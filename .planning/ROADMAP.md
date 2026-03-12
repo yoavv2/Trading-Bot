@@ -31,7 +31,7 @@ The roadmap is MVP-scoped. Multi-strategy expansion, richer portfolio analytics,
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation Platform** - Stand up the Python, FastAPI, PostgreSQL, and Docker skeleton with the core trading-platform interfaces and persistence model.
+- [x] **Phase 1: Foundation Platform** - Stand up the Python, FastAPI, PostgreSQL, and Docker skeleton with the core trading-platform interfaces and persistence model. Completed 2026-03-12.
 - [ ] **Phase 2: Data and Strategy** - Build the daily-bar data pipeline and implement `TrendFollowingDailyV1` as the first isolated strategy module.
 - [ ] **Phase 3: Backtest and Reporting** - Run deterministic daily-bar backtests and persist research outputs that are usable for strategy evaluation.
 - [ ] **Phase 4: Risk and Portfolio** - Add the portfolio state and mandatory risk-validation pipeline that gates every signal before execution.
@@ -55,7 +55,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [x] 01-01: Scaffold the repo layout, Docker Compose stack, FastAPI app, worker entrypoint, and config loading
 - [x] 01-02: Define core domain models, SQLAlchemy or SQLModel persistence, and database migrations
-- [ ] 01-03: Implement strategy, provider, execution, and risk interfaces plus the initial strategy registry shell
+- [x] 01-03: Implement strategy, provider, execution, and risk interfaces plus the initial strategy registry shell
 
 ### Phase 2: Data and Strategy
 **Goal:** Create a reliable daily-bar research input and the first isolated strategy implementation for the target universe.
@@ -147,7 +147,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Platform | 2/3 | In progress | 01-01, 01-02 |
+| 1. Foundation Platform | 3/3 | Complete | 2026-03-12 |
 | 2. Data and Strategy | 0/3 | Not started | - |
 | 3. Backtest and Reporting | 0/2 | Not started | - |
 | 4. Risk and Portfolio | 0/2 | Not started | - |
