@@ -21,6 +21,10 @@ class StrategyStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
+    return [member.value for member in enum_cls]
+
+
 class Strategy(TimestampedModel, Base):
     """Minimal persisted strategy catalog entry for Phase 1."""
 
@@ -34,7 +38,12 @@ class Strategy(TimestampedModel, Base):
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1")
     status: Mapped[StrategyStatus] = mapped_column(
-        Enum(StrategyStatus, name="strategy_status"),
+        Enum(
+            StrategyStatus,
+            name="strategy_status",
+            values_callable=_enum_values,
+            validate_strings=True,
+        ),
         nullable=False,
         default=StrategyStatus.ACTIVE,
     )

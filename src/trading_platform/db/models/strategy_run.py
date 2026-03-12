@@ -27,6 +27,10 @@ class StrategyRunStatus(StrEnum):
     FAILED = "failed"
 
 
+def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
+    return [member.value for member in enum_cls]
+
+
 class StrategyRun(TimestampedModel, Base):
     """Minimal persisted execution record for Phase 1 dry runs."""
 
@@ -41,12 +45,22 @@ class StrategyRun(TimestampedModel, Base):
         nullable=False,
     )
     run_type: Mapped[StrategyRunType] = mapped_column(
-        Enum(StrategyRunType, name="strategy_run_type"),
+        Enum(
+            StrategyRunType,
+            name="strategy_run_type",
+            values_callable=_enum_values,
+            validate_strings=True,
+        ),
         nullable=False,
         default=StrategyRunType.DRY_BOOTSTRAP,
     )
     status: Mapped[StrategyRunStatus] = mapped_column(
-        Enum(StrategyRunStatus, name="strategy_run_status"),
+        Enum(
+            StrategyRunStatus,
+            name="strategy_run_status",
+            values_callable=_enum_values,
+            validate_strings=True,
+        ),
         nullable=False,
         default=StrategyRunStatus.PENDING,
     )
