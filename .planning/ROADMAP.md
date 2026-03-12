@@ -15,7 +15,7 @@ The roadmap is MVP-scoped. Multi-strategy expansion, richer portfolio analytics,
 | REQ-03 | Implement `TrendFollowingDailyV1` for the initial daily U.S. equities universe | Phase 2 |
 | REQ-04 | Ingest and persist reproducible historical daily OHLCV bars with normalization, symbol metadata, and calendar awareness | Phase 2 |
 | REQ-05 | Run deterministic backtests, persist runs, trades, equity curves, and summary metrics, and make fee/slippage assumptions explicit | Phase 3 |
-| REQ-06 | Persist candles, signals, strategy runs, orders, fills, positions, account snapshots, risk events, and performance summaries in PostgreSQL | Phase 1 |
+| REQ-06 | Persist candles, signals, strategy runs, orders, fills, positions, account snapshots, risk events, and performance summaries in PostgreSQL | Phases 1-6 |
 | REQ-07 | Route every signal through a mandatory risk engine before execution | Phase 4 |
 | REQ-08 | Support daily scheduled paper trading through Alpaca with persistent order lifecycle tracking | Phase 5 |
 | REQ-09 | Produce trustworthy analytics for backtests and paper trading, including inspectable runs, orders, positions, and metrics | Phase 6 |
@@ -41,19 +41,19 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Phase Details
 
 ### Phase 1: Foundation Platform
-**Goal:** Stand up the local-first platform skeleton, persistence layer, and extensibility contracts so the project starts as a strategy platform instead of a one-off script.
+**Goal:** Stand up the local-first platform skeleton, minimal persistence foundation, and extensibility contracts so the project starts as a strategy platform instead of a one-off script.
 **Depends on:** Nothing (first phase)
-**Requirements**: [REQ-01, REQ-02, REQ-06, REQ-11, REQ-12]
+**Requirements**: [REQ-01, REQ-02, REQ-11, REQ-12]
 **Research:** Low — mostly internal architecture choices; no dedicated research phase is required before planning.
 **Success Criteria** (what must be TRUE):
   1. The operator can boot the local stack with Docker and connect the API and worker processes to PostgreSQL using externalized configuration.
-  2. Database schema and migrations exist for bars, strategy runs, signals, orders, fills, positions, account snapshots, risk events, and performance summaries.
-  3. Core interfaces exist for strategies, market data providers, broker adapters, execution, and risk evaluation so later strategies or adapters do not require structural rewrites.
-  4. The repository layout and runtime entrypoints clearly model one operator, one account, and one portfolio without introducing multi-user complexity.
+  2. The repository layout, configuration model, and runtime entrypoints clearly model one operator, one account, and one portfolio without introducing multi-user complexity.
+  3. A minimal schema and migration flow can be added cleanly in Phase 1 without forcing later plans to undo the foundation work.
+  4. Core interfaces and service boundaries exist for strategies, market data providers, broker adapters, execution, and risk evaluation so later strategies or adapters do not require structural rewrites.
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01: Scaffold the repo layout, Docker Compose stack, FastAPI app, worker entrypoint, and config loading
+- [x] 01-01: Scaffold the repo layout, Docker Compose stack, FastAPI app, worker entrypoint, and config loading
 - [ ] 01-02: Define core domain models, SQLAlchemy or SQLModel persistence, and database migrations
 - [ ] 01-03: Implement strategy, provider, execution, and risk interfaces plus the initial strategy registry shell
 
@@ -147,7 +147,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Platform | 0/3 | Not started | - |
+| 1. Foundation Platform | 1/3 | In progress | 01-01 |
 | 2. Data and Strategy | 0/3 | Not started | - |
 | 3. Backtest and Reporting | 0/2 | Not started | - |
 | 4. Risk and Portfolio | 0/2 | Not started | - |

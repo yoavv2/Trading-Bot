@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-platform"
+version = "0.1.0"
+description = "Local-first foundation for an auditable single-user trading strategy platform."
+readme = ".planning/PROJECT.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.18.0,<2.0.0",
+  "fastapi>=0.131.0,<1.0.0",
+  "psycopg[binary]>=3.2.0,<4.0.0",
+  "pydantic-settings>=2.12.0,<3.0.0",
+  "PyYAML>=6.0.2,<7.0.0",
+  "sqlalchemy>=2.0.0,<3.0.0",
+  "uvicorn[standard]>=0.34.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28.0,<1.0.0",
+  "pytest>=9.0.0,<10.0.0",
+]
+
+[project.scripts]
+trading-platform-api = "trading_platform.api.app:main"
+trading-platform-worker = "trading_platform.worker.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

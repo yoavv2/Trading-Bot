@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trading_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-trading_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      TRADING_PLATFORM_DATABASE__HOST: db
+      TRADING_PLATFORM_DATABASE__PORT: ${TRADING_PLATFORM_DATABASE__PORT:-5432}
+      TRADING_PLATFORM_DATABASE__NAME: ${POSTGRES_DB:-trading_platform}
+      TRADING_PLATFORM_DATABASE__USER: ${POSTGRES_USER:-trading_platform}
+      TRADING_PLATFORM_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "trading_platform.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  worker:
+    build: .
+    restart: unless-stopped
+    environment:
+      TRADING_PLATFORM_DATABASE__HOST: db
+      TRADING_PLATFORM_DATABASE__PORT: ${TRADING_PLATFORM_DATABASE__PORT:-5432}
+      TRADING_PLATFORM_DATABASE__NAME: ${POSTGRES_DB:-trading_platform}
+      TRADING_PLATFORM_DATABASE__USER: ${POSTGRES_USER:-trading_platform}
+      TRADING_PLATFORM_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "trading_platform.worker", "serve", "--interval-seconds", "30"]
+
+volumes:
+  postgres_data:

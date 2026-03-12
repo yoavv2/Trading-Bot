@@ -1,0 +1,23 @@
+strategy_id: trend_following_daily
+display_name: TrendFollowingDailyV1
+enabled: true
+universe:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMD
+  - META
+  - AMZN
+  - GOOGL
+  - TSLA
+indicators:
+  short_window: 50
+  long_window: 200
+risk:
+  max_positions: 10
+  risk_per_trade: 0.01
+exits:
+  close_below: sma_50
+
