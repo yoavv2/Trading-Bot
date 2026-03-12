@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import time
 from datetime import UTC, datetime
 
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import get_strategy_config, load_settings
+from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,22 +54,18 @@ def run_placeholder_worker(interval_seconds: int) -> None:
 def run_dry_bootstrap(strategy_id: str) -> None:
     settings = load_settings()
     configure_logging(settings.logging)
-    strategy = get_strategy_config(settings, strategy_id)
     logger = logging.getLogger("trading_platform.worker")
+    strategy = get_strategy_config(settings, strategy_id)
+    report = run_persisted_dry_bootstrap(
+        strategy.strategy_id,
+        trigger_source="worker_cli",
+        settings=settings,
+    )
     logger.info(
-        "dry_run_placeholder",
-        extra={
-            "context": {
-                "strategy_id": strategy.strategy_id,
-                "display_name": strategy.display_name,
-                "universe_size": len(strategy.universe),
-            }
-        },
+        "worker_dry_run_completed",
+        extra={"context": {"run_id": report.run_id, "strategy_id": report.strategy_id}},
     )
-    print(
-        f"Dry-run scaffold ready for {strategy.display_name} "
-        f"with {len(strategy.universe)} configured symbols."
-    )
+    print(json.dumps(report.to_dict(), default=str))
 
 
 def main() -> None:
@@ -86,4 +84,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
