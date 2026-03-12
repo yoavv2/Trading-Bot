@@ -54,7 +54,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01: Scaffold the repo layout, Docker Compose stack, FastAPI app, worker entrypoint, and config loading
-- [ ] 01-02: Define core domain models, SQLAlchemy or SQLModel persistence, and database migrations
+- [x] 01-02: Define core domain models, SQLAlchemy or SQLModel persistence, and database migrations
 - [ ] 01-03: Implement strategy, provider, execution, and risk interfaces plus the initial strategy registry shell
 
 ### Phase 2: Data and Strategy
@@ -147,7 +147,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Platform | 1/3 | In progress | 01-01 |
+| 1. Foundation Platform | 2/3 | In progress | 01-01, 01-02 |
 | 2. Data and Strategy | 0/3 | Not started | - |
 | 3. Backtest and Reporting | 0/2 | Not started | - |
 | 4. Risk and Portfolio | 0/2 | Not started | - |
