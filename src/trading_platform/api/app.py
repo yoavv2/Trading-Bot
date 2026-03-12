@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 
 from trading_platform.api.routes.health import router as health_router
+from trading_platform.api.routes.strategies import router as strategies_router
 from trading_platform.api.routes.system import router as system_router
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import load_settings
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(health_router)
+    app.include_router(strategies_router)
     app.include_router(system_router)
     return app
 
@@ -68,4 +70,3 @@ def main() -> None:
         port=settings.api.port,
         reload=False,
     )
-

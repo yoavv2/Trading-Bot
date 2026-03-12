@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from trading_platform.core.settings import Settings
+from trading_platform.strategies.registry import build_default_registry
 
 router = APIRouter(prefix="/api/v1", tags=["system"])
 
@@ -16,7 +17,7 @@ def _get_settings(request: Request) -> Settings:
 @router.get("/system")
 def system(request: Request) -> dict[str, object]:
     settings = _get_settings(request)
-    strategy = settings.strategies.trend_following_daily
+    registry = build_default_registry(settings)
 
     return {
         "application": {
@@ -30,16 +31,7 @@ def system(request: Request) -> dict[str, object]:
             "host": settings.api.host,
             "port": settings.api.port,
         },
-        "strategy_catalog": [
-            {
-                "strategy_id": strategy.strategy_id,
-                "display_name": strategy.display_name,
-                "enabled": strategy.enabled,
-                "universe_size": len(strategy.universe),
-                "short_window": strategy.indicators.short_window,
-                "long_window": strategy.indicators.long_window,
-            }
-        ],
+        "strategy_catalog": registry.list_public(),
         "database": {
             "driver": settings.database.driver,
             "host": settings.database.host,
