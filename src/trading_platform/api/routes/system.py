@@ -41,9 +41,12 @@ def system(request: Request) -> dict[str, object]:
             }
         ],
         "database": {
+            "driver": settings.database.driver,
             "host": settings.database.host,
             "port": settings.database.port,
             "name": settings.database.name,
+            "readiness_checks_enabled": settings.readiness.dependency_checks_enabled,
+            "readiness_required": settings.readiness.require_database,
+            "schema_managed_by": "alembic",
         },
     }
-

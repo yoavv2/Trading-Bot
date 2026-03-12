@@ -1,8 +1,10 @@
 COMPOSE ?= docker compose
 STRATEGY ?= trend_following_daily
+PYTHON ?= .venv/bin/python
+PYTEST ?= .venv/bin/pytest
 PYTHONPATH_PREFIX ?= PYTHONPATH=src
 
-.PHONY: up down logs migrate dry-run test
+.PHONY: up down logs migrate seed dry-run test
 
 up:
 	$(COMPOSE) up --build -d
@@ -14,11 +16,13 @@ logs:
 	$(COMPOSE) logs -f db api worker
 
 migrate:
-	@echo "Phase 1 Plan 01 scaffold complete. Database migrations land in Phase 1 Plan 02."
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/migrate.py upgrade head
+
+seed:
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/seed_phase1.py
 
 dry-run:
-	$(PYTHONPATH_PREFIX) python3 -m trading_platform.worker dry-run --strategy $(STRATEGY)
+	$(PYTHONPATH_PREFIX) $(PYTHON) -m trading_platform.worker dry-run --strategy $(STRATEGY)
 
 test:
-	$(PYTHONPATH_PREFIX) pytest tests/test_app_boot.py -q
-
+	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py -q
