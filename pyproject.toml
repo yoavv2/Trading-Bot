@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "trading-platform"
 version = "0.1.0"
 description = "Local-first foundation for an auditable single-user trading strategy platform."
-readme = ".planning/PROJECT.md"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.18.0,<2.0.0",
