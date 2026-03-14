@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session sync-paper-state test
+.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session sync-paper-state reconcile-paper-execution test
 
 up:
 	$(COMPOSE) up --build -d
@@ -73,6 +73,11 @@ run-paper-session:
 
 sync-paper-state:
 	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/sync_paper_state.py \
+		$(if $(STRATEGY),--strategy $(STRATEGY),) \
+		$(if $(AS_OF),--as-of $(AS_OF),)
+
+reconcile-paper-execution:
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/reconcile_paper_execution.py \
 		$(if $(STRATEGY),--strategy $(STRATEGY),) \
 		$(if $(AS_OF),--as-of $(AS_OF),)
 

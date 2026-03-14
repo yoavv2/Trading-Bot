@@ -19,6 +19,7 @@ from trading_platform.services.paper_execution import (
     run_paper_session,
     sync_paper_state,
 )
+from trading_platform.services.reconciliation import reconcile_paper_execution
 from trading_platform.services.risk import resolve_evaluation_session, run_risk_evaluation
 
 
@@ -100,6 +101,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target session date. Defaults to the latest completed persisted session.",
     )
     sync_paper_parser.add_argument("--compact", action="store_true", default=False)
+
+    reconcile_parser = subparsers.add_parser(
+        "reconcile-paper-execution",
+        help="Reconcile broker paper state against local execution records and report unsafe drift.",
+    )
+    reconcile_parser.add_argument("--strategy")
+    reconcile_parser.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        help="Target session date. Defaults to the latest completed persisted session.",
+    )
+    reconcile_parser.add_argument("--compact", action="store_true", default=False)
+    reconcile_parser.add_argument("--trigger-source", default="worker_cli")
 
     ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
     ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
@@ -335,6 +349,36 @@ def run_sync_paper_state_command(args: argparse.Namespace) -> None:
     print(json.dumps(report.to_dict(), indent=indent, default=str))
 
 
+def run_reconcile_paper_execution_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+    as_of_session = resolve_submission_session(
+        settings=settings,
+        as_of_arg=args.as_of,
+    )
+    strategy_id = args.strategy or settings.execution.paper_session_runner.default_strategy_id
+    report = reconcile_paper_execution(
+        strategy_id,
+        as_of_session=as_of_session,
+        settings=settings,
+        trigger_source=args.trigger_source,
+    )
+    logger.info(
+        "worker_paper_reconciliation_completed",
+        extra={
+            "context": {
+                "strategy_id": strategy_id,
+                "as_of_session": as_of_session.isoformat(),
+                "finding_count": report.finding_count,
+                "blocks_execution": report.blocks_execution,
+            }
+        },
+    )
+    indent = None if args.compact else 2
+    print(json.dumps(report.to_dict(), indent=indent, default=str))
+
+
 def run_ingest_bars(args: argparse.Namespace) -> None:
     from trading_platform.services.ingestion import ingest_daily_bars
 
@@ -478,6 +522,9 @@ def main() -> None:
         return
     if args.command == "sync-paper-state":
         run_sync_paper_state_command(args)
+        return
+    if args.command == "reconcile-paper-execution":
+        run_reconcile_paper_execution_command(args)
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)
