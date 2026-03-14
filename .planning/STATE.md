@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Executing Phase 03 Plan 02 (Deterministic Runner)
-last_updated: "2026-03-14T11:28:57Z"
-last_activity: 2026-03-14 — Completed Phase 3 Plan 01 and advanced to deterministic runner implementation
+stopped_at: Executing Phase 03 Plan 03 (Reporting and Exports)
+last_updated: "2026-03-14T11:45:44Z"
+last_activity: 2026-03-14 — Completed Phase 3 Plan 02 and advanced to reporting and export work
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State
@@ -26,16 +26,16 @@ See: .planning/PROJECT.md (updated 2026-03-11)
 ## Current Position
 
 Phase: 3 of 6 (Backtest and Reporting)
-Plan: 1 of 3
+Plan: 2 of 3
 Status: Executing
-Last activity: 2026-03-14 — Completed Phase 3 Plan 01 and advanced to deterministic runner implementation
+Last activity: 2026-03-14 — Completed Phase 3 Plan 02 and advanced to reporting and export work
 
-Progress: [███████░░░] 78%
+Progress: [████████░░] 89%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: ~7 min
 - Total execution time: -
 
@@ -45,16 +45,17 @@ Progress: [███████░░░] 78%
 |-------|-------|-------|----------|
 | 1 | 3 of 3 | - | - |
 | 2 | 3 of 3 | - | - |
-| 3 | 1 of 3 | - | - |
+| 3 | 2 of 3 | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 01-03, 02-01, 02-02, 02-03, 03-01 completed
-- Trend: Strong momentum; backtest schema foundation is complete and runner work is active
+- Last 5 plans: 02-01, 02-02, 02-03, 03-01, 03-02 completed
+- Trend: Strong momentum; deterministic backtest execution is complete and reporting is next
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
 | Phase 02-data-and-strategy P03 | 5min | 3 tasks | 8 files |
 | Phase 03-backtest-and-reporting P01 | 12min | 3 tasks | 10 files |
+| Phase 03-backtest-and-reporting P02 | 17min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -79,10 +80,13 @@ Recent decisions affecting current work:
 - [Phase 03-backtest-and-reporting]: `strategy_runs` remains the single run root; Phase 3 distinguishes backtests via `run_type=backtest`
 - [Phase 03-backtest-and-reporting]: Run assumptions persist in `parameters_snapshot` so execution and reporting stay tied to one exact config payload
 - [Phase 03-backtest-and-reporting]: Signals, trades, and equity history live in normalized child tables rather than opaque JSON blobs
+- [Phase 03-backtest-and-reporting]: Backtests compose on `strategy.generate_signals()` and only fill on the next persisted session open
+- [Phase 03-backtest-and-reporting]: Pending exits are processed before entries on a fill session so equal-weight slot rotation stays deterministic
+- [Phase 03-backtest-and-reporting]: Duplicate LONG signals while a position is open are persisted for inspection but ignored for execution
 
 ### Pending Todos
 
-- Execute Phase 3 Plan 02: Build the deterministic daily-bar backtest runner and execution flow
+- Execute Phase 3 Plan 03: Generate run reports, metrics summaries, and exports for research inspection
 
 ### Blockers/Concerns
 
@@ -91,6 +95,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-14T11:28:57Z
-Stopped at: Executing Phase 03 Plan 02 (Deterministic Runner)
+Last session: 2026-03-14T11:45:44Z
+Stopped at: Executing Phase 03 Plan 03 (Reporting and Exports)
 Resume file: None

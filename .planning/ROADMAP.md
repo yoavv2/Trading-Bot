@@ -84,11 +84,11 @@ Plans:
   2. Backtest runs persist their configuration, trades, positions or equity snapshots, and performance summaries in the database.
   3. Fee and slippage assumptions are explicit, versioned with the run, and visible in the generated results.
   4. The operator can inspect a trustworthy report or export for a run without reading raw logs.
-**Plans:** 1/3 plans complete
+**Plans:** 2/3 plans complete
 
 Plans:
 - [x] 03-01: Add typed backtest settings and persistence foundation for Phase 3 artifacts
-- [ ] 03-02: Build the deterministic daily-bar backtest runner and execution flow
+- [x] 03-02: Build the deterministic daily-bar backtest runner and execution flow
 - [ ] 03-03: Generate run reports, metrics summaries, and exports for research inspection
 
 ### Phase 4: Risk and Portfolio
@@ -150,7 +150,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Foundation Platform | 3/3 | Complete | 2026-03-12 |
 | 2. Data and Strategy | 3/3 | Complete   | 2026-03-14 |
-| 3. Backtest and Reporting | 1/3 | In progress | - |
+| 3. Backtest and Reporting | 2/3 | In progress | - |
 | 4. Risk and Portfolio | 0/2 | Not started | - |
 | 5. Paper Execution | 0/3 | Not started | - |
 | 6. Analytics and APIs | 0/3 | Not started | - |
