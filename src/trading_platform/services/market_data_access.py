@@ -112,6 +112,37 @@ def latest_persisted_session(
     return session.execute(query).scalar_one_or_none()
 
 
+def persisted_session_dates(
+    session: Session,
+    start: date,
+    end: date,
+    exchange: str = _DEFAULT_EXCHANGE,
+) -> list[date]:
+    """Return persisted session dates in ascending order for the requested range."""
+    return session.execute(
+        select(MarketSession.session_date)
+        .where(MarketSession.exchange == exchange)
+        .where(MarketSession.session_date >= start)
+        .where(MarketSession.session_date <= end)
+        .order_by(MarketSession.session_date.asc())
+    ).scalars().all()
+
+
+def next_persisted_session(
+    session: Session,
+    session_date: date,
+    exchange: str = _DEFAULT_EXCHANGE,
+) -> date | None:
+    """Return the next persisted session after *session_date*."""
+    return session.execute(
+        select(MarketSession.session_date)
+        .where(MarketSession.exchange == exchange)
+        .where(MarketSession.session_date > session_date)
+        .order_by(MarketSession.session_date.asc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def bars_for_sessions(
     session: Session,
     symbol: str,
@@ -179,6 +210,47 @@ def bars_for_sessions(
         )
         for bar in bars
     ]
+
+
+def bars_for_session_date(
+    session: Session,
+    session_date: date,
+    *,
+    symbols: list[str] | tuple[str, ...] | None = None,
+    adjusted: bool = True,
+    provider: str = "polygon",
+) -> dict[str, SessionBar]:
+    """Return session bars keyed by symbol for one persisted session date."""
+    query = (
+        select(Symbol.ticker, DailyBarModel)
+        .join(Symbol, Symbol.id == DailyBarModel.symbol_id)
+        .where(DailyBarModel.session_date == session_date)
+        .where(DailyBarModel.adjusted == adjusted)
+        .where(DailyBarModel.provider == provider)
+        .order_by(Symbol.ticker.asc())
+    )
+
+    if symbols:
+        query = query.where(Symbol.ticker.in_(symbols))
+
+    rows = session.execute(query).all()
+    return {
+        ticker: SessionBar(
+            symbol=ticker,
+            session_date=bar.session_date,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            adjusted=bar.adjusted,
+            provider=bar.provider,
+            vwap=bar.vwap,
+            trade_count=bar.trade_count,
+            provider_timestamp=bar.provider_timestamp,
+        )
+        for ticker, bar in rows
+    }
 
 
 def missing_sessions_for_symbol(
