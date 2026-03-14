@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation Platform** - Stand up the Python, FastAPI, PostgreSQL, and Docker skeleton with the core trading-platform interfaces and persistence model. Completed 2026-03-12.
 - [x] **Phase 2: Data and Strategy** - Build the daily-bar data pipeline and implement `TrendFollowingDailyV1` as the first isolated strategy module. (completed 2026-03-14)
 - [x] **Phase 3: Backtest and Reporting** - Run deterministic daily-bar backtests and persist research outputs that are usable for strategy evaluation. Completed 2026-03-14.
-- [ ] **Phase 4: Risk and Portfolio** - Add the portfolio state and mandatory risk-validation pipeline that gates every signal before execution.
+- [x] **Phase 4: Risk and Portfolio** - Add the portfolio state and mandatory risk-validation pipeline that gates every signal before execution. Completed 2026-03-14.
 - [ ] **Phase 5: Paper Execution** - Turn approved daily signals into Alpaca paper orders with scheduling, lifecycle tracking, and reconciliation.
 - [ ] **Phase 6: Analytics and APIs** - Make the system measurable and inspectable through analytics, operational controls, and operator-facing API reads.
 
@@ -101,11 +101,11 @@ Plans:
   2. Position sizing, max position limits, allocation caps, stale-data checks, and duplicate-position prevention are deterministic and testable.
   3. Rejected signals are persisted with human-readable reasons that explain which risk rule blocked them.
   4. Portfolio state tracks the cash, exposure, and open-position context needed by the daily strategy and later paper execution.
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 04-01: Build portfolio state, sizing logic, and exposure accounting
-- [ ] 04-02: Implement the risk-validation pipeline, rejection logging, and execution gating rules
+- [x] 04-01: Build portfolio state, sizing logic, and exposure accounting
+- [x] 04-02: Implement the risk-validation pipeline, rejection logging, and execution gating rules
 
 ### Phase 5: Paper Execution
 **Goal:** Convert approved daily signals into Alpaca paper orders on a schedule while keeping broker state and internal state aligned.
@@ -151,6 +151,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Foundation Platform | 3/3 | Complete | 2026-03-12 |
 | 2. Data and Strategy | 3/3 | Complete   | 2026-03-14 |
 | 3. Backtest and Reporting | 3/3 | Complete | 2026-03-14 |
-| 4. Risk and Portfolio | 0/2 | Not started | - |
+| 4. Risk and Portfolio | 2/2 | Complete | 2026-03-14 |
 | 5. Paper Execution | 0/3 | Not started | - |
 | 6. Analytics and APIs | 0/3 | Not started | - |
