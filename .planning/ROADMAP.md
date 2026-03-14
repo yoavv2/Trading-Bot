@@ -67,7 +67,7 @@ Plans:
   2. The platform stores normalized bar data, symbol metadata, and enough calendar context to run daily workflows consistently.
   3. `TrendFollowingDailyV1` computes its moving-average indicators and emits deterministic entry and exit signals for configured symbols.
   4. Strategy parameters such as universe, moving-average windows, and exits live in external config rather than inside strategy code.
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 02-01: Build the Polygon data provider, ingestion pipeline, and daily-bar normalization flow
@@ -148,7 +148,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation Platform | 3/3 | Complete | 2026-03-12 |
-| 2. Data and Strategy | 1/3 | In progress | - |
+| 2. Data and Strategy | 2/3 | In Progress|  |
 | 3. Backtest and Reporting | 0/2 | Not started | - |
 | 4. Risk and Portfolio | 0/2 | Not started | - |
 | 5. Paper Execution | 0/3 | Not started | - |
