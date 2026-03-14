@@ -11,10 +11,27 @@ from typing import Any
 from sqlalchemy import case, select
 
 from trading_platform.core.settings import Settings, load_settings
-from trading_platform.db.models import PaperOrder, RiskEvent, Strategy, StrategyRun, StrategyRunStatus, StrategyRunType
+from trading_platform.db.models import (
+    AccountSnapshot,
+    PaperFill,
+    PaperOrder,
+    Position,
+    RiskEvent,
+    Strategy,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+)
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import session_scope
-from trading_platform.services.alpaca import AlpacaExecutionService
+from trading_platform.services.alpaca import (
+    AlpacaClient,
+    AlpacaExecutionService,
+    BrokerAccountSnapshot,
+    BrokerFillSnapshot,
+    BrokerOrderSnapshot,
+    BrokerPositionSnapshot,
+)
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.market_data_access import latest_completed_session
@@ -88,6 +105,32 @@ class PaperSessionPlan:
     candidates: tuple[PaperExecutionCandidate, ...]
     existing_orders: tuple[PaperOrder, ...]
     missing_candidates: tuple[PaperExecutionCandidate, ...]
+
+
+@dataclass(frozen=True)
+class PaperStateSyncReport:
+    strategy_id: str
+    session_date: str
+    synced_at: str
+    orders_synced: int
+    fills_ingested: int
+    positions_opened: int
+    positions_closed: int
+    open_positions: int
+    account_snapshot_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "session_date": self.session_date,
+            "synced_at": self.synced_at,
+            "orders_synced": self.orders_synced,
+            "fills_ingested": self.fills_ingested,
+            "positions_opened": self.positions_opened,
+            "positions_closed": self.positions_closed,
+            "open_positions": self.open_positions,
+            "account_snapshot_id": self.account_snapshot_id,
+        }
 
 
 def resolve_submission_session(
@@ -372,6 +415,86 @@ def run_paper_session(
     )
 
 
+def sync_paper_state(
+    strategy_id: str | None = None,
+    *,
+    as_of_session: date,
+    settings: Settings | None = None,
+    registry: StrategyRegistry | None = None,
+    broker_client: AlpacaClient | None = None,
+) -> PaperStateSyncReport:
+    resolved_settings = settings or load_settings()
+    resolved_registry = registry or build_default_registry(resolved_settings)
+    resolved_strategy_id = strategy_id or resolved_settings.execution.paper_session_runner.default_strategy_id
+    strategy = resolved_registry.resolve(resolved_strategy_id)
+    synced_at = datetime.now(UTC)
+
+    owns_broker_client = broker_client is None
+    client = broker_client or AlpacaClient(resolved_settings.broker.alpaca)
+
+    try:
+        broker_orders = client.list_orders()
+        broker_fills = client.list_fills()
+        broker_positions = client.list_positions()
+        broker_account = client.get_account()
+
+        with session_scope(resolved_settings) as session:
+            strategy_record = ensure_strategy_record(session, strategy.metadata)
+            local_orders = session.execute(
+                select(PaperOrder)
+                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                .where(StrategyRun.strategy_id == strategy_record.id)
+                .order_by(PaperOrder.created_at.asc())
+            ).scalars().all()
+            local_orders_by_broker_id = {
+                order.broker_order_id: order for order in local_orders if order.broker_order_id
+            }
+            local_orders_by_client_id = {
+                order.client_order_id: order for order in local_orders if order.client_order_id
+            }
+
+            orders_synced = _sync_paper_orders(
+                broker_orders,
+                local_orders_by_broker_id=local_orders_by_broker_id,
+                local_orders_by_client_id=local_orders_by_client_id,
+                synced_at=synced_at,
+            )
+            fills_ingested = _ingest_paper_fills(
+                session,
+                broker_fills,
+                local_orders_by_broker_id=local_orders_by_broker_id,
+            )
+            positions_opened, positions_closed = _sync_positions_from_broker(
+                session,
+                strategy_record.id,
+                broker_positions,
+                as_of_session=as_of_session,
+                synced_at=synced_at,
+            )
+            snapshot = _record_broker_account_snapshot(
+                session,
+                strategy_record.id,
+                broker_account,
+                broker_positions,
+                synced_at=synced_at,
+            )
+
+            return PaperStateSyncReport(
+                strategy_id=resolved_strategy_id,
+                session_date=as_of_session.isoformat(),
+                synced_at=synced_at.isoformat(),
+                orders_synced=orders_synced,
+                fills_ingested=fills_ingested,
+                positions_opened=positions_opened,
+                positions_closed=positions_closed,
+                open_positions=len(broker_positions),
+                account_snapshot_id=str(snapshot.id),
+            )
+    finally:
+        if owns_broker_client:
+            client.close()
+
+
 def _resolve_source_risk_run(
     session,
     *,
@@ -578,3 +701,179 @@ def _paper_order_payload(paper_order: PaperOrder) -> dict[str, Any]:
         "intended_session_date": paper_order.intended_session_date.isoformat(),
         "submitted_at": paper_order.submitted_at.isoformat() if paper_order.submitted_at else None,
     }
+
+
+def _paper_order_status_from_broker_status(status: ExecutionOrderStatus) -> str:
+    if status in {ExecutionOrderStatus.PENDING, ExecutionOrderStatus.ACCEPTED}:
+        return "submitted"
+    if status == ExecutionOrderStatus.PARTIALLY_FILLED:
+        return "partially_filled"
+    if status == ExecutionOrderStatus.FILLED:
+        return "filled"
+    if status == ExecutionOrderStatus.CANCELED:
+        return "canceled"
+    if status == ExecutionOrderStatus.REJECTED:
+        return "rejected"
+    if status == ExecutionOrderStatus.EXPIRED:
+        return "expired"
+    return "unknown"
+
+
+def _sync_paper_orders(
+    broker_orders: list[BrokerOrderSnapshot],
+    *,
+    local_orders_by_broker_id: dict[str, PaperOrder],
+    local_orders_by_client_id: dict[str, PaperOrder],
+    synced_at: datetime,
+) -> int:
+    synced_count = 0
+    for broker_order in broker_orders:
+        local_order = local_orders_by_broker_id.get(broker_order.broker_order_id)
+        if local_order is None:
+            local_order = local_orders_by_client_id.get(broker_order.client_order_id)
+        if local_order is None:
+            continue
+
+        if not local_order.broker_order_id:
+            local_order.broker_order_id = broker_order.broker_order_id
+        local_order.status = _paper_order_status_from_broker_status(broker_order.status)
+        local_order.broker_status = broker_order.broker_status
+        local_order.submitted_at = broker_order.submitted_at or local_order.submitted_at
+        local_order.filled_at = broker_order.filled_at
+        local_order.canceled_at = broker_order.canceled_at
+        local_order.last_broker_update_at = broker_order.updated_at
+        local_order.last_synced_at = synced_at
+        local_order.broker_payload = broker_order.raw_payload
+
+        if local_order.broker_order_id:
+            local_orders_by_broker_id[local_order.broker_order_id] = local_order
+        synced_count += 1
+    return synced_count
+
+
+def _ingest_paper_fills(
+    session,
+    broker_fills: list[BrokerFillSnapshot],
+    *,
+    local_orders_by_broker_id: dict[str, PaperOrder],
+) -> int:
+    existing_fill_ids = set(session.execute(select(PaperFill.broker_fill_id)).scalars().all())
+    ingested = 0
+
+    for broker_fill in broker_fills:
+        if broker_fill.broker_fill_id in existing_fill_ids:
+            continue
+        local_order = local_orders_by_broker_id.get(broker_fill.broker_order_id)
+        if local_order is None:
+            continue
+
+        session.add(
+            PaperFill(
+                paper_order_id=local_order.id,
+                symbol_id=local_order.symbol_id,
+                broker_fill_id=broker_fill.broker_fill_id,
+                broker_order_id=broker_fill.broker_order_id,
+                side=broker_fill.side.value,
+                quantity=broker_fill.quantity,
+                price=broker_fill.price,
+                filled_at=broker_fill.filled_at,
+                broker_payload=broker_fill.raw_payload,
+            )
+        )
+        existing_fill_ids.add(broker_fill.broker_fill_id)
+        if local_order.filled_at is None or broker_fill.filled_at > local_order.filled_at:
+            local_order.filled_at = broker_fill.filled_at
+        ingested += 1
+
+    return ingested
+
+
+def _sync_positions_from_broker(
+    session,
+    strategy_row_id: uuid.UUID,
+    broker_positions: list[BrokerPositionSnapshot],
+    *,
+    as_of_session: date,
+    synced_at: datetime,
+) -> tuple[int, int]:
+    existing_open_positions = session.execute(
+        select(Position).where(
+            Position.strategy_id == strategy_row_id,
+            Position.status == "open",
+        )
+    ).scalars().all()
+    existing_by_symbol = {position.symbol_ref.ticker: position for position in existing_open_positions}
+    opened = 0
+    closed = 0
+
+    for broker_position in broker_positions:
+        symbol_row = _ensure_symbol(session, broker_position.symbol)
+        existing_position = existing_by_symbol.pop(broker_position.symbol, None)
+        if existing_position is None:
+            session.add(
+                Position(
+                    strategy_id=strategy_row_id,
+                    symbol_id=symbol_row.id,
+                    status="open",
+                    quantity=broker_position.quantity,
+                    average_entry_price=broker_position.average_entry_price,
+                    cost_basis=broker_position.cost_basis,
+                    opened_session_date=as_of_session,
+                    opened_at=synced_at,
+                )
+            )
+            opened += 1
+            continue
+
+        existing_position.quantity = broker_position.quantity
+        existing_position.average_entry_price = broker_position.average_entry_price
+        existing_position.cost_basis = broker_position.cost_basis
+        existing_position.status = "open"
+        existing_position.opened_session_date = existing_position.opened_session_date or as_of_session
+        existing_position.opened_at = existing_position.opened_at or synced_at
+        existing_position.closed_session_date = None
+        existing_position.closed_at = None
+
+    for stale_position in existing_by_symbol.values():
+        stale_position.status = "closed"
+        stale_position.closed_session_date = as_of_session
+        stale_position.closed_at = synced_at
+        closed += 1
+
+    return opened, closed
+
+
+def _record_broker_account_snapshot(
+    session,
+    strategy_row_id: uuid.UUID,
+    broker_account: BrokerAccountSnapshot,
+    broker_positions: list[BrokerPositionSnapshot],
+    *,
+    synced_at: datetime,
+) -> AccountSnapshot:
+    gross_exposure = sum((abs(position.market_value) for position in broker_positions), start=Decimal("0"))
+    snapshot = AccountSnapshot(
+        strategy_id=strategy_row_id,
+        source_run_id=None,
+        snapshot_source="broker_sync",
+        snapshot_at=synced_at,
+        cash=broker_account.cash,
+        gross_exposure=gross_exposure,
+        total_equity=broker_account.equity,
+        buying_power=broker_account.buying_power,
+        open_positions=len(broker_positions),
+    )
+    session.add(snapshot)
+    session.flush()
+    return snapshot
+
+
+def _ensure_symbol(session, ticker: str) -> Symbol:
+    symbol_row = session.execute(select(Symbol).where(Symbol.ticker == ticker)).scalar_one_or_none()
+    if symbol_row is not None:
+        return symbol_row
+
+    symbol_row = Symbol(ticker=ticker, active=True)
+    session.add(symbol_row)
+    session.flush()
+    return symbol_row

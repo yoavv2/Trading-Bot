@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from trading_platform.db.base import Base, TimestampedModel
 
 if TYPE_CHECKING:
+    from trading_platform.db.models.paper_fill import PaperFill
     from trading_platform.db.models.risk_event import RiskEvent
     from trading_platform.db.models.strategy_run import StrategyRun
     from trading_platform.db.models.symbol import Symbol
@@ -56,8 +57,16 @@ class PaperOrder(TimestampedModel, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_submission")
     broker_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    filled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_broker_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     broker_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     strategy_run: Mapped["StrategyRun"] = relationship(back_populates="paper_orders")
     source_risk_event: Mapped["RiskEvent"] = relationship()
     symbol_ref: Mapped["Symbol"] = relationship()
+    fills: Mapped[list["PaperFill"]] = relationship(
+        back_populates="paper_order",
+        cascade="all, delete-orphan",
+    )

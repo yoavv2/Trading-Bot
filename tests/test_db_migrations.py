@@ -289,7 +289,7 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
     inspector = inspect(get_engine(settings))
 
     table_names = set(inspector.get_table_names())
-    assert {"paper_orders"}.issubset(table_names)
+    assert {"paper_orders", "paper_fills"}.issubset(table_names)
 
     paper_order_cols = {col["name"] for col in inspector.get_columns("paper_orders")}
     assert paper_order_cols >= {
@@ -305,6 +305,11 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
         "broker_order_id",
         "status",
         "broker_status",
+        "submitted_at",
+        "filled_at",
+        "canceled_at",
+        "last_broker_update_at",
+        "last_synced_at",
         "broker_payload",
     }
 
@@ -314,6 +319,22 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
         "uq_paper_orders_client_order_id",
         "uq_paper_orders_broker_order_id",
     }
+
+    paper_fill_cols = {col["name"] for col in inspector.get_columns("paper_fills")}
+    assert paper_fill_cols >= {
+        "paper_order_id",
+        "symbol_id",
+        "broker_fill_id",
+        "broker_order_id",
+        "side",
+        "quantity",
+        "price",
+        "filled_at",
+        "broker_payload",
+    }
+
+    paper_fill_constraints = {uc["name"] for uc in inspector.get_unique_constraints("paper_fills")}
+    assert paper_fill_constraints >= {"uq_paper_fills_broker_fill_id"}
 
     enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
     assert enums["strategy_run_type"] >= {

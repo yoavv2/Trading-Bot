@@ -17,15 +17,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import DailyBar, MarketSession, PaperOrder, RiskEvent, StrategyRun, StrategyRunStatus, StrategyRunType
+from trading_platform.db.models import (
+    AccountSnapshot,
+    DailyBar,
+    MarketSession,
+    PaperFill,
+    PaperOrder,
+    Position,
+    RiskEvent,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+)
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
+from trading_platform.services.alpaca import (
+    BrokerAccountSnapshot,
+    BrokerFillSnapshot,
+    BrokerOrderSnapshot,
+    BrokerPositionSnapshot,
+)
 from trading_platform.services.bootstrap import ensure_strategy_record
-from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSubmissionResult
+from trading_platform.services.execution import (
+    ExecutionOrderStatus,
+    ExecutionService,
+    OrderIntent,
+    OrderSide,
+    OrderSubmissionResult,
+)
 from trading_platform.services.paper_execution import (
     build_client_order_id,
     resolve_submission_session,
     run_paper_session,
+    sync_paper_state,
 )
 from trading_platform.strategies.registry import build_default_registry
 
@@ -119,6 +143,36 @@ class FakeExecutionService(ExecutionService):
                 "submitted_at": "2024-01-05T14:35:00Z",
             },
         )
+
+
+class FakeBrokerClient:
+    def __init__(
+        self,
+        *,
+        orders: list[BrokerOrderSnapshot],
+        fills: list[BrokerFillSnapshot],
+        positions: list[BrokerPositionSnapshot],
+        account: BrokerAccountSnapshot,
+    ) -> None:
+        self._orders = orders
+        self._fills = fills
+        self._positions = positions
+        self._account = account
+
+    def close(self) -> None:
+        return None
+
+    def list_orders(self) -> list[BrokerOrderSnapshot]:
+        return list(self._orders)
+
+    def list_fills(self) -> list[BrokerFillSnapshot]:
+        return list(self._fills)
+
+    def list_positions(self) -> list[BrokerPositionSnapshot]:
+        return list(self._positions)
+
+    def get_account(self) -> BrokerAccountSnapshot:
+        return self._account
 
 
 def _seed_market_data(session_date: date) -> None:
@@ -263,6 +317,33 @@ def _seed_existing_paper_order(
         return execution_run.id
 
 
+def _seed_open_position(*, symbol: str, quantity: str) -> None:
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        symbol_row = session.execute(select(Symbol).where(Symbol.ticker == symbol)).scalar_one_or_none()
+        if symbol_row is None:
+            symbol_row = Symbol(ticker=symbol, active=True)
+            session.add(symbol_row)
+            session.flush()
+
+        session.add(
+            Position(
+                strategy_id=strategy_record.id,
+                symbol_id=symbol_row.id,
+                status="open",
+                quantity=Decimal(quantity),
+                average_entry_price=Decimal("250.000000"),
+                cost_basis=Decimal("1250.000000"),
+                opened_session_date=date(2024, 1, 4),
+                opened_at=datetime(2024, 1, 4, 14, 35, tzinfo=UTC),
+            )
+        )
+
+
 def test_resolve_submission_session_prefers_latest_completed_persisted_session(
     migrated_paper_db: str,
 ) -> None:
@@ -352,3 +433,101 @@ def test_run_paper_session_submits_only_missing_orders(
     assert len(paper_orders) == 2
     assert symbols == {"AAPL", "MSFT"}
     assert len(execution_runs) == 2
+
+
+def test_sync_paper_state_persists_fills_positions_and_account_snapshot(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    _seed_open_position(symbol="MSFT", quantity="5.000000")
+    settings = load_settings()
+
+    broker_client = FakeBrokerClient(
+        orders=[
+            BrokerOrderSnapshot(
+                broker_order_id="existing-aapl-001",
+                client_order_id=build_client_order_id(
+                    prefix=settings.execution.client_order_id_prefix,
+                    session_date=date(2024, 1, 5),
+                    symbol="AAPL",
+                    risk_event_id=approved_event_ids["AAPL"],
+                ),
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
+                status=ExecutionOrderStatus.FILLED,
+                broker_status="filled",
+                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                canceled_at=None,
+                updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                raw_payload={"id": "existing-aapl-001", "status": "filled"},
+            )
+        ],
+        fills=[
+            BrokerFillSnapshot(
+                broker_fill_id="fill-aapl-001",
+                broker_order_id="existing-aapl-001",
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
+                price=Decimal("120.250000"),
+                filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                raw_payload={"id": "fill-aapl-001", "order_id": "existing-aapl-001"},
+            )
+        ],
+        positions=[
+            BrokerPositionSnapshot(
+                symbol="AAPL",
+                quantity=Decimal("10.000000"),
+                average_entry_price=Decimal("120.250000"),
+                cost_basis=Decimal("1202.500000"),
+                market_value=Decimal("1215.000000"),
+                current_price=Decimal("121.500000"),
+                raw_payload={"symbol": "AAPL"},
+            )
+        ],
+        account=BrokerAccountSnapshot(
+            cash=Decimal("98797.500000"),
+            buying_power=Decimal("98797.500000"),
+            equity=Decimal("100012.500000"),
+            long_market_value=Decimal("1215.000000"),
+            short_market_value=Decimal("0"),
+            raw_payload={"equity": "100012.500000"},
+        ),
+    )
+
+    report = sync_paper_state(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=broker_client,
+    )
+
+    assert report.orders_synced == 1
+    assert report.fills_ingested == 1
+    assert report.positions_opened == 1
+    assert report.positions_closed == 1
+    assert report.open_positions == 1
+
+    with session_scope(settings) as session:
+        paper_order = session.execute(select(PaperOrder)).scalar_one()
+        paper_fill = session.execute(select(PaperFill)).scalar_one()
+        positions = session.execute(select(Position).order_by(Position.status.desc(), Position.created_at.asc())).scalars().all()
+        snapshot = session.execute(select(AccountSnapshot).order_by(AccountSnapshot.snapshot_at.desc())).scalar_one()
+        position_states = {position.symbol_ref.ticker: position.status for position in positions}
+
+    assert paper_order.status == "filled"
+    assert paper_order.filled_at is not None
+    assert paper_order.last_synced_at is not None
+    assert paper_fill.broker_fill_id == "fill-aapl-001"
+    assert paper_fill.price == Decimal("120.250000")
+    assert position_states == {"AAPL": "open", "MSFT": "closed"}
+    assert snapshot.snapshot_source == "broker_sync"
+    assert snapshot.open_positions == 1
