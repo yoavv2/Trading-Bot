@@ -531,3 +531,156 @@ def test_sync_paper_state_persists_fills_positions_and_account_snapshot(
     assert position_states == {"AAPL": "open", "MSFT": "closed"}
     assert snapshot.snapshot_source == "broker_sync"
     assert snapshot.open_positions == 1
+
+
+def test_sync_paper_state_advances_partial_lifecycle_without_duplicate_fills(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    settings = load_settings()
+    client_order_id = build_client_order_id(
+        prefix=settings.execution.client_order_id_prefix,
+        session_date=date(2024, 1, 5),
+        symbol="AAPL",
+        risk_event_id=approved_event_ids["AAPL"],
+    )
+
+    partial_report = sync_paper_state(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[
+                BrokerOrderSnapshot(
+                    broker_order_id="existing-aapl-001",
+                    client_order_id=client_order_id,
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                    status=ExecutionOrderStatus.PARTIALLY_FILLED,
+                    broker_status="partially_filled",
+                    submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    filled_at=datetime(2024, 1, 5, 14, 38, tzinfo=UTC),
+                    canceled_at=None,
+                    updated_at=datetime(2024, 1, 5, 14, 38, tzinfo=UTC),
+                    raw_payload={"id": "existing-aapl-001", "status": "partially_filled"},
+                )
+            ],
+            fills=[
+                BrokerFillSnapshot(
+                    broker_fill_id="fill-aapl-001",
+                    broker_order_id="existing-aapl-001",
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("4.000000"),
+                    price=Decimal("120.100000"),
+                    filled_at=datetime(2024, 1, 5, 14, 38, tzinfo=UTC),
+                    raw_payload={"id": "fill-aapl-001", "order_id": "existing-aapl-001"},
+                )
+            ],
+            positions=[
+                BrokerPositionSnapshot(
+                    symbol="AAPL",
+                    quantity=Decimal("4.000000"),
+                    average_entry_price=Decimal("120.100000"),
+                    cost_basis=Decimal("480.400000"),
+                    market_value=Decimal("486.000000"),
+                    current_price=Decimal("121.500000"),
+                    raw_payload={"symbol": "AAPL"},
+                )
+            ],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("99519.600000"),
+                buying_power=Decimal("99519.600000"),
+                equity=Decimal("100005.600000"),
+                long_market_value=Decimal("486.000000"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100005.600000"},
+            ),
+        ),
+    )
+
+    assert partial_report.fills_ingested == 1
+
+    filled_report = sync_paper_state(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[
+                BrokerOrderSnapshot(
+                    broker_order_id="existing-aapl-001",
+                    client_order_id=client_order_id,
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                    status=ExecutionOrderStatus.FILLED,
+                    broker_status="filled",
+                    submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    filled_at=datetime(2024, 1, 5, 14, 42, tzinfo=UTC),
+                    canceled_at=None,
+                    updated_at=datetime(2024, 1, 5, 14, 42, tzinfo=UTC),
+                    raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                )
+            ],
+            fills=[
+                BrokerFillSnapshot(
+                    broker_fill_id="fill-aapl-001",
+                    broker_order_id="existing-aapl-001",
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("4.000000"),
+                    price=Decimal("120.100000"),
+                    filled_at=datetime(2024, 1, 5, 14, 38, tzinfo=UTC),
+                    raw_payload={"id": "fill-aapl-001", "order_id": "existing-aapl-001"},
+                ),
+                BrokerFillSnapshot(
+                    broker_fill_id="fill-aapl-002",
+                    broker_order_id="existing-aapl-001",
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("6.000000"),
+                    price=Decimal("120.300000"),
+                    filled_at=datetime(2024, 1, 5, 14, 42, tzinfo=UTC),
+                    raw_payload={"id": "fill-aapl-002", "order_id": "existing-aapl-001"},
+                ),
+            ],
+            positions=[
+                BrokerPositionSnapshot(
+                    symbol="AAPL",
+                    quantity=Decimal("10.000000"),
+                    average_entry_price=Decimal("120.220000"),
+                    cost_basis=Decimal("1202.200000"),
+                    market_value=Decimal("1215.000000"),
+                    current_price=Decimal("121.500000"),
+                    raw_payload={"symbol": "AAPL"},
+                )
+            ],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("98797.800000"),
+                buying_power=Decimal("98797.800000"),
+                equity=Decimal("100012.800000"),
+                long_market_value=Decimal("1215.000000"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100012.800000"},
+            ),
+        ),
+    )
+
+    assert filled_report.fills_ingested == 1
+
+    with session_scope(settings) as session:
+        paper_order = session.execute(select(PaperOrder)).scalar_one()
+        paper_fills = session.execute(select(PaperFill).order_by(PaperFill.filled_at.asc())).scalars().all()
+        position = session.execute(select(Position).where(Position.status == "open")).scalar_one()
+
+    assert paper_order.status == "filled"
+    assert len(paper_fills) == 2
+    assert [fill.broker_fill_id for fill in paper_fills] == ["fill-aapl-001", "fill-aapl-002"]
+    assert position.quantity == Decimal("10.000000")

@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session test
+.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session sync-paper-state test
 
 up:
 	$(COMPOSE) up --build -d
@@ -70,6 +70,11 @@ run-paper-session:
 		$(if $(STRATEGY),--strategy $(STRATEGY),) \
 		$(if $(AS_OF),--as-of $(AS_OF),) \
 		$(if $(RISK_RUN_ID),--risk-run-id $(RISK_RUN_ID),)
+
+sync-paper-state:
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/sync_paper_state.py \
+		$(if $(STRATEGY),--strategy $(STRATEGY),) \
+		$(if $(AS_OF),--as-of $(AS_OF),)
 
 test:
 	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py tests/test_strategy_registry.py tests/test_dry_run.py tests/test_market_data_ingestion.py tests/test_market_data_access.py tests/test_trend_following_strategy.py -q

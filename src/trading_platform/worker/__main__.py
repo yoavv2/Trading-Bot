@@ -17,6 +17,7 @@ from trading_platform.services.paper_execution import (
     resolve_submission_session,
     run_paper_order_submission,
     run_paper_session,
+    sync_paper_state,
 )
 from trading_platform.services.risk import resolve_evaluation_session, run_risk_evaluation
 
@@ -87,6 +88,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_session_parser.add_argument("--risk-run-id", help="Explicit succeeded risk_evaluation run ID to consume.")
     run_session_parser.add_argument("--compact", action="store_true", default=False)
     run_session_parser.add_argument("--trigger-source")
+
+    sync_paper_parser = subparsers.add_parser(
+        "sync-paper-state",
+        help="Sync broker order lifecycle, fills, positions, and account state into local storage.",
+    )
+    sync_paper_parser.add_argument("--strategy")
+    sync_paper_parser.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        help="Target session date. Defaults to the latest completed persisted session.",
+    )
+    sync_paper_parser.add_argument("--compact", action="store_true", default=False)
 
     ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
     ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
@@ -293,6 +306,35 @@ def run_paper_session_command(args: argparse.Namespace) -> None:
     print(json.dumps(report.to_dict(), indent=indent, default=str))
 
 
+def run_sync_paper_state_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+    as_of_session = resolve_submission_session(
+        settings=settings,
+        as_of_arg=args.as_of,
+    )
+    strategy_id = args.strategy or settings.execution.paper_session_runner.default_strategy_id
+    report = sync_paper_state(
+        strategy_id,
+        as_of_session=as_of_session,
+        settings=settings,
+    )
+    logger.info(
+        "worker_paper_state_sync_completed",
+        extra={
+            "context": {
+                "strategy_id": strategy_id,
+                "as_of_session": as_of_session.isoformat(),
+                "orders_synced": report.orders_synced,
+                "fills_ingested": report.fills_ingested,
+            }
+        },
+    )
+    indent = None if args.compact else 2
+    print(json.dumps(report.to_dict(), indent=indent, default=str))
+
+
 def run_ingest_bars(args: argparse.Namespace) -> None:
     from trading_platform.services.ingestion import ingest_daily_bars
 
@@ -433,6 +475,9 @@ def main() -> None:
         return
     if args.command == "run-paper-session":
         run_paper_session_command(args)
+        return
+    if args.command == "sync-paper-state":
+        run_sync_paper_state_command(args)
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)
