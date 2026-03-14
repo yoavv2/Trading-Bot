@@ -13,11 +13,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from trading_platform.db.base import Base, TimestampedModel
 
 if TYPE_CHECKING:
+    from trading_platform.db.models.backtest_equity_snapshot import BacktestEquitySnapshot
+    from trading_platform.db.models.backtest_signal import BacktestSignal
+    from trading_platform.db.models.backtest_trade import BacktestTrade
     from trading_platform.db.models.strategy import Strategy
 
 
 class StrategyRunType(StrEnum):
     DRY_BOOTSTRAP = "dry_bootstrap"
+    BACKTEST = "backtest"
 
 
 class StrategyRunStatus(StrEnum):
@@ -71,7 +75,20 @@ class StrategyRun(TimestampedModel, Base):
         nullable=False,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    parameters_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     result_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
     strategy: Mapped["Strategy"] = relationship(back_populates="runs")
+    backtest_signals: Mapped[list["BacktestSignal"]] = relationship(
+        back_populates="strategy_run",
+        cascade="all, delete-orphan",
+    )
+    backtest_trades: Mapped[list["BacktestTrade"]] = relationship(
+        back_populates="strategy_run",
+        cascade="all, delete-orphan",
+    )
+    backtest_equity_snapshots: Mapped[list["BacktestEquitySnapshot"]] = relationship(
+        back_populates="strategy_run",
+        cascade="all, delete-orphan",
+    )

@@ -166,6 +166,30 @@ class MarketDataSettings(BaseModel):
     metadata: MetadataRefreshSettings = MetadataRefreshSettings()
 
 
+class BacktestFeeSettings(BaseModel):
+    """Explicit fee assumptions for deterministic backtests."""
+
+    commission_per_order: float = Field(default=0.0, ge=0.0)
+
+
+class BacktestSlippageSettings(BaseModel):
+    """Explicit slippage assumptions for deterministic backtests."""
+
+    model: Literal["bps"] = "bps"
+    bps: float = Field(default=5.0, ge=0.0)
+
+
+class BacktestSettings(BaseModel):
+    """Typed settings for the daily-bar backtest runner."""
+
+    initial_capital: float = Field(default=100_000.0, gt=0.0)
+    fill_strategy: Literal["next_session_open"] = "next_session_open"
+    allocation_model: Literal["equal_weight_slots"] = "equal_weight_slots"
+    max_concurrent_positions: int = Field(default=10, ge=1)
+    fees: BacktestFeeSettings = BacktestFeeSettings()
+    slippage: BacktestSlippageSettings = BacktestSlippageSettings()
+
+
 class Settings(BaseModel):
     app: AppMetadata = AppMetadata()
     api: ApiSettings = ApiSettings()
@@ -175,6 +199,7 @@ class Settings(BaseModel):
     paths: PathSettings = PathSettings()
     strategies: StrategyBundle = StrategyBundle()
     market_data: MarketDataSettings = MarketDataSettings()
+    backtest: BacktestSettings = BacktestSettings()
 
 
 class EnvironmentOverrides(BaseSettings):
@@ -193,6 +218,7 @@ class EnvironmentOverrides(BaseSettings):
     paths: PathSettings = PathSettings()
     strategies: StrategyBundle = StrategyBundle()
     market_data: MarketDataSettings = MarketDataSettings()
+    backtest: BacktestSettings = BacktestSettings()
 
 
 def _resolve_path(raw_path: str | Path) -> Path:

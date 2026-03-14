@@ -112,6 +112,7 @@ def test_dry_run_script_persists_strategy_run(
 
     assert persisted_run.status == StrategyRunStatus.SUCCEEDED
     assert persisted_run.trigger_source == "dry_run_script"
+    assert persisted_run.parameters_snapshot == {}
     assert persisted_run.result_summary["strategy"]["strategy_id"] == "trend_following_daily"
     assert persisted_run.result_summary["details"]["universe_size"] == 10
 

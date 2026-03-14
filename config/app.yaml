@@ -52,6 +52,17 @@ market_data:
       - AMZN
       - GOOGL
       - TSLA
+
+backtest:
+  initial_capital: 100000
+  fill_strategy: next_session_open
+  allocation_model: equal_weight_slots
+  max_concurrent_positions: 10
+  fees:
+    commission_per_order: 0.0
+  slippage:
+    model: bps
+    bps: 5.0
   calendar:
     exchange: XNYS
   metadata:
