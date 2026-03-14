@@ -98,6 +98,42 @@ class StrategyBundle(BaseModel):
     trend_following_daily: TrendFollowingDailySettings = TrendFollowingDailySettings()
 
 
+class PolygonProviderSettings(BaseModel):
+    """Typed settings for the Polygon.io REST provider."""
+
+    base_url: str = "https://api.polygon.io"
+    api_key: str = ""
+    adjusted: bool = True
+    max_retries: int = 3
+    retry_backoff_factor: float = 0.5
+    timeout_seconds: float = 30.0
+
+
+class IngestSettings(BaseModel):
+    """Defaults controlling the daily-bar ingest window and symbol universe."""
+
+    default_lookback_days: int = 365
+    universe: tuple[str, ...] = (
+        "SPY",
+        "QQQ",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "AMD",
+        "META",
+        "AMZN",
+        "GOOGL",
+        "TSLA",
+    )
+
+
+class MarketDataSettings(BaseModel):
+    """Root market-data settings block bundling provider and ingest defaults."""
+
+    polygon: PolygonProviderSettings = PolygonProviderSettings()
+    ingest: IngestSettings = IngestSettings()
+
+
 class Settings(BaseModel):
     app: AppMetadata = AppMetadata()
     api: ApiSettings = ApiSettings()
@@ -106,6 +142,7 @@ class Settings(BaseModel):
     readiness: ReadinessSettings = ReadinessSettings()
     paths: PathSettings = PathSettings()
     strategies: StrategyBundle = StrategyBundle()
+    market_data: MarketDataSettings = MarketDataSettings()
 
 
 class EnvironmentOverrides(BaseSettings):
@@ -123,6 +160,7 @@ class EnvironmentOverrides(BaseSettings):
     readiness: ReadinessSettings = ReadinessSettings()
     paths: PathSettings = PathSettings()
     strategies: StrategyBundle = StrategyBundle()
+    market_data: MarketDataSettings = MarketDataSettings()
 
 
 def _resolve_path(raw_path: str | Path) -> Path:

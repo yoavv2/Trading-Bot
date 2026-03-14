@@ -31,3 +31,24 @@ readiness:
 paths:
   data_dir: .data
   strategy_config_dir: config/strategies
+
+market_data:
+  polygon:
+    base_url: https://api.polygon.io
+    adjusted: true
+    max_retries: 3
+    retry_backoff_factor: 0.5
+    timeout_seconds: 30
+  ingest:
+    default_lookback_days: 365
+    universe:
+      - SPY
+      - QQQ
+      - AAPL
+      - MSFT
+      - NVDA
+      - AMD
+      - META
+      - AMZN
+      - GOOGL
+      - TSLA
