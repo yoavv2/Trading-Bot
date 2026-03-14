@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation Platform** - Stand up the Python, FastAPI, PostgreSQL, and Docker skeleton with the core trading-platform interfaces and persistence model. Completed 2026-03-12.
 - [x] **Phase 2: Data and Strategy** - Build the daily-bar data pipeline and implement `TrendFollowingDailyV1` as the first isolated strategy module. (completed 2026-03-14)
-- [ ] **Phase 3: Backtest and Reporting** - Run deterministic daily-bar backtests and persist research outputs that are usable for strategy evaluation.
+- [x] **Phase 3: Backtest and Reporting** - Run deterministic daily-bar backtests and persist research outputs that are usable for strategy evaluation. Completed 2026-03-14.
 - [ ] **Phase 4: Risk and Portfolio** - Add the portfolio state and mandatory risk-validation pipeline that gates every signal before execution.
 - [ ] **Phase 5: Paper Execution** - Turn approved daily signals into Alpaca paper orders with scheduling, lifecycle tracking, and reconciliation.
 - [ ] **Phase 6: Analytics and APIs** - Make the system measurable and inspectable through analytics, operational controls, and operator-facing API reads.
@@ -84,12 +84,12 @@ Plans:
   2. Backtest runs persist their configuration, trades, positions or equity snapshots, and performance summaries in the database.
   3. Fee and slippage assumptions are explicit, versioned with the run, and visible in the generated results.
   4. The operator can inspect a trustworthy report or export for a run without reading raw logs.
-**Plans:** 2/3 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 03-01: Add typed backtest settings and persistence foundation for Phase 3 artifacts
 - [x] 03-02: Build the deterministic daily-bar backtest runner and execution flow
-- [ ] 03-03: Generate run reports, metrics summaries, and exports for research inspection
+- [x] 03-03: Generate run reports, metrics summaries, and exports for research inspection
 
 ### Phase 4: Risk and Portfolio
 **Goal:** Add deterministic sizing, portfolio state, and hard execution guardrails so no signal can bypass risk controls.
@@ -150,7 +150,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Foundation Platform | 3/3 | Complete | 2026-03-12 |
 | 2. Data and Strategy | 3/3 | Complete   | 2026-03-14 |
-| 3. Backtest and Reporting | 2/3 | In progress | - |
+| 3. Backtest and Reporting | 3/3 | Complete | 2026-03-14 |
 | 4. Risk and Portfolio | 0/2 | Not started | - |
 | 5. Paper Execution | 0/3 | Not started | - |
 | 6. Analytics and APIs | 0/3 | Not started | - |
