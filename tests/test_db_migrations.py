@@ -116,7 +116,11 @@ def test_alembic_upgrade_creates_phase1_tables(migrated_database: str) -> None:
         "run_type",
         "status",
         "started_at",
+        "parameters_snapshot",
     }
+
+    enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
+    assert enums["strategy_run_type"] >= {"dry_bootstrap", "backtest"}
 
 
 def test_alembic_upgrade_creates_phase2_market_data_tables(migrated_database: str) -> None:
@@ -159,6 +163,52 @@ def test_alembic_upgrade_creates_phase2_market_data_tables(migrated_database: st
     # Verify the natural uniqueness constraint on daily_bars
     uq_constraints = {uc["name"] for uc in inspector.get_unique_constraints("daily_bars")}
     assert "uq_daily_bars_symbol_session_adjusted_provider" in uq_constraints
+
+
+def test_alembic_upgrade_creates_phase3_backtest_tables(migrated_database: str) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert {"backtest_signals", "backtest_trades", "backtest_equity_snapshots"}.issubset(table_names)
+
+    signal_cols = {col["name"] for col in inspector.get_columns("backtest_signals")}
+    assert signal_cols >= {
+        "strategy_run_id",
+        "symbol_id",
+        "session_date",
+        "direction",
+        "reason",
+        "close",
+        "bars_available",
+    }
+
+    trade_cols = {col["name"] for col in inspector.get_columns("backtest_trades")}
+    assert trade_cols >= {
+        "strategy_run_id",
+        "symbol_id",
+        "status",
+        "quantity",
+        "entry_signal_session",
+        "entry_fill_session",
+        "entry_price",
+    }
+
+    equity_cols = {col["name"] for col in inspector.get_columns("backtest_equity_snapshots")}
+    assert equity_cols >= {
+        "strategy_run_id",
+        "session_date",
+        "cash",
+        "gross_exposure",
+        "total_equity",
+        "open_positions",
+    }
+
+    signal_constraints = {uc["name"] for uc in inspector.get_unique_constraints("backtest_signals")}
+    assert "uq_backtest_signals_run_symbol_session" in signal_constraints
+
+    equity_constraints = {uc["name"] for uc in inspector.get_unique_constraints("backtest_equity_snapshots")}
+    assert "uq_backtest_equity_snapshots_run_session" in equity_constraints
 
 
 def test_seed_script_is_idempotent(migrated_database: str) -> None:
