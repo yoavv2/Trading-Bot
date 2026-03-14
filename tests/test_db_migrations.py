@@ -233,6 +233,39 @@ def test_alembic_upgrade_creates_phase3_backtest_tables(migrated_database: str) 
     assert "uq_backtest_metrics_strategy_run_id" in metric_constraints
 
 
+def test_alembic_upgrade_creates_phase4_portfolio_tables(migrated_database: str) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert {"positions", "account_snapshots"}.issubset(table_names)
+
+    position_cols = {col["name"] for col in inspector.get_columns("positions")}
+    assert position_cols >= {
+        "strategy_id",
+        "symbol_id",
+        "status",
+        "quantity",
+        "average_entry_price",
+        "cost_basis",
+        "opened_session_date",
+        "closed_session_date",
+    }
+
+    snapshot_cols = {col["name"] for col in inspector.get_columns("account_snapshots")}
+    assert snapshot_cols >= {
+        "strategy_id",
+        "source_run_id",
+        "snapshot_source",
+        "snapshot_at",
+        "cash",
+        "gross_exposure",
+        "total_equity",
+        "buying_power",
+        "open_positions",
+    }
+
+
 def test_seed_script_is_idempotent(migrated_database: str) -> None:
     first_record, first_created = seed_phase_one()
     second_record, second_created = seed_phase_one()
