@@ -204,6 +204,32 @@ class PortfolioSettings(BaseModel):
         return Decimal(str(self.starting_cash))
 
 
+class AlpacaBrokerSettings(BaseModel):
+    """Typed settings for Alpaca paper-order submission."""
+
+    base_url: str = "https://paper-api.alpaca.markets"
+    api_key: str = ""
+    api_secret: str = ""
+    max_retries: int = 3
+    retry_backoff_factor: float = 0.5
+    timeout_seconds: float = 30.0
+
+
+class BrokerSettings(BaseModel):
+    """Broker-provider settings surface for execution flows."""
+
+    provider: Literal["alpaca"] = "alpaca"
+    alpaca: AlpacaBrokerSettings = AlpacaBrokerSettings()
+
+
+class ExecutionSettings(BaseModel):
+    """Deterministic defaults for paper-order submission."""
+
+    default_order_type: Literal["market"] = "market"
+    default_time_in_force: Literal["day"] = "day"
+    client_order_id_prefix: str = Field(default="tp", min_length=2, max_length=12)
+
+
 class Settings(BaseModel):
     app: AppMetadata = AppMetadata()
     api: ApiSettings = ApiSettings()
@@ -215,6 +241,8 @@ class Settings(BaseModel):
     market_data: MarketDataSettings = MarketDataSettings()
     backtest: BacktestSettings = BacktestSettings()
     portfolio: PortfolioSettings = PortfolioSettings()
+    broker: BrokerSettings = BrokerSettings()
+    execution: ExecutionSettings = ExecutionSettings()
 
 
 class EnvironmentOverrides(BaseSettings):
@@ -235,6 +263,8 @@ class EnvironmentOverrides(BaseSettings):
     market_data: MarketDataSettings = MarketDataSettings()
     backtest: BacktestSettings = BacktestSettings()
     portfolio: PortfolioSettings = PortfolioSettings()
+    broker: BrokerSettings = BrokerSettings()
+    execution: ExecutionSettings = ExecutionSettings()
 
 
 def _resolve_path(raw_path: str | Path) -> Path:
