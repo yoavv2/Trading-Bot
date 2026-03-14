@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run ingest-bars sync-metadata sync-sessions test
+.PHONY: up down logs migrate seed dry-run ingest-bars sync-metadata sync-sessions generate-signals test
 
 up:
 	$(COMPOSE) up --build -d
@@ -42,5 +42,10 @@ sync-sessions:
 		$(if $(FROM_DATE),--from-date $(FROM_DATE),) \
 		$(if $(TO_DATE),--to-date $(TO_DATE),)
 
+generate-signals:
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/generate_signals.py \
+		--strategy $(STRATEGY) \
+		$(if $(AS_OF),--as-of $(AS_OF),)
+
 test:
-	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py tests/test_strategy_registry.py tests/test_dry_run.py tests/test_market_data_ingestion.py tests/test_market_data_access.py -q
+	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py tests/test_strategy_registry.py tests/test_dry_run.py tests/test_market_data_ingestion.py tests/test_market_data_access.py tests/test_trend_following_strategy.py -q
