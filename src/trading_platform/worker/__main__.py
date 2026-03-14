@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import get_strategy_config, load_settings
+from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
 
@@ -30,6 +31,15 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--to-date", metavar="YYYY-MM-DD", help="Backtest window end (inclusive).")
     backtest_parser.add_argument("--compact", action="store_true", default=False)
     backtest_parser.add_argument("--trigger-source", default="worker_cli")
+
+    report_parser = subparsers.add_parser(
+        "report-backtest",
+        help="Render and export a persisted backtest report.",
+    )
+    report_parser.add_argument("--run-id", help="Explicit backtest run ID to report.")
+    report_parser.add_argument("--strategy", default="trend_following_daily")
+    report_parser.add_argument("--summary-format", choices=("markdown", "json"), default="markdown")
+    report_parser.add_argument("--output-dir", help="Directory for summary and CSV exports.")
 
     ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
     ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
@@ -130,6 +140,19 @@ def run_backtest_command(args: argparse.Namespace) -> None:
     )
     indent = None if args.compact else 2
     print(json.dumps(report.to_dict(), indent=indent, default=str))
+
+
+def run_report_backtest_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    manifest = export_backtest_report(
+        run_id=args.run_id,
+        strategy_id=args.strategy,
+        output_dir=args.output_dir,
+        summary_format=args.summary_format,
+        settings=settings,
+    )
+    print(manifest.rendered_summary)
 
 
 def run_ingest_bars(args: argparse.Namespace) -> None:
@@ -260,6 +283,9 @@ def main() -> None:
         return
     if args.command == "backtest":
         run_backtest_command(args)
+        return
+    if args.command == "report-backtest":
+        run_report_backtest_command(args)
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)

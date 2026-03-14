@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run backtest ingest-bars sync-metadata sync-sessions generate-signals test
+.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals test
 
 up:
 	$(COMPOSE) up --build -d
@@ -32,6 +32,12 @@ backtest:
 		--strategy $(STRATEGY) \
 		$(if $(FROM_DATE),--from-date $(FROM_DATE),) \
 		$(if $(TO_DATE),--to-date $(TO_DATE),)
+
+export-backtest-report:
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/export_backtest_report.py \
+		$(if $(RUN_ID),--run-id $(RUN_ID),--strategy $(STRATEGY)) \
+		--summary-format $(or $(SUMMARY_FORMAT),markdown) \
+		$(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),)
 
 ingest-bars:
 	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/ingest_polygon_bars.py \
