@@ -13,6 +13,7 @@ from trading_platform.core.settings import get_strategy_config, load_settings
 from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
+from trading_platform.services.risk import resolve_evaluation_session, run_risk_evaluation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,6 +41,19 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--strategy", default="trend_following_daily")
     report_parser.add_argument("--summary-format", choices=("markdown", "json"), default="markdown")
     report_parser.add_argument("--output-dir", help="Directory for summary and CSV exports.")
+
+    risk_parser = subparsers.add_parser(
+        "evaluate-risk",
+        help="Run the persisted signal-to-risk evaluation flow.",
+    )
+    risk_parser.add_argument("--strategy", default="trend_following_daily")
+    risk_parser.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        help="Session date to evaluate. Defaults to the latest completed persisted session.",
+    )
+    risk_parser.add_argument("--compact", action="store_true", default=False)
+    risk_parser.add_argument("--trigger-source", default="worker_cli")
 
     ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
     ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
@@ -153,6 +167,35 @@ def run_report_backtest_command(args: argparse.Namespace) -> None:
         settings=settings,
     )
     print(manifest.rendered_summary)
+
+
+def run_evaluate_risk_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+    as_of_session = resolve_evaluation_session(
+        settings=settings,
+        as_of_arg=args.as_of,
+    )
+    report = run_risk_evaluation(
+        args.strategy,
+        as_of_session=as_of_session,
+        trigger_source=args.trigger_source,
+        settings=settings,
+    )
+    logger.info(
+        "worker_risk_evaluation_completed",
+        extra={
+            "context": {
+                "run_id": report.run_id,
+                "strategy_id": report.strategy_id,
+                "status": report.status,
+                "as_of_session": as_of_session.isoformat(),
+            }
+        },
+    )
+    indent = None if args.compact else 2
+    print(json.dumps(report.to_dict(), indent=indent, default=str))
 
 
 def run_ingest_bars(args: argparse.Namespace) -> None:
@@ -286,6 +329,9 @@ def main() -> None:
         return
     if args.command == "report-backtest":
         run_report_backtest_command(args)
+        return
+    if args.command == "evaluate-risk":
+        run_evaluate_risk_command(args)
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)
