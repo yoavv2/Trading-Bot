@@ -66,6 +66,12 @@ class PathSettings(BaseModel):
 class TrendFollowingIndicatorSettings(BaseModel):
     short_window: int = 50
     long_window: int = 200
+    warmup_periods: int = 200  # minimum bars required before signals are emitted
+
+
+class TrendFollowingExitSettings(BaseModel):
+    close_below: str = "sma_50"  # exit when close < this moving average
+    exit_window: int = 50  # window length matching the close_below MA
 
 
 class TrendFollowingRiskSettings(BaseModel):
@@ -91,7 +97,7 @@ class TrendFollowingDailySettings(BaseModel):
     )
     indicators: TrendFollowingIndicatorSettings = TrendFollowingIndicatorSettings()
     risk: TrendFollowingRiskSettings = TrendFollowingRiskSettings()
-    exits: dict[str, str] = Field(default_factory=lambda: {"close_below": "sma_50"})
+    exits: TrendFollowingExitSettings = TrendFollowingExitSettings()
 
 
 class StrategyBundle(BaseModel):
@@ -279,7 +285,7 @@ def clear_settings_cache() -> None:
     load_settings.cache_clear()
 
 
-def get_strategy_config(settings: Settings, strategy_id: str) -> TrendFollowingDailySettings:
+def get_strategy_config(settings: Settings, strategy_id: str) -> TrendFollowingDailySettings:  # noqa: E501
     try:
         return getattr(settings.strategies, strategy_id)
     except AttributeError as exc:

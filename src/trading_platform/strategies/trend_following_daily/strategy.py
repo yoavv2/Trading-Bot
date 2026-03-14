@@ -45,7 +45,7 @@ class TrendFollowingDailyStrategy(BaseStrategy):
             universe=tuple(config.universe),
             indicators=config.indicators.model_dump(mode="json"),
             risk=config.risk.model_dump(mode="json"),
-            exits=config.exits,
+            exits=config.exits.model_dump(mode="json"),
         )
 
     def dry_run(self, services: object) -> StrategyBootstrapResult:

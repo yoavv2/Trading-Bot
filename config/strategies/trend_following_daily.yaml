@@ -15,9 +15,13 @@ universe:
 indicators:
   short_window: 50
   long_window: 200
+  # warmup_periods is derived from long_window; listed here for operator clarity
+  warmup_periods: 200
 risk:
   max_positions: 10
   risk_per_trade: 0.01
 exits:
   close_below: sma_50
+  # exit_window matches short_window; listed here so the exit rule is self-contained
+  exit_window: 50
 
