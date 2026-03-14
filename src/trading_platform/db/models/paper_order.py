@@ -7,12 +7,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, JSON, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_platform.db.base import Base, TimestampedModel
 
 if TYPE_CHECKING:
+    from trading_platform.db.models.execution_event import ExecutionEvent
     from trading_platform.db.models.paper_fill import PaperFill
     from trading_platform.db.models.risk_event import RiskEvent
     from trading_platform.db.models.strategy_run import StrategyRun
@@ -57,6 +58,12 @@ class PaperOrder(TimestampedModel, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_submission")
     broker_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submission_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sync_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_submission_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_submission_error: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    last_sync_error: Mapped[str | None] = mapped_column(Text(), nullable=True)
     filled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_broker_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -69,4 +76,8 @@ class PaperOrder(TimestampedModel, Base):
     fills: Mapped[list["PaperFill"]] = relationship(
         back_populates="paper_order",
         cascade="all, delete-orphan",
+    )
+    execution_events: Mapped[list["ExecutionEvent"]] = relationship(
+        back_populates="paper_order",
+        cascade="save-update, merge",
     )

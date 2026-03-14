@@ -14,6 +14,7 @@ from trading_platform.db.base import Base, TimestampedModel
 
 if TYPE_CHECKING:
     from trading_platform.db.models.risk_event import RiskEvent
+    from trading_platform.db.models.execution_event import ExecutionEvent
     from trading_platform.db.models.paper_order import PaperOrder
     from trading_platform.db.models.backtest_equity_snapshot import BacktestEquitySnapshot
     from trading_platform.db.models.backtest_signal import BacktestSignal
@@ -26,6 +27,7 @@ class StrategyRunType(StrEnum):
     BACKTEST = "backtest"
     RISK_EVALUATION = "risk_evaluation"
     PAPER_EXECUTION = "paper_execution"
+    RECONCILIATION = "reconciliation"
 
 
 class StrategyRunStatus(StrEnum):
@@ -101,6 +103,10 @@ class StrategyRun(TimestampedModel, Base):
         cascade="all, delete-orphan",
     )
     paper_orders: Mapped[list["PaperOrder"]] = relationship(
+        back_populates="strategy_run",
+        cascade="all, delete-orphan",
+    )
+    execution_events: Mapped[list["ExecutionEvent"]] = relationship(
         back_populates="strategy_run",
         cascade="all, delete-orphan",
     )

@@ -289,7 +289,7 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
     inspector = inspect(get_engine(settings))
 
     table_names = set(inspector.get_table_names())
-    assert {"paper_orders", "paper_fills"}.issubset(table_names)
+    assert {"paper_orders", "paper_fills", "execution_events"}.issubset(table_names)
 
     paper_order_cols = {col["name"] for col in inspector.get_columns("paper_orders")}
     assert paper_order_cols >= {
@@ -306,6 +306,12 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
         "status",
         "broker_status",
         "submitted_at",
+        "submission_attempt_count",
+        "sync_failure_count",
+        "last_submission_attempt_at",
+        "last_sync_failure_at",
+        "last_submission_error",
+        "last_sync_error",
         "filled_at",
         "canceled_at",
         "last_broker_update_at",
@@ -336,12 +342,25 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
     paper_fill_constraints = {uc["name"] for uc in inspector.get_unique_constraints("paper_fills")}
     assert paper_fill_constraints >= {"uq_paper_fills_broker_fill_id"}
 
+    execution_event_cols = {col["name"] for col in inspector.get_columns("execution_events")}
+    assert execution_event_cols >= {
+        "strategy_run_id",
+        "paper_order_id",
+        "event_type",
+        "severity",
+        "blocks_execution",
+        "event_at",
+        "message",
+        "details",
+    }
+
     enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
     assert enums["strategy_run_type"] >= {
         "dry_bootstrap",
         "backtest",
         "risk_evaluation",
         "paper_execution",
+        "reconciliation",
     }
 
 
