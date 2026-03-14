@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from trading_platform.core.settings import Settings, get_strategy_config, load_settings
+from trading_platform.db.models import RiskEvent, Strategy, StrategyRun, StrategyRunStatus, StrategyRunType, Symbol
+from trading_platform.db.session import session_scope
 from trading_platform.services.market_data_access import (
     latest_completed_session,
     missing_bars_for_session,
@@ -22,6 +26,7 @@ from trading_platform.services.portfolio import (
     PortfolioState,
     PositionSnapshot,
 )
+from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 from trading_platform.strategies.signals import Signal, SignalBatch, SignalDirection
 
 
@@ -104,6 +109,28 @@ class RiskEvaluationResult:
             "approved_count": len(self.approved),
             "rejected_count": len(self.rejected),
             "decisions": [decision.to_dict() for decision in self.decisions],
+        }
+
+
+@dataclass(frozen=True)
+class RiskRunReport:
+    run_id: str
+    strategy_id: str
+    status: str
+    trigger_source: str
+    started_at: str
+    completed_at: str | None
+    result_summary: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "strategy_id": self.strategy_id,
+            "status": self.status,
+            "trigger_source": self.trigger_source,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "result_summary": self.result_summary,
         }
 
 
@@ -411,3 +438,218 @@ class PlaceholderRiskService(RiskService):
 
     def validate(self, payload: RiskEvaluationRequest) -> RiskEvaluationResult:
         raise NotImplementedError("Risk validation is deferred to Phase 4.")
+
+
+def resolve_evaluation_session(
+    *,
+    settings: Settings,
+    as_of_arg: str | None,
+) -> date:
+    if as_of_arg is not None:
+        return date.fromisoformat(as_of_arg)
+
+    with session_scope(settings) as session:
+        latest = latest_completed_session(
+            session,
+            exchange=settings.market_data.calendar.exchange,
+        )
+    if latest is not None:
+        return latest
+    return date.today() - timedelta(days=1)
+
+
+def run_risk_evaluation(
+    strategy_id: str,
+    *,
+    as_of_session: date,
+    trigger_source: str = "risk_script",
+    settings: Settings | None = None,
+    registry: StrategyRegistry | None = None,
+) -> RiskRunReport:
+    resolved_settings = settings or load_settings()
+    resolved_registry = registry or build_default_registry(resolved_settings)
+    strategy = resolved_registry.resolve(strategy_id)
+    metadata = strategy.metadata
+    run_id = _create_risk_run(
+        resolved_settings,
+        metadata,
+        trigger_source=trigger_source,
+        as_of_session=as_of_session,
+    )
+
+    _update_risk_run(
+        resolved_settings,
+        run_id,
+        status=StrategyRunStatus.RUNNING,
+        result_summary={
+            "stage": "running",
+            "strategy_id": metadata.strategy_id,
+            "as_of_session": as_of_session.isoformat(),
+        },
+    )
+
+    try:
+        with session_scope(resolved_settings) as session:
+            from trading_platform.services.bootstrap import ensure_strategy_record
+
+            strategy_record = ensure_strategy_record(session, metadata)
+            symbol_map = _ensure_symbol_rows(session, metadata.universe)
+            batch = strategy.generate_signals(session, as_of_session)
+            portfolio_service = PortfolioService(resolved_settings)
+            portfolio_state = portfolio_service.load_state(
+                session,
+                strategy_id=metadata.strategy_id,
+                as_of_session=as_of_session,
+            )
+            portfolio_service.record_snapshot(
+                session,
+                strategy_id=metadata.strategy_id,
+                state=portfolio_state,
+                source_run_id=run_id,
+                snapshot_source="risk_evaluation",
+            )
+            risk_result = PortfolioRiskService(resolved_settings).validate(
+                RiskEvaluationRequest(
+                    db_session=session,
+                    signal_batch=batch,
+                    portfolio_state=portfolio_state,
+                )
+            )
+
+            for decision in risk_result.decisions:
+                session.add(
+                    RiskEvent(
+                        strategy_run_id=run_id,
+                        symbol_id=symbol_map[decision.symbol].id,
+                        session_date=decision.session_date,
+                        signal_direction=decision.signal_direction,
+                        signal_reason=decision.signal_reason,
+                        outcome=decision.outcome.value,
+                        decision_code=decision.code.value,
+                        decision_reason=decision.reason,
+                        reference_price=decision.reference_price,
+                        proposed_quantity=decision.proposed_quantity,
+                        proposed_notional=decision.proposed_notional,
+                        risk_metadata=decision.metadata or {},
+                    )
+                )
+
+        summary = {
+            "stage": "completed",
+            "strategy_id": strategy_id,
+            "as_of_session": as_of_session.isoformat(),
+            "approved_count": len(risk_result.approved),
+            "rejected_count": len(risk_result.rejected),
+            "decision_count": len(risk_result.decisions),
+            "decision_codes": [decision.code.value for decision in risk_result.decisions],
+            "portfolio": resolved_settings.portfolio.model_dump(mode="json"),
+        }
+    except Exception as exc:
+        _update_risk_run(
+            resolved_settings,
+            run_id,
+            status=StrategyRunStatus.FAILED,
+            completed_at=datetime.now(UTC),
+            error_message=str(exc),
+            result_summary={
+                "stage": "failed",
+                "strategy_id": strategy_id,
+                "as_of_session": as_of_session.isoformat(),
+            },
+        )
+        raise
+
+    return _update_risk_run(
+        resolved_settings,
+        run_id,
+        status=StrategyRunStatus.SUCCEEDED,
+        completed_at=datetime.now(UTC),
+        result_summary=summary,
+    )
+
+
+def _create_risk_run(
+    settings: Settings,
+    metadata,
+    *,
+    trigger_source: str,
+    as_of_session: date,
+) -> Any:
+    with session_scope(settings) as session:
+        from trading_platform.services.bootstrap import ensure_strategy_record
+
+        strategy_record = ensure_strategy_record(session, metadata)
+        strategy_run = StrategyRun(
+            strategy_id=strategy_record.id,
+            run_type=StrategyRunType.RISK_EVALUATION,
+            status=StrategyRunStatus.PENDING,
+            trigger_source=trigger_source,
+            parameters_snapshot={
+                "strategy": metadata.to_public_dict(),
+                "portfolio": settings.portfolio.model_dump(mode="json"),
+                "as_of_session": as_of_session.isoformat(),
+                "share_quantity_mode": "whole_shares",
+            },
+            result_summary={
+                "stage": "pending",
+                "strategy_id": metadata.strategy_id,
+                "as_of_session": as_of_session.isoformat(),
+            },
+        )
+        session.add(strategy_run)
+        session.flush()
+        return strategy_run.id
+
+
+def _update_risk_run(
+    settings: Settings,
+    run_id,
+    *,
+    status: StrategyRunStatus,
+    result_summary: dict[str, Any] | None = None,
+    error_message: str | None = None,
+    completed_at: datetime | None = None,
+) -> RiskRunReport:
+    with session_scope(settings) as session:
+        strategy_run = session.get(StrategyRun, run_id)
+        if strategy_run is None:
+            raise LookupError(f"Missing strategy_run '{run_id}'.")
+
+        strategy_run.status = status
+        if result_summary is not None:
+            strategy_run.result_summary = result_summary
+        if error_message is not None:
+            strategy_run.error_message = error_message
+        if completed_at is not None:
+            strategy_run.completed_at = completed_at
+
+        session.flush()
+        session.refresh(strategy_run)
+        strategy = strategy_run.strategy
+
+        return RiskRunReport(
+            run_id=str(strategy_run.id),
+            strategy_id=strategy.strategy_id if strategy is not None else "unknown",
+            status=strategy_run.status.value,
+            trigger_source=strategy_run.trigger_source,
+            started_at=strategy_run.started_at.isoformat(),
+            completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+            result_summary=strategy_run.result_summary,
+        )
+
+
+def _ensure_symbol_rows(session: Session, tickers: tuple[str, ...]) -> dict[str, Symbol]:
+    rows = session.execute(
+        select(Symbol).where(Symbol.ticker.in_(tickers))
+    ).scalars().all()
+    symbol_map = {row.ticker: row for row in rows}
+
+    for ticker in tickers:
+        if ticker in symbol_map:
+            continue
+        symbol = Symbol(ticker=ticker, active=True)
+        session.add(symbol)
+        session.flush()
+        symbol_map[ticker] = symbol
+
+    return symbol_map

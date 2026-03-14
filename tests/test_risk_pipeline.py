@@ -10,13 +10,16 @@ from pathlib import Path
 
 import psycopg
 import pytest
+import yaml
 from alembic import command
+from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
 from trading_platform.core.settings import Settings, clear_settings_cache, load_settings
+from trading_platform.db.models import RiskEvent, StrategyRun, StrategyRunStatus, StrategyRunType
 from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
@@ -26,6 +29,7 @@ from trading_platform.services.risk import (
     PortfolioRiskService,
     RiskDecisionCode,
     RiskEvaluationRequest,
+    run_risk_evaluation,
 )
 from trading_platform.strategies.signals import (
     IndicatorSnapshot,
@@ -113,10 +117,48 @@ def _test_settings(*, max_positions: int = 10) -> Settings:
     return settings
 
 
+@pytest.fixture()
+def strategy_config_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    strategy_dir = tmp_path / "strategies"
+    strategy_dir.mkdir()
+    strategy_path = strategy_dir / "trend_following_daily.yaml"
+    strategy_path.write_text(
+        yaml.safe_dump(
+            {
+                "strategy_id": "trend_following_daily",
+                "display_name": "TrendFollowingDailyV1",
+                "enabled": True,
+                "universe": ["AAPL", "MSFT"],
+                "indicators": {
+                    "short_window": 2,
+                    "long_window": 3,
+                    "warmup_periods": 3,
+                },
+                "risk": {
+                    "max_positions": 10,
+                    "risk_per_trade": 0.01,
+                },
+                "exits": {
+                    "close_below": "sma_2",
+                    "exit_window": 2,
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("TRADING_PLATFORM_STRATEGY_CONFIG_DIR", str(strategy_dir))
+    clear_settings_cache()
+    try:
+        yield
+    finally:
+        clear_settings_cache()
+
+
 def _seed_symbol_and_bar(session, *, ticker: str, session_date: date, close: str) -> Symbol:
-    symbol = Symbol(ticker=ticker, active=True)
-    session.add(symbol)
-    session.flush()
+    symbol = session.execute(select(Symbol).where(Symbol.ticker == ticker)).scalar_one_or_none()
+    if symbol is None:
+        symbol = Symbol(ticker=ticker, active=True)
+        session.add(symbol)
+        session.flush()
     session.add(
         DailyBar(
             symbol_id=symbol.id,
@@ -308,3 +350,42 @@ def test_risk_service_approves_entry_with_deterministic_whole_share_size(migrate
     assert decision.code == RiskDecisionCode.APPROVED
     assert decision.proposed_quantity == Decimal("10")
     assert decision.proposed_notional == Decimal("1000.000000")
+
+
+def test_run_risk_evaluation_persists_strategy_run_and_risk_events(
+    migrated_risk_db: str,
+    strategy_config_override: None,
+) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        upsert_market_sessions(session, date(2024, 1, 3), date(2024, 1, 5))
+        _seed_symbol_and_bar(session, ticker="AAPL", session_date=date(2024, 1, 3), close="100")
+        _seed_symbol_and_bar(session, ticker="AAPL", session_date=date(2024, 1, 4), close="110")
+        _seed_symbol_and_bar(session, ticker="AAPL", session_date=date(2024, 1, 5), close="120")
+        _seed_symbol_and_bar(session, ticker="MSFT", session_date=date(2024, 1, 3), close="100")
+        _seed_symbol_and_bar(session, ticker="MSFT", session_date=date(2024, 1, 4), close="100")
+        _seed_symbol_and_bar(session, ticker="MSFT", session_date=date(2024, 1, 5), close="100")
+
+    report = run_risk_evaluation(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        trigger_source="test_suite",
+        settings=settings,
+    )
+
+    assert report.status == StrategyRunStatus.SUCCEEDED.value
+    assert report.result_summary["approved_count"] == 1
+    assert report.result_summary["rejected_count"] == 1
+
+    with session_scope(settings) as session:
+        strategy_run = session.execute(
+            select(StrategyRun).where(StrategyRun.id == uuid.UUID(report.run_id))
+        ).scalar_one()
+        risk_events = session.execute(
+            select(RiskEvent).where(RiskEvent.strategy_run_id == strategy_run.id).order_by(RiskEvent.signal_direction)
+        ).scalars().all()
+
+    assert strategy_run.run_type == StrategyRunType.RISK_EVALUATION
+    assert len(risk_events) == 2
+    assert {event.decision_code for event in risk_events} == {"approved", "non_actionable_signal"}

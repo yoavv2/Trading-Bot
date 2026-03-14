@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from trading_platform.db.base import Base, TimestampedModel
 
 if TYPE_CHECKING:
+    from trading_platform.db.models.risk_event import RiskEvent
     from trading_platform.db.models.backtest_equity_snapshot import BacktestEquitySnapshot
     from trading_platform.db.models.backtest_signal import BacktestSignal
     from trading_platform.db.models.backtest_trade import BacktestTrade
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 class StrategyRunType(StrEnum):
     DRY_BOOTSTRAP = "dry_bootstrap"
     BACKTEST = "backtest"
+    RISK_EVALUATION = "risk_evaluation"
 
 
 class StrategyRunStatus(StrEnum):
@@ -89,6 +91,10 @@ class StrategyRun(TimestampedModel, Base):
         cascade="all, delete-orphan",
     )
     backtest_equity_snapshots: Mapped[list["BacktestEquitySnapshot"]] = relationship(
+        back_populates="strategy_run",
+        cascade="all, delete-orphan",
+    )
+    risk_events: Mapped[list["RiskEvent"]] = relationship(
         back_populates="strategy_run",
         cascade="all, delete-orphan",
     )

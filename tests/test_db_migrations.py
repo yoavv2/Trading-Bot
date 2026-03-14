@@ -265,6 +265,33 @@ def test_alembic_upgrade_creates_phase4_portfolio_tables(migrated_database: str)
         "open_positions",
     }
 
+    enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
+    assert enums["strategy_run_type"] >= {"dry_bootstrap", "backtest", "risk_evaluation"}
+
+
+def test_alembic_upgrade_creates_phase4_risk_tables(migrated_database: str) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert {"risk_events"}.issubset(table_names)
+
+    risk_cols = {col["name"] for col in inspector.get_columns("risk_events")}
+    assert risk_cols >= {
+        "strategy_run_id",
+        "symbol_id",
+        "session_date",
+        "signal_direction",
+        "signal_reason",
+        "outcome",
+        "decision_code",
+        "decision_reason",
+        "reference_price",
+        "proposed_quantity",
+        "proposed_notional",
+        "risk_metadata",
+    }
+
 
 def test_seed_script_is_idempotent(migrated_database: str) -> None:
     first_record, first_created = seed_phase_one()
