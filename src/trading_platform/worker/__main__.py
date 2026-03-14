@@ -1,4 +1,4 @@
-"""Worker CLI for placeholder service and dry-run scaffolding."""
+"""Worker CLI for placeholder service, dry-run scaffolding, and market-data ingestion."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import json
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import get_strategy_config, load_settings
@@ -22,6 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     dry_run_parser = subparsers.add_parser("dry-run", help="Exercise config and strategy bootstrap.")
     dry_run_parser.add_argument("--strategy", default="trend_following_daily")
+
+    ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
+    ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
+    ingest_parser.add_argument("--to-date", metavar="YYYY-MM-DD", help="Ingest window end (inclusive).")
+    ingest_parser.add_argument("--symbols", nargs="+", metavar="TICKER", help="Symbol override list.")
+    ingest_parser.add_argument("--trigger-source", default="worker_cli", help="Trigger label for the run record.")
 
     return parser
 
@@ -68,6 +74,42 @@ def run_dry_bootstrap(strategy_id: str) -> None:
     print(json.dumps(report.to_dict(), default=str))
 
 
+def run_ingest_bars(args: argparse.Namespace) -> None:
+    from trading_platform.services.ingestion import ingest_daily_bars
+
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+
+    yesterday = date.today() - timedelta(days=1)
+    to_date = date.fromisoformat(args.to_date) if args.to_date else yesterday
+    from_date = (
+        date.fromisoformat(args.from_date)
+        if args.from_date
+        else to_date - timedelta(days=settings.market_data.ingest.default_lookback_days)
+    )
+    symbols: list[str] = args.symbols or list(settings.market_data.ingest.universe)
+
+    result = ingest_daily_bars(
+        from_date=from_date,
+        to_date=to_date,
+        symbols=symbols,
+        settings=settings.market_data,
+        trigger_source=args.trigger_source,
+    )
+    summary = {
+        "provider": result.provider,
+        "from_date": result.from_date.isoformat(),
+        "to_date": result.to_date.isoformat(),
+        "symbols_requested": result.symbol_count,
+        "bars_upserted": result.bars_upserted,
+        "failed_symbols": result.symbols_failed,
+        "succeeded": result.succeeded,
+    }
+    logger.info("ingest_bars_completed", extra={"context": summary})
+    print(json.dumps(summary, default=str))
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -77,6 +119,9 @@ def main() -> None:
         return
     if args.command == "dry-run":
         run_dry_bootstrap(args.strategy)
+        return
+    if args.command == "ingest-bars":
+        run_ingest_bars(args)
         return
 
     parser.error(f"Unknown command: {args.command}")
