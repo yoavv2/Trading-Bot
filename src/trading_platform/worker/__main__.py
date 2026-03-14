@@ -1,4 +1,4 @@
-"""Worker CLI for placeholder service, dry-run scaffolding, and market-data ingestion."""
+"""Worker CLI for placeholder service, dry-run scaffolding, and research workflows."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import get_strategy_config, load_settings
+from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
 
 
@@ -22,6 +23,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     dry_run_parser = subparsers.add_parser("dry-run", help="Exercise config and strategy bootstrap.")
     dry_run_parser.add_argument("--strategy", default="trend_following_daily")
+
+    backtest_parser = subparsers.add_parser("backtest", help="Run a deterministic daily-bar backtest.")
+    backtest_parser.add_argument("--strategy", default="trend_following_daily")
+    backtest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Backtest window start (inclusive).")
+    backtest_parser.add_argument("--to-date", metavar="YYYY-MM-DD", help="Backtest window end (inclusive).")
+    backtest_parser.add_argument("--compact", action="store_true", default=False)
+    backtest_parser.add_argument("--trigger-source", default="worker_cli")
 
     ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
     ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
@@ -90,6 +98,38 @@ def run_dry_bootstrap(strategy_id: str) -> None:
         extra={"context": {"run_id": report.run_id, "strategy_id": report.strategy_id}},
     )
     print(json.dumps(report.to_dict(), default=str))
+
+
+def run_backtest_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+    from_date, to_date = resolve_backtest_window(
+        settings=settings,
+        from_date_arg=args.from_date,
+        to_date_arg=args.to_date,
+    )
+    report = run_backtest(
+        args.strategy,
+        from_date=from_date,
+        to_date=to_date,
+        trigger_source=args.trigger_source,
+        settings=settings,
+    )
+    logger.info(
+        "worker_backtest_completed",
+        extra={
+            "context": {
+                "run_id": report.run_id,
+                "strategy_id": report.strategy_id,
+                "status": report.status,
+                "from_date": from_date.isoformat(),
+                "to_date": to_date.isoformat(),
+            }
+        },
+    )
+    indent = None if args.compact else 2
+    print(json.dumps(report.to_dict(), indent=indent, default=str))
 
 
 def run_ingest_bars(args: argparse.Namespace) -> None:
@@ -217,6 +257,9 @@ def main() -> None:
         return
     if args.command == "dry-run":
         run_dry_bootstrap(args.strategy)
+        return
+    if args.command == "backtest":
+        run_backtest_command(args)
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)

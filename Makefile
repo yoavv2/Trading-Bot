@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run ingest-bars sync-metadata sync-sessions generate-signals test
+.PHONY: up down logs migrate seed dry-run backtest ingest-bars sync-metadata sync-sessions generate-signals test
 
 up:
 	$(COMPOSE) up --build -d
@@ -26,6 +26,12 @@ seed:
 
 dry-run:
 	$(PYTHONPATH_PREFIX) $(PYTHON) -m trading_platform.worker dry-run --strategy $(STRATEGY)
+
+backtest:
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/run_backtest.py \
+		--strategy $(STRATEGY) \
+		$(if $(FROM_DATE),--from-date $(FROM_DATE),) \
+		$(if $(TO_DATE),--to-date $(TO_DATE),)
 
 ingest-bars:
 	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/ingest_polygon_bars.py \
