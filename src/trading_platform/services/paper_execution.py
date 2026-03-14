@@ -35,6 +35,11 @@ from trading_platform.services.alpaca import (
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.market_data_access import latest_completed_session
+from trading_platform.services.reconciliation import (
+    load_broker_state,
+    reconcile_paper_execution,
+    recover_inflight_paper_orders,
+)
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
 
@@ -209,14 +214,9 @@ def run_paper_order_submission(
 
         submitted_orders: list[dict[str, Any]] = []
         existing_orders: list[dict[str, Any]] = []
+        safety_threshold = resolved_settings.execution.safety.repeated_failure_threshold
 
         for candidate in candidates:
-            client_order_id = build_client_order_id(
-                prefix=resolved_settings.execution.client_order_id_prefix,
-                session_date=candidate.session_date,
-                symbol=candidate.symbol,
-                risk_event_id=candidate.risk_event_id,
-            )
             order_type = resolved_settings.execution.default_order_type
             time_in_force = resolved_settings.execution.default_time_in_force
 
@@ -224,26 +224,47 @@ def run_paper_order_submission(
                 existing_order = session.execute(
                     select(PaperOrder).where(PaperOrder.source_risk_event_id == candidate.risk_event_id)
                 ).scalar_one_or_none()
-                if existing_order is not None:
+                if existing_order is not None and not _is_resubmittable_order(
+                    existing_order,
+                    failure_threshold=safety_threshold,
+                ):
                     existing_orders.append(_paper_order_payload(existing_order))
                     continue
 
-                paper_order = PaperOrder(
-                    strategy_run_id=run_id,
-                    source_risk_event_id=candidate.risk_event_id,
-                    symbol_id=candidate.symbol_id,
-                    intended_session_date=candidate.session_date,
-                    side=candidate.side.value,
-                    quantity=candidate.quantity,
-                    order_type=order_type,
-                    time_in_force=time_in_force,
-                    client_order_id=client_order_id,
-                    status="pending_submission",
-                    broker_payload={},
-                )
-                session.add(paper_order)
+                if existing_order is None:
+                    client_order_id = build_client_order_id(
+                        prefix=resolved_settings.execution.client_order_id_prefix,
+                        session_date=candidate.session_date,
+                        symbol=candidate.symbol,
+                        risk_event_id=candidate.risk_event_id,
+                    )
+                    paper_order = PaperOrder(
+                        strategy_run_id=run_id,
+                        source_risk_event_id=candidate.risk_event_id,
+                        symbol_id=candidate.symbol_id,
+                        intended_session_date=candidate.session_date,
+                        side=candidate.side.value,
+                        quantity=candidate.quantity,
+                        order_type=order_type,
+                        time_in_force=time_in_force,
+                        client_order_id=client_order_id,
+                        status="pending_submission",
+                        broker_payload={},
+                    )
+                    session.add(paper_order)
+                    session.flush()
+                    pending_order = paper_order
+                else:
+                    pending_order = existing_order
+                    client_order_id = existing_order.client_order_id
+
+                pending_order.strategy_run_id = run_id
+                pending_order.status = "pending_submission"
+                pending_order.submission_attempt_count += 1
+                pending_order.last_submission_attempt_at = datetime.now(UTC)
+                pending_order.last_submission_error = None
                 session.flush()
-                pending_order_id = paper_order.id
+                pending_order_id = pending_order.id
 
             intent = OrderIntent(
                 strategy_id=strategy_id,
@@ -269,6 +290,7 @@ def run_paper_order_submission(
                     pending_order = session.get(PaperOrder, pending_order_id)
                     if pending_order is not None:
                         pending_order.status = "submission_failed"
+                        pending_order.last_submission_error = str(exc)
                         pending_order.broker_payload = {"error": str(exc)}
                 raise
 
@@ -285,6 +307,7 @@ def run_paper_order_submission(
                 persisted_order.broker_order_id = result.broker_order_id or None
                 persisted_order.broker_status = result.broker_status
                 persisted_order.submitted_at = result.submitted_at
+                persisted_order.last_submission_error = None
                 persisted_order.broker_payload = result.raw_payload
                 session.flush()
                 session.refresh(persisted_order)
@@ -342,11 +365,35 @@ def run_paper_session(
     settings: Settings | None = None,
     registry: StrategyRegistry | None = None,
     execution_service: ExecutionService | None = None,
+    broker_client: AlpacaClient | None = None,
 ) -> PaperSessionRunReport:
     resolved_settings = settings or load_settings()
     runner_settings = resolved_settings.execution.paper_session_runner
     resolved_strategy_id = strategy_id or runner_settings.default_strategy_id
     resolved_trigger_source = trigger_source or runner_settings.trigger_source
+    reconciliation_report = None
+
+    if broker_client is not None or execution_service is None:
+        broker_state = load_broker_state(
+            settings=resolved_settings,
+            broker_client=broker_client,
+        )
+        recovered_order_count = recover_inflight_paper_orders(
+            resolved_strategy_id,
+            settings=resolved_settings,
+            registry=registry,
+            broker_state=broker_state,
+        )
+        reconciliation_report = reconcile_paper_execution(
+            resolved_strategy_id,
+            as_of_session=as_of_session,
+            settings=resolved_settings,
+            registry=registry,
+            broker_client=broker_client,
+            broker_state=broker_state,
+            recovered_order_count=recovered_order_count,
+            trigger_source=f"{resolved_trigger_source}_reconciliation",
+        )
 
     with session_scope(resolved_settings) as session:
         session_plan = _build_paper_session_plan(
@@ -354,6 +401,7 @@ def run_paper_session(
             strategy_id=resolved_strategy_id,
             as_of_session=as_of_session,
             requested_risk_run_id=risk_run_id,
+            failure_threshold=resolved_settings.execution.safety.repeated_failure_threshold,
         )
 
     existing_orders = [_paper_order_payload(order) for order in session_plan.existing_orders]
@@ -366,6 +414,24 @@ def run_paper_session(
         "missing_count": len(session_plan.missing_candidates),
         "existing_orders": existing_orders,
     }
+    if reconciliation_report is not None:
+        base_summary["reconciliation"] = reconciliation_report.to_dict()
+
+    if (
+        reconciliation_report is not None
+        and reconciliation_report.blocks_execution
+        and resolved_settings.execution.safety.block_on_unresolved_reconciliation
+    ):
+        return PaperSessionRunReport(
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            trigger_source=resolved_trigger_source,
+            source_risk_run_id=str(session_plan.source_risk_run_id),
+            action="blocked_reconciliation",
+            execution_run_id=None,
+            execution_status=None,
+            result_summary=base_summary,
+        )
 
     if not session_plan.candidates:
         return PaperSessionRunReport(
@@ -589,6 +655,7 @@ def _build_paper_session_plan(
     strategy_id: str,
     as_of_session: date,
     requested_risk_run_id: str | None,
+    failure_threshold: int,
 ) -> PaperSessionPlan:
     source_risk_run = _resolve_source_risk_run(
         session,
@@ -607,7 +674,11 @@ def _build_paper_session_plan(
             .order_by(PaperOrder.client_order_id.asc())
         ).scalars().all()
 
-    existing_ids = {order.source_risk_event_id for order in existing_orders}
+    existing_ids = {
+        order.source_risk_event_id
+        for order in existing_orders
+        if not _is_resubmittable_order(order, failure_threshold=failure_threshold)
+    }
     missing_candidates = [candidate for candidate in candidates if candidate.risk_event_id not in existing_ids]
 
     return PaperSessionPlan(
@@ -699,8 +770,23 @@ def _paper_order_payload(paper_order: PaperOrder) -> dict[str, Any]:
         "side": paper_order.side,
         "quantity": float(paper_order.quantity),
         "intended_session_date": paper_order.intended_session_date.isoformat(),
+        "submission_attempt_count": paper_order.submission_attempt_count,
+        "sync_failure_count": paper_order.sync_failure_count,
+        "last_submission_error": paper_order.last_submission_error,
+        "last_sync_error": paper_order.last_sync_error,
         "submitted_at": paper_order.submitted_at.isoformat() if paper_order.submitted_at else None,
     }
+
+
+def _is_resubmittable_order(paper_order: PaperOrder, *, failure_threshold: int) -> bool:
+    if paper_order.broker_order_id:
+        return False
+    if paper_order.status == "pending_submission":
+        return True
+    return (
+        paper_order.status == "submission_failed"
+        and paper_order.submission_attempt_count < failure_threshold
+    )
 
 
 def _paper_order_status_from_broker_status(status: ExecutionOrderStatus) -> str:

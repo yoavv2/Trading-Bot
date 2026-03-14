@@ -99,6 +99,9 @@ execution:
   default_order_type: market
   default_time_in_force: day
   client_order_id_prefix: tp
+  safety:
+    repeated_failure_threshold: 3
+    block_on_unresolved_reconciliation: true
   paper_session_runner:
     default_strategy_id: trend_following_daily
     trigger_source: paper_session_runner

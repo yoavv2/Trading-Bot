@@ -270,10 +270,21 @@ def _seed_existing_paper_order(
     risk_event_id: uuid.UUID,
     symbol: str,
     session_date: date,
+    status: str = "submitted",
+    broker_order_id: str | None = None,
+    broker_status: str | None = "new",
+    submission_attempt_count: int = 1,
+    last_submission_error: str | None = None,
 ) -> uuid.UUID:
     settings = load_settings()
     registry = build_default_registry(settings)
     strategy = registry.resolve("trend_following_daily")
+
+    resolved_broker_order_id = (
+        broker_order_id
+        if broker_order_id is not None or status == "pending_submission"
+        else f"existing-{symbol.lower()}-001"
+    )
 
     with session_scope(settings) as session:
         strategy_record = ensure_strategy_record(session, strategy.metadata)
@@ -306,11 +317,20 @@ def _seed_existing_paper_order(
                     symbol=symbol,
                     risk_event_id=risk_event_id,
                 ),
-                broker_order_id=f"existing-{symbol.lower()}-001",
-                status="submitted",
-                broker_status="new",
-                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
-                broker_payload={"id": f"existing-{symbol.lower()}-001"},
+                broker_order_id=resolved_broker_order_id,
+                status=status,
+                broker_status=broker_status,
+                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC)
+                if status != "pending_submission"
+                else None,
+                submission_attempt_count=submission_attempt_count,
+                last_submission_attempt_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC)
+                if submission_attempt_count
+                else None,
+                last_submission_error=last_submission_error,
+                broker_payload={"id": resolved_broker_order_id}
+                if resolved_broker_order_id is not None
+                else {},
             )
         )
         session.flush()
@@ -433,6 +453,115 @@ def test_run_paper_session_submits_only_missing_orders(
     assert len(paper_orders) == 2
     assert symbols == {"AAPL", "MSFT"}
     assert len(execution_runs) == 2
+
+
+def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_candidates(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    settings = load_settings()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+        status="pending_submission",
+        broker_order_id=None,
+        broker_status=None,
+    )
+    execution_service = FakeExecutionService()
+
+    report = run_paper_session(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        broker_client=FakeBrokerClient(
+            orders=[
+                BrokerOrderSnapshot(
+                    broker_order_id="recovered-aapl-001",
+                    client_order_id=build_client_order_id(
+                        prefix=settings.execution.client_order_id_prefix,
+                        session_date=date(2024, 1, 5),
+                        symbol="AAPL",
+                        risk_event_id=approved_event_ids["AAPL"],
+                    ),
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                    status=ExecutionOrderStatus.PENDING,
+                    broker_status="new",
+                    submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    filled_at=None,
+                    canceled_at=None,
+                    updated_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    raw_payload={"id": "recovered-aapl-001", "status": "new"},
+                )
+            ],
+            fills=[],
+            positions=[],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("100000.000000"),
+                buying_power=Decimal("100000.000000"),
+                equity=Decimal("100000.000000"),
+                long_market_value=Decimal("0"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100000.000000"},
+            ),
+        ),
+    )
+
+    assert report.action == "submitted_missing_orders"
+    assert report.result_summary["session_preflight"]["reconciliation"]["recovered_order_count"] == 1
+    assert len(execution_service.submitted_intents) == 1
+    assert execution_service.submitted_intents[0].symbol == "MSFT"
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(select(PaperOrder).order_by(PaperOrder.client_order_id.asc())).scalars().all()
+        aapl_order = next(order for order in paper_orders if order.symbol_ref.ticker == "AAPL")
+
+    assert len(paper_orders) == 2
+    assert aapl_order.broker_order_id == "recovered-aapl-001"
+    assert aapl_order.status == "submitted"
+
+
+def test_run_paper_session_blocks_when_reconciliation_finds_unsafe_drift(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    settings = load_settings()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    execution_service = FakeExecutionService()
+
+    report = run_paper_session(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        broker_client=FakeBrokerClient(
+            orders=[],
+            fills=[],
+            positions=[],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("100000.000000"),
+                buying_power=Decimal("100000.000000"),
+                equity=Decimal("100000.000000"),
+                long_market_value=Decimal("0"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100000.000000"},
+            ),
+        ),
+    )
+
+    assert report.action == "blocked_reconciliation"
+    assert report.execution_run_id is None
+    assert report.result_summary["reconciliation"]["blocks_execution"] is True
+    assert len(execution_service.submitted_intents) == 0
 
 
 def test_sync_paper_state_persists_fills_positions_and_account_snapshot(
