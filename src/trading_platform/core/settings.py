@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
+from decimal import Decimal
 from typing import Any, Literal
 
 import yaml
@@ -190,6 +191,19 @@ class BacktestSettings(BaseModel):
     slippage: BacktestSlippageSettings = BacktestSlippageSettings()
 
 
+class PortfolioSettings(BaseModel):
+    """Account-level controls for the live portfolio and risk pipeline."""
+
+    starting_cash: float = Field(default=100_000.0, gt=0.0)
+    max_strategy_allocation_pct: float = Field(default=1.0, gt=0.0, le=1.0)
+    max_total_portfolio_allocation_pct: float = Field(default=1.0, gt=0.0, le=1.0)
+    stale_data_max_session_lag: int = Field(default=0, ge=0)
+
+    @property
+    def starting_cash_decimal(self) -> Decimal:
+        return Decimal(str(self.starting_cash))
+
+
 class Settings(BaseModel):
     app: AppMetadata = AppMetadata()
     api: ApiSettings = ApiSettings()
@@ -200,6 +214,7 @@ class Settings(BaseModel):
     strategies: StrategyBundle = StrategyBundle()
     market_data: MarketDataSettings = MarketDataSettings()
     backtest: BacktestSettings = BacktestSettings()
+    portfolio: PortfolioSettings = PortfolioSettings()
 
 
 class EnvironmentOverrides(BaseSettings):
@@ -219,6 +234,7 @@ class EnvironmentOverrides(BaseSettings):
     strategies: StrategyBundle = StrategyBundle()
     market_data: MarketDataSettings = MarketDataSettings()
     backtest: BacktestSettings = BacktestSettings()
+    portfolio: PortfolioSettings = PortfolioSettings()
 
 
 def _resolve_path(raw_path: str | Path) -> Path:

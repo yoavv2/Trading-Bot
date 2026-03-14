@@ -78,3 +78,9 @@ backtest:
       - AMZN
       - GOOGL
       - TSLA
+
+portfolio:
+  starting_cash: 100000
+  max_strategy_allocation_pct: 1.0
+  max_total_portfolio_allocation_pct: 1.0
+  stale_data_max_session_lag: 0
