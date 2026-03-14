@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Data and Strategy** - Build the daily-bar data pipeline and implement `TrendFollowingDailyV1` as the first isolated strategy module. (completed 2026-03-14)
 - [x] **Phase 3: Backtest and Reporting** - Run deterministic daily-bar backtests and persist research outputs that are usable for strategy evaluation. Completed 2026-03-14.
 - [x] **Phase 4: Risk and Portfolio** - Add the portfolio state and mandatory risk-validation pipeline that gates every signal before execution. Completed 2026-03-14.
-- [ ] **Phase 5: Paper Execution** - Turn approved daily signals into Alpaca paper orders with scheduling, lifecycle tracking, and reconciliation.
+- [x] **Phase 5: Paper Execution** - Turn approved daily signals into Alpaca paper orders with scheduling, lifecycle tracking, and reconciliation. Completed 2026-03-14.
 - [ ] **Phase 6: Analytics and APIs** - Make the system measurable and inspectable through analytics, operational controls, and operator-facing API reads.
 
 ## Phase Details
@@ -117,12 +117,12 @@ Plans:
   2. Orders, fills, positions, and account snapshots are persisted and remain consistent across process restarts.
   3. Broker reconciliation detects mismatches or repeated order failures and blocks new execution when state is unsafe.
   4. The operator can inspect which orders were submitted, filled, blocked, or retried on the next trading day.
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 05-01: Implement the Alpaca broker adapter and paper-order submission flow
-- [ ] 05-02: Add scheduled daily execution, order lifecycle updates, and fill ingestion
-- [ ] 05-03: Build reconciliation, restart safety, and execution-stop conditions for unsafe broker state
+- [x] 05-02: Add scheduled daily execution, order lifecycle updates, and fill ingestion
+- [x] 05-03: Build reconciliation, restart safety, and execution-stop conditions for unsafe broker state
 
 ### Phase 6: Analytics and APIs
 **Goal:** Make the platform measurable, inspectable, and operator-friendly enough to decide whether the MVP is trustworthy.
@@ -152,5 +152,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 2. Data and Strategy | 3/3 | Complete   | 2026-03-14 |
 | 3. Backtest and Reporting | 3/3 | Complete | 2026-03-14 |
 | 4. Risk and Portfolio | 2/2 | Complete | 2026-03-14 |
-| 5. Paper Execution | 2/3 | In Progress|  |
+| 5. Paper Execution | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | 0/3 | Not started | - |
