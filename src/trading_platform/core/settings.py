@@ -222,12 +222,23 @@ class BrokerSettings(BaseModel):
     alpaca: AlpacaBrokerSettings = AlpacaBrokerSettings()
 
 
+class PaperSessionRunnerSettings(BaseModel):
+    """Scheduling metadata for the daily paper-session runner."""
+
+    default_strategy_id: str = "trend_following_daily"
+    trigger_source: str = "paper_session_runner"
+    cadence: Literal["daily"] = "daily"
+    scheduled_hour_utc: int = Field(default=20, ge=0, le=23)
+    scheduled_minute_utc: int = Field(default=5, ge=0, le=59)
+
+
 class ExecutionSettings(BaseModel):
     """Deterministic defaults for paper-order submission."""
 
     default_order_type: Literal["market"] = "market"
     default_time_in_force: Literal["day"] = "day"
     client_order_id_prefix: str = Field(default="tp", min_length=2, max_length=12)
+    paper_session_runner: PaperSessionRunnerSettings = PaperSessionRunnerSettings()
 
 
 class Settings(BaseModel):

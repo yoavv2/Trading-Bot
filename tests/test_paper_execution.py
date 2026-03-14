@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+import os
+import sys
+import uuid
+from collections.abc import Iterator
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+import psycopg
+import pytest
+from alembic import command
+from sqlalchemy import select
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.migrate import build_alembic_config
+from trading_platform.core.settings import clear_settings_cache, load_settings
+from trading_platform.db.models import DailyBar, MarketSession, PaperOrder, RiskEvent, StrategyRun, StrategyRunStatus, StrategyRunType
+from trading_platform.db.models.symbol import Symbol
+from trading_platform.db.session import clear_engine_cache, session_scope
+from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSubmissionResult
+from trading_platform.services.paper_execution import (
+    build_client_order_id,
+    resolve_submission_session,
+    run_paper_session,
+)
+from trading_platform.strategies.registry import build_default_registry
+
+
+def _admin_connection_settings() -> dict[str, str]:
+    return {
+        "host": os.getenv("TRADING_PLATFORM_DATABASE__HOST", "localhost"),
+        "port": os.getenv("TRADING_PLATFORM_DATABASE__PORT", "5432"),
+        "user": os.getenv("TRADING_PLATFORM_DATABASE__USER", "trading_platform"),
+        "password": os.getenv("TRADING_PLATFORM_DATABASE__PASSWORD", "trading_platform"),
+        "dbname": os.getenv("TRADING_PLATFORM_ADMIN_DB", "postgres"),
+    }
+
+
+def _connect_admin(params: dict[str, str] | None = None) -> psycopg.Connection:
+    params = params or _admin_connection_settings()
+    return psycopg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        dbname=params["dbname"],
+        autocommit=True,
+    )
+
+
+def _set_database_env(monkeypatch: pytest.MonkeyPatch, database_name: str) -> None:
+    params = _admin_connection_settings()
+    monkeypatch.setenv("TRADING_PLATFORM_DATABASE__HOST", params["host"])
+    monkeypatch.setenv("TRADING_PLATFORM_DATABASE__PORT", params["port"])
+    monkeypatch.setenv("TRADING_PLATFORM_DATABASE__USER", params["user"])
+    monkeypatch.setenv("TRADING_PLATFORM_DATABASE__PASSWORD", params["password"])
+    monkeypatch.setenv("TRADING_PLATFORM_DATABASE__NAME", database_name)
+
+
+@pytest.fixture()
+def migrated_paper_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    database_name = f"paper_execution_{uuid.uuid4().hex[:8]}"
+    admin_params = _admin_connection_settings()
+
+    try:
+        with _connect_admin(admin_params) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f'CREATE DATABASE "{database_name}"')
+    except psycopg.Error as exc:
+        pytest.fail(
+            "PostgreSQL is required for tests/test_paper_execution.py. "
+            f"Connection error: {exc}"
+        )
+
+    _set_database_env(monkeypatch, database_name)
+    clear_settings_cache()
+    clear_engine_cache()
+    command.upgrade(build_alembic_config(), "head")
+
+    try:
+        yield database_name
+    finally:
+        clear_settings_cache()
+        clear_engine_cache()
+        with _connect_admin(admin_params) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
+
+
+class FakeExecutionService(ExecutionService):
+    def __init__(self) -> None:
+        self.submitted_intents: list[OrderIntent] = []
+
+    def describe(self) -> dict[str, object]:
+        return {"service": "execution", "status": "available", "provider": "fake"}
+
+    def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        self.submitted_intents.append(intent)
+        return OrderSubmissionResult(
+            client_order_id=intent.client_order_id,
+            broker_order_id=f"fake-{intent.symbol.lower()}-001",
+            symbol=intent.symbol,
+            side=intent.side,
+            quantity=intent.quantity,
+            order_type=intent.order_type,
+            time_in_force=intent.time_in_force,
+            status=ExecutionOrderStatus.PENDING,
+            broker_status="new",
+            submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+            raw_payload={
+                "id": f"fake-{intent.symbol.lower()}-001",
+                "client_order_id": intent.client_order_id,
+                "symbol": intent.symbol,
+                "status": "new",
+                "submitted_at": "2024-01-05T14:35:00Z",
+            },
+        )
+
+
+def _seed_market_data(session_date: date) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        symbol = Symbol(ticker="AAPL", active=True)
+        session.add(symbol)
+        session.flush()
+        session.add(
+            MarketSession(
+                exchange=settings.market_data.calendar.exchange,
+                session_date=session_date,
+                market_open=datetime(2024, 1, 5, 14, 30, tzinfo=UTC),
+                market_close=datetime(2024, 1, 5, 21, 0, tzinfo=UTC),
+                early_close=False,
+            )
+        )
+        session.add(
+            DailyBar(
+                symbol_id=symbol.id,
+                session_date=session_date,
+                open=Decimal("120.000000"),
+                high=Decimal("121.000000"),
+                low=Decimal("119.000000"),
+                close=Decimal("120.500000"),
+                volume=1_000_000,
+                adjusted=True,
+                provider="polygon",
+            )
+        )
+
+
+def _seed_approved_risk_batch(*, session_date: date = date(2024, 1, 5)) -> tuple[uuid.UUID, dict[str, uuid.UUID]]:
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        aapl = Symbol(ticker="AAPL", active=True)
+        msft = Symbol(ticker="MSFT", active=True)
+        session.add_all([aapl, msft])
+        session.flush()
+
+        risk_run = StrategyRun(
+            strategy_id=strategy_record.id,
+            run_type=StrategyRunType.RISK_EVALUATION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="test_suite",
+            parameters_snapshot={"as_of_session": session_date.isoformat()},
+            result_summary={"stage": "completed", "as_of_session": session_date.isoformat()},
+        )
+        session.add(risk_run)
+        session.flush()
+
+        approved_events = {
+            "AAPL": RiskEvent(
+                strategy_run_id=risk_run.id,
+                symbol_id=aapl.id,
+                session_date=session_date,
+                signal_direction="long",
+                signal_reason="trend_entry",
+                outcome="approved",
+                decision_code="approved",
+                decision_reason="Approved for paper execution.",
+                reference_price=Decimal("120.000000"),
+                proposed_quantity=Decimal("10.000000"),
+                proposed_notional=Decimal("1200.000000"),
+                risk_metadata={"remaining_cash": 98800.0},
+            ),
+            "MSFT": RiskEvent(
+                strategy_run_id=risk_run.id,
+                symbol_id=msft.id,
+                session_date=session_date,
+                signal_direction="long",
+                signal_reason="trend_entry",
+                outcome="approved",
+                decision_code="approved",
+                decision_reason="Approved for paper execution.",
+                reference_price=Decimal("300.000000"),
+                proposed_quantity=Decimal("5.000000"),
+                proposed_notional=Decimal("1500.000000"),
+                risk_metadata={"remaining_cash": 97300.0},
+            ),
+        }
+        session.add_all(list(approved_events.values()))
+        session.flush()
+        return risk_run.id, {symbol: event.id for symbol, event in approved_events.items()}
+
+
+def _seed_existing_paper_order(
+    *,
+    risk_run_id: uuid.UUID,
+    risk_event_id: uuid.UUID,
+    symbol: str,
+    session_date: date,
+) -> uuid.UUID:
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        symbol_row = session.execute(select(Symbol).where(Symbol.ticker == symbol)).scalar_one()
+        execution_run = StrategyRun(
+            strategy_id=strategy_record.id,
+            run_type=StrategyRunType.PAPER_EXECUTION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="seed_existing_order",
+            parameters_snapshot={"as_of_session": session_date.isoformat(), "requested_risk_run_id": str(risk_run_id)},
+            result_summary={"stage": "completed", "as_of_session": session_date.isoformat()},
+            completed_at=datetime(2024, 1, 5, 15, 0, tzinfo=UTC),
+        )
+        session.add(execution_run)
+        session.flush()
+
+        session.add(
+            PaperOrder(
+                strategy_run_id=execution_run.id,
+                source_risk_event_id=risk_event_id,
+                symbol_id=symbol_row.id,
+                intended_session_date=session_date,
+                side="buy",
+                quantity=Decimal("10.000000"),
+                order_type="market",
+                time_in_force="day",
+                client_order_id=build_client_order_id(
+                    prefix=load_settings().execution.client_order_id_prefix,
+                    session_date=session_date,
+                    symbol=symbol,
+                    risk_event_id=risk_event_id,
+                ),
+                broker_order_id=f"existing-{symbol.lower()}-001",
+                status="submitted",
+                broker_status="new",
+                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                broker_payload={"id": f"existing-{symbol.lower()}-001"},
+            )
+        )
+        session.flush()
+        return execution_run.id
+
+
+def test_resolve_submission_session_prefers_latest_completed_persisted_session(
+    migrated_paper_db: str,
+) -> None:
+    _seed_market_data(date(2024, 1, 5))
+    settings = load_settings()
+
+    resolved = resolve_submission_session(settings=settings, as_of_arg=None)
+
+    assert resolved == date(2024, 1, 5)
+
+
+def test_run_paper_session_noops_when_all_candidates_already_seeded(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    existing_run_id = _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["MSFT"],
+        symbol="MSFT",
+        session_date=date(2024, 1, 5),
+    )
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+
+    report = run_paper_session(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+    )
+
+    assert report.action == "noop_existing_orders"
+    assert report.execution_run_id is None
+    assert report.result_summary["existing_count"] == 2
+    assert execution_service.submitted_intents == []
+
+    with session_scope(settings) as session:
+        execution_runs = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
+        ).scalars().all()
+
+    assert len(execution_runs) == 2
+    assert {run.id for run in execution_runs} >= {existing_run_id}
+
+
+def test_run_paper_session_submits_only_missing_orders(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+
+    report = run_paper_session(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+    )
+
+    assert report.action == "submitted_missing_orders"
+    assert report.execution_run_id is not None
+    assert report.result_summary["submitted_count"] == 1
+    assert report.result_summary["existing_count"] == 1
+    assert report.result_summary["session_preflight"]["missing_count"] == 1
+    assert len(execution_service.submitted_intents) == 1
+    assert execution_service.submitted_intents[0].symbol == "MSFT"
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(select(PaperOrder).order_by(PaperOrder.client_order_id.asc())).scalars().all()
+        execution_runs = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
+        ).scalars().all()
+        symbols = {order.symbol_ref.ticker for order in paper_orders}
+
+    assert len(paper_orders) == 2
+    assert symbols == {"AAPL", "MSFT"}
+    assert len(execution_runs) == 2

@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders test
+.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session test
 
 up:
 	$(COMPOSE) up --build -d
@@ -62,6 +62,12 @@ generate-signals:
 submit-paper-orders:
 	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/submit_paper_orders.py \
 		--strategy $(STRATEGY) \
+		$(if $(AS_OF),--as-of $(AS_OF),) \
+		$(if $(RISK_RUN_ID),--risk-run-id $(RISK_RUN_ID),)
+
+run-paper-session:
+	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/run_paper_session.py \
+		$(if $(STRATEGY),--strategy $(STRATEGY),) \
 		$(if $(AS_OF),--as-of $(AS_OF),) \
 		$(if $(RISK_RUN_ID),--risk-run-id $(RISK_RUN_ID),)
 

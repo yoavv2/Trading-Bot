@@ -13,7 +13,11 @@ from trading_platform.core.settings import get_strategy_config, load_settings
 from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
-from trading_platform.services.paper_execution import resolve_submission_session, run_paper_order_submission
+from trading_platform.services.paper_execution import (
+    resolve_submission_session,
+    run_paper_order_submission,
+    run_paper_session,
+)
 from trading_platform.services.risk import resolve_evaluation_session, run_risk_evaluation
 
 
@@ -69,6 +73,20 @@ def build_parser() -> argparse.ArgumentParser:
     submit_parser.add_argument("--risk-run-id", help="Explicit succeeded risk_evaluation run ID to consume.")
     submit_parser.add_argument("--compact", action="store_true", default=False)
     submit_parser.add_argument("--trigger-source", default="worker_cli")
+
+    run_session_parser = subparsers.add_parser(
+        "run-paper-session",
+        help="Run the idempotent paper-trading session orchestration for one session.",
+    )
+    run_session_parser.add_argument("--strategy")
+    run_session_parser.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        help="Target session date. Defaults to the latest completed persisted session.",
+    )
+    run_session_parser.add_argument("--risk-run-id", help="Explicit succeeded risk_evaluation run ID to consume.")
+    run_session_parser.add_argument("--compact", action="store_true", default=False)
+    run_session_parser.add_argument("--trigger-source")
 
     ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
     ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
@@ -243,6 +261,38 @@ def run_submit_paper_orders_command(args: argparse.Namespace) -> None:
     print(json.dumps(report.to_dict(), indent=indent, default=str))
 
 
+def run_paper_session_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+    as_of_session = resolve_submission_session(
+        settings=settings,
+        as_of_arg=args.as_of,
+    )
+    strategy_id = args.strategy or settings.execution.paper_session_runner.default_strategy_id
+    trigger_source = args.trigger_source or settings.execution.paper_session_runner.trigger_source
+    report = run_paper_session(
+        strategy_id,
+        as_of_session=as_of_session,
+        risk_run_id=args.risk_run_id,
+        trigger_source=trigger_source,
+        settings=settings,
+    )
+    logger.info(
+        "worker_paper_session_completed",
+        extra={
+            "context": {
+                "strategy_id": strategy_id,
+                "as_of_session": as_of_session.isoformat(),
+                "action": report.action,
+                "execution_run_id": report.execution_run_id,
+            }
+        },
+    )
+    indent = None if args.compact else 2
+    print(json.dumps(report.to_dict(), indent=indent, default=str))
+
+
 def run_ingest_bars(args: argparse.Namespace) -> None:
     from trading_platform.services.ingestion import ingest_daily_bars
 
@@ -380,6 +430,9 @@ def main() -> None:
         return
     if args.command == "submit-paper-orders":
         run_submit_paper_orders_command(args)
+        return
+    if args.command == "run-paper-session":
+        run_paper_session_command(args)
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)

@@ -58,6 +58,38 @@ class PaperExecutionRunReport:
         }
 
 
+@dataclass(frozen=True)
+class PaperSessionRunReport:
+    strategy_id: str
+    session_date: str
+    trigger_source: str
+    source_risk_run_id: str
+    action: str
+    execution_run_id: str | None
+    execution_status: str | None
+    result_summary: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "session_date": self.session_date,
+            "trigger_source": self.trigger_source,
+            "source_risk_run_id": self.source_risk_run_id,
+            "action": self.action,
+            "execution_run_id": self.execution_run_id,
+            "execution_status": self.execution_status,
+            "result_summary": self.result_summary,
+        }
+
+
+@dataclass(frozen=True)
+class PaperSessionPlan:
+    source_risk_run_id: uuid.UUID
+    candidates: tuple[PaperExecutionCandidate, ...]
+    existing_orders: tuple[PaperOrder, ...]
+    missing_candidates: tuple[PaperExecutionCandidate, ...]
+
+
 def resolve_submission_session(
     *,
     settings: Settings,
@@ -258,6 +290,88 @@ def run_paper_order_submission(
     )
 
 
+def run_paper_session(
+    strategy_id: str | None = None,
+    *,
+    as_of_session: date,
+    risk_run_id: str | None = None,
+    trigger_source: str | None = None,
+    settings: Settings | None = None,
+    registry: StrategyRegistry | None = None,
+    execution_service: ExecutionService | None = None,
+) -> PaperSessionRunReport:
+    resolved_settings = settings or load_settings()
+    runner_settings = resolved_settings.execution.paper_session_runner
+    resolved_strategy_id = strategy_id or runner_settings.default_strategy_id
+    resolved_trigger_source = trigger_source or runner_settings.trigger_source
+
+    with session_scope(resolved_settings) as session:
+        session_plan = _build_paper_session_plan(
+            session,
+            strategy_id=resolved_strategy_id,
+            as_of_session=as_of_session,
+            requested_risk_run_id=risk_run_id,
+        )
+
+    existing_orders = [_paper_order_payload(order) for order in session_plan.existing_orders]
+    base_summary = {
+        "strategy_id": resolved_strategy_id,
+        "as_of_session": as_of_session.isoformat(),
+        "source_risk_run_id": str(session_plan.source_risk_run_id),
+        "approved_candidate_count": len(session_plan.candidates),
+        "existing_count": len(session_plan.existing_orders),
+        "missing_count": len(session_plan.missing_candidates),
+        "existing_orders": existing_orders,
+    }
+
+    if not session_plan.candidates:
+        return PaperSessionRunReport(
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            trigger_source=resolved_trigger_source,
+            source_risk_run_id=str(session_plan.source_risk_run_id),
+            action="noop_no_candidates",
+            execution_run_id=None,
+            execution_status=None,
+            result_summary=base_summary,
+        )
+
+    if not session_plan.missing_candidates:
+        return PaperSessionRunReport(
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            trigger_source=resolved_trigger_source,
+            source_risk_run_id=str(session_plan.source_risk_run_id),
+            action="noop_existing_orders",
+            execution_run_id=None,
+            execution_status=None,
+            result_summary=base_summary,
+        )
+
+    execution_report = run_paper_order_submission(
+        resolved_strategy_id,
+        as_of_session=as_of_session,
+        risk_run_id=str(session_plan.source_risk_run_id),
+        trigger_source=resolved_trigger_source,
+        settings=resolved_settings,
+        registry=registry,
+        execution_service=execution_service,
+    )
+    result_summary = dict(execution_report.result_summary)
+    result_summary["session_preflight"] = base_summary
+
+    return PaperSessionRunReport(
+        strategy_id=resolved_strategy_id,
+        session_date=as_of_session.isoformat(),
+        trigger_source=resolved_trigger_source,
+        source_risk_run_id=str(session_plan.source_risk_run_id),
+        action="submitted_missing_orders",
+        execution_run_id=execution_report.run_id,
+        execution_status=execution_report.status,
+        result_summary=result_summary,
+    )
+
+
 def _resolve_source_risk_run(
     session,
     *,
@@ -344,6 +458,41 @@ def _load_submission_candidates(session, source_risk_run_id: uuid.UUID) -> list[
             )
         )
     return candidates
+
+
+def _build_paper_session_plan(
+    session,
+    *,
+    strategy_id: str,
+    as_of_session: date,
+    requested_risk_run_id: str | None,
+) -> PaperSessionPlan:
+    source_risk_run = _resolve_source_risk_run(
+        session,
+        strategy_id=strategy_id,
+        as_of_session=as_of_session,
+        requested_risk_run_id=requested_risk_run_id,
+    )
+    candidates = _load_submission_candidates(session, source_risk_run.id)
+    existing_orders: list[PaperOrder] = []
+
+    if candidates:
+        candidate_ids = [candidate.risk_event_id for candidate in candidates]
+        existing_orders = session.execute(
+            select(PaperOrder)
+            .where(PaperOrder.source_risk_event_id.in_(candidate_ids))
+            .order_by(PaperOrder.client_order_id.asc())
+        ).scalars().all()
+
+    existing_ids = {order.source_risk_event_id for order in existing_orders}
+    missing_candidates = [candidate for candidate in candidates if candidate.risk_event_id not in existing_ids]
+
+    return PaperSessionPlan(
+        source_risk_run_id=source_risk_run.id,
+        candidates=tuple(candidates),
+        existing_orders=tuple(existing_orders),
+        missing_candidates=tuple(missing_candidates),
+    )
 
 
 def _create_paper_execution_run(
