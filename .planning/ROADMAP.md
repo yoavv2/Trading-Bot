@@ -117,7 +117,7 @@ Plans:
   2. Orders, fills, positions, and account snapshots are persisted and remain consistent across process restarts.
   3. Broker reconciliation detects mismatches or repeated order failures and blocks new execution when state is unsafe.
   4. The operator can inspect which orders were submitted, filled, blocked, or retried on the next trading day.
-**Plans:** 1/3 plans complete
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 05-01: Implement the Alpaca broker adapter and paper-order submission flow
@@ -152,5 +152,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 2. Data and Strategy | 3/3 | Complete   | 2026-03-14 |
 | 3. Backtest and Reporting | 3/3 | Complete | 2026-03-14 |
 | 4. Risk and Portfolio | 2/2 | Complete | 2026-03-14 |
-| 5. Paper Execution | 1/3 | In Progress | - |
+| 5. Paper Execution | 2/3 | In Progress|  |
 | 6. Analytics and APIs | 0/3 | Not started | - |

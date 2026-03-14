@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 05
 current_phase_name: Paper Execution
-current_plan: 1
+current_plan: 2
 status: Ready for execution
-stopped_at: Completed 05-paper-execution-01-PLAN.md
-last_updated: "2026-03-14T18:00:25.470Z"
+stopped_at: Completed 05-paper-execution-02-PLAN.md
+last_updated: "2026-03-14T18:28:31.078Z"
 last_activity: 2026-03-14
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 14
-  completed_plans: 12
-  percent: 86
+  completed_plans: 13
+  percent: 93
 ---
 
 # Project State
@@ -31,20 +31,20 @@ See: .planning/PROJECT.md (updated 2026-03-11)
 Current Phase: 05
 Current Phase Name: Paper Execution
 Total Phases: 6
-Current Plan: 1
+Current Plan: 2
 Total Plans in Phase: 3
 Phase: 5 of 6 (Paper Execution)
-Plan: 1 of 3
+Plan: 2 of 3
 Status: Ready for execution
 Last Activity: 2026-03-14
-Last Activity Description: Completed Phase 05 Plan 01 with Alpaca submission adapters, paper-order persistence, and CLI-first execution entrypoints
+Last Activity Description: Completed Phase 05 Plan 02 with an idempotent paper-session runner, lifecycle sync, and broker-derived live-state refreshes
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: ~7 min
 - Total execution time: -
 
@@ -58,8 +58,8 @@ Progress: [█████████░] 86%
 | 4 | 2 of 2 | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 03-02, 03-03, 04-01, 04-02 completed
-- Trend: Strong momentum; Phase 4 is complete and Phase 5 execution is next
+- Last 5 plans: 03-03, 04-01, 04-02, 05-01, 05-02 completed
+- Trend: Strong momentum; Phase 5 is nearly complete and Phase 05-03 is next
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -70,6 +70,7 @@ Progress: [█████████░] 86%
 | Phase 04-risk-and-portfolio P01 | 3min | 3 tasks | 9 files |
 | Phase 04-risk-and-portfolio P02 | 8min | 3 tasks | 10 files |
 | Phase 05-paper-execution P01 | 26min | 3 tasks | 14 files |
+| Phase 05-paper-execution P02 | 24min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -108,10 +109,13 @@ Recent decisions affecting current work:
 - [Phase 05-paper-execution]: Approved risk_events are the paper-submission source; no separate execution-candidate table was introduced
 - [Phase 05-paper-execution]: Paper-order rows persist deterministic client-order IDs before broker submission so reruns can safely detect already-seeded candidates
 - [Phase 05-paper-execution]: Alpaca HTTP mapping stays in services/alpaca.py while submission orchestration and persistence live in services/paper_execution.py
+- [Phase 05-paper-execution]: The session runner preflights approved risk candidates and returns a no-op report when all paper orders for a session are already seeded.
+- [Phase 05-paper-execution]: Broker lifecycle sync reuses paper_orders and matches broker reads by broker order ID first, then deterministic client_order_id.
+- [Phase 05-paper-execution]: Repeated broker syncs persist normalized paper_fills keyed by broker_fill_id while positions and account_snapshots remain the durable live-state source.
 
 ### Pending Todos
 
-- Execute Phase 05: connect approved risk decisions to Alpaca paper execution, lifecycle sync, and reconciliation
+- Execute Phase 05-03: add reconciliation, restart safety, and unsafe-state execution stops on top of the persisted lifecycle sync foundation
 
 ### Blockers/Concerns
 
@@ -120,6 +124,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-14T18:00:25.468Z
-Stopped at: Completed 05-paper-execution-01-PLAN.md
+Last session: 2026-03-14T18:28:21.317Z
+Stopped at: Completed 05-paper-execution-02-PLAN.md
 Resume file: None
