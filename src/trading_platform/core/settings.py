@@ -127,11 +127,37 @@ class IngestSettings(BaseModel):
     )
 
 
+class CalendarSettings(BaseModel):
+    """Settings for the exchange calendar service."""
+
+    exchange: str = "XNYS"
+
+
+class MetadataRefreshSettings(BaseModel):
+    """Settings controlling symbol metadata refresh behavior."""
+
+    provider: str = "polygon"
+    universe: tuple[str, ...] = (
+        "SPY",
+        "QQQ",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "AMD",
+        "META",
+        "AMZN",
+        "GOOGL",
+        "TSLA",
+    )
+
+
 class MarketDataSettings(BaseModel):
     """Root market-data settings block bundling provider and ingest defaults."""
 
     polygon: PolygonProviderSettings = PolygonProviderSettings()
     ingest: IngestSettings = IngestSettings()
+    calendar: CalendarSettings = CalendarSettings()
+    metadata: MetadataRefreshSettings = MetadataRefreshSettings()
 
 
 class Settings(BaseModel):

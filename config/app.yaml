@@ -52,3 +52,18 @@ market_data:
       - AMZN
       - GOOGL
       - TSLA
+  calendar:
+    exchange: XNYS
+  metadata:
+    provider: polygon
+    universe:
+      - SPY
+      - QQQ
+      - AAPL
+      - MSFT
+      - NVDA
+      - AMD
+      - META
+      - AMZN
+      - GOOGL
+      - TSLA
