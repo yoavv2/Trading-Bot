@@ -253,6 +253,28 @@ def bars_for_session_date(
     }
 
 
+def missing_bars_for_session(
+    session: Session,
+    session_date: date,
+    *,
+    symbols: list[str] | tuple[str, ...],
+    adjusted: bool = True,
+    provider: str = "polygon",
+) -> list[str]:
+    """Return requested symbols missing a persisted bar for *session_date*."""
+
+    if not symbols:
+        return []
+    available = bars_for_session_date(
+        session,
+        session_date,
+        symbols=list(symbols),
+        adjusted=adjusted,
+        provider=provider,
+    )
+    return sorted(set(symbols) - set(available))
+
+
 def missing_sessions_for_symbol(
     session: Session,
     symbol: str,
