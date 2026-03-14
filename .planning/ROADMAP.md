@@ -32,7 +32,7 @@ The roadmap is MVP-scoped. Multi-strategy expansion, richer portfolio analytics,
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation Platform** - Stand up the Python, FastAPI, PostgreSQL, and Docker skeleton with the core trading-platform interfaces and persistence model. Completed 2026-03-12.
-- [ ] **Phase 2: Data and Strategy** - Build the daily-bar data pipeline and implement `TrendFollowingDailyV1` as the first isolated strategy module.
+- [x] **Phase 2: Data and Strategy** - Build the daily-bar data pipeline and implement `TrendFollowingDailyV1` as the first isolated strategy module. (completed 2026-03-14)
 - [ ] **Phase 3: Backtest and Reporting** - Run deterministic daily-bar backtests and persist research outputs that are usable for strategy evaluation.
 - [ ] **Phase 4: Risk and Portfolio** - Add the portfolio state and mandatory risk-validation pipeline that gates every signal before execution.
 - [ ] **Phase 5: Paper Execution** - Turn approved daily signals into Alpaca paper orders with scheduling, lifecycle tracking, and reconciliation.
@@ -67,7 +67,7 @@ Plans:
   2. The platform stores normalized bar data, symbol metadata, and enough calendar context to run daily workflows consistently.
   3. `TrendFollowingDailyV1` computes its moving-average indicators and emits deterministic entry and exit signals for configured symbols.
   4. Strategy parameters such as universe, moving-average windows, and exits live in external config rather than inside strategy code.
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 02-01: Build the Polygon data provider, ingestion pipeline, and daily-bar normalization flow
@@ -148,7 +148,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation Platform | 3/3 | Complete | 2026-03-12 |
-| 2. Data and Strategy | 2/3 | In Progress|  |
+| 2. Data and Strategy | 3/3 | Complete   | 2026-03-14 |
 | 3. Backtest and Reporting | 0/2 | Not started | - |
 | 4. Risk and Portfolio | 0/2 | Not started | - |
 | 5. Paper Execution | 0/3 | Not started | - |
