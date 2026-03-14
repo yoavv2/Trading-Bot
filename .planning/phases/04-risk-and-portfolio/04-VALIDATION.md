@@ -38,12 +38,12 @@ created: 2026-03-14
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 04-01-01 | 01 | 1 | REQ-11 | unit | `PYTHONPATH=src .venv/bin/pytest tests/test_portfolio_service.py -q` | created in 04-01 | ⬜ pending |
-| 04-01-02 | 01 | 1 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_db_migrations.py -q` | existing | ⬜ pending |
-| 04-01-03 | 01 | 1 | REQ-07 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_portfolio_service.py tests/test_db_migrations.py tests/test_backtest_runner.py -q` | created in 04-01 | ⬜ pending |
-| 04-02-01 | 02 | 2 | REQ-07 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_risk_pipeline.py -q` | created in 04-02 | ⬜ pending |
-| 04-02-02 | 02 | 2 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_db_migrations.py tests/test_risk_pipeline.py -q` | existing | ⬜ pending |
-| 04-02-03 | 02 | 2 | REQ-07 | integration | `PYTHONPATH=src .venv/bin/python scripts/evaluate_risk.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker evaluate-risk --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_risk_pipeline.py tests/test_portfolio_service.py tests/test_db_migrations.py tests/test_backtest_runner.py -q` | created in 04-02 | ⬜ pending |
+| 04-01-01 | 01 | 1 | REQ-11 | unit | `PYTHONPATH=src .venv/bin/pytest tests/test_portfolio_service.py -q` | created in 04-01 | ✅ green |
+| 04-01-02 | 01 | 1 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_db_migrations.py -q` | existing | ✅ green |
+| 04-01-03 | 01 | 1 | REQ-07 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_portfolio_service.py tests/test_db_migrations.py tests/test_backtest_runner.py -q` | created in 04-01 | ✅ green |
+| 04-02-01 | 02 | 2 | REQ-07 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_risk_pipeline.py -q` | created in 04-02 | ✅ green |
+| 04-02-02 | 02 | 2 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_db_migrations.py tests/test_risk_pipeline.py -q` | existing | ✅ green |
+| 04-02-03 | 02 | 2 | REQ-07 | integration | `PYTHONPATH=src .venv/bin/python scripts/evaluate_risk.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker evaluate-risk --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_risk_pipeline.py tests/test_portfolio_service.py tests/test_db_migrations.py tests/test_backtest_runner.py -q` | created in 04-02 | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -63,11 +63,11 @@ All phase behaviors have automated verification.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 90s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 90s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-03-14
