@@ -119,6 +119,48 @@ def test_alembic_upgrade_creates_phase1_tables(migrated_database: str) -> None:
     }
 
 
+def test_alembic_upgrade_creates_phase2_market_data_tables(migrated_database: str) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert {"symbols", "daily_bars", "market_data_ingestion_runs"}.issubset(table_names)
+
+    symbol_cols = {col["name"] for col in inspector.get_columns("symbols")}
+    assert symbol_cols >= {"id", "ticker", "active", "created_at", "updated_at"}
+
+    bar_cols = {col["name"] for col in inspector.get_columns("daily_bars")}
+    assert bar_cols >= {
+        "id",
+        "symbol_id",
+        "session_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "adjusted",
+        "provider",
+    }
+
+    run_cols = {col["name"] for col in inspector.get_columns("market_data_ingestion_runs")}
+    assert run_cols >= {
+        "id",
+        "provider",
+        "from_date",
+        "to_date",
+        "adjusted",
+        "status",
+        "symbols_requested",
+        "bars_upserted",
+        "started_at",
+    }
+
+    # Verify the natural uniqueness constraint on daily_bars
+    uq_constraints = {uc["name"] for uc in inspector.get_unique_constraints("daily_bars")}
+    assert "uq_daily_bars_symbol_session_adjusted_provider" in uq_constraints
+
+
 def test_seed_script_is_idempotent(migrated_database: str) -> None:
     first_record, first_created = seed_phase_one()
     second_record, second_created = seed_phase_one()
