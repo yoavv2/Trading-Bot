@@ -29,6 +29,24 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("--symbols", nargs="+", metavar="TICKER", help="Symbol override list.")
     ingest_parser.add_argument("--trigger-source", default="worker_cli", help="Trigger label for the run record.")
 
+    sync_meta_parser = subparsers.add_parser(
+        "sync-metadata", help="Refresh symbol metadata from Polygon ticker overview."
+    )
+    sync_meta_parser.add_argument("--symbols", nargs="+", metavar="TICKER", help="Symbol override list.")
+    sync_meta_parser.add_argument(
+        "--dry-run", action="store_true", default=False, help="Print metadata without persisting."
+    )
+
+    sync_sessions_parser = subparsers.add_parser(
+        "sync-sessions", help="Persist XNYS market sessions for a date range."
+    )
+    sync_sessions_parser.add_argument(
+        "--from-date", metavar="YYYY-MM-DD", help="Session sync start (inclusive)."
+    )
+    sync_sessions_parser.add_argument(
+        "--to-date", metavar="YYYY-MM-DD", help="Session sync end (inclusive)."
+    )
+
     return parser
 
 
@@ -110,6 +128,86 @@ def run_ingest_bars(args: argparse.Namespace) -> None:
     print(json.dumps(summary, default=str))
 
 
+def run_sync_metadata(args: argparse.Namespace) -> None:
+    from trading_platform.db.models.symbol import Symbol as SymbolModel
+    from trading_platform.db.session import session_scope
+
+    import uuid
+    from datetime import UTC, datetime
+
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+
+    # Import the standalone sync logic from the scripts module
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
+
+    import importlib
+
+    sync_mod = importlib.import_module("sync_symbol_metadata")
+
+    symbols: list[str] = args.symbols or list(settings.market_data.metadata.universe)
+    result = sync_mod.MetadataSyncResult(dry_run=args.dry_run)
+
+    for ticker in symbols:
+        try:
+            overview = sync_mod._fetch_ticker_overview(ticker, settings)
+            if overview is None:
+                result.skipped.append(ticker)
+                continue
+
+            if args.dry_run:
+                result.synced.append(ticker)
+                continue
+
+            with session_scope(settings) as db_session:
+                sync_mod._upsert_symbol_metadata(db_session, ticker, overview)
+            result.synced.append(ticker)
+        except Exception as exc:
+            logger.error(
+                "metadata_sync_failed",
+                extra={"context": {"ticker": ticker, "error": str(exc)}},
+            )
+            result.failed.append(ticker)
+
+    print(json.dumps(result.to_dict(), default=str))
+
+
+def run_sync_sessions(args: argparse.Namespace) -> None:
+    from datetime import timedelta
+
+    from trading_platform.db.session import session_scope
+    from trading_platform.services.calendar import upsert_market_sessions
+
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+
+    exchange = settings.market_data.calendar.exchange
+    yesterday = date.today() - timedelta(days=1)
+    to_date = date.fromisoformat(args.to_date) if args.to_date else yesterday
+    from_date = (
+        date.fromisoformat(args.from_date)
+        if args.from_date
+        else to_date - timedelta(days=settings.market_data.ingest.default_lookback_days)
+    )
+
+    with session_scope(settings) as db_session:
+        count = upsert_market_sessions(db_session, from_date, to_date, exchange)
+
+    summary = {
+        "exchange": exchange,
+        "from_date": from_date.isoformat(),
+        "to_date": to_date.isoformat(),
+        "sessions_upserted": count,
+    }
+    logger.info("sync_sessions_completed", extra={"context": summary})
+    print(json.dumps(summary, default=str))
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -122,6 +220,12 @@ def main() -> None:
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)
+        return
+    if args.command == "sync-metadata":
+        run_sync_metadata(args)
+        return
+    if args.command == "sync-sessions":
+        run_sync_sessions(args)
         return
 
     parser.error(f"Unknown command: {args.command}")
