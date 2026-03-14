@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, Decimal
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from trading_platform.core.settings import PortfolioSettings, Settings, load_settings
+from trading_platform.db.models import AccountSnapshot, Position, Strategy
+from trading_platform.services.market_data_access import bars_for_session_date, latest_completed_session
 
 MONEY_SCALE = Decimal("0.000001")
 
@@ -18,8 +24,11 @@ def _money(value: Decimal | float | int) -> Decimal:
 class PositionSnapshot:
     """Lightweight live-position view used for portfolio accounting."""
 
+    position_id: str
+    strategy_id: str
     symbol: str
     quantity: Decimal
+    average_entry_price: Decimal
     market_price: Decimal
     market_value: Decimal
 
@@ -32,8 +41,10 @@ class PortfolioState:
     gross_exposure: Decimal
     total_equity: Decimal
     strategy_exposure: Decimal
+    as_of_session: date | None = None
     open_positions: tuple[PositionSnapshot, ...] = field(default_factory=tuple)
     open_symbols: frozenset[str] = field(default_factory=frozenset)
+    total_open_positions: int = 0
 
     @property
     def position_count(self) -> int:
@@ -77,6 +88,117 @@ class PortfolioService:
             total_equity=resolved_cash,
             strategy_exposure=_money(0),
         )
+
+    def load_state(
+        self,
+        session: Session,
+        *,
+        strategy_id: str,
+        as_of_session: date | None = None,
+    ) -> PortfolioState:
+        strategy_record = session.execute(
+            select(Strategy).where(Strategy.strategy_id == strategy_id)
+        ).scalar_one_or_none()
+        if strategy_record is None:
+            raise LookupError(f"Unknown strategy '{strategy_id}'.")
+
+        latest_snapshot = session.execute(
+            select(AccountSnapshot).order_by(AccountSnapshot.snapshot_at.desc()).limit(1)
+        ).scalar_one_or_none()
+        cash = _money(
+            latest_snapshot.cash if latest_snapshot is not None else self.settings.starting_cash_decimal
+        )
+
+        valuation_session = as_of_session or latest_completed_session(
+            session,
+            exchange=load_settings().market_data.calendar.exchange,
+        )
+
+        open_rows = session.execute(
+            select(Position, Strategy.strategy_id)
+            .join(Strategy, Strategy.id == Position.strategy_id)
+            .where(Position.status == "open")
+        ).all()
+        symbols = [row.Position.symbol_ref.ticker for row in open_rows]
+        price_map = (
+            bars_for_session_date(session, valuation_session, symbols=symbols)
+            if valuation_session is not None and symbols
+            else {}
+        )
+
+        strategy_positions: list[PositionSnapshot] = []
+        strategy_symbols: set[str] = set()
+        gross_exposure = Decimal("0")
+        strategy_exposure = Decimal("0")
+
+        for position, owner_strategy_id in open_rows:
+            ticker = position.symbol_ref.ticker
+            market_price = (
+                price_map[ticker].close if ticker in price_map else _money(position.average_entry_price)
+            )
+            market_value = _money(position.quantity * market_price)
+            gross_exposure += market_value
+
+            if owner_strategy_id != strategy_id:
+                continue
+
+            strategy_exposure += market_value
+            strategy_symbols.add(ticker)
+            strategy_positions.append(
+                PositionSnapshot(
+                    position_id=str(position.id),
+                    strategy_id=owner_strategy_id,
+                    symbol=ticker,
+                    quantity=_money(position.quantity),
+                    average_entry_price=_money(position.average_entry_price),
+                    market_price=_money(market_price),
+                    market_value=market_value,
+                )
+            )
+
+        gross_exposure = _money(gross_exposure)
+        strategy_exposure = _money(strategy_exposure)
+        return PortfolioState(
+            cash=cash,
+            gross_exposure=gross_exposure,
+            total_equity=_money(cash + gross_exposure),
+            strategy_exposure=strategy_exposure,
+            as_of_session=valuation_session,
+            open_positions=tuple(strategy_positions),
+            open_symbols=frozenset(strategy_symbols),
+            total_open_positions=len(open_rows),
+        )
+
+    def record_snapshot(
+        self,
+        session: Session,
+        *,
+        strategy_id: str | None,
+        state: PortfolioState,
+        source_run_id=None,
+        snapshot_source: str = "derived",
+        snapshot_at: datetime | None = None,
+    ) -> AccountSnapshot:
+        strategy_record = None
+        if strategy_id is not None:
+            strategy_record = session.execute(
+                select(Strategy).where(Strategy.strategy_id == strategy_id)
+            ).scalar_one_or_none()
+
+        snapshot = AccountSnapshot(
+            strategy_id=strategy_record.id if strategy_record is not None else None,
+            source_run_id=source_run_id,
+            snapshot_source=snapshot_source,
+            snapshot_at=snapshot_at or datetime.now(UTC),
+            cash=state.cash,
+            gross_exposure=state.gross_exposure,
+            total_equity=state.total_equity,
+            buying_power=state.cash,
+            open_positions=state.total_open_positions or state.position_count,
+        )
+        session.add(snapshot)
+        session.flush()
+        return snapshot
 
     def compute_entry_size(
         self,
