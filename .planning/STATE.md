@@ -2,15 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: execution
-stopped_at: Completed Phase 04 (Risk and Portfolio); ready to execute Phase 05
-last_updated: "2026-03-14T17:20:00Z"
-last_activity: 2026-03-14 — Completed Phase 4 with persisted portfolio state and a deterministic risk-evaluation gate
+current_phase: 06
+current_phase_name: Analytics and APIs
+current_plan: 0
+status: planning
+stopped_at: Completed Phase 05 (Paper Execution); Phase 06 planning is next
+last_updated: "2026-03-14T20:46:24Z"
+last_activity: 2026-03-14
 progress:
   total_phases: 6
-  completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
+  completed_phases: 5
+  total_plans: 14
+  completed_plans: 14
   percent: 100
 ---
 
@@ -21,21 +24,27 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-11)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 5 - Paper Execution
+**Current focus:** Phase 6 - Analytics and APIs planning
 
 ## Current Position
 
-Phase: 5 of 6 (Paper Execution)
-Plan: 0 of 3
-Status: Ready for execution
-Last activity: 2026-03-14 — Completed Phase 4 with persisted portfolio state and a deterministic risk-evaluation gate
+Current Phase: 06
+Current Phase Name: Analytics and APIs
+Total Phases: 6
+Current Plan: 0
+Total Plans in Phase: pending planning
+Phase: 6 of 6 (Analytics and APIs)
+Plan: 0 of 0
+Status: Ready for planning
+Last Activity: 2026-03-14
+Last Activity Description: Completed Phase 05 Plan 03 with broker reconciliation, restart-safe recovery, and fail-closed unsafe-state execution guards
 
 Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 14
 - Average duration: ~7 min
 - Total execution time: -
 
@@ -47,10 +56,11 @@ Progress: [██████████] 100%
 | 2 | 3 of 3 | - | - |
 | 3 | 3 of 3 | - | - |
 | 4 | 2 of 2 | - | - |
+| 5 | 3 of 3 | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 03-02, 03-03, 04-01, 04-02 completed
-- Trend: Strong momentum; Phase 4 is complete and Phase 5 execution is next
+- Last 5 plans: 04-01, 04-02, 05-01, 05-02, 05-03 completed
+- Trend: Phase 5 is complete; the next milestone action is planning Phase 6 analytics and API reads
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -60,6 +70,9 @@ Progress: [██████████] 100%
 | Phase 03-backtest-and-reporting P03 | 18min | 3 tasks | 9 files |
 | Phase 04-risk-and-portfolio P01 | 3min | 3 tasks | 9 files |
 | Phase 04-risk-and-portfolio P02 | 8min | 3 tasks | 10 files |
+| Phase 05-paper-execution P01 | 26min | 3 tasks | 14 files |
+| Phase 05-paper-execution P02 | 24min | 3 tasks | 14 files |
+| Phase 05-paper-execution P03 | 138min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -95,10 +108,19 @@ Recent decisions affecting current work:
 - [Phase 04-risk-and-portfolio]: Flat signals persist as `non_actionable_signal` rejections so every evaluated symbol is visible in the risk audit trail
 - [Phase 04-risk-and-portfolio]: `strategy_runs` remains the single execution root; Phase 4 adds `run_type=risk_evaluation`
 - [Phase 04-risk-and-portfolio]: The operator risk gate is CLI-first via `scripts/evaluate_risk.py` and `trading-platform-worker evaluate-risk`
+- [Phase 05-paper-execution]: Approved risk_events are the paper-submission source; no separate execution-candidate table was introduced
+- [Phase 05-paper-execution]: Paper-order rows persist deterministic client-order IDs before broker submission so reruns can safely detect already-seeded candidates
+- [Phase 05-paper-execution]: Alpaca HTTP mapping stays in services/alpaca.py while submission orchestration and persistence live in services/paper_execution.py
+- [Phase 05-paper-execution]: The session runner preflights approved risk candidates and returns a no-op report when all paper orders for a session are already seeded.
+- [Phase 05-paper-execution]: Broker lifecycle sync reuses paper_orders and matches broker reads by broker order ID first, then deterministic client_order_id.
+- [Phase 05-paper-execution]: Repeated broker syncs persist normalized paper_fills keyed by broker_fill_id while positions and account_snapshots remain the durable live-state source.
+- [Phase 05-paper-execution]: Reconciliation findings persist as execution_events under strategy_runs with run_type=reconciliation for next-day inspection.
+- [Phase 05-paper-execution]: Paper-session preflight recovers in-flight orders, reconciles broker state, and blocks new submissions when unresolved drift remains.
+- [Phase 05-paper-execution]: Only pending_submission and below-threshold submission_failed orders are retryable; broker-touched orders fail closed for operator review.
 
 ### Pending Todos
 
-- Execute Phase 05: connect approved risk decisions to Alpaca paper execution, lifecycle sync, and reconciliation
+- Plan Phase 06: analytics summaries, inspection reads, and operator-facing APIs on top of the completed paper-execution loop
 
 ### Blockers/Concerns
 
@@ -107,6 +129,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-14T17:20:00Z
-Stopped at: Completed Phase 04 (Risk and Portfolio); ready to execute Phase 05
+Last session: 2026-03-14T20:46:24Z
+Stopped at: Completed Phase 05 (Paper Execution); Phase 06 planning is next
 Resume file: None

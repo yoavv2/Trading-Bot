@@ -1,7 +1,7 @@
 ---
 phase: 05
 slug: paper-execution
-status: draft
+status: validated
 nyquist_compliant: true
 wave_0_complete: true
 created: 2026-03-14
@@ -38,15 +38,15 @@ created: 2026-03-14
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 05-01-01 | 01 | 1 | REQ-08 | unit | `PYTHONPATH=src .venv/bin/pytest tests/test_alpaca_execution.py -q` | created in 05-01 | ⬜ pending |
-| 05-01-02 | 01 | 1 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_db_migrations.py -q` | existing | ⬜ pending |
-| 05-01-03 | 01 | 1 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/python scripts/submit_paper_orders.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker submit-paper-orders --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_alpaca_execution.py tests/test_db_migrations.py -q` | created in 05-01 | ⬜ pending |
-| 05-02-01 | 02 | 2 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_paper_execution.py -q` | created in 05-02 | ⬜ pending |
-| 05-02-02 | 02 | 2 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_paper_execution.py tests/test_db_migrations.py -q` | existing | ⬜ pending |
-| 05-02-03 | 02 | 2 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/python scripts/run_paper_session.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker run-paper-session --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_paper_execution.py tests/test_alpaca_execution.py tests/test_db_migrations.py -q` | created in 05-02 | ⬜ pending |
-| 05-03-01 | 03 | 3 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_execution_reconciliation.py -q` | created in 05-03 | ⬜ pending |
-| 05-03-02 | 03 | 3 | REQ-08 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_execution_reconciliation.py tests/test_paper_execution.py -q` | created in 05-03 | ⬜ pending |
-| 05-03-03 | 03 | 3 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/python scripts/reconcile_paper_execution.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker reconcile-paper-execution --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_execution_reconciliation.py tests/test_paper_execution.py tests/test_alpaca_execution.py tests/test_db_migrations.py -q` | created in 05-03 | ⬜ pending |
+| 05-01-01 | 01 | 1 | REQ-08 | unit | `PYTHONPATH=src .venv/bin/pytest tests/test_alpaca_execution.py -q` | created in 05-01 | ✅ green |
+| 05-01-02 | 01 | 1 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_db_migrations.py -q` | existing | ✅ green |
+| 05-01-03 | 01 | 1 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/python scripts/submit_paper_orders.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker submit-paper-orders --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_alpaca_execution.py tests/test_db_migrations.py -q` | created in 05-01 | ✅ green |
+| 05-02-01 | 02 | 2 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_paper_execution.py -q` | created in 05-02 | ✅ green |
+| 05-02-02 | 02 | 2 | REQ-06 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_paper_execution.py tests/test_db_migrations.py -q` | existing | ✅ green |
+| 05-02-03 | 02 | 2 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/python scripts/run_paper_session.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker run-paper-session --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_paper_execution.py tests/test_alpaca_execution.py tests/test_db_migrations.py -q` | created in 05-02 | ✅ green |
+| 05-03-01 | 03 | 3 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_execution_reconciliation.py -q` | created in 05-03 | ✅ green |
+| 05-03-02 | 03 | 3 | REQ-08 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_execution_reconciliation.py tests/test_paper_execution.py -q` | created in 05-03 | ✅ green |
+| 05-03-03 | 03 | 3 | REQ-08 | integration | `PYTHONPATH=src .venv/bin/python scripts/reconcile_paper_execution.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker reconcile-paper-execution --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_execution_reconciliation.py tests/test_paper_execution.py tests/test_alpaca_execution.py tests/test_db_migrations.py -q` | created in 05-03 | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -66,11 +66,22 @@ All planned Phase 5 behaviors have automated verification. A live Alpaca paper-a
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 120s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** validated 2026-03-14
+
+## Validation Audit 2026-03-14
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+**Full suite:** 22 passed in 4.58s
+**CLI entrypoints:** 6/6 confirmed (3 scripts + 3 worker commands)

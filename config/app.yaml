@@ -84,3 +84,27 @@ portfolio:
   max_strategy_allocation_pct: 1.0
   max_total_portfolio_allocation_pct: 1.0
   stale_data_max_session_lag: 0
+
+broker:
+  provider: alpaca
+  alpaca:
+    base_url: https://paper-api.alpaca.markets
+    api_key: ""
+    api_secret: ""
+    max_retries: 3
+    retry_backoff_factor: 0.5
+    timeout_seconds: 30
+
+execution:
+  default_order_type: market
+  default_time_in_force: day
+  client_order_id_prefix: tp
+  safety:
+    repeated_failure_threshold: 3
+    block_on_unresolved_reconciliation: true
+  paper_session_runner:
+    default_strategy_id: trend_following_daily
+    trigger_source: paper_session_runner
+    cadence: daily
+    scheduled_hour_utc: 20
+    scheduled_minute_utc: 5

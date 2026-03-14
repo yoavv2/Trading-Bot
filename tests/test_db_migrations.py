@@ -86,16 +86,7 @@ def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         clear_engine_cache()
         with _connect_admin(admin_params) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT pg_terminate_backend(pid)
-                    FROM pg_stat_activity
-                    WHERE datname = %s
-                      AND pid <> pg_backend_pid()
-                    """,
-                    (database_name,),
-                )
-                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
 
 
 def test_alembic_upgrade_creates_phase1_tables(migrated_database: str) -> None:
@@ -290,6 +281,86 @@ def test_alembic_upgrade_creates_phase4_risk_tables(migrated_database: str) -> N
         "proposed_quantity",
         "proposed_notional",
         "risk_metadata",
+    }
+
+
+def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: str) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert {"paper_orders", "paper_fills", "execution_events"}.issubset(table_names)
+
+    paper_order_cols = {col["name"] for col in inspector.get_columns("paper_orders")}
+    assert paper_order_cols >= {
+        "strategy_run_id",
+        "source_risk_event_id",
+        "symbol_id",
+        "intended_session_date",
+        "side",
+        "quantity",
+        "order_type",
+        "time_in_force",
+        "client_order_id",
+        "broker_order_id",
+        "status",
+        "broker_status",
+        "submitted_at",
+        "submission_attempt_count",
+        "sync_failure_count",
+        "last_submission_attempt_at",
+        "last_sync_failure_at",
+        "last_submission_error",
+        "last_sync_error",
+        "filled_at",
+        "canceled_at",
+        "last_broker_update_at",
+        "last_synced_at",
+        "broker_payload",
+    }
+
+    constraints = {uc["name"] for uc in inspector.get_unique_constraints("paper_orders")}
+    assert constraints >= {
+        "uq_paper_orders_source_risk_event_id",
+        "uq_paper_orders_client_order_id",
+        "uq_paper_orders_broker_order_id",
+    }
+
+    paper_fill_cols = {col["name"] for col in inspector.get_columns("paper_fills")}
+    assert paper_fill_cols >= {
+        "paper_order_id",
+        "symbol_id",
+        "broker_fill_id",
+        "broker_order_id",
+        "side",
+        "quantity",
+        "price",
+        "filled_at",
+        "broker_payload",
+    }
+
+    paper_fill_constraints = {uc["name"] for uc in inspector.get_unique_constraints("paper_fills")}
+    assert paper_fill_constraints >= {"uq_paper_fills_broker_fill_id"}
+
+    execution_event_cols = {col["name"] for col in inspector.get_columns("execution_events")}
+    assert execution_event_cols >= {
+        "strategy_run_id",
+        "paper_order_id",
+        "event_type",
+        "severity",
+        "blocks_execution",
+        "event_at",
+        "message",
+        "details",
+    }
+
+    enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
+    assert enums["strategy_run_type"] >= {
+        "dry_bootstrap",
+        "backtest",
+        "risk_evaluation",
+        "paper_execution",
+        "reconciliation",
     }
 
 

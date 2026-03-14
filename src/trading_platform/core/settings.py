@@ -204,6 +204,51 @@ class PortfolioSettings(BaseModel):
         return Decimal(str(self.starting_cash))
 
 
+class AlpacaBrokerSettings(BaseModel):
+    """Typed settings for Alpaca paper-order submission."""
+
+    base_url: str = "https://paper-api.alpaca.markets"
+    api_key: str = ""
+    api_secret: str = ""
+    max_retries: int = 3
+    retry_backoff_factor: float = 0.5
+    timeout_seconds: float = 30.0
+
+
+class BrokerSettings(BaseModel):
+    """Broker-provider settings surface for execution flows."""
+
+    provider: Literal["alpaca"] = "alpaca"
+    alpaca: AlpacaBrokerSettings = AlpacaBrokerSettings()
+
+
+class PaperSessionRunnerSettings(BaseModel):
+    """Scheduling metadata for the daily paper-session runner."""
+
+    default_strategy_id: str = "trend_following_daily"
+    trigger_source: str = "paper_session_runner"
+    cadence: Literal["daily"] = "daily"
+    scheduled_hour_utc: int = Field(default=20, ge=0, le=23)
+    scheduled_minute_utc: int = Field(default=5, ge=0, le=59)
+
+
+class ExecutionSafetySettings(BaseModel):
+    """Safety thresholds that gate new paper execution when state is ambiguous."""
+
+    repeated_failure_threshold: int = Field(default=3, ge=1)
+    block_on_unresolved_reconciliation: bool = True
+
+
+class ExecutionSettings(BaseModel):
+    """Deterministic defaults for paper-order submission."""
+
+    default_order_type: Literal["market"] = "market"
+    default_time_in_force: Literal["day"] = "day"
+    client_order_id_prefix: str = Field(default="tp", min_length=2, max_length=12)
+    paper_session_runner: PaperSessionRunnerSettings = PaperSessionRunnerSettings()
+    safety: ExecutionSafetySettings = ExecutionSafetySettings()
+
+
 class Settings(BaseModel):
     app: AppMetadata = AppMetadata()
     api: ApiSettings = ApiSettings()
@@ -215,6 +260,8 @@ class Settings(BaseModel):
     market_data: MarketDataSettings = MarketDataSettings()
     backtest: BacktestSettings = BacktestSettings()
     portfolio: PortfolioSettings = PortfolioSettings()
+    broker: BrokerSettings = BrokerSettings()
+    execution: ExecutionSettings = ExecutionSettings()
 
 
 class EnvironmentOverrides(BaseSettings):
@@ -235,6 +282,8 @@ class EnvironmentOverrides(BaseSettings):
     market_data: MarketDataSettings = MarketDataSettings()
     backtest: BacktestSettings = BacktestSettings()
     portfolio: PortfolioSettings = PortfolioSettings()
+    broker: BrokerSettings = BrokerSettings()
+    execution: ExecutionSettings = ExecutionSettings()
 
 
 def _resolve_path(raw_path: str | Path) -> Path:
