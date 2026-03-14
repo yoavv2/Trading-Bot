@@ -293,6 +293,46 @@ def test_alembic_upgrade_creates_phase4_risk_tables(migrated_database: str) -> N
     }
 
 
+def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: str) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert {"paper_orders"}.issubset(table_names)
+
+    paper_order_cols = {col["name"] for col in inspector.get_columns("paper_orders")}
+    assert paper_order_cols >= {
+        "strategy_run_id",
+        "source_risk_event_id",
+        "symbol_id",
+        "intended_session_date",
+        "side",
+        "quantity",
+        "order_type",
+        "time_in_force",
+        "client_order_id",
+        "broker_order_id",
+        "status",
+        "broker_status",
+        "broker_payload",
+    }
+
+    constraints = {uc["name"] for uc in inspector.get_unique_constraints("paper_orders")}
+    assert constraints >= {
+        "uq_paper_orders_source_risk_event_id",
+        "uq_paper_orders_client_order_id",
+        "uq_paper_orders_broker_order_id",
+    }
+
+    enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
+    assert enums["strategy_run_type"] >= {
+        "dry_bootstrap",
+        "backtest",
+        "risk_evaluation",
+        "paper_execution",
+    }
+
+
 def test_seed_script_is_idempotent(migrated_database: str) -> None:
     first_record, first_created = seed_phase_one()
     second_record, second_created = seed_phase_one()
