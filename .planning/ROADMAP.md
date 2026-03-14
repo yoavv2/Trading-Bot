@@ -70,7 +70,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 02-01: Build the Polygon data provider, ingestion pipeline, and daily-bar normalization flow
+- [x] 02-01: Build the Polygon data provider, ingestion pipeline, and daily-bar normalization flow
 - [ ] 02-02: Model symbol metadata, trading-calendar awareness, and reusable market-data access patterns
 - [ ] 02-03: Implement `TrendFollowingDailyV1` with isolated config, indicators, and signal generation
 
@@ -148,7 +148,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation Platform | 3/3 | Complete | 2026-03-12 |
-| 2. Data and Strategy | 0/3 | Not started | - |
+| 2. Data and Strategy | 1/3 | In progress | - |
 | 3. Backtest and Reporting | 0/2 | Not started | - |
 | 4. Risk and Portfolio | 0/2 | Not started | - |
 | 5. Paper Execution | 0/3 | Not started | - |
