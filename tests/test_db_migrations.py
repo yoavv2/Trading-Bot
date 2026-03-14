@@ -86,16 +86,7 @@ def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         clear_engine_cache()
         with _connect_admin(admin_params) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT pg_terminate_backend(pid)
-                    FROM pg_stat_activity
-                    WHERE datname = %s
-                      AND pid <> pg_backend_pid()
-                    """,
-                    (database_name,),
-                )
-                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
 
 
 def test_alembic_upgrade_creates_phase1_tables(migrated_database: str) -> None:
