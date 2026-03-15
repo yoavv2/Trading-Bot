@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 06
 current_phase_name: Analytics and APIs
-current_plan: 2
-status: Ready for execution
-stopped_at: Completed 06-analytics-and-apis-02-PLAN.md
-last_updated: "2026-03-15T04:37:08Z"
+current_plan: 3
+status: Ready for milestone completion
+stopped_at: Completed 06-analytics-and-apis-03-PLAN.md
+last_updated: "2026-03-15T07:33:22Z"
 last_activity: 2026-03-15
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 17
-  completed_plans: 16
-  percent: 94
+  completed_plans: 17
+  percent: 100
 ---
 
 # Project State
@@ -24,22 +24,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-11)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 6 - operator controls and observability on top of the new API read surface
+**Current focus:** Milestone closure and MVP audit after Phase 6 completion
 
 ## Current Position
 
 Current Phase: 06
 Current Phase Name: Analytics and APIs
 Total Phases: 6
-Current Plan: 2
+Current Plan: 3
 Total Plans in Phase: 3
 Phase: 6 of 6 (Analytics and APIs)
-Plan: 2 of 3
-Status: Ready for execution
+Plan: 3 of 3
+Status: Ready for milestone completion
 Last Activity: 2026-03-15
-Last Activity Description: Completed Phase 06 Plan 02 with versioned analytics, run, and operational inspection APIs
+Last Activity Description: Completed Phase 06 Plan 03 with persisted operator controls, fail-closed execution, and operator status surfaces
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -57,11 +57,11 @@ Progress: [█████████░] 94%
 | 3 | 3 of 3 | - | - |
 | 4 | 2 of 2 | - | - |
 | 5 | 3 of 3 | - | - |
-| 6 | 2 of 3 | - | - |
+| 6 | 3 of 3 | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 05-01, 05-02, 05-03, 06-01, 06-02 completed
-- Trend: Phase 6 is nearly complete; the API read surface is in place and the operator-control wave is next
+- Last 5 plans: 05-02, 05-03, 06-01, 06-02, 06-03 completed
+- Trend: Milestone execution scope is complete; the next action is milestone audit and closure
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -125,10 +125,12 @@ Recent decisions affecting current work:
 - [Phase 06-analytics-and-apis]: Operator inspection reads live behind one shared service layer that returns serializable payloads for runs, orders, fills, positions, snapshots, risk events, and execution events.
 - [Phase 06-analytics-and-apis]: Versioned FastAPI read routes reuse the shared analytics and operator-read services directly instead of embedding route-local SQL.
 - [Phase 06-analytics-and-apis]: Strategy and system responses expose an operator-read API catalog so future dashboard clients can discover the stable read surface without database knowledge.
+- [Phase 06-analytics-and-apis]: Persisted strategy status is authoritative operator-control state, and metadata refreshes preserve it instead of resetting it to `active`.
+- [Phase 06-analytics-and-apis]: Disabled strategies fail closed before broker work and record blocked attempts as durable `paper_execution` runs plus `execution_events`.
 
 ### Pending Todos
 
-- Execute Phase 06-03: add durable operator controls, kill-switch enforcement, and operator status/observability outputs
+- None in the current milestone execution scope
 
 ### Blockers/Concerns
 
@@ -138,6 +140,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-15T04:37:08Z
-Stopped at: Completed 06-analytics-and-apis-02-PLAN.md
+Last session: 2026-03-15T07:33:22Z
+Stopped at: Completed 06-analytics-and-apis-03-PLAN.md
 Resume file: None
