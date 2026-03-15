@@ -8,12 +8,20 @@ import logging
 import time
 from datetime import UTC, date, datetime, timedelta
 
-from trading_platform.core.logging import configure_logging
+from trading_platform.core.logging import build_log_context, configure_logging
 from trading_platform.core.settings import get_strategy_config, load_settings
 from trading_platform.services.analytics import build_strategy_analytics_report, render_strategy_analytics_report
 from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
+from trading_platform.services.operator_controls import (
+    OperatorControlService,
+    render_operator_control_report,
+)
+from trading_platform.services.operator_status import (
+    build_operator_status_report,
+    render_operator_status_report,
+)
 from trading_platform.services.paper_execution import (
     resolve_submission_session,
     run_paper_order_submission,
@@ -125,6 +133,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconcile_parser.add_argument("--compact", action="store_true", default=False)
     reconcile_parser.add_argument("--trigger-source", default="worker_cli")
+
+    operator_control_parser = subparsers.add_parser(
+        "operator-control",
+        help="Enable or disable persisted strategy execution.",
+    )
+    operator_control_parser.add_argument("action", choices=("enable", "disable"))
+    operator_control_parser.add_argument("--strategy", default="trend_following_daily")
+    operator_control_parser.add_argument("--reason")
+    operator_control_parser.add_argument("--actor", default="worker_cli")
+    operator_control_parser.add_argument("--trigger-source", default="worker_cli")
+    operator_control_parser.add_argument("--summary-format", choices=("markdown", "json"), default="json")
+
+    operator_status_parser = subparsers.add_parser(
+        "operator-status",
+        help="Show current strategy control state and recent operational failures.",
+    )
+    operator_status_parser.add_argument("--strategy", default="trend_following_daily")
+    operator_status_parser.add_argument("--inspection-limit", type=int, default=5)
+    operator_status_parser.add_argument("--summary-format", choices=("markdown", "json"), default="markdown")
 
     ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
     ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
@@ -416,6 +443,63 @@ def run_reconcile_paper_execution_command(args: argparse.Namespace) -> None:
     print(json.dumps(report.to_dict(), indent=indent, default=str))
 
 
+def run_operator_control_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+    service = OperatorControlService(settings=settings)
+    if args.action == "disable":
+        report = service.disable_strategy(
+            args.strategy,
+            reason=args.reason,
+            actor=args.actor,
+            trigger_source=args.trigger_source,
+        )
+    else:
+        report = service.enable_strategy(
+            args.strategy,
+            reason=args.reason,
+            actor=args.actor,
+            trigger_source=args.trigger_source,
+        )
+
+    logger.info(
+        "worker_operator_control_completed",
+        extra={
+            "context": build_log_context(
+                strategy_id=report.strategy_id,
+                run_id=report.run_id,
+                strategy_status=report.current_status,
+                action=args.action,
+                trigger_source=args.trigger_source,
+            )
+        },
+    )
+    print(render_operator_control_report(report, summary_format=args.summary_format))
+
+
+def run_operator_status_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.worker")
+    report = build_operator_status_report(
+        strategy_id=args.strategy,
+        inspection_limit=args.inspection_limit,
+        settings=settings,
+    )
+    logger.info(
+        "worker_operator_status_completed",
+        extra={
+            "context": build_log_context(
+                strategy_id=args.strategy,
+                strategy_status=report.strategy["status"],
+                inspection_limit=args.inspection_limit,
+            )
+        },
+    )
+    print(render_operator_status_report(report, summary_format=args.summary_format))
+
+
 def run_ingest_bars(args: argparse.Namespace) -> None:
     from trading_platform.services.ingestion import ingest_daily_bars
 
@@ -565,6 +649,12 @@ def main() -> None:
         return
     if args.command == "reconcile-paper-execution":
         run_reconcile_paper_execution_command(args)
+        return
+    if args.command == "operator-control":
+        run_operator_control_command(args)
+        return
+    if args.command == "operator-status":
+        run_operator_status_command(args)
         return
     if args.command == "ingest-bars":
         run_ingest_bars(args)

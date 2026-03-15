@@ -20,14 +20,17 @@ from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
     DailyBar,
+    ExecutionEvent,
     MarketSession,
     PaperFill,
     PaperOrder,
     Position,
     RiskEvent,
+    Strategy,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
+    StrategyStatus,
 )
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
@@ -45,9 +48,11 @@ from trading_platform.services.execution import (
     OrderSide,
     OrderSubmissionResult,
 )
+from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.services.paper_execution import (
     build_client_order_id,
     resolve_submission_session,
+    run_paper_order_submission,
     run_paper_session,
     sync_paper_state,
 )
@@ -112,7 +117,17 @@ def migrated_paper_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         clear_engine_cache()
         with _connect_admin(admin_params) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
+                cursor.execute(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = %s
+                      AND usename = current_user
+                      AND pid <> pg_backend_pid()
+                    """,
+                    (database_name,),
+                )
+                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
 
 
 class FakeExecutionService(ExecutionService):
@@ -173,6 +188,23 @@ class FakeBrokerClient:
 
     def get_account(self) -> BrokerAccountSnapshot:
         return self._account
+
+
+class ExplodingBrokerClient:
+    def close(self) -> None:
+        return None
+
+    def list_orders(self) -> list[BrokerOrderSnapshot]:
+        raise AssertionError("paper session should not read broker orders while strategy is disabled")
+
+    def list_fills(self) -> list[BrokerFillSnapshot]:
+        raise AssertionError("paper session should not read broker fills while strategy is disabled")
+
+    def list_positions(self) -> list[BrokerPositionSnapshot]:
+        raise AssertionError("paper session should not read broker positions while strategy is disabled")
+
+    def get_account(self) -> BrokerAccountSnapshot:
+        raise AssertionError("paper session should not read broker account while strategy is disabled")
 
 
 def _seed_market_data(session_date: date) -> None:
@@ -562,6 +594,84 @@ def test_run_paper_session_blocks_when_reconciliation_finds_unsafe_drift(
     assert report.execution_run_id is None
     assert report.result_summary["reconciliation"]["blocks_execution"] is True
     assert len(execution_service.submitted_intents) == 0
+
+
+def test_run_paper_order_submission_records_blocked_attempt_when_strategy_disabled(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+    control_service = OperatorControlService(settings=settings)
+    control_service.disable_strategy(
+        "trend_following_daily",
+        reason="manual kill switch",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="pytest",
+    )
+
+    assert report.status == StrategyRunStatus.FAILED.value
+    assert report.result_summary["action"] == "blocked_strategy_disabled"
+    assert report.result_summary["blocked_reason"] == "strategy_disabled"
+    assert execution_service.submitted_intents == []
+
+    with session_scope(settings) as session:
+        strategy = session.execute(select(Strategy)).scalar_one()
+        blocked_run = session.get(StrategyRun, uuid.UUID(report.run_id))
+        execution_events = session.execute(
+            select(ExecutionEvent)
+            .where(ExecutionEvent.strategy_run_id == uuid.UUID(report.run_id))
+            .order_by(ExecutionEvent.event_at.desc())
+        ).scalars().all()
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+
+    assert strategy.status == StrategyStatus.DISABLED
+    assert blocked_run is not None
+    assert blocked_run.run_type == StrategyRunType.PAPER_EXECUTION
+    assert blocked_run.status == StrategyRunStatus.FAILED
+    assert len(execution_events) == 1
+    assert execution_events[0].event_type == "paper_execution_blocked"
+    assert execution_events[0].blocks_execution is True
+    assert paper_orders == []
+
+
+def test_run_paper_session_blocks_before_broker_reads_when_strategy_disabled(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+    control_service = OperatorControlService(settings=settings)
+    control_service.disable_strategy(
+        "trend_following_daily",
+        reason="maintenance window",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+
+    report = run_paper_session(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        broker_client=ExplodingBrokerClient(),
+        trigger_source="pytest",
+    )
+
+    assert report.action == "blocked_strategy_disabled"
+    assert report.execution_run_id is not None
+    assert report.execution_status == StrategyRunStatus.FAILED.value
+    assert report.result_summary["blocked_reason"] == "strategy_disabled"
+    assert report.result_summary["session_preflight"]["missing_count"] == 2
+    assert execution_service.submitted_intents == []
 
 
 def test_sync_paper_state_persists_fills_positions_and_account_snapshot(

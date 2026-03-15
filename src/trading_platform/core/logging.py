@@ -40,3 +40,58 @@ def configure_logging(settings: LoggingSettings) -> None:
     root_logger.setLevel(level)
     logging.captureWarnings(True)
 
+
+def build_log_context(
+    *,
+    strategy_id: str | None = None,
+    run_id: str | None = None,
+    session_date: str | None = None,
+    strategy_status: str | None = None,
+    blocked_reason: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    standard_fields = {
+        "strategy_id": strategy_id,
+        "run_id": run_id,
+        "session_date": session_date,
+        "strategy_status": strategy_status,
+        "blocked_reason": blocked_reason,
+    }
+    for field_name, value in standard_fields.items():
+        if value is not None:
+            context[field_name] = value
+
+    for field_name, value in extra.items():
+        if value is not None:
+            context[field_name] = value
+
+    return context
+
+
+def emit_structured_log(
+    logger: logging.Logger,
+    level: int,
+    message: str,
+    *,
+    strategy_id: str | None = None,
+    run_id: str | None = None,
+    session_date: str | None = None,
+    strategy_status: str | None = None,
+    blocked_reason: str | None = None,
+    **extra: Any,
+) -> None:
+    logger.log(
+        level,
+        message,
+        extra={
+            "context": build_log_context(
+                strategy_id=strategy_id,
+                run_id=run_id,
+                session_date=session_date,
+                strategy_status=strategy_status,
+                blocked_reason=blocked_reason,
+                **extra,
+            )
+        },
+    )

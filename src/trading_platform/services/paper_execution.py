@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -10,9 +11,11 @@ from typing import Any
 
 from sqlalchemy import case, select
 
+from trading_platform.core.logging import build_log_context, emit_structured_log
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
+    ExecutionEvent,
     PaperFill,
     PaperOrder,
     Position,
@@ -35,6 +38,7 @@ from trading_platform.services.alpaca import (
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.market_data_access import latest_completed_session
+from trading_platform.services.operator_controls import load_strategy_control_state
 from trading_platform.services.reconciliation import (
     load_broker_state,
     reconcile_paper_execution,
@@ -173,10 +177,16 @@ def run_paper_order_submission(
     registry: StrategyRegistry | None = None,
     execution_service: ExecutionService | None = None,
 ) -> PaperExecutionRunReport:
+    logger = logging.getLogger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
     strategy = resolved_registry.resolve(strategy_id)
     metadata = strategy.metadata
+    control_state = load_strategy_control_state(
+        strategy_id,
+        settings=resolved_settings,
+        registry=resolved_registry,
+    )
 
     run_id = _create_paper_execution_run(
         resolved_settings,
@@ -184,7 +194,32 @@ def run_paper_order_submission(
         trigger_source=trigger_source,
         as_of_session=as_of_session,
         requested_risk_run_id=risk_run_id,
+        strategy_status=control_state.status,
     )
+    if not control_state.is_execution_enabled:
+        report = _finalize_blocked_paper_execution_run(
+            resolved_settings,
+            run_id,
+            strategy_id=strategy_id,
+            as_of_session=as_of_session,
+            requested_risk_run_id=risk_run_id,
+            trigger_source=trigger_source,
+            strategy_status=control_state.status,
+            blocked_reason="strategy_disabled",
+        )
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_execution_blocked",
+            strategy_id=strategy_id,
+            run_id=report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason="strategy_disabled",
+            trigger_source=trigger_source,
+        )
+        return report
+
     _update_paper_execution_run(
         resolved_settings,
         run_id,
@@ -194,6 +229,7 @@ def run_paper_order_submission(
             "strategy_id": metadata.strategy_id,
             "as_of_session": as_of_session.isoformat(),
             "requested_risk_run_id": risk_run_id,
+            "strategy_status": control_state.status,
         },
     )
 
@@ -340,6 +376,19 @@ def run_paper_order_submission(
                 "as_of_session": as_of_session.isoformat(),
                 "requested_risk_run_id": risk_run_id,
                 "source_risk_run_id": str(source_risk_run.id) if source_risk_run is not None else None,
+                "strategy_status": control_state.status,
+            },
+        )
+        logger.exception(
+            "paper_execution_failed",
+            extra={
+                "context": build_log_context(
+                    strategy_id=strategy_id,
+                    run_id=str(run_id),
+                    session_date=as_of_session.isoformat(),
+                    strategy_status=control_state.status,
+                    trigger_source=trigger_source,
+                )
             },
         )
         raise
@@ -347,13 +396,26 @@ def run_paper_order_submission(
         if owns_execution_service and hasattr(broker_execution, "close"):
             broker_execution.close()
 
-    return _update_paper_execution_run(
+    report = _update_paper_execution_run(
         resolved_settings,
         run_id,
         status=StrategyRunStatus.SUCCEEDED,
         completed_at=datetime.now(UTC),
         result_summary=summary,
     )
+    emit_structured_log(
+        logger,
+        logging.INFO,
+        "paper_execution_completed",
+        strategy_id=strategy_id,
+        run_id=report.run_id,
+        session_date=as_of_session.isoformat(),
+        strategy_status=control_state.status,
+        trigger_source=trigger_source,
+        submitted_count=summary["submitted_count"],
+        existing_count=summary["existing_count"],
+    )
+    return report
 
 
 def run_paper_session(
@@ -367,11 +429,72 @@ def run_paper_session(
     execution_service: ExecutionService | None = None,
     broker_client: AlpacaClient | None = None,
 ) -> PaperSessionRunReport:
+    logger = logging.getLogger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
     runner_settings = resolved_settings.execution.paper_session_runner
     resolved_strategy_id = strategy_id or runner_settings.default_strategy_id
     resolved_trigger_source = trigger_source or runner_settings.trigger_source
     reconciliation_report = None
+
+    with session_scope(resolved_settings) as session:
+        session_plan = _build_paper_session_plan(
+            session,
+            strategy_id=resolved_strategy_id,
+            as_of_session=as_of_session,
+            requested_risk_run_id=risk_run_id,
+            failure_threshold=resolved_settings.execution.safety.repeated_failure_threshold,
+        )
+
+    control_state = load_strategy_control_state(
+        resolved_strategy_id,
+        settings=resolved_settings,
+        registry=registry,
+    )
+    existing_orders = [_paper_order_payload(order) for order in session_plan.existing_orders]
+    base_summary = {
+        "strategy_id": resolved_strategy_id,
+        "as_of_session": as_of_session.isoformat(),
+        "source_risk_run_id": str(session_plan.source_risk_run_id),
+        "approved_candidate_count": len(session_plan.candidates),
+        "existing_count": len(session_plan.existing_orders),
+        "missing_count": len(session_plan.missing_candidates),
+        "existing_orders": existing_orders,
+        "strategy_status": control_state.status,
+    }
+
+    if not control_state.is_execution_enabled:
+        blocked_execution_report = run_paper_order_submission(
+            resolved_strategy_id,
+            as_of_session=as_of_session,
+            risk_run_id=str(session_plan.source_risk_run_id),
+            trigger_source=resolved_trigger_source,
+            settings=resolved_settings,
+            registry=registry,
+            execution_service=execution_service,
+        )
+        result_summary = dict(blocked_execution_report.result_summary)
+        result_summary["session_preflight"] = base_summary
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_session_blocked",
+            strategy_id=resolved_strategy_id,
+            run_id=blocked_execution_report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason="strategy_disabled",
+            trigger_source=resolved_trigger_source,
+        )
+        return PaperSessionRunReport(
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            trigger_source=resolved_trigger_source,
+            source_risk_run_id=str(session_plan.source_risk_run_id),
+            action="blocked_strategy_disabled",
+            execution_run_id=blocked_execution_report.run_id,
+            execution_status=blocked_execution_report.status,
+            result_summary=result_summary,
+        )
 
     if broker_client is not None or execution_service is None:
         broker_state = load_broker_state(
@@ -394,27 +517,6 @@ def run_paper_session(
             recovered_order_count=recovered_order_count,
             trigger_source=f"{resolved_trigger_source}_reconciliation",
         )
-
-    with session_scope(resolved_settings) as session:
-        session_plan = _build_paper_session_plan(
-            session,
-            strategy_id=resolved_strategy_id,
-            as_of_session=as_of_session,
-            requested_risk_run_id=risk_run_id,
-            failure_threshold=resolved_settings.execution.safety.repeated_failure_threshold,
-        )
-
-    existing_orders = [_paper_order_payload(order) for order in session_plan.existing_orders]
-    base_summary = {
-        "strategy_id": resolved_strategy_id,
-        "as_of_session": as_of_session.isoformat(),
-        "source_risk_run_id": str(session_plan.source_risk_run_id),
-        "approved_candidate_count": len(session_plan.candidates),
-        "existing_count": len(session_plan.existing_orders),
-        "missing_count": len(session_plan.missing_candidates),
-        "existing_orders": existing_orders,
-    }
-    if reconciliation_report is not None:
         base_summary["reconciliation"] = reconciliation_report.to_dict()
 
     if (
@@ -422,6 +524,17 @@ def run_paper_session(
         and reconciliation_report.blocks_execution
         and resolved_settings.execution.safety.block_on_unresolved_reconciliation
     ):
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_session_blocked",
+            strategy_id=resolved_strategy_id,
+            run_id=reconciliation_report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason="reconciliation_blocks_execution",
+            trigger_source=resolved_trigger_source,
+        )
         return PaperSessionRunReport(
             strategy_id=resolved_strategy_id,
             session_date=as_of_session.isoformat(),
@@ -434,6 +547,16 @@ def run_paper_session(
         )
 
     if not session_plan.candidates:
+        emit_structured_log(
+            logger,
+            logging.INFO,
+            "paper_session_noop",
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            trigger_source=resolved_trigger_source,
+            action="noop_no_candidates",
+        )
         return PaperSessionRunReport(
             strategy_id=resolved_strategy_id,
             session_date=as_of_session.isoformat(),
@@ -446,6 +569,16 @@ def run_paper_session(
         )
 
     if not session_plan.missing_candidates:
+        emit_structured_log(
+            logger,
+            logging.INFO,
+            "paper_session_noop",
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            trigger_source=resolved_trigger_source,
+            action="noop_existing_orders",
+        )
         return PaperSessionRunReport(
             strategy_id=resolved_strategy_id,
             session_date=as_of_session.isoformat(),
@@ -468,6 +601,17 @@ def run_paper_session(
     )
     result_summary = dict(execution_report.result_summary)
     result_summary["session_preflight"] = base_summary
+    emit_structured_log(
+        logger,
+        logging.INFO,
+        "paper_session_completed",
+        strategy_id=resolved_strategy_id,
+        run_id=execution_report.run_id,
+        session_date=as_of_session.isoformat(),
+        strategy_status=control_state.status,
+        trigger_source=resolved_trigger_source,
+        action="submitted_missing_orders",
+    )
 
     return PaperSessionRunReport(
         strategy_id=resolved_strategy_id,
@@ -696,6 +840,7 @@ def _create_paper_execution_run(
     trigger_source: str,
     as_of_session: date,
     requested_risk_run_id: str | None,
+    strategy_status: str,
 ) -> uuid.UUID:
     with session_scope(settings) as session:
         strategy_record = ensure_strategy_record(session, metadata)
@@ -708,6 +853,7 @@ def _create_paper_execution_run(
                 "strategy": metadata.to_public_dict(),
                 "as_of_session": as_of_session.isoformat(),
                 "requested_risk_run_id": requested_risk_run_id,
+                "strategy_status": strategy_status,
                 "broker": settings.broker.model_dump(mode="json"),
                 "execution": settings.execution.model_dump(mode="json"),
             },
@@ -716,6 +862,7 @@ def _create_paper_execution_run(
                 "strategy_id": metadata.strategy_id,
                 "as_of_session": as_of_session.isoformat(),
                 "requested_risk_run_id": requested_risk_run_id,
+                "strategy_status": strategy_status,
             },
         )
         session.add(strategy_run)
@@ -776,6 +923,69 @@ def _paper_order_payload(paper_order: PaperOrder) -> dict[str, Any]:
         "last_sync_error": paper_order.last_sync_error,
         "submitted_at": paper_order.submitted_at.isoformat() if paper_order.submitted_at else None,
     }
+
+
+def _finalize_blocked_paper_execution_run(
+    settings: Settings,
+    run_id: uuid.UUID,
+    *,
+    strategy_id: str,
+    as_of_session: date,
+    requested_risk_run_id: str | None,
+    trigger_source: str,
+    strategy_status: str,
+    blocked_reason: str,
+) -> PaperExecutionRunReport:
+    completed_at = datetime.now(UTC)
+    message = (
+        f"Strategy '{strategy_id}' is disabled; paper execution blocked before broker submission begins."
+    )
+    result_summary = {
+        "stage": "blocked",
+        "action": "blocked_strategy_disabled",
+        "strategy_id": strategy_id,
+        "as_of_session": as_of_session.isoformat(),
+        "requested_risk_run_id": requested_risk_run_id,
+        "blocked_reason": blocked_reason,
+        "strategy_status": strategy_status,
+        "trigger_source": trigger_source,
+        "message": message,
+    }
+
+    with session_scope(settings) as session:
+        strategy_run = session.get(StrategyRun, run_id)
+        if strategy_run is None:
+            raise LookupError(f"Missing strategy_run '{run_id}'.")
+
+        strategy_run.status = StrategyRunStatus.FAILED
+        strategy_run.completed_at = completed_at
+        strategy_run.error_message = message
+        strategy_run.result_summary = result_summary
+        session.add(
+            ExecutionEvent(
+                strategy_run_id=strategy_run.id,
+                paper_order_id=None,
+                event_type="paper_execution_blocked",
+                severity="warning",
+                blocks_execution=True,
+                event_at=completed_at,
+                message=message,
+                details=result_summary,
+            )
+        )
+        session.flush()
+        session.refresh(strategy_run)
+        strategy = strategy_run.strategy
+
+        return PaperExecutionRunReport(
+            run_id=str(strategy_run.id),
+            strategy_id=strategy.strategy_id if strategy is not None else strategy_id,
+            status=strategy_run.status.value,
+            trigger_source=strategy_run.trigger_source,
+            started_at=strategy_run.started_at.isoformat(),
+            completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+            result_summary=strategy_run.result_summary,
+        )
 
 
 def _is_resubmittable_order(paper_order: PaperOrder, *, failure_threshold: int) -> bool:

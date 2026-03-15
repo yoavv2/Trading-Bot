@@ -28,6 +28,7 @@ class StrategyRunType(StrEnum):
     RISK_EVALUATION = "risk_evaluation"
     PAPER_EXECUTION = "paper_execution"
     RECONCILIATION = "reconciliation"
+    OPERATOR_CONTROL = "operator_control"
 
 
 class StrategyRunStatus(StrEnum):

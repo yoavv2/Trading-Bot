@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import sys
+import uuid
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+from sqlalchemy import select
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tests.test_paper_execution import (  # noqa: E402
+    FakeBrokerClient,
+    FakeExecutionService,
+    _seed_approved_risk_batch,
+    migrated_paper_db,
+)
+from trading_platform.core.settings import load_settings  # noqa: E402
+from trading_platform.db.models import (  # noqa: E402
+    ExecutionEvent,
+    Strategy,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+    StrategyStatus,
+)
+from trading_platform.db.session import session_scope  # noqa: E402
+from trading_platform.services.alpaca import BrokerAccountSnapshot  # noqa: E402
+from trading_platform.services.operator_controls import OperatorControlService  # noqa: E402
+from trading_platform.services.operator_status import build_operator_status_report  # noqa: E402
+from trading_platform.services.paper_execution import run_paper_order_submission, sync_paper_state  # noqa: E402
+
+
+def test_operator_control_service_persists_status_transitions_and_audit_events(
+    migrated_paper_db: str,
+) -> None:
+    settings = load_settings()
+    service = OperatorControlService(settings=settings)
+
+    disable_report = service.disable_strategy(
+        "trend_following_daily",
+        reason="manual kill switch",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    enable_report = service.enable_strategy(
+        "trend_following_daily",
+        reason="resume paper execution",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+
+    assert disable_report.previous_status == StrategyStatus.ACTIVE.value
+    assert disable_report.current_status == StrategyStatus.DISABLED.value
+    assert disable_report.changed is True
+    assert enable_report.previous_status == StrategyStatus.DISABLED.value
+    assert enable_report.current_status == StrategyStatus.ACTIVE.value
+    assert enable_report.changed is True
+
+    with session_scope(settings) as session:
+        strategy = session.execute(select(Strategy)).scalar_one()
+        control_runs = session.execute(
+            select(StrategyRun)
+            .where(StrategyRun.run_type == StrategyRunType.OPERATOR_CONTROL)
+            .order_by(StrategyRun.started_at.asc())
+        ).scalars().all()
+        control_events = session.execute(
+            select(ExecutionEvent)
+            .join(StrategyRun, StrategyRun.id == ExecutionEvent.strategy_run_id)
+            .where(StrategyRun.run_type == StrategyRunType.OPERATOR_CONTROL)
+            .order_by(ExecutionEvent.event_at.asc())
+        ).scalars().all()
+
+    assert strategy.status == StrategyStatus.ACTIVE
+    assert [run.status for run in control_runs] == [
+        StrategyRunStatus.SUCCEEDED,
+        StrategyRunStatus.SUCCEEDED,
+    ]
+    assert [run.trigger_source for run in control_runs] == ["pytest", "pytest"]
+    assert [event.event_type for event in control_events] == ["strategy_disabled", "strategy_enabled"]
+    assert [event.blocks_execution for event in control_events] == [True, False]
+
+
+def test_operator_status_report_surfaces_current_control_state_and_recent_blocks(
+    migrated_paper_db: str,
+) -> None:
+    settings = load_settings()
+    _seed_approved_risk_batch(session_date=date(2024, 1, 5))
+    control_service = OperatorControlService(settings=settings)
+    control_service.disable_strategy(
+        "trend_following_daily",
+        reason="maintenance window",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    sync_paper_state(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[],
+            fills=[],
+            positions=[],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("100000.000000"),
+                buying_power=Decimal("100000.000000"),
+                equity=Decimal("100000.000000"),
+                long_market_value=Decimal("0"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100000.000000"},
+            ),
+        ),
+    )
+    blocked_report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=FakeExecutionService(),
+        trigger_source="pytest",
+    )
+
+    report = build_operator_status_report(
+        strategy_id="trend_following_daily",
+        inspection_limit=5,
+        settings=settings,
+    )
+
+    assert report.strategy["status"] == StrategyStatus.DISABLED.value
+    assert report.latest_control is not None
+    assert report.latest_control["run_type"] == StrategyRunType.OPERATOR_CONTROL.value
+    assert report.latest_account_snapshot is not None
+    assert report.latest_account_snapshot["snapshot_source"] == "broker_sync"
+    assert report.latest_paper_execution is not None
+    assert report.latest_paper_execution["run_id"] == blocked_report.run_id
+    assert report.latest_paper_session is not None
+    assert report.latest_paper_session["action"] == "blocked_strategy_disabled"
+    assert report.recent_blocking_events[0]["blocks_execution"] is True
+    assert any(
+        failed_run["run_id"] == blocked_report.run_id for failed_run in report.recent_failed_runs
+    )

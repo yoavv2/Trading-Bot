@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -10,6 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from trading_platform.core.logging import build_log_context, emit_structured_log
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
@@ -173,6 +175,7 @@ def reconcile_paper_execution(
     recovered_order_count: int = 0,
     trigger_source: str = "paper_reconciliation",
 ) -> ReconciliationReport:
+    logger = logging.getLogger("trading_platform.reconciliation")
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
     resolved_strategy_id = strategy_id or resolved_settings.execution.paper_session_runner.default_strategy_id
@@ -293,9 +296,20 @@ def reconcile_paper_execution(
                 "as_of_session": as_of_session.isoformat(),
             },
         )
+        logger.exception(
+            "paper_reconciliation_failed",
+            extra={
+                "context": build_log_context(
+                    strategy_id=resolved_strategy_id,
+                    run_id=str(run_id),
+                    session_date=as_of_session.isoformat(),
+                    trigger_source=trigger_source,
+                )
+            },
+        )
         raise
 
-    return ReconciliationReport(
+    reconciliation_report = ReconciliationReport(
         run_id=report.run_id,
         strategy_id=report.strategy_id,
         session_date=as_of_session.isoformat(),
@@ -316,6 +330,18 @@ def reconcile_paper_execution(
             for finding in report.result_summary["findings"]
         ),
     )
+    emit_structured_log(
+        logger,
+        logging.INFO,
+        "paper_reconciliation_completed",
+        strategy_id=resolved_strategy_id,
+        run_id=reconciliation_report.run_id,
+        session_date=as_of_session.isoformat(),
+        trigger_source=trigger_source,
+        blocking_count=reconciliation_report.blocking_count,
+        recovered_order_count=reconciliation_report.recovered_order_count,
+    )
+    return reconciliation_report
 
 
 def _build_findings(

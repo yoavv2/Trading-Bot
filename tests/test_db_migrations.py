@@ -378,6 +378,7 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
         "risk_evaluation",
         "paper_execution",
         "reconciliation",
+        "operator_control",
     }
 
 

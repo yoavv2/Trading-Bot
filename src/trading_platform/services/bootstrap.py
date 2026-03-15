@@ -73,7 +73,6 @@ def _strategy_payload(metadata: StrategyMetadata) -> dict[str, Any]:
         "strategy_id": metadata.strategy_id,
         "display_name": metadata.display_name,
         "version": metadata.version,
-        "status": StrategyStatus.ACTIVE,
         "description": metadata.description,
         "config_reference": metadata.config_reference,
         "universe_symbols": list(metadata.universe),
@@ -92,7 +91,7 @@ def ensure_strategy_record(session, metadata: StrategyMetadata) -> Strategy:
     payload = _strategy_payload(metadata)
 
     if existing is None:
-        strategy = Strategy(**payload)
+        strategy = Strategy(status=StrategyStatus.ACTIVE, **payload)
         session.add(strategy)
     else:
         strategy = existing
