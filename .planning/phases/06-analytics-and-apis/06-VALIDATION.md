@@ -38,15 +38,15 @@ created: 2026-03-14
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 06-01-01 | 01 | 1 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_analytics_service.py tests/test_backtest_reporting.py tests/test_db_migrations.py -q` | created in 06-01 | ⬜ pending |
-| 06-01-02 | 01 | 1 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_analytics_service.py -q` | created in 06-01 | ⬜ pending |
-| 06-01-03 | 01 | 1 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/python scripts/report_strategy_analytics.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker report-strategy-analytics --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_analytics_service.py tests/test_backtest_reporting.py -q` | created in 06-01 | ⬜ pending |
-| 06-02-01 | 02 | 2 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_api_reads.py -q` | created in 06-02 | ⬜ pending |
-| 06-02-02 | 02 | 2 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_api_reads.py -q` | created in 06-02 | ⬜ pending |
-| 06-02-03 | 02 | 2 | REQ-10 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_api_reads.py tests/test_app_boot.py -q` | existing | ⬜ pending |
-| 06-03-01 | 03 | 3 | REQ-10 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_operator_controls.py tests/test_db_migrations.py -q` | created in 06-03 | ⬜ pending |
-| 06-03-02 | 03 | 3 | REQ-10 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_operator_controls.py tests/test_paper_execution.py -q` | existing | ⬜ pending |
-| 06-03-03 | 03 | 3 | REQ-10 | integration | `PYTHONPATH=src .venv/bin/python scripts/operator_control.py --help` and `PYTHONPATH=src .venv/bin/python scripts/operator_status.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker operator-status --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_operator_controls.py tests/test_paper_execution.py tests/test_api_reads.py -q` | created in 06-03 | ⬜ pending |
+| 06-01-01 | 01 | 1 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_analytics_service.py tests/test_backtest_reporting.py tests/test_db_migrations.py -q` | created in 06-01 | ✅ green |
+| 06-01-02 | 01 | 1 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_analytics_service.py -q` | created in 06-01 | ✅ green |
+| 06-01-03 | 01 | 1 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/python scripts/report_strategy_analytics.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker report-strategy-analytics --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_analytics_service.py tests/test_backtest_reporting.py -q` | created in 06-01 | ✅ green |
+| 06-02-01 | 02 | 2 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_api_reads.py -q` | created in 06-02 | ✅ green |
+| 06-02-02 | 02 | 2 | REQ-09 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_api_reads.py -q` | created in 06-02 | ✅ green |
+| 06-02-03 | 02 | 2 | REQ-10 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_api_reads.py tests/test_app_boot.py -q` | existing | ✅ green |
+| 06-03-01 | 03 | 3 | REQ-10 | integration | `PYTHONPATH=src .venv/bin/pytest tests/test_operator_controls.py tests/test_db_migrations.py -q` | created in 06-03 | ✅ green |
+| 06-03-02 | 03 | 3 | REQ-10 | regression | `PYTHONPATH=src .venv/bin/pytest tests/test_operator_controls.py tests/test_paper_execution.py -q` | existing | ✅ green |
+| 06-03-03 | 03 | 3 | REQ-10 | integration | `PYTHONPATH=src .venv/bin/python scripts/operator_control.py --help` and `PYTHONPATH=src .venv/bin/python scripts/operator_status.py --help` and `PYTHONPATH=src .venv/bin/python -m trading_platform.worker operator-status --help` and `PYTHONPATH=src .venv/bin/pytest tests/test_operator_controls.py tests/test_paper_execution.py tests/test_api_reads.py -q` | created in 06-03 | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -78,3 +78,15 @@ All planned Phase 6 behaviors have automated verification. Optional manual curl 
 - [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** validated 2026-03-14
+
+---
+
+## Validation Audit 2026-03-15
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+All 9 task verification commands ran green (32 tests, 5 CLI help surfaces). No gaps to fill.
