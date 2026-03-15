@@ -13,7 +13,7 @@ from sqlalchemy import select
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import Strategy, StrategyRun, StrategyRunStatus, StrategyRunType, StrategyStatus
 from trading_platform.db.session import session_scope
-from trading_platform.services.analytics import AnalyticsService, PlaceholderAnalyticsService
+from trading_platform.services.analytics import AnalyticsService, StrategyAnalyticsService
 from trading_platform.services.data import MarketDataService, PlaceholderMarketDataService
 from trading_platform.services.execution import ExecutionService, PlaceholderExecutionService
 from trading_platform.services.risk import PlaceholderRiskService, RiskService
@@ -64,7 +64,7 @@ def build_placeholder_services() -> PlatformServices:
         data=PlaceholderMarketDataService(),
         risk=PlaceholderRiskService(),
         execution=PlaceholderExecutionService(),
-        analytics=PlaceholderAnalyticsService(),
+        analytics=StrategyAnalyticsService(),
     )
 
 

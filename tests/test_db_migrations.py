@@ -211,6 +211,13 @@ def test_alembic_upgrade_creates_phase3_backtest_tables(migrated_database: str) 
         "average_loss",
         "profit_factor",
         "exposure_pct",
+        "cagr_pct",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "expectancy",
+        "turnover_pct",
+        "best_trade",
+        "worst_trade",
         "average_holding_period_sessions",
     }
 

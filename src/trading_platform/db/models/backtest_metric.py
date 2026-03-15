@@ -38,6 +38,13 @@ class BacktestMetric(TimestampedModel, Base):
     average_loss: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
     profit_factor: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
     exposure_pct: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
+    cagr_pct: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
+    sharpe_ratio: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
+    sortino_ratio: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
+    expectancy: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
+    turnover_pct: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
+    best_trade: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
+    worst_trade: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
     average_holding_period_sessions: Mapped[Decimal] = mapped_column(
         Numeric(precision=20, scale=6),
         nullable=False,

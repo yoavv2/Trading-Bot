@@ -1,9 +1,37 @@
-"""Placeholder analytics service contracts."""
+"""Strategy analytics summaries derived from persisted platform state."""
 
 from __future__ import annotations
 
+import uuid
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
+
+from sqlalchemy import distinct, func, select
+
+from trading_platform.core.settings import Settings, load_settings
+from trading_platform.db.models import (
+    AccountSnapshot,
+    ExecutionEvent,
+    PaperFill,
+    PaperOrder,
+    Position,
+    Strategy,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+)
+from trading_platform.db.session import session_scope
+from trading_platform.services.backtest_reporting import materialize_backtest_report
+
+
+@dataclass(frozen=True)
+class StrategyAnalyticsRequest:
+    strategy_id: str = "trend_following_daily"
+    backtest_run_id: str | None = None
+    paper_run_id: str | None = None
+    inspection_limit: int = 5
 
 
 class AnalyticsService(ABC):
@@ -13,16 +41,285 @@ class AnalyticsService(ABC):
 
     @abstractmethod
     def summarize(self, payload: object) -> object:
-        """Summarize execution data once analytics are implemented."""
+        """Summarize persisted analytics state for a strategy."""
 
 
-class PlaceholderAnalyticsService(AnalyticsService):
+class StrategyAnalyticsService(AnalyticsService):
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings or load_settings()
+
     def describe(self) -> dict[str, Any]:
         return {
             "service": "analytics",
-            "status": "deferred",
-            "detail": "Deferred to Phase 6 analytics and reporting.",
+            "status": "available",
+            "detail": "Backtest and paper-trading analytics are derived from persisted artifacts.",
         }
 
     def summarize(self, payload: object) -> object:
-        raise NotImplementedError("Analytics are deferred to Phase 6.")
+        request = _coerce_request(payload)
+        return self.summarize_strategy(
+            strategy_id=request.strategy_id,
+            backtest_run_id=request.backtest_run_id,
+            paper_run_id=request.paper_run_id,
+            inspection_limit=request.inspection_limit,
+        )
+
+    def summarize_strategy(
+        self,
+        *,
+        strategy_id: str = "trend_following_daily",
+        backtest_run_id: str | None = None,
+        paper_run_id: str | None = None,
+        inspection_limit: int = 5,
+    ) -> dict[str, Any]:
+        with session_scope(self.settings) as session:
+            strategy = session.execute(
+                select(Strategy).where(Strategy.strategy_id == strategy_id)
+            ).scalar_one_or_none()
+
+            if strategy is None:
+                raise LookupError(f"Strategy '{strategy_id}' was not found.")
+
+            return {
+                "strategy": {
+                    "strategy_id": strategy.strategy_id,
+                    "display_name": strategy.display_name,
+                    "status": strategy.status.value,
+                    "version": strategy.version,
+                },
+                "backtest": self._summarize_backtest(strategy_id=strategy_id, run_id=backtest_run_id),
+                "paper": self._summarize_paper(
+                    strategy=strategy,
+                    paper_run_id=paper_run_id,
+                    inspection_limit=inspection_limit,
+                ),
+            }
+
+    def _summarize_backtest(
+        self,
+        *,
+        strategy_id: str,
+        run_id: str | None,
+    ) -> dict[str, Any] | None:
+        try:
+            report = materialize_backtest_report(
+                run_id=run_id,
+                strategy_id=strategy_id,
+                settings=self.settings,
+            )
+        except LookupError:
+            return None
+
+        return {
+            "run_id": report["run_id"],
+            "status": report["status"],
+            "started_at": report["started_at"],
+            "completed_at": report["completed_at"],
+            "summary": report["summary"],
+            "metrics": report["metrics"],
+        }
+
+    def _summarize_paper(
+        self,
+        *,
+        strategy: Strategy,
+        paper_run_id: str | None,
+        inspection_limit: int,
+    ) -> dict[str, Any]:
+        with session_scope(self.settings) as session:
+            latest_snapshot = session.execute(
+                select(AccountSnapshot)
+                .where(AccountSnapshot.strategy_id == strategy.id)
+                .order_by(AccountSnapshot.snapshot_at.desc())
+            ).scalars().first()
+
+            latest_paper_run = self._resolve_paper_run(
+                session,
+                strategy_id=strategy.id,
+                paper_run_id=paper_run_id,
+            )
+            latest_reconciliation = session.execute(
+                select(StrategyRun)
+                .where(
+                    StrategyRun.strategy_id == strategy.id,
+                    StrategyRun.run_type == StrategyRunType.RECONCILIATION,
+                )
+                .order_by(StrategyRun.started_at.desc())
+            ).scalars().first()
+
+            submitted_order_count = session.execute(
+                select(func.count(PaperOrder.id))
+                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                .where(
+                    StrategyRun.strategy_id == strategy.id,
+                    PaperOrder.submitted_at.is_not(None),
+                )
+            ).scalar_one()
+            filled_order_count = session.execute(
+                select(func.count(PaperOrder.id))
+                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                .where(
+                    StrategyRun.strategy_id == strategy.id,
+                    PaperOrder.filled_at.is_not(None),
+                )
+            ).scalar_one()
+            fill_count = session.execute(
+                select(func.count(PaperFill.id))
+                .join(PaperOrder, PaperOrder.id == PaperFill.paper_order_id)
+                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                .where(StrategyRun.strategy_id == strategy.id)
+            ).scalar_one()
+            blocked_session_count = session.execute(
+                select(func.count(distinct(StrategyRun.id)))
+                .join(ExecutionEvent, ExecutionEvent.strategy_run_id == StrategyRun.id)
+                .where(
+                    StrategyRun.strategy_id == strategy.id,
+                    StrategyRun.run_type == StrategyRunType.RECONCILIATION,
+                    ExecutionEvent.blocks_execution.is_(True),
+                )
+            ).scalar_one()
+            open_position_count = session.execute(
+                select(func.count(Position.id))
+                .where(
+                    Position.strategy_id == strategy.id,
+                    Position.status == "open",
+                )
+            ).scalar_one()
+            open_position_cost_basis = session.execute(
+                select(func.coalesce(func.sum(Position.cost_basis), Decimal("0")))
+                .where(
+                    Position.strategy_id == strategy.id,
+                    Position.status == "open",
+                )
+            ).scalar_one()
+
+            recent_findings = session.execute(
+                select(ExecutionEvent)
+                .join(StrategyRun, StrategyRun.id == ExecutionEvent.strategy_run_id)
+                .where(StrategyRun.strategy_id == strategy.id)
+                .order_by(ExecutionEvent.event_at.desc(), ExecutionEvent.created_at.desc())
+                .limit(max(inspection_limit, 1))
+            ).scalars().all()
+
+        exposure_pct = Decimal("0")
+        if latest_snapshot is not None and latest_snapshot.total_equity > 0:
+            exposure_pct = (latest_snapshot.gross_exposure / latest_snapshot.total_equity) * Decimal("100")
+
+        return {
+            "latest_account_snapshot": _serialize_account_snapshot(latest_snapshot),
+            "latest_paper_run": _serialize_run(latest_paper_run),
+            "latest_reconciliation": _serialize_reconciliation(latest_reconciliation),
+            "submitted_order_count": submitted_order_count,
+            "filled_order_count": filled_order_count,
+            "fill_count": fill_count,
+            "blocked_session_count": blocked_session_count,
+            "open_position_count": open_position_count,
+            "open_position_cost_basis": _decimal_value(open_position_cost_basis),
+            "current_exposure_pct": _decimal_value(exposure_pct),
+            "recent_execution_findings": [
+                {
+                    "event_type": finding.event_type,
+                    "severity": finding.severity,
+                    "blocks_execution": finding.blocks_execution,
+                    "event_at": finding.event_at.isoformat(),
+                    "message": finding.message,
+                    "details": finding.details,
+                }
+                for finding in recent_findings
+            ],
+        }
+
+    @staticmethod
+    def _resolve_paper_run(
+        session,
+        *,
+        strategy_id,
+        paper_run_id: str | None,
+    ) -> StrategyRun | None:
+        if paper_run_id is not None:
+            strategy_run = session.get(StrategyRun, uuid.UUID(paper_run_id))
+            if strategy_run is None:
+                raise LookupError(f"Paper run '{paper_run_id}' was not found.")
+            if strategy_run.strategy_id != strategy_id:
+                raise ValueError(f"Run '{paper_run_id}' does not belong to the requested strategy.")
+            if strategy_run.run_type != StrategyRunType.PAPER_EXECUTION:
+                raise ValueError(f"Run '{paper_run_id}' is not a paper execution run.")
+            return strategy_run
+
+        return session.execute(
+            select(StrategyRun)
+            .where(
+                StrategyRun.strategy_id == strategy_id,
+                StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION,
+                StrategyRun.status == StrategyRunStatus.SUCCEEDED,
+            )
+            .order_by(StrategyRun.started_at.desc())
+        ).scalars().first()
+
+
+def _coerce_request(payload: object) -> StrategyAnalyticsRequest:
+    if payload is None:
+        return StrategyAnalyticsRequest()
+    if isinstance(payload, StrategyAnalyticsRequest):
+        return payload
+    if isinstance(payload, dict):
+        return StrategyAnalyticsRequest(
+            strategy_id=payload.get("strategy_id", "trend_following_daily"),
+            backtest_run_id=payload.get("backtest_run_id"),
+            paper_run_id=payload.get("paper_run_id"),
+            inspection_limit=payload.get("inspection_limit", 5),
+        )
+    raise TypeError("Analytics payload must be a StrategyAnalyticsRequest or mapping.")
+
+
+def _serialize_run(strategy_run: StrategyRun | None) -> dict[str, Any] | None:
+    if strategy_run is None:
+        return None
+    return {
+        "run_id": str(strategy_run.id),
+        "run_type": strategy_run.run_type.value,
+        "status": strategy_run.status.value,
+        "trigger_source": strategy_run.trigger_source,
+        "started_at": strategy_run.started_at.isoformat(),
+        "completed_at": strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+        "result_summary": strategy_run.result_summary,
+    }
+
+
+def _serialize_account_snapshot(snapshot: AccountSnapshot | None) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    return {
+        "snapshot_at": snapshot.snapshot_at.isoformat(),
+        "snapshot_source": snapshot.snapshot_source,
+        "cash": _decimal_value(snapshot.cash),
+        "gross_exposure": _decimal_value(snapshot.gross_exposure),
+        "total_equity": _decimal_value(snapshot.total_equity),
+        "buying_power": _decimal_value(snapshot.buying_power),
+        "open_positions": snapshot.open_positions,
+    }
+
+
+def _serialize_reconciliation(strategy_run: StrategyRun | None) -> dict[str, Any] | None:
+    if strategy_run is None:
+        return None
+    result_summary = strategy_run.result_summary
+    return {
+        "run_id": str(strategy_run.id),
+        "status": strategy_run.status.value,
+        "as_of_session": result_summary.get("as_of_session"),
+        "finding_count": result_summary.get("finding_count", 0),
+        "blocking_count": result_summary.get("blocking_count", 0),
+        "blocks_execution": result_summary.get("blocks_execution", False),
+        "completed_at": strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+    }
+
+
+def _decimal_value(value: Decimal | None) -> float:
+    if value is None:
+        return 0.0
+    return float(value)

@@ -252,8 +252,17 @@ def test_reporting_materializes_metrics_and_exports_files(
     assert report["metrics"]["average_holding_period_sessions"] == pytest.approx(3.0)
     assert report["metrics"]["total_return_pct"] == pytest.approx(-2.615571, rel=1e-6)
     assert report["metrics"]["max_drawdown_pct"] == pytest.approx(-3.903931, rel=1e-6)
+    assert report["metrics"]["cagr_pct"] < 0.0
+    assert report["metrics"]["sharpe_ratio"] < 0.0
+    assert report["metrics"]["sortino_ratio"] < 0.0
+    assert report["metrics"]["expectancy"] == pytest.approx(-2615.5715, rel=1e-6)
+    assert report["metrics"]["turnover_pct"] > 0.0
+    assert report["metrics"]["best_trade"] == pytest.approx(-2615.5715, rel=1e-6)
+    assert report["metrics"]["worst_trade"] == pytest.approx(-2615.5715, rel=1e-6)
     assert report["assumptions"]["backtest"]["fill_strategy"] == "next_session_open"
     assert "Initial capital: 100000.0" in manifest.rendered_summary
+    assert "| CAGR |" in manifest.rendered_summary
+    assert "| Turnover |" in manifest.rendered_summary
     assert metrics_row.trade_count == 1
 
     with open(manifest.trades_csv_path, newline="") as handle:
@@ -293,4 +302,11 @@ def test_reporting_handles_no_trade_runs_without_divide_by_zero(
     assert report["metrics"]["average_win"] == 0.0
     assert report["metrics"]["average_loss"] == 0.0
     assert report["metrics"]["profit_factor"] == 0.0
+    assert report["metrics"]["cagr_pct"] == 0.0
+    assert report["metrics"]["sharpe_ratio"] == 0.0
+    assert report["metrics"]["sortino_ratio"] == 0.0
+    assert report["metrics"]["expectancy"] == 0.0
+    assert report["metrics"]["turnover_pct"] == 0.0
+    assert report["metrics"]["best_trade"] == 0.0
+    assert report["metrics"]["worst_trade"] == 0.0
     assert "Trades persisted: 0" in manifest.rendered_summary

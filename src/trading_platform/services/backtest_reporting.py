@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -127,6 +128,13 @@ def render_backtest_summary(
             f"| Average loss | {metrics['average_loss']:.6f} |",
             f"| Profit factor | {metrics['profit_factor']:.6f} |",
             f"| Exposure | {metrics['exposure_pct']:.6f}% |",
+            f"| CAGR | {metrics['cagr_pct']:.6f}% |",
+            f"| Sharpe ratio | {metrics['sharpe_ratio']:.6f} |",
+            f"| Sortino ratio | {metrics['sortino_ratio']:.6f} |",
+            f"| Expectancy | {metrics['expectancy']:.6f} |",
+            f"| Turnover | {metrics['turnover_pct']:.6f}% |",
+            f"| Best trade | {metrics['best_trade']:.6f} |",
+            f"| Worst trade | {metrics['worst_trade']:.6f} |",
             f"| Average holding period | {metrics['average_holding_period_sessions']:.6f} sessions |",
             "",
             "## Persisted Artifacts",
@@ -349,6 +357,50 @@ def _compute_metrics(
         ]
         exposure_pct = sum(exposures, Decimal("0")) / Decimal(len(exposures))
 
+    cagr_pct = Decimal("0")
+    if len(equity_snapshots) >= 2 and initial_capital > 0 and ending_equity > 0:
+        day_span = (equity_snapshots[-1].session_date - equity_snapshots[0].session_date).days
+        if day_span > 0:
+            years = day_span / 365.25
+            if years > 0:
+                cagr_pct = Decimal(str((math.pow(float(ending_equity / initial_capital), 1 / years) - 1) * 100))
+
+    sharpe_ratio = Decimal("0")
+    sortino_ratio = Decimal("0")
+    returns = _daily_returns(equity_snapshots)
+    if returns:
+        mean_return = sum(returns) / len(returns)
+        if len(returns) > 1:
+            variance = sum((value - mean_return) ** 2 for value in returns) / len(returns)
+            std_dev = math.sqrt(variance)
+            if std_dev > 0:
+                sharpe_ratio = Decimal(str((mean_return / std_dev) * math.sqrt(252)))
+
+        downside_returns = [value for value in returns if value < 0]
+        if downside_returns:
+            downside_variance = sum(value**2 for value in downside_returns) / len(downside_returns)
+            downside_deviation = math.sqrt(downside_variance)
+            if downside_deviation > 0:
+                sortino_ratio = Decimal(str((mean_return / downside_deviation) * math.sqrt(252)))
+
+    expectancy = sum((trade.net_pnl for trade in closed_trades if trade.net_pnl is not None), Decimal("0"))
+    expectancy = expectancy / Decimal(len(closed_trades)) if closed_trades else Decimal("0")
+
+    average_equity = Decimal("0")
+    if equity_snapshots:
+        average_equity = sum((snapshot.total_equity for snapshot in equity_snapshots), Decimal("0")) / Decimal(
+            len(equity_snapshots)
+        )
+    turnover_notional = Decimal("0")
+    for trade in trades:
+        turnover_notional += trade.entry_price * trade.quantity
+        if trade.exit_price is not None:
+            turnover_notional += trade.exit_price * trade.quantity
+    turnover_pct = (turnover_notional / average_equity) * Decimal("100") if average_equity > 0 else Decimal("0")
+
+    best_trade = max((trade.net_pnl for trade in closed_trades if trade.net_pnl is not None), default=Decimal("0"))
+    worst_trade = min((trade.net_pnl for trade in closed_trades if trade.net_pnl is not None), default=Decimal("0"))
+
     holding_periods = [
         Decimal(trade.holding_period_sessions)
         for trade in closed_trades
@@ -369,6 +421,13 @@ def _compute_metrics(
         "average_loss": _money(average_loss),
         "profit_factor": _money(profit_factor),
         "exposure_pct": _money(exposure_pct),
+        "cagr_pct": _money(cagr_pct),
+        "sharpe_ratio": _money(sharpe_ratio),
+        "sortino_ratio": _money(sortino_ratio),
+        "expectancy": _money(expectancy),
+        "turnover_pct": _money(turnover_pct),
+        "best_trade": _money(best_trade),
+        "worst_trade": _money(worst_trade),
         "average_holding_period_sessions": _money(average_holding_period),
     }
 
@@ -391,6 +450,13 @@ def _upsert_backtest_metric(
         "average_loss": metrics["average_loss"],
         "profit_factor": metrics["profit_factor"],
         "exposure_pct": metrics["exposure_pct"],
+        "cagr_pct": metrics["cagr_pct"],
+        "sharpe_ratio": metrics["sharpe_ratio"],
+        "sortino_ratio": metrics["sortino_ratio"],
+        "expectancy": metrics["expectancy"],
+        "turnover_pct": metrics["turnover_pct"],
+        "best_trade": metrics["best_trade"],
+        "worst_trade": metrics["worst_trade"],
         "average_holding_period_sessions": metrics["average_holding_period_sessions"],
     }
 
@@ -415,6 +481,13 @@ def _serialize_metrics(metrics: dict[str, Decimal | int]) -> dict[str, Any]:
         "average_loss": float(metrics["average_loss"]),
         "profit_factor": float(metrics["profit_factor"]),
         "exposure_pct": float(metrics["exposure_pct"]),
+        "cagr_pct": float(metrics["cagr_pct"]),
+        "sharpe_ratio": float(metrics["sharpe_ratio"]),
+        "sortino_ratio": float(metrics["sortino_ratio"]),
+        "expectancy": float(metrics["expectancy"]),
+        "turnover_pct": float(metrics["turnover_pct"]),
+        "best_trade": float(metrics["best_trade"]),
+        "worst_trade": float(metrics["worst_trade"]),
         "average_holding_period_sessions": float(metrics["average_holding_period_sessions"]),
     }
 
@@ -429,3 +502,16 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], *, fieldnames: list[str])
 
 def _money(value: Decimal | float | int) -> Decimal:
     return Decimal(str(value)).quantize(MONEY_SCALE)
+
+
+def _daily_returns(equity_snapshots: list[BacktestEquitySnapshot]) -> list[float]:
+    if len(equity_snapshots) < 2:
+        return []
+
+    returns: list[float] = []
+    previous_equity = equity_snapshots[0].total_equity
+    for snapshot in equity_snapshots[1:]:
+        if previous_equity > 0:
+            returns.append(float((snapshot.total_equity / previous_equity) - Decimal("1")))
+        previous_equity = snapshot.total_equity
+    return returns
