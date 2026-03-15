@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import get_strategy_config, load_settings
+from trading_platform.services.analytics import build_strategy_analytics_report, render_strategy_analytics_report
 from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
@@ -48,6 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--strategy", default="trend_following_daily")
     report_parser.add_argument("--summary-format", choices=("markdown", "json"), default="markdown")
     report_parser.add_argument("--output-dir", help="Directory for summary and CSV exports.")
+
+    analytics_parser = subparsers.add_parser(
+        "report-strategy-analytics",
+        help="Render a strategy analytics summary plus recent operational inspection data.",
+    )
+    analytics_parser.add_argument("--strategy", default="trend_following_daily")
+    analytics_parser.add_argument("--backtest-run-id", help="Explicit backtest run ID to summarize.")
+    analytics_parser.add_argument("--paper-run-id", help="Explicit paper execution run ID to summarize.")
+    analytics_parser.add_argument("--inspection-limit", type=int, default=5)
+    analytics_parser.add_argument("--summary-format", choices=("markdown", "json"), default="markdown")
 
     risk_parser = subparsers.add_parser(
         "evaluate-risk",
@@ -227,6 +238,32 @@ def run_report_backtest_command(args: argparse.Namespace) -> None:
         settings=settings,
     )
     print(manifest.rendered_summary)
+
+
+def run_report_strategy_analytics_command(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("trading_platform.analytics.report.worker")
+    report = build_strategy_analytics_report(
+        strategy_id=args.strategy,
+        backtest_run_id=args.backtest_run_id,
+        paper_run_id=args.paper_run_id,
+        inspection_limit=args.inspection_limit,
+        settings=settings,
+    )
+    logger.info(
+        "worker_strategy_analytics_report_completed",
+        extra={
+            "context": {
+                "strategy_id": args.strategy,
+                "backtest_run_id": args.backtest_run_id,
+                "paper_run_id": args.paper_run_id,
+                "inspection_limit": args.inspection_limit,
+                "summary_format": args.summary_format,
+            }
+        },
+    )
+    print(render_strategy_analytics_report(report, summary_format=args.summary_format))
 
 
 def run_evaluate_risk_command(args: argparse.Namespace) -> None:
@@ -510,6 +547,9 @@ def main() -> None:
         return
     if args.command == "report-backtest":
         run_report_backtest_command(args)
+        return
+    if args.command == "report-strategy-analytics":
+        run_report_strategy_analytics_command(args)
         return
     if args.command == "evaluate-risk":
         run_evaluate_risk_command(args)

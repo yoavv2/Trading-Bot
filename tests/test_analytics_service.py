@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import uuid
@@ -34,10 +35,16 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
-from trading_platform.services.analytics import StrategyAnalyticsRequest, StrategyAnalyticsService
+from trading_platform.services.analytics import (
+    StrategyAnalyticsRequest,
+    StrategyAnalyticsService,
+    build_strategy_analytics_report,
+    render_strategy_analytics_report,
+)
 from trading_platform.services.backtesting import run_backtest
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import OrderSide
+from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.services.paper_execution import build_client_order_id
 from trading_platform.strategies.registry import build_default_registry
 
@@ -100,7 +107,17 @@ def migrated_analytics_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         clear_engine_cache()
         with _connect_admin(admin_params) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
+                cursor.execute(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = %s
+                      AND usename = current_user
+                      AND pid <> pg_backend_pid()
+                    """,
+                    (database_name,),
+                )
+                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
 
 
 @pytest.fixture()
@@ -475,3 +492,136 @@ def test_strategy_analytics_service_handles_empty_paper_state(
     assert paper["open_position_cost_basis"] == 0.0
     assert paper["current_exposure_pct"] == 0.0
     assert paper["recent_execution_findings"] == []
+
+
+def test_operator_read_service_returns_filtered_serializable_payloads(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    _seed_market_data(_trading_fixture())
+    settings = load_settings()
+    run_backtest(
+        "trend_following_daily",
+        from_date=date(2024, 1, 2),
+        to_date=date(2024, 1, 10),
+        settings=settings,
+        trigger_source="pytest",
+    )
+    paper_state = _seed_paper_operational_state()
+
+    service = OperatorReadService(settings)
+
+    paper_filters = OperatorReadFilters(
+        strategy_id="trend_following_daily",
+        run_type="paper_execution",
+        status="succeeded",
+        session_start=date(2024, 1, 5),
+        session_end=date(2024, 1, 5),
+        limit=10,
+    )
+    paper_runs = service.list_runs(paper_filters)
+    paper_orders = service.list_paper_orders(paper_filters)
+    paper_fills = service.list_paper_fills(paper_filters)
+    positions = service.list_positions(paper_filters)
+    snapshots = service.list_account_snapshots(paper_filters)
+
+    assert len(paper_runs) == 1
+    assert paper_runs[0]["run_id"] == paper_state["paper_run_id"]
+    assert paper_runs[0]["as_of_session"] == "2024-01-05"
+
+    assert [item["symbol"] for item in paper_orders] == ["MSFT", "AAPL"]
+    assert paper_orders[0]["status"] == "submitted"
+    assert paper_orders[1]["status"] == "filled"
+
+    assert len(paper_fills) == 1
+    assert paper_fills[0]["symbol"] == "AAPL"
+    assert paper_fills[0]["price"] == pytest.approx(120.25)
+
+    assert len(positions) == 1
+    assert positions[0]["symbol"] == "AAPL"
+    assert positions[0]["status"] == "open"
+
+    assert len(snapshots) == 1
+    assert snapshots[0]["source_run_id"] == paper_state["paper_run_id"]
+    assert snapshots[0]["total_equity"] == pytest.approx(100012.5)
+
+    risk_filters = OperatorReadFilters(
+        strategy_id="trend_following_daily",
+        run_type="risk_evaluation",
+        status="succeeded",
+        session_start=date(2024, 1, 5),
+        session_end=date(2024, 1, 5),
+        limit=10,
+    )
+    risk_events = service.list_risk_events(risk_filters)
+    assert len(risk_events) == 2
+    assert {item["symbol"] for item in risk_events} == {"AAPL", "MSFT"}
+
+    reconciliation_filters = OperatorReadFilters(
+        strategy_id="trend_following_daily",
+        run_type="reconciliation",
+        status="succeeded",
+        session_start=date(2024, 1, 5),
+        session_end=date(2024, 1, 5),
+        limit=10,
+    )
+    execution_events = service.list_execution_events(reconciliation_filters)
+    assert len(execution_events) == 1
+    assert execution_events[0]["run_id"] == paper_state["reconciliation_run_id"]
+    assert execution_events[0]["blocks_execution"] is True
+
+    run_detail = service.get_run_detail(paper_state["paper_run_id"])
+    assert run_detail["artifact_counts"]["paper_orders"] == 2
+    assert run_detail["artifact_counts"]["paper_fills"] == 1
+
+
+def test_operator_read_service_handles_empty_state(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    _seed_strategy_record()
+    settings = load_settings()
+    service = OperatorReadService(settings)
+
+    inspection = service.inspect_strategy(
+        OperatorReadFilters(strategy_id="trend_following_daily", limit=5)
+    )
+
+    assert inspection["runs"]["count"] == 0
+    assert inspection["paper_orders"]["count"] == 0
+    assert inspection["paper_fills"]["count"] == 0
+    assert inspection["positions"]["count"] == 0
+    assert inspection["account_snapshots"]["count"] == 0
+    assert inspection["risk_events"]["count"] == 0
+    assert inspection["execution_events"]["count"] == 0
+
+
+def test_strategy_analytics_report_renders_markdown_and_json(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    _seed_market_data(_trading_fixture())
+    settings = load_settings()
+    run_backtest(
+        "trend_following_daily",
+        from_date=date(2024, 1, 2),
+        to_date=date(2024, 1, 10),
+        settings=settings,
+        trigger_source="pytest",
+    )
+    _seed_paper_operational_state()
+
+    report = build_strategy_analytics_report(
+        strategy_id="trend_following_daily",
+        inspection_limit=3,
+        settings=settings,
+    )
+    markdown = render_strategy_analytics_report(report, summary_format="markdown")
+    json_output = render_strategy_analytics_report(report, summary_format="json")
+    parsed = json.loads(json_output)
+
+    assert "# Strategy Analytics: trend_following_daily" in markdown
+    assert "## Recent Paper Orders" in markdown
+    assert "MSFT" in markdown
+    assert parsed["strategy"]["strategy_id"] == "trend_following_daily"
+    assert parsed["inspection"]["paper_orders"]["count"] == 2
