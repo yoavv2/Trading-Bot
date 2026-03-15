@@ -134,10 +134,10 @@ Plans:
   2. The operator can inspect recent signals, orders, fills, positions, account snapshots, and risk events through stable reads instead of raw logs alone.
   3. Structured logs, visible failures, kill-switch behavior, and audit trails make ambiguous state transitions observable and reviewable.
   4. The MVP verdict is satisfied: the operator can backtest the strategy, enable daily paper trading, and inspect exactly what happened with confidence.
-**Plans:** 3 plans
+**Plans:** 1/3 plans complete
 
 Plans:
-- [ ] 06-01: Build analytics summaries, per-run metrics, and historical inspection views
+- [x] 06-01: Build analytics summaries, per-run metrics, and historical inspection views
 - [ ] 06-02: Expose operator-facing FastAPI read endpoints for runs, trades, positions, metrics, and risk events
 - [ ] 06-03: Add operational controls, kill-switch flows, and observability outputs needed for confident daily use
 
@@ -153,4 +153,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 3. Backtest and Reporting | 3/3 | Complete | 2026-03-14 |
 | 4. Risk and Portfolio | 2/2 | Complete | 2026-03-14 |
 | 5. Paper Execution | 3/3 | Complete | 2026-03-14 |
-| 6. Analytics and APIs | 0/3 | Not started | - |
+| 6. Analytics and APIs | 1/3 | In Progress | - |

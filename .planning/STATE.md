@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 06
 current_phase_name: Analytics and APIs
-current_plan: 0
-status: planning
-stopped_at: Completed Phase 05 (Paper Execution); Phase 06 planning is next
-last_updated: "2026-03-14T20:46:24Z"
-last_activity: 2026-03-14
+current_plan: 1
+status: Ready for execution
+stopped_at: Completed 06-analytics-and-apis-01-PLAN.md
+last_updated: "2026-03-15T03:52:03Z"
+last_activity: 2026-03-15
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 14
-  completed_plans: 14
-  percent: 100
+  total_plans: 17
+  completed_plans: 15
+  percent: 88
 ---
 
 # Project State
@@ -24,27 +24,27 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-11)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 6 - Analytics and APIs planning
+**Current focus:** Phase 6 - API read endpoints on top of the new analytics and inspection foundation
 
 ## Current Position
 
 Current Phase: 06
 Current Phase Name: Analytics and APIs
 Total Phases: 6
-Current Plan: 0
-Total Plans in Phase: pending planning
+Current Plan: 1
+Total Plans in Phase: 3
 Phase: 6 of 6 (Analytics and APIs)
-Plan: 0 of 0
-Status: Ready for planning
-Last Activity: 2026-03-14
-Last Activity Description: Completed Phase 05 Plan 03 with broker reconciliation, restart-safe recovery, and fail-closed unsafe-state execution guards
+Plan: 1 of 3
+Status: Ready for execution
+Last Activity: 2026-03-15
+Last Activity Description: Completed Phase 06 Plan 01 with persisted analytics metrics, operator inspection reads, and CLI-first analytics reporting
 
-Progress: [██████████] 100%
+Progress: [████████░░] 88%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14
+- Total plans completed: 15
 - Average duration: ~7 min
 - Total execution time: -
 
@@ -57,10 +57,11 @@ Progress: [██████████] 100%
 | 3 | 3 of 3 | - | - |
 | 4 | 2 of 2 | - | - |
 | 5 | 3 of 3 | - | - |
+| 6 | 1 of 3 | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 04-01, 04-02, 05-01, 05-02, 05-03 completed
-- Trend: Phase 5 is complete; the next milestone action is planning Phase 6 analytics and API reads
+- Last 5 plans: 04-02, 05-01, 05-02, 05-03, 06-01 completed
+- Trend: Phase 6 is underway; the analytics and inspection foundation is complete and the API read surface is next
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -73,6 +74,7 @@ Progress: [██████████] 100%
 | Phase 05-paper-execution P01 | 26min | 3 tasks | 14 files |
 | Phase 05-paper-execution P02 | 24min | 3 tasks | 14 files |
 | Phase 05-paper-execution P03 | 138min | 3 tasks | 14 files |
+| Phase 06-analytics-and-apis P01 | 15min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -117,18 +119,22 @@ Recent decisions affecting current work:
 - [Phase 05-paper-execution]: Reconciliation findings persist as execution_events under strategy_runs with run_type=reconciliation for next-day inspection.
 - [Phase 05-paper-execution]: Paper-session preflight recovers in-flight orders, reconciles broker state, and blocks new submissions when unresolved drift remains.
 - [Phase 05-paper-execution]: Only pending_submission and below-threshold submission_failed orders are retryable; broker-touched orders fail closed for operator review.
+- [Phase 06-analytics-and-apis]: Backtest analytics remain derived from persisted trades and equity snapshots; Phase 6 expands the materialized metric surface instead of re-simulating results ad hoc.
+- [Phase 06-analytics-and-apis]: Paper analytics stay honest to persisted state by exposing account, order, fill, position, and blocking-event summaries without inventing unsupported closed-trade PnL metrics.
+- [Phase 06-analytics-and-apis]: Operator inspection reads live behind one shared service layer that returns serializable payloads for runs, orders, fills, positions, snapshots, risk events, and execution events.
 
 ### Pending Todos
 
-- Plan Phase 06: analytics summaries, inspection reads, and operator-facing APIs on top of the completed paper-execution loop
+- Execute Phase 06-02: expose the analytics and inspection foundation through versioned FastAPI read endpoints
 
 ### Blockers/Concerns
 
 - Docker daemon was unavailable during Phase 1 and 2-01 verification; local PostgreSQL@14 (Homebrew) used instead of Docker Compose.
 - Local PostgreSQL-backed verification requires elevated sandbox access in this environment, but the Phase 4 verification slice passed once rerun against the local database.
+- The Postgres-backed Phase 06 verification slice also required elevated local access, and the temporary-database fixtures now terminate same-user sessions explicitly before dropping test databases.
 
 ## Session Continuity
 
-Last session: 2026-03-14T20:46:24Z
-Stopped at: Completed Phase 05 (Paper Execution); Phase 06 planning is next
+Last session: 2026-03-15T03:52:03Z
+Stopped at: Completed 06-analytics-and-apis-01-PLAN.md
 Resume file: None
