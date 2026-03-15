@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 06
 current_phase_name: Analytics and APIs
-current_plan: 1
+current_plan: 2
 status: Ready for execution
-stopped_at: Completed 06-analytics-and-apis-01-PLAN.md
-last_updated: "2026-03-15T03:52:03Z"
+stopped_at: Completed 06-analytics-and-apis-02-PLAN.md
+last_updated: "2026-03-15T04:37:08Z"
 last_activity: 2026-03-15
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 17
-  completed_plans: 15
-  percent: 88
+  completed_plans: 16
+  percent: 94
 ---
 
 # Project State
@@ -24,27 +24,27 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-11)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 6 - API read endpoints on top of the new analytics and inspection foundation
+**Current focus:** Phase 6 - operator controls and observability on top of the new API read surface
 
 ## Current Position
 
 Current Phase: 06
 Current Phase Name: Analytics and APIs
 Total Phases: 6
-Current Plan: 1
+Current Plan: 2
 Total Plans in Phase: 3
 Phase: 6 of 6 (Analytics and APIs)
-Plan: 1 of 3
+Plan: 2 of 3
 Status: Ready for execution
 Last Activity: 2026-03-15
-Last Activity Description: Completed Phase 06 Plan 01 with persisted analytics metrics, operator inspection reads, and CLI-first analytics reporting
+Last Activity Description: Completed Phase 06 Plan 02 with versioned analytics, run, and operational inspection APIs
 
-Progress: [████████░░] 88%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
+- Total plans completed: 16
 - Average duration: ~7 min
 - Total execution time: -
 
@@ -57,11 +57,11 @@ Progress: [████████░░] 88%
 | 3 | 3 of 3 | - | - |
 | 4 | 2 of 2 | - | - |
 | 5 | 3 of 3 | - | - |
-| 6 | 1 of 3 | - | - |
+| 6 | 2 of 3 | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 04-02, 05-01, 05-02, 05-03, 06-01 completed
-- Trend: Phase 6 is underway; the analytics and inspection foundation is complete and the API read surface is next
+- Last 5 plans: 05-01, 05-02, 05-03, 06-01, 06-02 completed
+- Trend: Phase 6 is nearly complete; the API read surface is in place and the operator-control wave is next
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -75,6 +75,7 @@ Progress: [████████░░] 88%
 | Phase 05-paper-execution P02 | 24min | 3 tasks | 14 files |
 | Phase 05-paper-execution P03 | 138min | 3 tasks | 14 files |
 | Phase 06-analytics-and-apis P01 | 15min | 3 tasks | 10 files |
+| Phase 06-analytics-and-apis P02 | 20min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -122,10 +123,12 @@ Recent decisions affecting current work:
 - [Phase 06-analytics-and-apis]: Backtest analytics remain derived from persisted trades and equity snapshots; Phase 6 expands the materialized metric surface instead of re-simulating results ad hoc.
 - [Phase 06-analytics-and-apis]: Paper analytics stay honest to persisted state by exposing account, order, fill, position, and blocking-event summaries without inventing unsupported closed-trade PnL metrics.
 - [Phase 06-analytics-and-apis]: Operator inspection reads live behind one shared service layer that returns serializable payloads for runs, orders, fills, positions, snapshots, risk events, and execution events.
+- [Phase 06-analytics-and-apis]: Versioned FastAPI read routes reuse the shared analytics and operator-read services directly instead of embedding route-local SQL.
+- [Phase 06-analytics-and-apis]: Strategy and system responses expose an operator-read API catalog so future dashboard clients can discover the stable read surface without database knowledge.
 
 ### Pending Todos
 
-- Execute Phase 06-02: expose the analytics and inspection foundation through versioned FastAPI read endpoints
+- Execute Phase 06-03: add durable operator controls, kill-switch enforcement, and operator status/observability outputs
 
 ### Blockers/Concerns
 
@@ -135,6 +138,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-15T03:52:03Z
-Stopped at: Completed 06-analytics-and-apis-01-PLAN.md
+Last session: 2026-03-15T04:37:08Z
+Stopped at: Completed 06-analytics-and-apis-02-PLAN.md
 Resume file: None
