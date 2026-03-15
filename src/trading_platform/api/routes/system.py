@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends
 
+from trading_platform.api.dependencies import build_operator_read_catalog, get_settings, get_strategy_registry
 from trading_platform.core.settings import Settings
-from trading_platform.strategies.registry import build_default_registry
+from trading_platform.strategies.registry import StrategyRegistry
 
 router = APIRouter(prefix="/api/v1", tags=["system"])
 
 
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings  # type: ignore[return-value]
-
-
 @router.get("/system")
-def system(request: Request) -> dict[str, object]:
-    settings = _get_settings(request)
-    registry = build_default_registry(settings)
+def system(
+    settings: Settings = Depends(get_settings),
+    registry: StrategyRegistry = Depends(get_strategy_registry),
+) -> dict[str, object]:
 
     return {
         "application": {
@@ -41,4 +39,5 @@ def system(request: Request) -> dict[str, object]:
             "readiness_required": settings.readiness.require_database,
             "schema_managed_by": "alembic",
         },
+        "operator_read_api": build_operator_read_catalog(settings.api.base_path),
     }

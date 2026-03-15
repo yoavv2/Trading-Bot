@@ -126,11 +126,14 @@ def test_app_bootstrap_serves_foundation_endpoints(monkeypatch, tmp_path: Path) 
 
     clear_settings_cache()
     app = create_app()
+    registered_paths = {route.path for route in app.routes}
 
     with TestClient(app) as client:
         health = client.get("/health")
         ready = client.get("/ready")
         system = client.get("/api/v1/system")
+        strategies = client.get("/api/v1/strategies")
+        strategy_detail = client.get("/api/v1/strategies/trend_following_daily")
 
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
@@ -144,3 +147,26 @@ def test_app_bootstrap_serves_foundation_endpoints(monkeypatch, tmp_path: Path) 
     system_body = system.json()
     assert system_body["application"]["environment"] == "test"
     assert system_body["strategy_catalog"][0]["universe_size"] == 3
+    assert system_body["operator_read_api"]["status"] == "available"
+    assert (
+        system_body["operator_read_api"]["analytics"]["strategy_summary"]
+        == "/api/v1/analytics/strategies/{strategy_id}"
+    )
+
+    assert strategies.status_code == 200
+    assert strategies.json()["count"] == 1
+
+    assert strategy_detail.status_code == 200
+    assert strategy_detail.json()["operator_reads"]["runs"] == "/api/v1/runs?strategy_id=trend_following_daily"
+
+    assert {
+        "/api/v1/analytics/strategies/{strategy_id}",
+        "/api/v1/runs",
+        "/api/v1/runs/{run_id}",
+        "/api/v1/operations/orders",
+        "/api/v1/operations/fills",
+        "/api/v1/operations/positions",
+        "/api/v1/operations/account-snapshots",
+        "/api/v1/operations/risk-events",
+        "/api/v1/operations/execution-events",
+    }.issubset(registered_paths)
