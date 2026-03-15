@@ -20,6 +20,7 @@ from trading_platform.db.models import (
     PaperOrder,
     Position,
     Strategy,
+    StrategyStatus,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
@@ -27,6 +28,7 @@ from trading_platform.db.models import (
 from trading_platform.db.session import session_scope
 from trading_platform.services.backtest_reporting import materialize_backtest_report
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
+from trading_platform.strategies.registry import UnknownStrategyError, build_default_registry
 
 
 @dataclass(frozen=True)
@@ -79,24 +81,33 @@ class StrategyAnalyticsService(AnalyticsService):
         paper_run_id: str | None = None,
         inspection_limit: int = 5,
     ) -> dict[str, Any]:
+        registry = build_default_registry(self.settings)
+        try:
+            metadata = registry.resolve(strategy_id).metadata
+        except UnknownStrategyError as exc:
+            raise LookupError(str(exc)) from exc
+
         with session_scope(self.settings) as session:
-            strategy = session.execute(
+            strategy_record = session.execute(
                 select(Strategy).where(Strategy.strategy_id == strategy_id)
             ).scalar_one_or_none()
 
-            if strategy is None:
-                raise LookupError(f"Strategy '{strategy_id}' was not found.")
-
             return {
                 "strategy": {
-                    "strategy_id": strategy.strategy_id,
-                    "display_name": strategy.display_name,
-                    "status": strategy.status.value,
-                    "version": strategy.version,
+                    "strategy_id": strategy_id,
+                    "display_name": strategy_record.display_name if strategy_record is not None else metadata.display_name,
+                    "status": (
+                        strategy_record.status.value
+                        if strategy_record is not None
+                        else StrategyStatus.ACTIVE.value
+                        if metadata.enabled
+                        else StrategyStatus.DISABLED.value
+                    ),
+                    "version": strategy_record.version if strategy_record is not None else metadata.version,
                 },
                 "backtest": self._summarize_backtest(strategy_id=strategy_id, run_id=backtest_run_id),
                 "paper": self._summarize_paper(
-                    strategy=strategy,
+                    strategy=strategy_record,
                     paper_run_id=paper_run_id,
                     inspection_limit=inspection_limit,
                 ),
@@ -115,6 +126,8 @@ class StrategyAnalyticsService(AnalyticsService):
                 settings=self.settings,
             )
         except LookupError:
+            if run_id is not None:
+                raise
             return None
 
         return {
@@ -129,10 +142,27 @@ class StrategyAnalyticsService(AnalyticsService):
     def _summarize_paper(
         self,
         *,
-        strategy: Strategy,
+        strategy: Strategy | None,
         paper_run_id: str | None,
         inspection_limit: int,
     ) -> dict[str, Any]:
+        if strategy is None:
+            if paper_run_id is not None:
+                raise LookupError(f"Paper run '{paper_run_id}' was not found.")
+            return {
+                "latest_account_snapshot": None,
+                "latest_paper_run": None,
+                "latest_reconciliation": None,
+                "submitted_order_count": 0,
+                "filled_order_count": 0,
+                "fill_count": 0,
+                "blocked_session_count": 0,
+                "open_position_count": 0,
+                "open_position_cost_basis": 0.0,
+                "current_exposure_pct": 0.0,
+                "recent_execution_findings": [],
+            }
+
         with session_scope(self.settings) as session:
             latest_snapshot = session.execute(
                 select(AccountSnapshot)
