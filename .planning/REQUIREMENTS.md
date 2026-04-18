@@ -147,79 +147,77 @@ Explicitly excluded from v1.1.
 
 ## Traceability
 
-Populated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ORDER-01 | TBD | Pending |
-| ORDER-02 | TBD | Pending |
-| ORDER-03 | TBD | Pending |
-| ORDER-04 | TBD | Pending |
-| ORDER-05 | TBD | Pending |
-| ORDER-06 | TBD | Pending |
-| ORDER-07 | TBD | Pending |
-| IDEM-01 | TBD | Pending |
-| IDEM-02 | TBD | Pending |
-| IDEM-03 | TBD | Pending |
-| IDEM-04 | TBD | Pending |
-| LOCK-01 | TBD | Pending |
-| LOCK-02 | TBD | Pending |
-| LOCK-03 | TBD | Pending |
-| LOCK-04 | TBD | Pending |
-| LOCK-05 | TBD | Pending |
-| LOCK-06 | TBD | Pending |
-| RECON-01 | TBD | Pending |
-| RECON-02 | TBD | Pending |
-| RECON-03 | TBD | Pending |
-| RECON-04 | TBD | Pending |
-| RECON-05 | TBD | Pending |
-| RECON-06 | TBD | Pending |
-| RECON-07 | TBD | Pending |
-| RECON-08 | TBD | Pending |
-| RECON-09 | TBD | Pending |
-| SAFE-01 | TBD | Pending |
-| SAFE-02 | TBD | Pending |
-| SAFE-03 | TBD | Pending |
-| SAFE-04 | TBD | Pending |
-| SAFE-05 | TBD | Pending |
-| CFG-01 | TBD | Pending |
-| CFG-02 | TBD | Pending |
-| CFG-03 | TBD | Pending |
-| CFG-04 | TBD | Pending |
-| CFG-05 | TBD | Pending |
-| CFG-06 | TBD | Pending |
-| CFG-07 | TBD | Pending |
-| LOG-01 | TBD | Pending |
-| LOG-02 | TBD | Pending |
-| LOG-03 | TBD | Pending |
-| LOG-04 | TBD | Pending |
-| LOG-05 | TBD | Pending |
-| LOG-06 | TBD | Pending |
-| DB-01 | TBD | Pending |
-| DB-02 | TBD | Pending |
-| DB-03 | TBD | Pending |
-| DB-04 | TBD | Pending |
-| DB-05 | TBD | Pending |
-| DB-06 | TBD | Pending |
-| PERF-01 | TBD | Pending |
-| PERF-02 | TBD | Pending |
-| PERF-03 | TBD | Pending |
-| STRUCT-01 | TBD | Pending |
-| STRUCT-02 | TBD | Pending |
-| STRUCT-03 | TBD | Pending |
-| STRUCT-04 | TBD | Pending |
-| STRUCT-05 | TBD | Pending |
-| STRUCT-06 | TBD | Pending |
-| STRUCT-07 | TBD | Pending |
-| STRUCT-08 | TBD | Pending |
-| TOOL-01 | TBD | Pending |
-| TOOL-02 | TBD | Pending |
+| ORDER-01 | Phase 7 | Pending |
+| ORDER-02 | Phase 7 | Pending |
+| ORDER-03 | Phase 7 | Pending |
+| ORDER-04 | Phase 7 | Pending |
+| ORDER-05 | Phase 7 | Pending |
+| ORDER-06 | Phase 7 | Pending |
+| ORDER-07 | Phase 7 | Pending |
+| IDEM-01 | Phase 7 | Pending |
+| IDEM-02 | Phase 7 | Pending |
+| IDEM-03 | Phase 7 | Pending |
+| IDEM-04 | Phase 7 | Pending |
+| LOCK-01 | Phase 8 | Pending |
+| LOCK-02 | Phase 8 | Pending |
+| LOCK-03 | Phase 8 | Pending |
+| LOCK-04 | Phase 8 | Pending |
+| LOCK-05 | Phase 8 | Pending |
+| LOCK-06 | Phase 8 | Pending |
+| RECON-01 | Phase 9 | Pending |
+| RECON-02 | Phase 9 | Pending |
+| RECON-03 | Phase 9 | Pending |
+| RECON-04 | Phase 9 | Pending |
+| RECON-05 | Phase 9 | Pending |
+| RECON-06 | Phase 9 | Pending |
+| RECON-07 | Phase 9 | Pending |
+| RECON-08 | Phase 9 | Pending |
+| RECON-09 | Phase 9 | Pending |
+| SAFE-01 | Phase 7 | Pending |
+| SAFE-02 | Phase 7 | Pending |
+| SAFE-03 | Phase 7 | Pending |
+| SAFE-04 | Phase 7 | Pending |
+| SAFE-05 | Phase 7 | Pending |
+| CFG-01 | Phase 10 | Pending |
+| CFG-02 | Phase 10 | Pending |
+| CFG-03 | Phase 10 | Pending |
+| CFG-04 | Phase 10 | Pending |
+| CFG-05 | Phase 10 | Pending |
+| CFG-06 | Phase 10 | Pending |
+| CFG-07 | Phase 10 | Pending |
+| LOG-01 | Phase 10 | Pending |
+| LOG-02 | Phase 10 | Pending |
+| LOG-03 | Phase 10 | Pending |
+| LOG-04 | Phase 10 | Pending |
+| LOG-05 | Phase 10 | Pending |
+| LOG-06 | Phase 10 | Pending |
+| DB-01 | Phase 10 | Pending |
+| DB-02 | Phase 10 | Pending |
+| DB-03 | Phase 10 | Pending |
+| DB-04 | Phase 10 | Pending |
+| DB-05 | Phase 10 | Pending |
+| DB-06 | Phase 10 | Pending |
+| PERF-01 | Phase 11 | Pending |
+| PERF-02 | Phase 11 | Pending |
+| PERF-03 | Phase 11 | Pending |
+| STRUCT-01 | Phase 12 | Pending |
+| STRUCT-02 | Phase 12 | Pending |
+| STRUCT-03 | Phase 12 | Pending |
+| STRUCT-04 | Phase 12 | Pending |
+| STRUCT-05 | Phase 12 | Pending |
+| STRUCT-06 | Phase 12 | Pending |
+| STRUCT-07 | Phase 12 | Pending |
+| STRUCT-08 | Phase 12 | Pending |
+| TOOL-01 | Phase 12 | Pending |
+| TOOL-02 | Phase 12 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 63 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 63 ⚠️
+- Mapped to phases: 63
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-18*
-*Last updated: 2026-04-18 after hardening pass (testable invariants)*
+*Last updated: 2026-04-18 after v1.1 roadmap creation (all 63 requirements mapped)*

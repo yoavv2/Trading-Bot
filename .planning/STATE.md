@@ -5,13 +5,13 @@ milestone_name: Execution Correctness & Hardening
 current_phase: null
 current_phase_name: null
 current_plan: null
-status: Defining requirements
+status: Roadmap defined — ready to plan Phase 7
 stopped_at: null
 last_updated: "2026-04-18T00:00:00Z"
 last_activity: 2026-04-18
 progress:
-  total_phases: 0
-  completed_phases: 0
+  total_phases: 6
+  completed_phases: 6
   total_plans: 0
   completed_plans: 0
   percent: 0
@@ -24,25 +24,25 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (defining requirements)
+**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (roadmap defined, planning Phase 7 next)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (roadmap defined)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-18 — Milestone v1.1 started (Execution Correctness & Hardening)
+Status: Roadmap defined — ready to plan Phase 7
+Last activity: 2026-04-18 — v1.1 roadmap created (6 phases: 7-12, 63 requirements mapped)
 
 Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16
-- Average duration: ~7 min
+- Total plans completed: 16 (v1.0)
+- Average duration: ~7 min (v1.0)
 - Total execution time: -
 
-**By Phase:**
+**v1.0 By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
@@ -53,9 +53,20 @@ Progress: [░░░░░░░░░░] 0%
 | 5 | 3 of 3 | - | - |
 | 6 | 3 of 3 | - | - |
 
+**v1.1 By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 7 | 0/TBD | - | - |
+| 8 | 0/TBD | - | - |
+| 9 | 0/TBD | - | - |
+| 10 | 0/TBD | - | - |
+| 11 | 0/TBD | - | - |
+| 12 | 0/TBD | - | - |
+
 **Recent Trend:**
-- Last 5 plans: 05-02, 05-03, 06-01, 06-02, 06-03 completed
-- Trend: Milestone execution scope is complete; the next action is milestone audit and closure
+- Last 5 plans (v1.0): 05-02, 05-03, 06-01, 06-02, 06-03 completed
+- Trend: v1.0 milestone complete; v1.1 roadmap defined, beginning correctness kernel work
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -121,6 +132,12 @@ Recent decisions affecting current work:
 - [Phase 06-analytics-and-apis]: Strategy and system responses expose an operator-read API catalog so future dashboard clients can discover the stable read surface without database knowledge.
 - [Phase 06-analytics-and-apis]: Persisted strategy status is authoritative operator-control state, and metadata refreshes preserve it instead of resetting it to `active`.
 - [Phase 06-analytics-and-apis]: Disabled strategies fail closed before broker work and record blocked attempts as durable `paper_execution` runs plus `execution_events`.
+- [v1.1-roadmap]: Phase 7 (ORDER+IDEM+SAFE) groups state machine, idempotency, and kill switch as one coherent Tier 0 correctness unit — all three share the same transition and submission boundary.
+- [v1.1-roadmap]: Phase 8 (LOCK) is isolated because advisory lock + stale-run detection is contained DB work that does not overlap with the state machine boundary in Phase 7.
+- [v1.1-roadmap]: Phase 9 (RECON) depends on Phase 7's typed identity model (IDEM-01 client_order_id, ORDER enums) but is otherwise independent of locking.
+- [v1.1-roadmap]: Phase 10 (CFG+LOG+DB) groups all startup-path hardening — config validation gates DB init which gates service init; all three must land together.
+- [v1.1-roadmap]: Phase 11 (PERF) is sequenced after all correctness work; RECON-06 O(n) matcher is the reconciliation performance win already delivered in Phase 9, PERF covers the remaining preflight and index work.
+- [v1.1-roadmap]: Phase 12 (STRUCT+TOOL) is strictly last per STRUCT-01; no structural refactor lands before Tier 0 is verified complete.
 
 ### Pending Todos
 
@@ -135,5 +152,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-04-18T00:00:00Z
-Stopped at: Milestone v1.1 initialization — requirements phase pending
+Stopped at: v1.1 roadmap created — ready to plan Phase 7 (Correctness Kernel)
 Resume file: None
