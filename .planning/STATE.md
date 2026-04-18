@@ -1,45 +1,39 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-current_phase: 06
-current_phase_name: Analytics and APIs
-current_plan: 3
-status: Ready for milestone completion
-stopped_at: Completed 06-analytics-and-apis-03-PLAN.md
-last_updated: "2026-03-15T07:33:22Z"
-last_activity: 2026-03-15
+milestone: v1.1
+milestone_name: Execution Correctness & Hardening
+current_phase: null
+current_phase_name: null
+current_plan: null
+status: Defining requirements
+stopped_at: null
+last_updated: "2026-04-18T00:00:00Z"
+last_activity: 2026-04-18
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 17
-  completed_plans: 17
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-11)
+See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone closure and MVP audit after Phase 6 completion
+**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (defining requirements)
 
 ## Current Position
 
-Current Phase: 06
-Current Phase Name: Analytics and APIs
-Total Phases: 6
-Current Plan: 3
-Total Plans in Phase: 3
-Phase: 6 of 6 (Analytics and APIs)
-Plan: 3 of 3
-Status: Ready for milestone completion
-Last Activity: 2026-03-15
-Last Activity Description: Completed Phase 06 Plan 03 with persisted operator controls, fail-closed execution, and operator status surfaces
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-18 — Milestone v1.1 started (Execution Correctness & Hardening)
 
-Progress: [██████████] 100%
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -140,6 +134,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-15T07:33:22Z
-Stopped at: Completed 06-analytics-and-apis-03-PLAN.md
+Last session: 2026-04-18T00:00:00Z
+Stopped at: Milestone v1.1 initialization — requirements phase pending
 Resume file: None

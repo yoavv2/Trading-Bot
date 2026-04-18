@@ -10,6 +10,42 @@ The initial product focus is a Daily Trend Following workflow for U.S. equities 
 
 Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
 
+## Current Milestone: v1.1 Execution Correctness & Hardening
+
+**Goal:** Prove every order intent has exactly one legal lifecycle, one broker identity, and one audit trace before extending platform capabilities.
+
+**Thesis:** The central weakness is not file size or missing features — it is the absence of a hard boundary around two areas: order state transitions and reconciliation between local DB and broker. Implicit state machines, non-idempotent submissions, unenforced single-instance invariants, and string-classified reconciliation findings are all symptoms of a missing formal execution model. Stabilize the core before widening scope.
+
+**Target features:**
+
+Tier 0 — correctness kernel (blocking before new features):
+- Formal order state machine with closed transition map and single `apply_order_transition(order, event)` entry point
+- Deterministic `client_order_id` for every submission so partial broker failures cannot duplicate intents
+- Concurrency guard per `(strategy_id, session_date)` via DB advisory lock, lease table with heartbeat, or unique-active-run constraint
+- Reconciliation correctness rewrite: normalized snapshots, typed findings (enum/dataclass, not strings), matched by typed identity, materialized report
+- Emergency halt / kill switch for new submissions (full event sourcing deferred)
+
+Tier 1 — operational hardening:
+- Fail-fast startup config validation (secrets per execution mode, broker vs paper/live, mutually exclusive flags, DB settings, tolerance ranges) — process refuses to boot on invalid config
+- Log sanitization policy — no credentials, connection URLs with passwords, or auth headers in logs; broker order IDs hashed or gated behind debug flag
+- DB connection lifecycle consolidation — pick one model (process-level immutable or explicit lifecycle manager); resolve `@lru_cache` vs `_ENGINE_CACHE` inconsistency
+
+Tier 2 — performance (only after correctness):
+- Fix N+1 query in paper preflight
+- Replace O(n²) reconciliation with indexed maps keyed by symbol/account/side
+- Add covering indices matching real query shapes
+
+Tier 3 — maintainability:
+- Split bloated `worker/__main__.py` into `worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile}.py` — orchestration boundaries only, not domain semantics
+- Restructure services into `services/execution/{submit_orders,sync_orders,transition,idempotency}.py`, `services/reconciliation/{snapshot,matcher,findings,report}.py`, `services/config/{validation,secrets}.py`
+- Extract scattered tolerance constants, consolidate settings sprawl, add lint/format/static-check toolchain
+
+**Explicit non-goals for v1.1:**
+- Full event sourcing / historical replay — out of scope; kill switch is the needed primitive
+- New product features (new strategies, intraday, multi-broker, dashboard) — v1.1 is hardening only
+- Architecture redesign — layering is sound; restructure is bounded to orchestration split
+- Performance-first work ahead of correctness — speed without state integrity is negative value
+
 ## Requirements
 
 ### Validated
@@ -535,4 +571,4 @@ The future API should expose platform data cleanly to the dashboard without dire
 | Defer dashboard work until the engine is trustworthy | The engine, analytics, and paper workflow must be credible before UI investment | — Pending |
 
 ---
-*Last updated: 2026-03-11 after project initialization questioning*
+*Last updated: 2026-04-18 after starting milestone v1.1 (Execution Correctness & Hardening)*
