@@ -9,7 +9,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,7 +19,13 @@ from scripts.migrate import build_alembic_config
 from scripts.seed_phase1 import seed_phase_one
 from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import Strategy
+from trading_platform.db.models import (
+    OrderEvent,
+    OrderTransitionEventType,
+    OrderTransitionOutcome,
+    PaperOrder,
+    Strategy,
+)
 from trading_platform.db.session import clear_engine_cache, get_engine, session_scope
 
 
@@ -54,10 +60,14 @@ def _set_database_env(monkeypatch: pytest.MonkeyPatch, database_name: str) -> No
     monkeypatch.setenv("TRADING_PLATFORM_DATABASE__NAME", database_name)
 
 
-def _upgrade_to_head() -> None:
+def _upgrade_to_revision(revision: str) -> None:
     clear_settings_cache()
     clear_engine_cache()
-    command.upgrade(build_alembic_config(), "head")
+    command.upgrade(build_alembic_config(), revision)
+
+
+def _upgrade_to_head() -> None:
+    _upgrade_to_revision("head")
 
 
 @pytest.fixture()
@@ -306,7 +316,7 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
     inspector = inspect(get_engine(settings))
 
     table_names = set(inspector.get_table_names())
-    assert {"paper_orders", "paper_fills", "execution_events"}.issubset(table_names)
+    assert {"paper_orders", "paper_fills", "execution_events", "order_events"}.issubset(table_names)
 
     paper_order_cols = {col["name"] for col in inspector.get_columns("paper_orders")}
     assert paper_order_cols >= {
@@ -371,6 +381,18 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
         "details",
     }
 
+    order_event_cols = {col["name"] for col in inspector.get_columns("order_events")}
+    assert order_event_cols >= {
+        "paper_order_id",
+        "strategy_run_id",
+        "from_state",
+        "event_type",
+        "to_state",
+        "outcome",
+        "event_at",
+        "details",
+    }
+
     enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
     assert enums["strategy_run_type"] >= {
         "dry_bootstrap",
@@ -380,6 +402,289 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
         "reconciliation",
         "operator_control",
     }
+    assert enums["order_lifecycle_state"] >= {
+        "pending_submission",
+        "submission_failed",
+        "submitted",
+        "partially_filled",
+        "filled",
+        "canceled",
+        "rejected",
+        "expired",
+        "unknown",
+    }
+    assert enums["order_event_type"] >= {
+        "legacy_imported",
+        "intent_registered",
+        "retry_requested",
+        "submission_failed",
+        "broker_acknowledged",
+        "broker_partially_filled",
+        "broker_filled",
+        "broker_canceled",
+        "broker_rejected",
+        "broker_expired",
+        "broker_status_unknown",
+    }
+    assert enums["order_event_outcome"] >= {"accepted", "rejected"}
+
+
+def test_phase7_order_kernel_migration_preserves_existing_paper_orders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_name = f"phase7_order_kernel_{uuid.uuid4().hex[:8]}"
+    admin_params = _admin_connection_settings()
+
+    try:
+        with _connect_admin(admin_params) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f'CREATE DATABASE "{database_name}"')
+    except psycopg.Error as exc:  # pragma: no cover - exercised when local Postgres is unavailable
+        pytest.fail(
+            "PostgreSQL is required for tests/test_db_migrations.py. "
+            "Start the local db service first (for example `docker compose up -d db`). "
+            f"Connection error: {exc}"
+        )
+
+    _set_database_env(monkeypatch, database_name)
+    try:
+        _upgrade_to_revision("0012_phase6_operator_controls")
+
+        with session_scope(load_settings()) as session:
+            strategy = Strategy(
+                strategy_id="trend_following_daily",
+                display_name="Trend Following Daily",
+                status="active",
+                config_reference="config/strategies/trend_following_daily.yaml",
+            )
+            session.add(strategy)
+            session.flush()
+
+            run_id = uuid.uuid4()
+            symbol_a = uuid.uuid4()
+            symbol_b = uuid.uuid4()
+            risk_event_a = uuid.uuid4()
+            risk_event_b = uuid.uuid4()
+
+            session.execute(
+                text(
+                    """
+                    INSERT INTO strategy_runs (
+                        id,
+                        strategy_id,
+                        run_type,
+                        status,
+                        trigger_source,
+                        parameters_snapshot,
+                        result_summary,
+                        error_message
+                    ) VALUES (
+                        :id,
+                        :strategy_id,
+                        'paper_execution',
+                        'succeeded',
+                        'pytest',
+                        '{}'::json,
+                        '{}'::json,
+                        NULL
+                    )
+                    """
+                ),
+                {"id": run_id, "strategy_id": strategy.id},
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO symbols (id, ticker, active)
+                    VALUES
+                        (:symbol_a, 'AAPL', true),
+                        (:symbol_b, 'MSFT', true)
+                    """
+                ),
+                {"symbol_a": symbol_a, "symbol_b": symbol_b},
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO risk_events (
+                        id,
+                        strategy_run_id,
+                        symbol_id,
+                        session_date,
+                        signal_direction,
+                        signal_reason,
+                        outcome,
+                        decision_code,
+                        decision_reason,
+                        reference_price,
+                        proposed_quantity,
+                        proposed_notional,
+                        risk_metadata
+                    ) VALUES
+                        (
+                            :risk_event_a,
+                            :run_id,
+                            :symbol_a,
+                            DATE '2024-01-05',
+                            'long',
+                            'trend_entry',
+                            'approved',
+                            'approved',
+                            'Approved for paper execution.',
+                            120.0,
+                            10.0,
+                            1200.0,
+                            '{}'::json
+                        ),
+                        (
+                            :risk_event_b,
+                            :run_id,
+                            :symbol_b,
+                            DATE '2024-01-05',
+                            'long',
+                            'trend_entry',
+                            'approved',
+                            'approved',
+                            'Approved for paper execution.',
+                            300.0,
+                            5.0,
+                            1500.0,
+                            '{}'::json
+                        )
+                    """
+                ),
+                {
+                    "risk_event_a": risk_event_a,
+                    "risk_event_b": risk_event_b,
+                    "run_id": run_id,
+                    "symbol_a": symbol_a,
+                    "symbol_b": symbol_b,
+                },
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO paper_orders (
+                        id,
+                        strategy_run_id,
+                        source_risk_event_id,
+                        symbol_id,
+                        intended_session_date,
+                        side,
+                        quantity,
+                        order_type,
+                        time_in_force,
+                        client_order_id,
+                        broker_order_id,
+                        status,
+                        broker_status,
+                        submitted_at,
+                        submission_attempt_count,
+                        sync_failure_count,
+                        last_submission_attempt_at,
+                        last_sync_failure_at,
+                        last_submission_error,
+                        last_sync_error,
+                        filled_at,
+                        canceled_at,
+                        last_broker_update_at,
+                        last_synced_at,
+                        broker_payload
+                    ) VALUES
+                        (
+                            :order_a,
+                            :run_id,
+                            :risk_event_a,
+                            :symbol_a,
+                            DATE '2024-01-05',
+                            'buy',
+                            10.0,
+                            'market',
+                            'day',
+                            'legacy-aapl-001',
+                            NULL,
+                            'submission_rejected',
+                            'rejected',
+                            TIMESTAMPTZ '2024-01-05T14:35:00Z',
+                            1,
+                            0,
+                            TIMESTAMPTZ '2024-01-05T14:35:00Z',
+                            NULL,
+                            'broker reject',
+                            NULL,
+                            NULL,
+                            NULL,
+                            TIMESTAMPTZ '2024-01-05T14:35:10Z',
+                            NULL,
+                            '{"id": "legacy-aapl-001"}'::json
+                        ),
+                        (
+                            :order_b,
+                            :run_id,
+                            :risk_event_b,
+                            :symbol_b,
+                            DATE '2024-01-05',
+                            'buy',
+                            5.0,
+                            'market',
+                            'day',
+                            'legacy-msft-001',
+                            'broker-msft-001',
+                            'submitted',
+                            'new',
+                            TIMESTAMPTZ '2024-01-05T14:36:00Z',
+                            1,
+                            0,
+                            TIMESTAMPTZ '2024-01-05T14:36:00Z',
+                            NULL,
+                            NULL,
+                            NULL,
+                            NULL,
+                            NULL,
+                            TIMESTAMPTZ '2024-01-05T14:36:10Z',
+                            NULL,
+                            '{"id": "broker-msft-001"}'::json
+                        )
+                    """
+                ),
+                {
+                    "order_a": uuid.uuid4(),
+                    "order_b": uuid.uuid4(),
+                    "run_id": run_id,
+                    "risk_event_a": risk_event_a,
+                    "risk_event_b": risk_event_b,
+                    "symbol_a": symbol_a,
+                    "symbol_b": symbol_b,
+                },
+            )
+
+        _upgrade_to_head()
+
+        with session_scope(load_settings()) as session:
+            orders = session.execute(select(PaperOrder).order_by(PaperOrder.client_order_id.asc())).scalars().all()
+            events = session.execute(select(OrderEvent).order_by(OrderEvent.event_at.asc())).scalars().all()
+
+        assert [order.status for order in orders] == ["rejected", "submitted"]
+        assert len(events) == 2
+        assert {event.event_type for event in events} == {OrderTransitionEventType.LEGACY_IMPORTED}
+        assert {event.outcome for event in events} == {OrderTransitionOutcome.ACCEPTED}
+        assert {event.to_state for event in events} == {order.status for order in orders}
+    finally:
+        clear_settings_cache()
+        clear_engine_cache()
+        with _connect_admin(admin_params) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = %s
+                      AND usename = current_user
+                      AND pid <> pg_backend_pid()
+                    """,
+                    (database_name,),
+                )
+                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
 
 
 def test_seed_script_is_idempotent(migrated_database: str) -> None:

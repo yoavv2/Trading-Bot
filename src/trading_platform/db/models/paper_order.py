@@ -7,10 +7,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_platform.db.base import Base, TimestampedModel
+from trading_platform.db.models.order_event import OrderEvent, OrderLifecycleState, _enum_values
 
 if TYPE_CHECKING:
     from trading_platform.db.models.execution_event import ExecutionEvent
@@ -55,7 +56,16 @@ class PaperOrder(TimestampedModel, Base):
     time_in_force: Mapped[str] = mapped_column(String(16), nullable=False, default="day")
     client_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     broker_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_submission")
+    status: Mapped[OrderLifecycleState] = mapped_column(
+        Enum(
+            OrderLifecycleState,
+            name="order_lifecycle_state",
+            values_callable=_enum_values,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default=OrderLifecycleState.PENDING_SUBMISSION,
+    )
     broker_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     submission_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -80,4 +90,9 @@ class PaperOrder(TimestampedModel, Base):
     execution_events: Mapped[list["ExecutionEvent"]] = relationship(
         back_populates="paper_order",
         cascade="save-update, merge",
+    )
+    order_events: Mapped[list["OrderEvent"]] = relationship(
+        back_populates="paper_order",
+        cascade="all, delete-orphan",
+        order_by="OrderEvent.event_at.asc()",
     )

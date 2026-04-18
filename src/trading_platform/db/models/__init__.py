@@ -9,6 +9,12 @@ from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.models.execution_event import ExecutionEvent
 from trading_platform.db.models.market_data_ingestion_run import MarketDataIngestionRun
 from trading_platform.db.models.market_session import MarketSession
+from trading_platform.db.models.order_event import (
+    OrderEvent,
+    OrderLifecycleState,
+    OrderTransitionEventType,
+    OrderTransitionOutcome,
+)
 from trading_platform.db.models.paper_fill import PaperFill
 from trading_platform.db.models.paper_order import PaperOrder
 from trading_platform.db.models.position import Position
@@ -27,6 +33,10 @@ __all__ = [
     "ExecutionEvent",
     "MarketDataIngestionRun",
     "MarketSession",
+    "OrderEvent",
+    "OrderLifecycleState",
+    "OrderTransitionEventType",
+    "OrderTransitionOutcome",
     "PaperFill",
     "PaperOrder",
     "Position",
