@@ -29,8 +29,10 @@ class PaperOrder(TimestampedModel, Base):
         UniqueConstraint("source_risk_event_id", name="uq_paper_orders_source_risk_event_id"),
         UniqueConstraint("client_order_id", name="uq_paper_orders_client_order_id"),
         UniqueConstraint("broker_order_id", name="uq_paper_orders_broker_order_id"),
+        UniqueConstraint("intent_hash", name="uq_paper_orders_intent_hash"),
         Index("ix_paper_orders_strategy_run_id_status", "strategy_run_id", "status"),
         Index("ix_paper_orders_strategy_run_id_symbol_id", "strategy_run_id", "symbol_id"),
+        Index("ix_paper_orders_supersedes_paper_order_id", "supersedes_paper_order_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -54,6 +56,13 @@ class PaperOrder(TimestampedModel, Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
     order_type: Mapped[str] = mapped_column(String(16), nullable=False, default="market")
     time_in_force: Mapped[str] = mapped_column(String(16), nullable=False, default="day")
+    intent_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    intent_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    supersedes_paper_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("paper_orders.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     client_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     broker_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[OrderLifecycleState] = mapped_column(
@@ -95,4 +104,13 @@ class PaperOrder(TimestampedModel, Base):
         back_populates="paper_order",
         cascade="all, delete-orphan",
         order_by="OrderEvent.event_at.asc()",
+    )
+    supersedes_paper_order: Mapped["PaperOrder | None"] = relationship(
+        remote_side="PaperOrder.id",
+        foreign_keys=[supersedes_paper_order_id],
+        back_populates="superseded_by_orders",
+    )
+    superseded_by_orders: Mapped[list["PaperOrder"]] = relationship(
+        back_populates="supersedes_paper_order",
+        cascade="save-update, merge",
     )

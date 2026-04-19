@@ -4,6 +4,8 @@ import os
 import sys
 import uuid
 from collections.abc import Iterator
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import psycopg
@@ -21,12 +23,19 @@ from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     OrderEvent,
+    OrderLifecycleState,
     OrderTransitionEventType,
     OrderTransitionOutcome,
     PaperOrder,
+    RiskEvent,
     Strategy,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+    Symbol,
 )
 from trading_platform.db.session import clear_engine_cache, get_engine, session_scope
+from trading_platform.services.order_identity import build_intent_hash
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -328,6 +337,9 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
         "quantity",
         "order_type",
         "time_in_force",
+        "intent_hash",
+        "intent_version",
+        "supersedes_paper_order_id",
         "client_order_id",
         "broker_order_id",
         "status",
@@ -349,6 +361,7 @@ def test_alembic_upgrade_creates_phase5_paper_order_tables(migrated_database: st
     constraints = {uc["name"] for uc in inspector.get_unique_constraints("paper_orders")}
     assert constraints >= {
         "uq_paper_orders_source_risk_event_id",
+        "uq_paper_orders_intent_hash",
         "uq_paper_orders_client_order_id",
         "uq_paper_orders_broker_order_id",
     }
@@ -665,6 +678,24 @@ def test_phase7_order_kernel_migration_preserves_existing_paper_orders(
             events = session.execute(select(OrderEvent).order_by(OrderEvent.event_at.asc())).scalars().all()
 
         assert [order.status for order in orders] == ["rejected", "submitted"]
+        assert [order.intent_version for order in orders] == [1, 1]
+        assert all(order.supersedes_paper_order_id is None for order in orders)
+        assert [order.intent_hash for order in orders] == [
+            build_intent_hash(
+                strategy_id="trend_following_daily",
+                session_date=date(2024, 1, 5),
+                symbol="AAPL",
+                side="buy",
+                quantity=Decimal("10.0"),
+            ),
+            build_intent_hash(
+                strategy_id="trend_following_daily",
+                session_date=date(2024, 1, 5),
+                symbol="MSFT",
+                side="buy",
+                quantity=Decimal("5.0"),
+            ),
+        ]
         assert len(events) == 2
         assert {event.event_type for event in events} == {OrderTransitionEventType.LEGACY_IMPORTED}
         assert {event.outcome for event in events} == {OrderTransitionOutcome.ACCEPTED}
@@ -701,6 +732,145 @@ def test_seed_script_is_idempotent(migrated_database: str) -> None:
     assert len(persisted) == 1
     assert persisted[0].strategy_id == "trend_following_daily"
     assert persisted[0].config_reference == "config/strategies/trend_following_daily.yaml"
+
+
+def test_phase7_idempotent_intent_schema_supports_predecessor_links(migrated_database: str) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        strategy = Strategy(
+            strategy_id="trend_following_daily",
+            display_name="Trend Following Daily",
+            status="active",
+            config_reference="config/strategies/trend_following_daily.yaml",
+        )
+        session.add(strategy)
+        session.flush()
+
+        symbol = Symbol(ticker="AAPL", active=True)
+        session.add(symbol)
+        session.flush()
+
+        risk_run = StrategyRun(
+            strategy_id=strategy.id,
+            run_type=StrategyRunType.RISK_EVALUATION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="pytest",
+            parameters_snapshot={"as_of_session": "2024-01-05"},
+            result_summary={"stage": "completed", "as_of_session": "2024-01-05"},
+        )
+        second_risk_run = StrategyRun(
+            strategy_id=strategy.id,
+            run_type=StrategyRunType.RISK_EVALUATION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="pytest",
+            parameters_snapshot={"as_of_session": "2024-01-05", "wave": "retry"},
+            result_summary={"stage": "completed", "as_of_session": "2024-01-05"},
+        )
+        execution_run = StrategyRun(
+            strategy_id=strategy.id,
+            run_type=StrategyRunType.PAPER_EXECUTION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="pytest",
+            parameters_snapshot={"as_of_session": "2024-01-05"},
+            result_summary={"stage": "completed", "as_of_session": "2024-01-05"},
+        )
+        session.add_all([risk_run, second_risk_run, execution_run])
+        session.flush()
+
+        first_risk_event = RiskEvent(
+            strategy_run_id=risk_run.id,
+            symbol_id=symbol.id,
+            session_date=date(2024, 1, 5),
+            signal_direction="long",
+            signal_reason="trend_entry",
+            outcome="approved",
+            decision_code="approved",
+            decision_reason="Approved for paper execution.",
+            reference_price=Decimal("120.0"),
+            proposed_quantity=Decimal("10.0"),
+            proposed_notional=Decimal("1200.0"),
+            risk_metadata={},
+        )
+        second_risk_event = RiskEvent(
+            strategy_run_id=second_risk_run.id,
+            symbol_id=symbol.id,
+            session_date=date(2024, 1, 5),
+            signal_direction="long",
+            signal_reason="trend_entry",
+            outcome="approved",
+            decision_code="approved",
+            decision_reason="Approved for paper execution.",
+            reference_price=Decimal("120.0"),
+            proposed_quantity=Decimal("12.0"),
+            proposed_notional=Decimal("1440.0"),
+            risk_metadata={},
+        )
+        session.add_all([first_risk_event, second_risk_event])
+        session.flush()
+
+        first_order = PaperOrder(
+            strategy_run_id=execution_run.id,
+            source_risk_event_id=first_risk_event.id,
+            symbol_id=symbol.id,
+            intended_session_date=date(2024, 1, 5),
+            side="buy",
+            quantity=Decimal("10.0"),
+            order_type="market",
+            time_in_force="day",
+            intent_hash=build_intent_hash(
+                strategy_id="trend_following_daily",
+                session_date=date(2024, 1, 5),
+                symbol="AAPL",
+                side="buy",
+                quantity=Decimal("10.0"),
+            ),
+            intent_version=1,
+            client_order_id="tp-20240105-aapl-first",
+            broker_order_id="broker-aapl-001",
+            status=OrderLifecycleState.SUBMITTED,
+            broker_status="new",
+            broker_payload={"id": "broker-aapl-001"},
+        )
+        session.add(first_order)
+        session.flush()
+
+        second_order = PaperOrder(
+            strategy_run_id=execution_run.id,
+            source_risk_event_id=second_risk_event.id,
+            symbol_id=symbol.id,
+            intended_session_date=date(2024, 1, 5),
+            side="buy",
+            quantity=Decimal("12.0"),
+            order_type="market",
+            time_in_force="day",
+            intent_hash=build_intent_hash(
+                strategy_id="trend_following_daily",
+                session_date=date(2024, 1, 5),
+                symbol="AAPL",
+                side="buy",
+                quantity=Decimal("12.0"),
+            ),
+            intent_version=2,
+            supersedes_paper_order_id=first_order.id,
+            client_order_id="tp-20240105-aapl-second",
+            broker_order_id=None,
+            status=OrderLifecycleState.PENDING_SUBMISSION,
+            broker_payload={},
+        )
+        session.add(second_order)
+        session.flush()
+        second_order_id = second_order.id
+        first_order_id = first_order.id
+
+    with session_scope(settings) as session:
+        persisted = session.get(PaperOrder, second_order_id)
+
+        assert persisted is not None
+        assert persisted.intent_version == 2
+        assert persisted.supersedes_paper_order_id == first_order_id
+        assert persisted.supersedes_paper_order is not None
+        assert persisted.supersedes_paper_order.intent_version == 1
 
 
 def test_ready_endpoint_reflects_database_connectivity(

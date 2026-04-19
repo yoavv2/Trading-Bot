@@ -42,6 +42,8 @@ class OrderIntent:
     quantity: Decimal
     intended_session: date
     client_order_id: str
+    intent_hash: str | None = None
+    intent_version: int = 1
     order_type: OrderType = OrderType.MARKET
     time_in_force: OrderTimeInForce = OrderTimeInForce.DAY
     reference_price: Decimal | None = None
