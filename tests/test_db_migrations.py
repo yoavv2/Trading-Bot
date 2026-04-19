@@ -873,6 +873,45 @@ def test_phase7_idempotent_intent_schema_supports_predecessor_links(migrated_dat
         assert persisted.supersedes_paper_order.intent_version == 1
 
 
+def test_phase7_global_kill_switch_migration_creates_table_and_seeds_armed_state(
+    migrated_database: str,
+) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert "system_controls" in table_names
+
+    cols = {col["name"] for col in inspector.get_columns("system_controls")}
+    assert cols >= {
+        "id",
+        "name",
+        "state",
+        "last_changed_at",
+        "last_change_actor",
+        "last_change_reason",
+        "last_change_run_id",
+        "created_at",
+        "updated_at",
+    }
+
+    uniques = {uc["name"] for uc in inspector.get_unique_constraints("system_controls")}
+    assert "uq_system_controls_name" in uniques
+
+    enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
+    assert enums["kill_switch_state"] == {"armed", "tripped"}
+
+    with session_scope(settings) as session:
+        rows = session.execute(
+            text("SELECT name, state, last_change_actor FROM system_controls")
+        ).all()
+
+    assert len(rows) == 1
+    assert rows[0][0] == "global_kill_switch"
+    assert rows[0][1] == "armed"
+    assert rows[0][2] == "system_bootstrap"
+
+
 def test_ready_endpoint_reflects_database_connectivity(
     monkeypatch: pytest.MonkeyPatch,
     migrated_database: str,

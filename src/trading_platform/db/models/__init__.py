@@ -22,6 +22,11 @@ from trading_platform.db.models.risk_event import RiskEvent
 from trading_platform.db.models.strategy import Strategy, StrategyStatus
 from trading_platform.db.models.strategy_run import StrategyRun, StrategyRunStatus, StrategyRunType
 from trading_platform.db.models.symbol import Symbol
+from trading_platform.db.models.system_control import (
+    GLOBAL_KILL_SWITCH_NAME,
+    KillSwitchState,
+    SystemControl,
+)
 
 __all__ = [
     "AccountSnapshot",
@@ -31,6 +36,8 @@ __all__ = [
     "BacktestTrade",
     "DailyBar",
     "ExecutionEvent",
+    "GLOBAL_KILL_SWITCH_NAME",
+    "KillSwitchState",
     "MarketDataIngestionRun",
     "MarketSession",
     "OrderEvent",
@@ -47,4 +54,5 @@ __all__ = [
     "StrategyRunType",
     "StrategyStatus",
     "Symbol",
+    "SystemControl",
 ]

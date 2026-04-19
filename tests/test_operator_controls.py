@@ -16,18 +16,24 @@ from tests.test_paper_execution import (  # noqa: E402
     _seed_approved_risk_batch,
     migrated_paper_db,
 )
-from trading_platform.core.settings import load_settings  # noqa: E402
+from trading_platform.core.settings import clear_settings_cache, load_settings  # noqa: E402
 from trading_platform.db.models import (  # noqa: E402
+    GLOBAL_KILL_SWITCH_NAME,
     ExecutionEvent,
+    KillSwitchState,
     Strategy,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
     StrategyStatus,
+    SystemControl,
 )
-from trading_platform.db.session import session_scope  # noqa: E402
+from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
 from trading_platform.services.alpaca import BrokerAccountSnapshot  # noqa: E402
-from trading_platform.services.operator_controls import OperatorControlService  # noqa: E402
+from trading_platform.services.operator_controls import (  # noqa: E402
+    OperatorControlService,
+    load_kill_switch_state,
+)
 from trading_platform.services.operator_status import build_operator_status_report  # noqa: E402
 from trading_platform.services.paper_execution import run_paper_order_submission, sync_paper_state  # noqa: E402
 
@@ -139,3 +145,95 @@ def test_operator_status_report_surfaces_current_control_state_and_recent_blocks
     assert any(
         failed_run["run_id"] == blocked_report.run_id for failed_run in report.recent_failed_runs
     )
+
+
+def test_kill_switch_is_armed_by_default(migrated_paper_db: str) -> None:
+    settings = load_settings()
+
+    snapshot = load_kill_switch_state(settings=settings)
+
+    assert snapshot.name == GLOBAL_KILL_SWITCH_NAME
+    assert snapshot.state == KillSwitchState.ARMED.value
+    assert snapshot.is_tripped is False
+    assert snapshot.last_change_actor == "system_bootstrap"
+    assert snapshot.last_change_run_id is None
+
+
+def test_operator_control_service_persists_kill_switch_trip_and_reset_with_audit(
+    migrated_paper_db: str,
+) -> None:
+    settings = load_settings()
+    service = OperatorControlService(settings=settings)
+
+    trip_report = service.trip_kill_switch(
+        reason="global halt for incident",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    reset_report = service.reset_kill_switch(
+        reason="incident resolved",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+
+    assert trip_report.previous_state == KillSwitchState.ARMED.value
+    assert trip_report.current_state == KillSwitchState.TRIPPED.value
+    assert trip_report.changed is True
+    assert trip_report.state_snapshot["is_tripped"] is True
+    assert reset_report.previous_state == KillSwitchState.TRIPPED.value
+    assert reset_report.current_state == KillSwitchState.ARMED.value
+    assert reset_report.changed is True
+
+    with session_scope(settings) as session:
+        control = session.execute(
+            select(SystemControl).where(SystemControl.name == GLOBAL_KILL_SWITCH_NAME)
+        ).scalar_one()
+        strategy = session.execute(select(Strategy)).scalar_one()
+        control_runs = session.execute(
+            select(StrategyRun)
+            .where(StrategyRun.run_type == StrategyRunType.OPERATOR_CONTROL)
+            .order_by(StrategyRun.started_at.asc())
+        ).scalars().all()
+        kill_switch_events = session.execute(
+            select(ExecutionEvent)
+            .join(StrategyRun, StrategyRun.id == ExecutionEvent.strategy_run_id)
+            .where(ExecutionEvent.event_type.in_(["kill_switch_trip", "kill_switch_reset"]))
+            .order_by(ExecutionEvent.event_at.asc())
+        ).scalars().all()
+
+    assert control.state == KillSwitchState.ARMED
+    assert control.last_change_actor == "pytest"
+    assert control.last_change_reason == "incident resolved"
+    assert strategy.status == StrategyStatus.ACTIVE  # Strategy status must NOT be mutated
+    assert [run.status for run in control_runs] == [
+        StrategyRunStatus.SUCCEEDED,
+        StrategyRunStatus.SUCCEEDED,
+    ]
+    assert [
+        run.parameters_snapshot.get("scope") for run in control_runs
+    ] == ["global_kill_switch", "global_kill_switch"]
+    assert [event.event_type for event in kill_switch_events] == [
+        "kill_switch_trip",
+        "kill_switch_reset",
+    ]
+    assert [event.blocks_execution for event in kill_switch_events] == [True, False]
+
+
+def test_kill_switch_tripped_state_is_restart_safe(migrated_paper_db: str) -> None:
+    settings = load_settings()
+    service = OperatorControlService(settings=settings)
+    service.trip_kill_switch(
+        reason="ensure persistence survives reload",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+
+    clear_settings_cache()
+    clear_engine_cache()
+
+    settings_after_reload = load_settings()
+    snapshot = load_kill_switch_state(settings=settings_after_reload)
+
+    assert snapshot.state == KillSwitchState.TRIPPED.value
+    assert snapshot.is_tripped is True
+    assert snapshot.last_change_reason == "ensure persistence survives reload"
