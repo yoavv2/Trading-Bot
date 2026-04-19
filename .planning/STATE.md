@@ -4,17 +4,17 @@ milestone: v1.1
 milestone_name: Execution Correctness & Hardening
 current_phase: "07"
 current_phase_name: Correctness Kernel
-current_plan: "07-02"
-status: Executing Phase 7 — 07-01 complete, 07-02 next
+current_plan: "07-03"
+status: Executing Phase 7 — 07-02 complete, 07-03 next
 stopped_at: null
-last_updated: "2026-04-19T11:15:45Z"
+last_updated: "2026-04-19T12:02:08Z"
 last_activity: 2026-04-19
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 33
+  completed_plans: 2
+  percent: 67
 ---
 
 # Project State
@@ -24,15 +24,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (executing Phase 7; 07-01 complete, 07-02 next)
+**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (executing Phase 7; 07-02 complete, 07-03 next)
 
 ## Current Position
 
 Phase: 07 — Correctness Kernel
-Plan: 07-02 — Idempotent Intents
-Status: Executing Phase 7 — 07-01 complete, 07-02 next
-Last activity: 2026-04-19 — completed 07-01 order lifecycle kernel and verified against the local PostgreSQL slice
-Progress: [███░░░░░░░] 33%
+Plan: 07-03 — Global Kill Switch
+Status: Executing Phase 7 — 07-02 complete, 07-03 next
+Last activity: 2026-04-19 — completed 07-02 deterministic intent identity and idempotent submission flow
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
@@ -56,7 +56,7 @@ Progress: [███░░░░░░░] 33%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 7 | 1/3 | - | - |
+| 7 | 2/3 | - | - |
 | 8 | 0/TBD | - | - |
 | 9 | 0/TBD | - | - |
 | 10 | 0/TBD | - | - |
@@ -64,8 +64,8 @@ Progress: [███░░░░░░░] 33%
 | 12 | 0/TBD | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 05-03, 06-01, 06-02, 06-03, 07-01 completed
-- Trend: v1.1 execution started; order-lifecycle kernel is in place and idempotent intent work is next
+- Last 5 plans: 06-01, 06-02, 06-03, 07-01, 07-02 completed
+- Trend: Phase 7 is two-thirds complete; kill-switch hardening is the remaining correctness-kernel slice
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -140,6 +140,9 @@ Recent decisions affecting current work:
 - [07-01]: `PaperOrder.status` is now a closed `OrderLifecycleState` enum projected from append-only `order_events`.
 - [07-01]: `apply_order_transition(order_id, event)` is the only legal order-lifecycle mutation boundary; illegal transitions persist rejected audit events before raising.
 - [07-01]: Paper execution and reconciliation now share one local lifecycle vocabulary and cannot mutate order state directly.
+- [07-02]: Deterministic intent identity is derived from `strategy_id`, `session_date`, `symbol`, `side`, and quantity instead of `risk_event_id`.
+- [07-02]: Same-intent retries reuse the persisted order row and `client_order_id`; broker-touched material changes create explicit successor versions with predecessor links.
+- [07-02]: Reconciliation and operator reads now prefer `client_order_id` matching and expose intent lineage in order payloads.
 
 ### Pending Todos
 
@@ -153,6 +156,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-04-19T11:15:45Z
-Stopped at: In progress — 07-01 complete, start 07-02 (Idempotent Intents)
+Last session: 2026-04-19T12:02:08Z
+Stopped at: In progress — 07-02 complete, start 07-03 (Global Kill Switch)
 Resume file: None
