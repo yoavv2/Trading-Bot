@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import uuid
 from collections.abc import Iterator
@@ -101,7 +102,17 @@ def migrated_reconciliation_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]
         clear_engine_cache()
         with _connect_admin(admin_params) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
+                cursor.execute(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = %s
+                      AND usename = current_user
+                      AND pid <> pg_backend_pid()
+                    """,
+                    (database_name,),
+                )
+                cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
 
 
 class FakeBrokerClient:
@@ -476,3 +487,10 @@ def test_reconciliation_blocks_after_repeated_submission_failures(
     assert {finding.event_type for finding in report.findings} >= {
         "submission_failure_threshold_exceeded",
     }
+
+
+def test_reconciliation_module_routes_lifecycle_through_order_state_machine() -> None:
+    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/reconciliation.py").read_text()
+
+    assert "apply_order_transition" in source
+    assert re.search(r"\b(?:pending_order|persisted_order|existing_order|local_order|paper_order)\.status\s*=(?!=)", source) is None

@@ -16,6 +16,8 @@ from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
     ExecutionEvent,
+    OrderLifecycleState,
+    OrderTransitionEventType,
     PaperFill,
     PaperOrder,
     Position,
@@ -34,9 +36,18 @@ from trading_platform.services.alpaca import (
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import ExecutionOrderStatus
+from trading_platform.services.order_state_machine import (
+    OrderTransitionRequest,
+    apply_order_transition,
+    resolve_transition_target,
+)
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
-_ACTIVE_LOCAL_ORDER_STATUSES = {"pending_submission", "submitted", "partially_filled"}
+_ACTIVE_LOCAL_ORDER_STATUSES = {
+    OrderLifecycleState.PENDING_SUBMISSION,
+    OrderLifecycleState.SUBMITTED,
+    OrderLifecycleState.PARTIALLY_FILLED,
+}
 _MONEY_TOLERANCE = Decimal("0.01")
 _QUANTITY_TOLERANCE = Decimal("0.000001")
 
@@ -143,7 +154,7 @@ def recover_inflight_paper_orders(
             .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
             .where(
                 StrategyRun.strategy_id == strategy_record.id,
-                PaperOrder.status.in_(tuple(_ACTIVE_LOCAL_ORDER_STATUSES | {"submission_failed"})),
+                PaperOrder.status.in_(tuple(_ACTIVE_LOCAL_ORDER_STATUSES | {OrderLifecycleState.SUBMISSION_FAILED})),
             )
             .order_by(PaperOrder.created_at.asc())
         ).scalars().all()
@@ -157,7 +168,7 @@ def recover_inflight_paper_orders(
             if broker_order is None:
                 continue
 
-            if _apply_broker_order_snapshot(local_order, broker_order, synced_at=synced_at):
+            if _apply_broker_order_snapshot(session, local_order, broker_order, synced_at=synced_at):
                 local_order.last_submission_error = None
                 recovered += 1
 
@@ -387,7 +398,7 @@ def _build_findings(
             continue
 
         matched_order_ids.add(local_order.id)
-        expected_local_status = _local_status_from_broker_status(broker_order.status)
+        expected_local_status = _local_state_from_broker_status(broker_order.status)
         if local_order.status != expected_local_status or local_order.broker_status != broker_order.broker_status:
             findings.append(
                 ReconciliationFinding(
@@ -413,9 +424,12 @@ def _build_findings(
     for local_order in local_orders:
         if local_order.id in matched_order_ids:
             continue
-        if local_order.status == "submission_failed":
+        if local_order.status == OrderLifecycleState.SUBMISSION_FAILED:
             continue
-        if local_order.status == "pending_submission" and local_order.submission_attempt_count == 0:
+        if (
+            local_order.status == OrderLifecycleState.PENDING_SUBMISSION
+            and local_order.submission_attempt_count == 0
+        ):
             continue
         if local_order.status not in _ACTIVE_LOCAL_ORDER_STATUSES:
             continue
@@ -596,7 +610,7 @@ def _build_findings(
     order_error_messages = _order_error_messages(findings)
     for local_order in local_orders:
         if (
-            local_order.status == "submission_failed"
+            local_order.status == OrderLifecycleState.SUBMISSION_FAILED
             and local_order.submission_attempt_count >= failure_threshold
         ):
             findings.append(
@@ -671,6 +685,7 @@ def _apply_sync_failure_state(
 
 
 def _apply_broker_order_snapshot(
+    session,
     local_order: PaperOrder,
     broker_order: BrokerOrderSnapshot,
     *,
@@ -687,7 +702,25 @@ def _apply_broker_order_snapshot(
 
     if not local_order.broker_order_id:
         local_order.broker_order_id = broker_order.broker_order_id
-    local_order.status = _local_status_from_broker_status(broker_order.status)
+    transition_event = _broker_transition_event(broker_order.status)
+    transition_target = resolve_transition_target(
+        from_state=local_order.status,
+        event_type=transition_event,
+    )
+    if transition_target is not None and transition_target != local_order.status:
+        apply_order_transition(
+            local_order.id,
+            OrderTransitionRequest(
+                strategy_run_id=local_order.strategy_run_id,
+                event_type=transition_event,
+                details={
+                    "broker_order_id": broker_order.broker_order_id,
+                    "broker_status": broker_order.broker_status,
+                },
+                event_at=broker_order.updated_at,
+            ),
+            session=session,
+        )
     local_order.broker_status = broker_order.broker_status
     local_order.submitted_at = broker_order.submitted_at or local_order.submitted_at
     local_order.filled_at = broker_order.filled_at
@@ -707,20 +740,34 @@ def _apply_broker_order_snapshot(
     return before != after
 
 
-def _local_status_from_broker_status(status: ExecutionOrderStatus) -> str:
+def _broker_transition_event(status: ExecutionOrderStatus) -> OrderTransitionEventType:
     if status in {ExecutionOrderStatus.PENDING, ExecutionOrderStatus.ACCEPTED}:
-        return "submitted"
+        return OrderTransitionEventType.BROKER_ACKNOWLEDGED
     if status == ExecutionOrderStatus.PARTIALLY_FILLED:
-        return "partially_filled"
+        return OrderTransitionEventType.BROKER_PARTIALLY_FILLED
     if status == ExecutionOrderStatus.FILLED:
-        return "filled"
+        return OrderTransitionEventType.BROKER_FILLED
     if status == ExecutionOrderStatus.CANCELED:
-        return "canceled"
+        return OrderTransitionEventType.BROKER_CANCELED
     if status == ExecutionOrderStatus.REJECTED:
-        return "rejected"
+        return OrderTransitionEventType.BROKER_REJECTED
     if status == ExecutionOrderStatus.EXPIRED:
-        return "expired"
-    return "unknown"
+        return OrderTransitionEventType.BROKER_EXPIRED
+    return OrderTransitionEventType.BROKER_STATUS_UNKNOWN
+
+
+def _local_state_from_broker_status(status: ExecutionOrderStatus) -> OrderLifecycleState:
+    event_type = _broker_transition_event(status)
+    mapping = {
+        OrderTransitionEventType.BROKER_ACKNOWLEDGED: OrderLifecycleState.SUBMITTED,
+        OrderTransitionEventType.BROKER_PARTIALLY_FILLED: OrderLifecycleState.PARTIALLY_FILLED,
+        OrderTransitionEventType.BROKER_FILLED: OrderLifecycleState.FILLED,
+        OrderTransitionEventType.BROKER_CANCELED: OrderLifecycleState.CANCELED,
+        OrderTransitionEventType.BROKER_REJECTED: OrderLifecycleState.REJECTED,
+        OrderTransitionEventType.BROKER_EXPIRED: OrderLifecycleState.EXPIRED,
+        OrderTransitionEventType.BROKER_STATUS_UNKNOWN: OrderLifecycleState.UNKNOWN,
+    }
+    return mapping[event_type]
 
 
 def _create_reconciliation_run(

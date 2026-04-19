@@ -16,6 +16,8 @@ from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
     ExecutionEvent,
+    OrderLifecycleState,
+    OrderTransitionEventType,
     PaperFill,
     PaperOrder,
     Position,
@@ -39,6 +41,11 @@ from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.operator_controls import load_strategy_control_state
+from trading_platform.services.order_state_machine import (
+    OrderTransitionRequest,
+    apply_order_transition,
+    resolve_transition_target,
+)
 from trading_platform.services.reconciliation import (
     load_broker_state,
     reconcile_paper_execution,
@@ -284,18 +291,32 @@ def run_paper_order_submission(
                         order_type=order_type,
                         time_in_force=time_in_force,
                         client_order_id=client_order_id,
-                        status="pending_submission",
+                        status=OrderLifecycleState.PENDING_SUBMISSION,
                         broker_payload={},
                     )
                     session.add(paper_order)
                     session.flush()
                     pending_order = paper_order
+                    transition_event_type = OrderTransitionEventType.INTENT_REGISTERED
                 else:
                     pending_order = existing_order
                     client_order_id = existing_order.client_order_id
+                    transition_event_type = OrderTransitionEventType.RETRY_REQUESTED
 
                 pending_order.strategy_run_id = run_id
-                pending_order.status = "pending_submission"
+                apply_order_transition(
+                    pending_order.id,
+                    OrderTransitionRequest(
+                        strategy_run_id=run_id,
+                        event_type=transition_event_type,
+                        details={
+                            "trigger_source": trigger_source,
+                            "source_risk_event_id": str(candidate.risk_event_id),
+                        },
+                    ),
+                    session=session,
+                    settings=resolved_settings,
+                )
                 pending_order.submission_attempt_count += 1
                 pending_order.last_submission_attempt_at = datetime.now(UTC)
                 pending_order.last_submission_error = None
@@ -325,9 +346,21 @@ def run_paper_order_submission(
                 with session_scope(resolved_settings) as session:
                     pending_order = session.get(PaperOrder, pending_order_id)
                     if pending_order is not None:
-                        pending_order.status = "submission_failed"
                         pending_order.last_submission_error = str(exc)
                         pending_order.broker_payload = {"error": str(exc)}
+                        apply_order_transition(
+                            pending_order.id,
+                            OrderTransitionRequest(
+                                strategy_run_id=run_id,
+                                event_type=OrderTransitionEventType.SUBMISSION_FAILED,
+                                details={
+                                    "error": str(exc),
+                                    "trigger_source": trigger_source,
+                                },
+                            ),
+                            session=session,
+                            settings=resolved_settings,
+                        )
                 raise
 
             with session_scope(resolved_settings) as session:
@@ -335,16 +368,27 @@ def run_paper_order_submission(
                 if persisted_order is None:
                     raise LookupError(f"Missing pending paper_order '{pending_order_id}'.")
 
-                persisted_order.status = (
-                    "submission_rejected"
-                    if result.status == ExecutionOrderStatus.REJECTED
-                    else "submitted"
-                )
+                transition_recorded_at = datetime.now(UTC)
                 persisted_order.broker_order_id = result.broker_order_id or None
                 persisted_order.broker_status = result.broker_status
                 persisted_order.submitted_at = result.submitted_at
                 persisted_order.last_submission_error = None
                 persisted_order.broker_payload = result.raw_payload
+                apply_order_transition(
+                    persisted_order.id,
+                    OrderTransitionRequest(
+                        strategy_run_id=run_id,
+                        event_type=_broker_transition_event(result.status),
+                        details={
+                            "broker_order_id": result.broker_order_id,
+                            "broker_status": result.broker_status,
+                            "trigger_source": trigger_source,
+                        },
+                        event_at=transition_recorded_at,
+                    ),
+                    session=session,
+                    settings=resolved_settings,
+                )
                 session.flush()
                 session.refresh(persisted_order)
                 submitted_orders.append(_paper_order_payload(persisted_order))
@@ -664,6 +708,7 @@ def sync_paper_state(
             }
 
             orders_synced = _sync_paper_orders(
+                session,
                 broker_orders,
                 local_orders_by_broker_id=local_orders_by_broker_id,
                 local_orders_by_client_id=local_orders_by_client_id,
@@ -991,31 +1036,32 @@ def _finalize_blocked_paper_execution_run(
 def _is_resubmittable_order(paper_order: PaperOrder, *, failure_threshold: int) -> bool:
     if paper_order.broker_order_id:
         return False
-    if paper_order.status == "pending_submission":
+    if paper_order.status == OrderLifecycleState.PENDING_SUBMISSION:
         return True
     return (
-        paper_order.status == "submission_failed"
+        paper_order.status == OrderLifecycleState.SUBMISSION_FAILED
         and paper_order.submission_attempt_count < failure_threshold
     )
 
 
-def _paper_order_status_from_broker_status(status: ExecutionOrderStatus) -> str:
+def _broker_transition_event(status: ExecutionOrderStatus) -> OrderTransitionEventType:
     if status in {ExecutionOrderStatus.PENDING, ExecutionOrderStatus.ACCEPTED}:
-        return "submitted"
+        return OrderTransitionEventType.BROKER_ACKNOWLEDGED
     if status == ExecutionOrderStatus.PARTIALLY_FILLED:
-        return "partially_filled"
+        return OrderTransitionEventType.BROKER_PARTIALLY_FILLED
     if status == ExecutionOrderStatus.FILLED:
-        return "filled"
+        return OrderTransitionEventType.BROKER_FILLED
     if status == ExecutionOrderStatus.CANCELED:
-        return "canceled"
+        return OrderTransitionEventType.BROKER_CANCELED
     if status == ExecutionOrderStatus.REJECTED:
-        return "rejected"
+        return OrderTransitionEventType.BROKER_REJECTED
     if status == ExecutionOrderStatus.EXPIRED:
-        return "expired"
-    return "unknown"
+        return OrderTransitionEventType.BROKER_EXPIRED
+    return OrderTransitionEventType.BROKER_STATUS_UNKNOWN
 
 
 def _sync_paper_orders(
+    session,
     broker_orders: list[BrokerOrderSnapshot],
     *,
     local_orders_by_broker_id: dict[str, PaperOrder],
@@ -1032,7 +1078,25 @@ def _sync_paper_orders(
 
         if not local_order.broker_order_id:
             local_order.broker_order_id = broker_order.broker_order_id
-        local_order.status = _paper_order_status_from_broker_status(broker_order.status)
+        transition_event = _broker_transition_event(broker_order.status)
+        transition_target = resolve_transition_target(
+            from_state=local_order.status,
+            event_type=transition_event,
+        )
+        if transition_target is not None and transition_target != local_order.status:
+            apply_order_transition(
+                local_order.id,
+                OrderTransitionRequest(
+                    strategy_run_id=local_order.strategy_run_id,
+                    event_type=transition_event,
+                    details={
+                        "broker_order_id": broker_order.broker_order_id,
+                        "broker_status": broker_order.broker_status,
+                    },
+                    event_at=broker_order.updated_at,
+                ),
+                session=session,
+            )
         local_order.broker_status = broker_order.broker_status
         local_order.submitted_at = broker_order.submitted_at or local_order.submitted_at
         local_order.filled_at = broker_order.filled_at

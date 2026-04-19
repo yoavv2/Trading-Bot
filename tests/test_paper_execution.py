@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import uuid
 from collections.abc import Iterator
@@ -22,6 +23,8 @@ from trading_platform.db.models import (
     DailyBar,
     ExecutionEvent,
     MarketSession,
+    OrderEvent,
+    OrderTransitionEventType,
     PaperFill,
     PaperOrder,
     Position,
@@ -481,10 +484,20 @@ def test_run_paper_session_submits_only_missing_orders(
             select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
         ).scalars().all()
         symbols = {order.symbol_ref.ticker for order in paper_orders}
+        msft_order = next(order for order in paper_orders if order.symbol_ref.ticker == "MSFT")
+        order_events = session.execute(
+            select(OrderEvent)
+            .where(OrderEvent.paper_order_id == msft_order.id)
+            .order_by(OrderEvent.event_at.asc())
+        ).scalars().all()
 
     assert len(paper_orders) == 2
     assert symbols == {"AAPL", "MSFT"}
     assert len(execution_runs) == 2
+    assert [event.event_type for event in order_events] == [
+        OrderTransitionEventType.INTENT_REGISTERED,
+        OrderTransitionEventType.BROKER_ACKNOWLEDGED,
+    ]
 
 
 def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_candidates(
@@ -918,8 +931,24 @@ def test_sync_paper_state_advances_partial_lifecycle_without_duplicate_fills(
         paper_order = session.execute(select(PaperOrder)).scalar_one()
         paper_fills = session.execute(select(PaperFill).order_by(PaperFill.filled_at.asc())).scalars().all()
         position = session.execute(select(Position).where(Position.status == "open")).scalar_one()
+        order_events = session.execute(
+            select(OrderEvent)
+            .where(OrderEvent.paper_order_id == paper_order.id)
+            .order_by(OrderEvent.event_at.asc())
+        ).scalars().all()
 
     assert paper_order.status == "filled"
     assert len(paper_fills) == 2
     assert [fill.broker_fill_id for fill in paper_fills] == ["fill-aapl-001", "fill-aapl-002"]
     assert position.quantity == Decimal("10.000000")
+    assert [event.event_type for event in order_events] == [
+        OrderTransitionEventType.BROKER_PARTIALLY_FILLED,
+        OrderTransitionEventType.BROKER_FILLED,
+    ]
+
+
+def test_paper_execution_module_routes_lifecycle_through_order_state_machine() -> None:
+    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/paper_execution.py").read_text()
+
+    assert "apply_order_transition" in source
+    assert re.search(r"\b(?:pending_order|persisted_order|existing_order|local_order|paper_order)\.status\s*=(?!=)", source) is None
