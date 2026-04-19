@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Execution Correctness & Hardening
-current_phase: null
-current_phase_name: null
-current_plan: null
-status: Roadmap defined — ready to plan Phase 7
+current_phase: "07"
+current_phase_name: Correctness Kernel
+current_plan: "07-02"
+status: Executing Phase 7 — 07-01 complete, 07-02 next
 stopped_at: null
-last_updated: "2026-04-18T00:00:00Z"
-last_activity: 2026-04-18
+last_updated: "2026-04-19T11:15:45Z"
+last_activity: 2026-04-19
 progress:
   total_phases: 6
-  completed_phases: 6
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 0
+  total_plans: 3
+  completed_plans: 1
+  percent: 33
 ---
 
 # Project State
@@ -24,16 +24,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (roadmap defined, planning Phase 7 next)
+**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (executing Phase 7; 07-01 complete, 07-02 next)
 
 ## Current Position
 
-Phase: Not started (roadmap defined)
-Plan: —
-Status: Roadmap defined — ready to plan Phase 7
-Last activity: 2026-04-18 — v1.1 roadmap created (6 phases: 7-12, 63 requirements mapped)
-
-Progress: [░░░░░░░░░░] 0%
+Phase: 07 — Correctness Kernel
+Plan: 07-02 — Idempotent Intents
+Status: Executing Phase 7 — 07-01 complete, 07-02 next
+Last activity: 2026-04-19 — completed 07-01 order lifecycle kernel and verified against the local PostgreSQL slice
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -57,7 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 7 | 0/TBD | - | - |
+| 7 | 1/3 | - | - |
 | 8 | 0/TBD | - | - |
 | 9 | 0/TBD | - | - |
 | 10 | 0/TBD | - | - |
@@ -65,8 +64,8 @@ Progress: [░░░░░░░░░░] 0%
 | 12 | 0/TBD | - | - |
 
 **Recent Trend:**
-- Last 5 plans (v1.0): 05-02, 05-03, 06-01, 06-02, 06-03 completed
-- Trend: v1.0 milestone complete; v1.1 roadmap defined, beginning correctness kernel work
+- Last 5 plans: 05-03, 06-01, 06-02, 06-03, 07-01 completed
+- Trend: v1.1 execution started; order-lifecycle kernel is in place and idempotent intent work is next
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -138,6 +137,9 @@ Recent decisions affecting current work:
 - [v1.1-roadmap]: Phase 10 (CFG+LOG+DB) groups all startup-path hardening — config validation gates DB init which gates service init; all three must land together.
 - [v1.1-roadmap]: Phase 11 (PERF) is sequenced after all correctness work; RECON-06 O(n) matcher is the reconciliation performance win already delivered in Phase 9, PERF covers the remaining preflight and index work.
 - [v1.1-roadmap]: Phase 12 (STRUCT+TOOL) is strictly last per STRUCT-01; no structural refactor lands before Tier 0 is verified complete.
+- [07-01]: `PaperOrder.status` is now a closed `OrderLifecycleState` enum projected from append-only `order_events`.
+- [07-01]: `apply_order_transition(order_id, event)` is the only legal order-lifecycle mutation boundary; illegal transitions persist rejected audit events before raising.
+- [07-01]: Paper execution and reconciliation now share one local lifecycle vocabulary and cannot mutate order state directly.
 
 ### Pending Todos
 
@@ -151,6 +153,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-04-18T00:00:00Z
-Stopped at: v1.1 roadmap created — ready to plan Phase 7 (Correctness Kernel)
+Last session: 2026-04-19T11:15:45Z
+Stopped at: In progress — 07-01 complete, start 07-02 (Idempotent Intents)
 Resume file: None

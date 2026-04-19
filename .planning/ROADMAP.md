@@ -170,7 +170,12 @@ Plans:
   3. Given identical `(strategy_id, session_date, symbol, side, intent_hash)` inputs, `client_order_id` produces the same byte-for-byte value across separate processes and restarts; a DB `UNIQUE` constraint enforces one row per intent.
   4. Retry of an existing intent returns the persisted row rather than inserting a duplicate; broker-response matching resolves by `client_order_id` first.
   5. Kill-switch state is persisted in the DB, checked before every broker submission, survives a worker restart without manual reset, and when tripped allows reconciliation and logging to continue while blocking only new submissions.
-**Plans:** TBD
+**Plans:** 1/3 plans complete
+
+Plans:
+- [x] 07-01: Build the closed order-lifecycle kernel
+- [ ] 07-02: Turn the paper-submission path into a deterministic idempotent intent pipeline
+- [ ] 07-03: Add the restart-safe global kill switch
 
 ### Phase 8: Concurrency Guard
 **Goal:** At most one active run per `(strategy_id, session_date)` can execute side effects; the lock is acquired before any broker call or state-affecting write, released on all exit paths including crash, and stale runs are detectable and cleanly handled.
@@ -241,7 +246,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 4. Risk and Portfolio | 2/2 | Complete | 2026-03-14 |
 | 5. Paper Execution | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | 3/3 | Complete | 2026-03-15 |
-| 7. Correctness Kernel | 0/TBD | Not started | - |
+| 7. Correctness Kernel | 1/3 | In progress | - |
 | 8. Concurrency Guard | 0/TBD | Not started | - |
 | 9. Reconciliation Rewrite | 0/TBD | Not started | - |
 | 10. Startup Hardening | 0/TBD | Not started | - |
