@@ -161,10 +161,10 @@ def recover_inflight_paper_orders(
 
         for local_order in local_orders:
             broker_order = None
-            if local_order.broker_order_id:
-                broker_order = broker_by_broker_id.get(local_order.broker_order_id)
-            if broker_order is None:
+            if local_order.client_order_id:
                 broker_order = broker_by_client_id.get(local_order.client_order_id)
+            if broker_order is None and local_order.broker_order_id:
+                broker_order = broker_by_broker_id.get(local_order.broker_order_id)
             if broker_order is None:
                 continue
 
@@ -374,9 +374,9 @@ def _build_findings(
     matched_order_ids: set[uuid.UUID] = set()
 
     for broker_order in broker_state.orders:
-        local_order = local_orders_by_broker_id.get(broker_order.broker_order_id)
+        local_order = local_orders_by_client_id.get(broker_order.client_order_id)
         if local_order is None:
-            local_order = local_orders_by_client_id.get(broker_order.client_order_id)
+            local_order = local_orders_by_broker_id.get(broker_order.broker_order_id)
         if local_order is None:
             findings.append(
                 ReconciliationFinding(

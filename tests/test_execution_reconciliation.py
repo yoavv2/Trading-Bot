@@ -38,6 +38,7 @@ from trading_platform.services.alpaca import (
     BrokerPositionSnapshot,
 )
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
+from trading_platform.services.order_identity import build_intent_hash
 from trading_platform.services.paper_execution import build_client_order_id
 from trading_platform.services.reconciliation import reconcile_paper_execution
 from trading_platform.services.bootstrap import ensure_strategy_record
@@ -206,9 +207,11 @@ def _seed_existing_execution_state(
 
         client_order_id = build_client_order_id(
             prefix=settings.execution.client_order_id_prefix,
+            strategy_id="trend_following_daily",
             session_date=session_date,
             symbol="AAPL",
-            risk_event_id=risk_event.id,
+            side=OrderSide.BUY,
+            quantity=Decimal("10.000000"),
         )
         paper_order = PaperOrder(
             strategy_run_id=execution_run.id,
@@ -219,6 +222,14 @@ def _seed_existing_execution_state(
             quantity=Decimal("10.000000"),
             order_type="market",
             time_in_force="day",
+            intent_hash=build_intent_hash(
+                strategy_id="trend_following_daily",
+                session_date=session_date,
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
+            ),
+            intent_version=1,
             client_order_id=client_order_id,
             broker_order_id=broker_order_id,
             status=status,
@@ -487,6 +498,132 @@ def test_reconciliation_blocks_after_repeated_submission_failures(
     assert {finding.event_type for finding in report.findings} >= {
         "submission_failure_threshold_exceeded",
     }
+
+
+def test_reconciliation_prefers_client_order_id_when_version_chain_exists(
+    migrated_reconciliation_db: str,
+) -> None:
+    predecessor_order_id, _predecessor_client_order_id = _seed_existing_execution_state(
+        status="canceled",
+        broker_order_id="shared-broker-id",
+        broker_status="canceled",
+    )
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        predecessor = session.get(PaperOrder, predecessor_order_id)
+        assert predecessor is not None
+        predecessor_run = session.get(StrategyRun, predecessor.strategy_run_id)
+        assert predecessor_run is not None
+
+        followup_risk_run = StrategyRun(
+            strategy_id=predecessor_run.strategy_id,
+            run_type=StrategyRunType.RISK_EVALUATION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="test_followup",
+            parameters_snapshot={"as_of_session": "2024-01-05"},
+            result_summary={"stage": "completed", "as_of_session": "2024-01-05"},
+        )
+        followup_execution_run = StrategyRun(
+            strategy_id=predecessor_run.strategy_id,
+            run_type=StrategyRunType.PAPER_EXECUTION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="test_followup",
+            parameters_snapshot={"as_of_session": "2024-01-05"},
+            result_summary={"stage": "completed", "as_of_session": "2024-01-05"},
+        )
+        session.add_all([followup_risk_run, followup_execution_run])
+        session.flush()
+
+        followup_risk_event = RiskEvent(
+            strategy_run_id=followup_risk_run.id,
+            symbol_id=predecessor.symbol_id,
+            session_date=date(2024, 1, 5),
+            signal_direction="long",
+            signal_reason="scaled_entry",
+            outcome="approved",
+            decision_code="approved",
+            decision_reason="Approved for paper execution.",
+            reference_price=Decimal("120.000000"),
+            proposed_quantity=Decimal("12.000000"),
+            proposed_notional=Decimal("1440.000000"),
+            risk_metadata={"remaining_cash": 98560.0},
+        )
+        session.add(followup_risk_event)
+        session.flush()
+
+        successor_client_order_id = build_client_order_id(
+            prefix=settings.execution.client_order_id_prefix,
+            strategy_id="trend_following_daily",
+            session_date=date(2024, 1, 5),
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("12.000000"),
+        )
+        session.add(
+            PaperOrder(
+                strategy_run_id=followup_execution_run.id,
+                source_risk_event_id=followup_risk_event.id,
+                symbol_id=predecessor.symbol_id,
+                intended_session_date=date(2024, 1, 5),
+                side="buy",
+                quantity=Decimal("12.000000"),
+                order_type="market",
+                time_in_force="day",
+                intent_hash=build_intent_hash(
+                    strategy_id="trend_following_daily",
+                    session_date=date(2024, 1, 5),
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("12.000000"),
+                ),
+                intent_version=2,
+                supersedes_paper_order_id=predecessor.id,
+                client_order_id=successor_client_order_id,
+                broker_order_id=None,
+                status="submitted",
+                broker_status="new",
+                submitted_at=datetime(2024, 1, 5, 14, 45, tzinfo=UTC),
+                broker_payload={},
+            )
+        )
+
+    report = reconcile_paper_execution(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[
+                BrokerOrderSnapshot(
+                    broker_order_id="shared-broker-id",
+                    client_order_id=successor_client_order_id,
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("12.000000"),
+                    status=ExecutionOrderStatus.PENDING,
+                    broker_status="new",
+                    submitted_at=datetime(2024, 1, 5, 14, 45, tzinfo=UTC),
+                    filled_at=None,
+                    canceled_at=None,
+                    updated_at=datetime(2024, 1, 5, 14, 45, tzinfo=UTC),
+                    raw_payload={"id": "shared-broker-id", "status": "new"},
+                )
+            ],
+            fills=[],
+            positions=[],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("100000.000000"),
+                buying_power=Decimal("100000.000000"),
+                equity=Decimal("100000.000000"),
+                long_market_value=Decimal("0"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100000.000000"},
+            ),
+        ),
+    )
+
+    assert report.blocks_execution is False
+    assert "order_status_mismatch" not in {finding.event_type for finding in report.findings}
 
 
 def test_reconciliation_module_routes_lifecycle_through_order_state_machine() -> None:

@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
@@ -141,13 +142,15 @@ class OperatorReadService:
         resolved_filters = filters or OperatorReadFilters()
         run_type = _coerce_run_type(resolved_filters.run_type)
         status = _coerce_run_status(resolved_filters.status)
+        superseded_order = aliased(PaperOrder)
 
         with session_scope(self.settings) as session:
             stmt = (
-                select(PaperOrder, StrategyRun, Strategy, Symbol.ticker)
+                select(PaperOrder, StrategyRun, Strategy, Symbol.ticker, superseded_order.client_order_id)
                 .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
                 .join(Strategy, Strategy.id == StrategyRun.strategy_id)
                 .join(Symbol, Symbol.id == PaperOrder.symbol_id)
+                .outerjoin(superseded_order, superseded_order.id == PaperOrder.supersedes_paper_order_id)
                 .where(Strategy.strategy_id == resolved_filters.strategy_id)
             )
             if run_type is not None:
@@ -190,8 +193,18 @@ class OperatorReadService:
                 "sync_failure_count": paper_order.sync_failure_count,
                 "last_submission_error": paper_order.last_submission_error,
                 "last_sync_error": paper_order.last_sync_error,
+                "intent_context": {
+                    "intent_hash": paper_order.intent_hash,
+                    "intent_version": paper_order.intent_version,
+                    "supersedes_paper_order_id": (
+                        str(paper_order.supersedes_paper_order_id)
+                        if paper_order.supersedes_paper_order_id is not None
+                        else None
+                    ),
+                    "supersedes_client_order_id": supersedes_client_order_id,
+                },
             }
-            for paper_order, strategy_run, strategy, ticker in rows
+            for paper_order, strategy_run, strategy, ticker, supersedes_client_order_id in rows
         ]
         return _apply_window_and_limit(items, resolved_filters, key_fn=_session_date_from_payload)
 
