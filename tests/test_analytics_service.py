@@ -44,6 +44,7 @@ from trading_platform.services.analytics import (
 from trading_platform.services.backtesting import run_backtest
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import OrderSide
+from trading_platform.services.order_identity import build_intent_hash
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.services.paper_execution import build_client_order_id
 from trading_platform.strategies.registry import build_default_registry
@@ -309,10 +310,20 @@ def _seed_paper_operational_state(session_date: date = date(2024, 1, 5)) -> dict
             time_in_force="day",
             client_order_id=build_client_order_id(
                 prefix=settings.execution.client_order_id_prefix,
+                strategy_id="trend_following_daily",
                 session_date=session_date,
                 symbol="AAPL",
-                risk_event_id=aapl_risk_event.id,
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
             ),
+            intent_hash=build_intent_hash(
+                strategy_id="trend_following_daily",
+                session_date=session_date,
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
+            ),
+            intent_version=1,
             broker_order_id="paper-aapl-001",
             status="filled",
             broker_status="filled",
@@ -331,10 +342,20 @@ def _seed_paper_operational_state(session_date: date = date(2024, 1, 5)) -> dict
             time_in_force="day",
             client_order_id=build_client_order_id(
                 prefix=settings.execution.client_order_id_prefix,
+                strategy_id="trend_following_daily",
                 session_date=session_date,
                 symbol="MSFT",
-                risk_event_id=msft_risk_event.id,
+                side=OrderSide.BUY,
+                quantity=Decimal("5.000000"),
             ),
+            intent_hash=build_intent_hash(
+                strategy_id="trend_following_daily",
+                session_date=session_date,
+                symbol="MSFT",
+                side=OrderSide.BUY,
+                quantity=Decimal("5.000000"),
+            ),
+            intent_version=1,
             broker_order_id="paper-msft-001",
             status="submitted",
             broker_status="new",

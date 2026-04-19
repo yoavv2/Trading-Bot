@@ -52,6 +52,8 @@ from trading_platform.services.execution import (
     OrderSubmissionResult,
 )
 from trading_platform.services.operator_controls import OperatorControlService
+from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
+from trading_platform.services.order_identity import build_intent_hash
 from trading_platform.services.paper_execution import (
     build_client_order_id,
     resolve_submission_session,
@@ -60,6 +62,8 @@ from trading_platform.services.paper_execution import (
     sync_paper_state,
 )
 from trading_platform.strategies.registry import build_default_registry
+
+_AUTO_BROKER_ORDER_ID = object()
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -306,7 +310,7 @@ def _seed_existing_paper_order(
     symbol: str,
     session_date: date,
     status: str = "submitted",
-    broker_order_id: str | None = None,
+    broker_order_id: str | None | object = _AUTO_BROKER_ORDER_ID,
     broker_status: str | None = "new",
     submission_attempt_count: int = 1,
     last_submission_error: str | None = None,
@@ -315,15 +319,21 @@ def _seed_existing_paper_order(
     registry = build_default_registry(settings)
     strategy = registry.resolve("trend_following_daily")
 
-    resolved_broker_order_id = (
-        broker_order_id
-        if broker_order_id is not None or status == "pending_submission"
-        else f"existing-{symbol.lower()}-001"
-    )
-
     with session_scope(settings) as session:
         strategy_record = ensure_strategy_record(session, strategy.metadata)
         symbol_row = session.execute(select(Symbol).where(Symbol.ticker == symbol)).scalar_one()
+        risk_event = session.get(RiskEvent, risk_event_id)
+        if risk_event is None:
+            raise LookupError(f"Missing risk_event '{risk_event_id}'.")
+        quantity = risk_event.proposed_quantity
+        if quantity is None:
+            raise ValueError(f"Risk event '{risk_event_id}' does not have a proposed quantity.")
+
+        if broker_order_id is _AUTO_BROKER_ORDER_ID:
+            resolved_broker_order_id = None if status == "pending_submission" else f"existing-{symbol.lower()}-001"
+        else:
+            resolved_broker_order_id = broker_order_id
+
         execution_run = StrategyRun(
             strategy_id=strategy_record.id,
             run_type=StrategyRunType.PAPER_EXECUTION,
@@ -343,15 +353,25 @@ def _seed_existing_paper_order(
                 symbol_id=symbol_row.id,
                 intended_session_date=session_date,
                 side="buy",
-                quantity=Decimal("10.000000"),
+                quantity=quantity,
                 order_type="market",
                 time_in_force="day",
                 client_order_id=build_client_order_id(
                     prefix=load_settings().execution.client_order_id_prefix,
+                    strategy_id=strategy.metadata.strategy_id,
                     session_date=session_date,
                     symbol=symbol,
-                    risk_event_id=risk_event_id,
+                    side=OrderSide.BUY,
+                    quantity=quantity,
                 ),
+                intent_hash=build_intent_hash(
+                    strategy_id=strategy.metadata.strategy_id,
+                    session_date=session_date,
+                    symbol=symbol,
+                    side=OrderSide.BUY,
+                    quantity=quantity,
+                ),
+                intent_version=1,
                 broker_order_id=resolved_broker_order_id,
                 status=status,
                 broker_status=broker_status,
@@ -370,6 +390,51 @@ def _seed_existing_paper_order(
         )
         session.flush()
         return execution_run.id
+
+
+def _seed_followup_risk_event(
+    *,
+    symbol: str,
+    session_date: date,
+    quantity: str,
+    signal_reason: str = "trend_entry",
+) -> tuple[uuid.UUID, uuid.UUID]:
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        symbol_row = session.execute(select(Symbol).where(Symbol.ticker == symbol)).scalar_one()
+        risk_run = StrategyRun(
+            strategy_id=strategy_record.id,
+            run_type=StrategyRunType.RISK_EVALUATION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="followup_risk_seed",
+            parameters_snapshot={"as_of_session": session_date.isoformat()},
+            result_summary={"stage": "completed", "as_of_session": session_date.isoformat()},
+            completed_at=datetime(2024, 1, 5, 16, 0, tzinfo=UTC),
+        )
+        session.add(risk_run)
+        session.flush()
+
+        risk_event = RiskEvent(
+            strategy_run_id=risk_run.id,
+            symbol_id=symbol_row.id,
+            session_date=session_date,
+            signal_direction="long",
+            signal_reason=signal_reason,
+            outcome="approved",
+            decision_code="approved",
+            decision_reason="Approved for paper execution.",
+            reference_price=Decimal("120.000000"),
+            proposed_quantity=Decimal(quantity),
+            proposed_notional=Decimal(quantity) * Decimal("120.000000"),
+            risk_metadata={"remaining_cash": 98800.0},
+        )
+        session.add(risk_event)
+        session.flush()
+        return risk_run.id, risk_event.id
 
 
 def _seed_open_position(*, symbol: str, quantity: str) -> None:
@@ -500,6 +565,131 @@ def test_run_paper_session_submits_only_missing_orders(
     ]
 
 
+def test_run_paper_order_submission_retries_same_intent_across_followup_risk_runs(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+        status="submission_failed",
+        broker_order_id=None,
+        broker_status=None,
+        submission_attempt_count=1,
+        last_submission_error="timed out",
+    )
+    followup_risk_run_id, _followup_event_id = _seed_followup_risk_event(
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+        quantity="10.000000",
+        signal_reason="rerun_retry",
+    )
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+
+    with session_scope(settings) as session:
+        existing_order = session.execute(
+            select(PaperOrder).where(PaperOrder.source_risk_event_id == approved_event_ids["AAPL"])
+        ).scalar_one()
+        existing_order_id = existing_order.id
+        existing_client_order_id = existing_order.client_order_id
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        risk_run_id=str(followup_risk_run_id),
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="followup_retry",
+    )
+
+    assert report.result_summary["submitted_count"] == 1
+    assert report.result_summary["existing_count"] == 0
+    assert report.result_summary["reused_count"] == 1
+    assert report.result_summary["versioned_count"] == 0
+    assert len(execution_service.submitted_intents) == 1
+    assert execution_service.submitted_intents[0].client_order_id == existing_client_order_id
+    assert execution_service.submitted_intents[0].intent_version == 1
+    assert report.result_summary["reused_orders"][0]["intent_decision"]["action"] == "retry_existing"
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(select(PaperOrder).order_by(PaperOrder.created_at.asc())).scalars().all()
+
+    assert len(paper_orders) == 1
+    assert paper_orders[0].id == existing_order_id
+    assert paper_orders[0].client_order_id == existing_client_order_id
+    assert paper_orders[0].source_risk_event_id == approved_event_ids["AAPL"]
+
+
+def test_run_paper_order_submission_versions_material_change_after_broker_touch(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    followup_risk_run_id, followup_event_id = _seed_followup_risk_event(
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+        quantity="12.000000",
+        signal_reason="scaled_entry",
+    )
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        risk_run_id=str(followup_risk_run_id),
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="followup_version",
+    )
+
+    assert report.result_summary["submitted_count"] == 1
+    assert report.result_summary["reused_count"] == 0
+    assert report.result_summary["versioned_count"] == 1
+    assert len(execution_service.submitted_intents) == 1
+    assert execution_service.submitted_intents[0].intent_version == 2
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(
+            select(PaperOrder).order_by(PaperOrder.intent_version.asc(), PaperOrder.created_at.asc())
+        ).scalars().all()
+
+    assert len(paper_orders) == 2
+    first_order, second_order = paper_orders
+    assert first_order.intent_version == 1
+    assert second_order.intent_version == 2
+    assert second_order.supersedes_paper_order_id == first_order.id
+    assert second_order.source_risk_event_id == followup_event_id
+    assert second_order.client_order_id != first_order.client_order_id
+    assert report.result_summary["versioned_orders"][0]["intent_decision"]["action"] == "create_new_version"
+
+    service = OperatorReadService(settings)
+    order_reads = service.list_paper_orders(
+        OperatorReadFilters(
+            strategy_id="trend_following_daily",
+            run_type="paper_execution",
+            status="succeeded",
+            session_start=date(2024, 1, 5),
+            session_end=date(2024, 1, 5),
+            limit=10,
+        )
+    )
+    versioned_payload = next(
+        item for item in order_reads if item["intent_context"]["intent_version"] == 2
+    )
+
+    assert versioned_payload["intent_context"]["supersedes_paper_order_id"] == str(first_order.id)
+    assert versioned_payload["intent_context"]["supersedes_client_order_id"] == first_order.client_order_id
+
+
 def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_candidates(
     migrated_paper_db: str,
 ) -> None:
@@ -527,9 +717,11 @@ def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_ca
                     broker_order_id="recovered-aapl-001",
                     client_order_id=build_client_order_id(
                         prefix=settings.execution.client_order_id_prefix,
+                        strategy_id="trend_following_daily",
                         session_date=date(2024, 1, 5),
                         symbol="AAPL",
-                        risk_event_id=approved_event_ids["AAPL"],
+                        side=OrderSide.BUY,
+                        quantity=Decimal("10.000000"),
                     ),
                     symbol="AAPL",
                     side=OrderSide.BUY,
@@ -706,9 +898,11 @@ def test_sync_paper_state_persists_fills_positions_and_account_snapshot(
                 broker_order_id="existing-aapl-001",
                 client_order_id=build_client_order_id(
                     prefix=settings.execution.client_order_id_prefix,
+                    strategy_id="trend_following_daily",
                     session_date=date(2024, 1, 5),
                     symbol="AAPL",
-                    risk_event_id=approved_event_ids["AAPL"],
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
                 ),
                 symbol="AAPL",
                 side=OrderSide.BUY,
@@ -798,9 +992,11 @@ def test_sync_paper_state_advances_partial_lifecycle_without_duplicate_fills(
     settings = load_settings()
     client_order_id = build_client_order_id(
         prefix=settings.execution.client_order_id_prefix,
+        strategy_id="trend_following_daily",
         session_date=date(2024, 1, 5),
         symbol="AAPL",
-        risk_event_id=approved_event_ids["AAPL"],
+        side=OrderSide.BUY,
+        quantity=Decimal("10.000000"),
     )
 
     partial_report = sync_paper_state(

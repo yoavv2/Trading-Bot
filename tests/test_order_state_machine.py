@@ -32,6 +32,7 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.order_identity import build_intent_hash
 from trading_platform.services.order_state_machine import (
     IllegalOrderTransition,
     OrderTransitionRequest,
@@ -173,6 +174,14 @@ def _seed_paper_order(
             quantity=Decimal("10.000000"),
             order_type="market",
             time_in_force="day",
+            intent_hash=build_intent_hash(
+                strategy_id=strategy.metadata.strategy_id,
+                session_date=date(2024, 1, 5),
+                symbol="AAPL",
+                side="buy",
+                quantity=Decimal("10.000000"),
+            ),
+            intent_version=1,
             client_order_id=f"test-aapl-{uuid.uuid4().hex[:8]}",
             broker_order_id=None,
             status=status,

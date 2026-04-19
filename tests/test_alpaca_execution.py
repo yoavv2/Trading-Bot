@@ -293,6 +293,44 @@ def _seed_approved_risk_batch() -> tuple[uuid.UUID, uuid.UUID]:
         return risk_run.id, approved_event.id
 
 
+def _seed_followup_risk_event(*, quantity: str) -> tuple[uuid.UUID, uuid.UUID]:
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        aapl = session.execute(select(Symbol).where(Symbol.ticker == "AAPL")).scalar_one()
+        risk_run = StrategyRun(
+            strategy_id=strategy_record.id,
+            run_type=StrategyRunType.RISK_EVALUATION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="followup_risk_seed",
+            parameters_snapshot={"as_of_session": "2024-01-05"},
+            result_summary={"stage": "completed", "as_of_session": "2024-01-05"},
+        )
+        session.add(risk_run)
+        session.flush()
+
+        approved_event = RiskEvent(
+            strategy_run_id=risk_run.id,
+            symbol_id=aapl.id,
+            session_date=date(2024, 1, 5),
+            signal_direction="long",
+            signal_reason="scaled_entry",
+            outcome="approved",
+            decision_code="approved",
+            decision_reason="Approved for paper execution.",
+            reference_price=Decimal("120.000000"),
+            proposed_quantity=Decimal(quantity),
+            proposed_notional=Decimal(quantity) * Decimal("120.000000"),
+            risk_metadata={"remaining_cash": 98800.0},
+        )
+        session.add(approved_event)
+        session.flush()
+        return risk_run.id, approved_event.id
+
+
 def test_run_paper_order_submission_persists_idempotent_paper_orders(
     migrated_execution_db: str,
 ) -> None:
@@ -341,3 +379,74 @@ def test_run_paper_order_submission_persists_idempotent_paper_orders(
     assert second_report.result_summary["submitted_count"] == 0
     assert second_report.result_summary["existing_count"] == 1
     assert second_execution_service.submitted_intents == []
+
+
+def test_run_paper_order_submission_versions_material_change_in_alpaca_flow(
+    migrated_execution_db: str,
+) -> None:
+    _risk_run_id, _approved_event_id = _seed_approved_risk_batch()
+    settings = load_settings()
+
+    class UniqueExecutionService(FakeExecutionService):
+        def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+            self.submitted_intents.append(intent)
+            broker_order_id = f"alpaca-{intent.symbol.lower()}-{intent.intent_version:03d}"
+            return OrderSubmissionResult(
+                client_order_id=intent.client_order_id,
+                broker_order_id=broker_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=intent.quantity,
+                order_type=intent.order_type,
+                time_in_force=intent.time_in_force,
+                status=ExecutionOrderStatus.PENDING,
+                broker_status="new",
+                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                raw_payload={
+                    "id": broker_order_id,
+                    "client_order_id": intent.client_order_id,
+                    "symbol": intent.symbol,
+                    "side": intent.side.value,
+                    "qty": str(intent.quantity),
+                    "type": intent.order_type.value,
+                    "time_in_force": intent.time_in_force.value,
+                    "status": "new",
+                    "submitted_at": "2024-01-05T14:35:00Z",
+                },
+            )
+
+    initial_execution_service = UniqueExecutionService()
+    initial_report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        trigger_source="initial_submit",
+        settings=settings,
+        execution_service=initial_execution_service,
+    )
+    followup_risk_run_id, followup_event_id = _seed_followup_risk_event(quantity="12.000000")
+
+    versioned_execution_service = UniqueExecutionService()
+    versioned_report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        risk_run_id=str(followup_risk_run_id),
+        trigger_source="version_submit",
+        settings=settings,
+        execution_service=versioned_execution_service,
+    )
+
+    assert initial_report.result_summary["submitted_count"] == 1
+    assert versioned_report.result_summary["submitted_count"] == 1
+    assert versioned_report.result_summary["versioned_count"] == 1
+    assert len(versioned_execution_service.submitted_intents) == 1
+    assert versioned_execution_service.submitted_intents[0].intent_version == 2
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(
+            select(PaperOrder).order_by(PaperOrder.intent_version.asc(), PaperOrder.created_at.asc())
+        ).scalars().all()
+
+    assert len(paper_orders) == 2
+    assert paper_orders[1].intent_version == 2
+    assert paper_orders[1].supersedes_paper_order_id == paper_orders[0].id
+    assert paper_orders[1].source_risk_event_id == followup_event_id

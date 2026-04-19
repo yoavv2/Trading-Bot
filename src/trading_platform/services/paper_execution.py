@@ -41,6 +41,11 @@ from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.operator_controls import load_strategy_control_state
+from trading_platform.services.order_identity import (
+    DerivedOrderIdentity,
+    build_client_order_id as _build_client_order_id,
+    derive_order_identity,
+)
 from trading_platform.services.order_state_machine import (
     OrderTransitionRequest,
     apply_order_transition,
@@ -119,8 +124,19 @@ class PaperSessionRunReport:
 class PaperSessionPlan:
     source_risk_run_id: uuid.UUID
     candidates: tuple[PaperExecutionCandidate, ...]
-    existing_orders: tuple[PaperOrder, ...]
+    existing_orders: tuple[dict[str, Any], ...]
     missing_candidates: tuple[PaperExecutionCandidate, ...]
+
+
+@dataclass(frozen=True)
+class PaperIntentDecision:
+    action: str
+    identity: DerivedOrderIdentity
+    intent_version: int
+    existing_order_id: uuid.UUID | None
+    supersedes_paper_order_id: uuid.UUID | None
+    supersedes_client_order_id: str | None
+    summary: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -166,12 +182,20 @@ def resolve_submission_session(
 def build_client_order_id(
     *,
     prefix: str,
+    strategy_id: str,
     session_date: date,
     symbol: str,
-    risk_event_id: uuid.UUID,
+    side: OrderSide | str,
+    quantity: Decimal,
 ) -> str:
-    normalized_symbol = "".join(char for char in symbol.lower() if char.isalnum())[:8]
-    return f"{prefix}-{session_date.strftime('%Y%m%d')}-{normalized_symbol}-{risk_event_id.hex[:12]}"
+    return _build_client_order_id(
+        prefix=prefix,
+        strategy_id=strategy_id,
+        session_date=session_date,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+    )
 
 
 def run_paper_order_submission(
@@ -243,6 +267,7 @@ def run_paper_order_submission(
     owns_execution_service = execution_service is None
     broker_execution = execution_service or AlpacaExecutionService(resolved_settings.broker.alpaca)
     source_risk_run: StrategyRun | None = None
+    strategy_row_id: uuid.UUID | None = None
 
     try:
         with session_scope(resolved_settings) as session:
@@ -253,10 +278,13 @@ def run_paper_order_submission(
                 as_of_session=as_of_session,
                 requested_risk_run_id=risk_run_id,
             )
+            strategy_row_id = source_risk_run.strategy_id
             candidates = _load_submission_candidates(session, source_risk_run.id)
 
         submitted_orders: list[dict[str, Any]] = []
         existing_orders: list[dict[str, Any]] = []
+        reused_orders: list[dict[str, Any]] = []
+        versioned_orders: list[dict[str, Any]] = []
         safety_threshold = resolved_settings.execution.safety.repeated_failure_threshold
 
         for candidate in candidates:
@@ -264,23 +292,45 @@ def run_paper_order_submission(
             time_in_force = resolved_settings.execution.default_time_in_force
 
             with session_scope(resolved_settings) as session:
-                existing_order = session.execute(
-                    select(PaperOrder).where(PaperOrder.source_risk_event_id == candidate.risk_event_id)
-                ).scalar_one_or_none()
-                if existing_order is not None and not _is_resubmittable_order(
-                    existing_order,
+                if strategy_row_id is None:
+                    raise LookupError("Missing strategy row for paper execution.")
+
+                intent_decision = _resolve_paper_intent_decision(
+                    session,
+                    strategy_row_id=strategy_row_id,
+                    strategy_id=strategy_id,
+                    prefix=resolved_settings.execution.client_order_id_prefix,
+                    candidate=candidate,
                     failure_threshold=safety_threshold,
-                ):
-                    existing_orders.append(_paper_order_payload(existing_order))
+                )
+
+                if intent_decision.action == "reuse_existing":
+                    existing_order = session.get(PaperOrder, intent_decision.existing_order_id)
+                    if existing_order is None:
+                        raise LookupError(
+                            f"Missing reusable paper_order '{intent_decision.existing_order_id}'."
+                        )
+                    _record_intent_decision_event(
+                        session,
+                        strategy_run_id=run_id,
+                        paper_order_id=existing_order.id,
+                        event_type="paper_order_reused",
+                        message=(
+                            f"Reused existing intent '{existing_order.client_order_id}' for identical "
+                            "material order inputs; no new submission was attempted."
+                        ),
+                        details=intent_decision.summary,
+                    )
+                    payload = _paper_order_payload(
+                        existing_order,
+                        intent_decision=intent_decision.summary,
+                        supersedes_client_order_id=intent_decision.supersedes_client_order_id,
+                    )
+                    existing_orders.append(payload)
+                    reused_orders.append(payload)
                     continue
 
-                if existing_order is None:
-                    client_order_id = build_client_order_id(
-                        prefix=resolved_settings.execution.client_order_id_prefix,
-                        session_date=candidate.session_date,
-                        symbol=candidate.symbol,
-                        risk_event_id=candidate.risk_event_id,
-                    )
+                if intent_decision.existing_order_id is None:
                     paper_order = PaperOrder(
                         strategy_run_id=run_id,
                         source_risk_event_id=candidate.risk_event_id,
@@ -290,7 +340,10 @@ def run_paper_order_submission(
                         quantity=candidate.quantity,
                         order_type=order_type,
                         time_in_force=time_in_force,
-                        client_order_id=client_order_id,
+                        intent_hash=intent_decision.identity.intent_hash,
+                        intent_version=intent_decision.intent_version,
+                        supersedes_paper_order_id=intent_decision.supersedes_paper_order_id,
+                        client_order_id=intent_decision.identity.client_order_id,
                         status=OrderLifecycleState.PENDING_SUBMISSION,
                         broker_payload={},
                     )
@@ -299,8 +352,11 @@ def run_paper_order_submission(
                     pending_order = paper_order
                     transition_event_type = OrderTransitionEventType.INTENT_REGISTERED
                 else:
-                    pending_order = existing_order
-                    client_order_id = existing_order.client_order_id
+                    pending_order = session.get(PaperOrder, intent_decision.existing_order_id)
+                    if pending_order is None:
+                        raise LookupError(
+                            f"Missing retryable paper_order '{intent_decision.existing_order_id}'."
+                        )
                     transition_event_type = OrderTransitionEventType.RETRY_REQUESTED
 
                 pending_order.strategy_run_id = run_id
@@ -312,6 +368,7 @@ def run_paper_order_submission(
                         details={
                             "trigger_source": trigger_source,
                             "source_risk_event_id": str(candidate.risk_event_id),
+                            "intent_decision": intent_decision.summary,
                         },
                     ),
                     session=session,
@@ -323,13 +380,28 @@ def run_paper_order_submission(
                 session.flush()
                 pending_order_id = pending_order.id
 
+                if intent_decision.action == "create_new_version":
+                    _record_intent_decision_event(
+                        session,
+                        strategy_run_id=run_id,
+                        paper_order_id=pending_order.id,
+                        event_type="paper_order_versioned",
+                        message=(
+                            f"Created intent version {pending_order.intent_version} after superseding "
+                            f"broker-touched order '{intent_decision.supersedes_client_order_id}'."
+                        ),
+                        details=intent_decision.summary,
+                    )
+
             intent = OrderIntent(
                 strategy_id=strategy_id,
                 symbol=candidate.symbol,
                 side=candidate.side,
                 quantity=candidate.quantity,
                 intended_session=candidate.session_date,
-                client_order_id=client_order_id,
+                client_order_id=pending_order.client_order_id,
+                intent_hash=pending_order.intent_hash,
+                intent_version=pending_order.intent_version,
                 reference_price=candidate.reference_price,
                 metadata={
                     "signal_reason": candidate.signal_reason,
@@ -391,7 +463,16 @@ def run_paper_order_submission(
                 )
                 session.flush()
                 session.refresh(persisted_order)
-                submitted_orders.append(_paper_order_payload(persisted_order))
+                payload = _paper_order_payload(
+                    persisted_order,
+                    intent_decision=intent_decision.summary,
+                    supersedes_client_order_id=intent_decision.supersedes_client_order_id,
+                )
+                submitted_orders.append(payload)
+                if intent_decision.action == "retry_existing":
+                    reused_orders.append(payload)
+                if intent_decision.action == "create_new_version":
+                    versioned_orders.append(payload)
 
         summary = {
             "stage": "completed",
@@ -402,8 +483,12 @@ def run_paper_order_submission(
             "approved_candidate_count": len(candidates),
             "submitted_count": len(submitted_orders),
             "existing_count": len(existing_orders),
+            "reused_count": len(reused_orders),
+            "versioned_count": len(versioned_orders),
             "submitted_orders": submitted_orders,
             "existing_orders": existing_orders,
+            "reused_orders": reused_orders,
+            "versioned_orders": versioned_orders,
             "broker_provider": resolved_settings.broker.provider,
             "execution_defaults": resolved_settings.execution.model_dump(mode="json"),
         }
@@ -487,6 +572,7 @@ def run_paper_session(
             as_of_session=as_of_session,
             requested_risk_run_id=risk_run_id,
             failure_threshold=resolved_settings.execution.safety.repeated_failure_threshold,
+            client_order_id_prefix=resolved_settings.execution.client_order_id_prefix,
         )
 
     control_state = load_strategy_control_state(
@@ -494,7 +580,7 @@ def run_paper_session(
         settings=resolved_settings,
         registry=registry,
     )
-    existing_orders = [_paper_order_payload(order) for order in session_plan.existing_orders]
+    existing_orders = list(session_plan.existing_orders)
     base_summary = {
         "strategy_id": resolved_strategy_id,
         "as_of_session": as_of_session.isoformat(),
@@ -845,6 +931,7 @@ def _build_paper_session_plan(
     as_of_session: date,
     requested_risk_run_id: str | None,
     failure_threshold: int,
+    client_order_id_prefix: str,
 ) -> PaperSessionPlan:
     source_risk_run = _resolve_source_risk_run(
         session,
@@ -853,28 +940,136 @@ def _build_paper_session_plan(
         requested_risk_run_id=requested_risk_run_id,
     )
     candidates = _load_submission_candidates(session, source_risk_run.id)
-    existing_orders: list[PaperOrder] = []
+    existing_orders: list[dict[str, Any]] = []
+    missing_candidates: list[PaperExecutionCandidate] = []
 
-    if candidates:
-        candidate_ids = [candidate.risk_event_id for candidate in candidates]
-        existing_orders = session.execute(
-            select(PaperOrder)
-            .where(PaperOrder.source_risk_event_id.in_(candidate_ids))
-            .order_by(PaperOrder.client_order_id.asc())
-        ).scalars().all()
-
-    existing_ids = {
-        order.source_risk_event_id
-        for order in existing_orders
-        if not _is_resubmittable_order(order, failure_threshold=failure_threshold)
-    }
-    missing_candidates = [candidate for candidate in candidates if candidate.risk_event_id not in existing_ids]
+    for candidate in candidates:
+        intent_decision = _resolve_paper_intent_decision(
+            session,
+            strategy_row_id=source_risk_run.strategy_id,
+            strategy_id=strategy_id,
+            prefix=client_order_id_prefix,
+            candidate=candidate,
+            failure_threshold=failure_threshold,
+        )
+        if intent_decision.action == "reuse_existing":
+            existing_order = session.get(PaperOrder, intent_decision.existing_order_id)
+            if existing_order is None:
+                raise LookupError(f"Missing reusable paper_order '{intent_decision.existing_order_id}'.")
+            existing_orders.append(
+                _paper_order_payload(
+                    existing_order,
+                    intent_decision=intent_decision.summary,
+                    supersedes_client_order_id=intent_decision.supersedes_client_order_id,
+                )
+            )
+            continue
+        missing_candidates.append(candidate)
 
     return PaperSessionPlan(
         source_risk_run_id=source_risk_run.id,
         candidates=tuple(candidates),
         existing_orders=tuple(existing_orders),
         missing_candidates=tuple(missing_candidates),
+    )
+
+
+def _resolve_paper_intent_decision(
+    session,
+    *,
+    strategy_row_id: uuid.UUID,
+    strategy_id: str,
+    prefix: str,
+    candidate: PaperExecutionCandidate,
+    failure_threshold: int,
+) -> PaperIntentDecision:
+    identity = derive_order_identity(
+        prefix=prefix,
+        strategy_id=strategy_id,
+        session_date=candidate.session_date,
+        symbol=candidate.symbol,
+        side=candidate.side,
+        quantity=candidate.quantity,
+    )
+    existing_order = session.execute(
+        select(PaperOrder).where(PaperOrder.intent_hash == identity.intent_hash)
+    ).scalar_one_or_none()
+    if existing_order is not None:
+        action = (
+            "retry_existing"
+            if _is_resubmittable_order(existing_order, failure_threshold=failure_threshold)
+            else "reuse_existing"
+        )
+        return PaperIntentDecision(
+            action=action,
+            identity=identity,
+            intent_version=existing_order.intent_version,
+            existing_order_id=existing_order.id,
+            supersedes_paper_order_id=existing_order.supersedes_paper_order_id,
+            supersedes_client_order_id=(
+                existing_order.supersedes_paper_order.client_order_id
+                if existing_order.supersedes_paper_order is not None
+                else None
+            ),
+            summary={
+                "action": action,
+                "reason": "identical_material_intent",
+                "paper_order_id": str(existing_order.id),
+                "client_order_id": existing_order.client_order_id,
+                "intent_hash": existing_order.intent_hash,
+                "intent_version": existing_order.intent_version,
+                "source_risk_event_id": str(candidate.risk_event_id),
+                "persisted_source_risk_event_id": str(existing_order.source_risk_event_id),
+            },
+        )
+
+    predecessor = session.execute(
+        select(PaperOrder)
+        .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+        .where(
+            StrategyRun.strategy_id == strategy_row_id,
+            PaperOrder.symbol_id == candidate.symbol_id,
+            PaperOrder.intended_session_date == candidate.session_date,
+            PaperOrder.side == candidate.side.value,
+        )
+        .order_by(PaperOrder.intent_version.desc(), PaperOrder.created_at.desc())
+    ).scalars().first()
+    if predecessor is not None and _broker_has_touched_order(predecessor):
+        next_version = predecessor.intent_version + 1
+        return PaperIntentDecision(
+            action="create_new_version",
+            identity=identity,
+            intent_version=next_version,
+            existing_order_id=None,
+            supersedes_paper_order_id=predecessor.id,
+            supersedes_client_order_id=predecessor.client_order_id,
+            summary={
+                "action": "create_new_version",
+                "reason": "material_change_after_broker_touch",
+                "client_order_id": identity.client_order_id,
+                "intent_hash": identity.intent_hash,
+                "intent_version": next_version,
+                "source_risk_event_id": str(candidate.risk_event_id),
+                "supersedes_paper_order_id": str(predecessor.id),
+                "supersedes_client_order_id": predecessor.client_order_id,
+            },
+        )
+
+    return PaperIntentDecision(
+        action="create_new",
+        identity=identity,
+        intent_version=1,
+        existing_order_id=None,
+        supersedes_paper_order_id=None,
+        supersedes_client_order_id=None,
+        summary={
+            "action": "create_new",
+            "reason": "new_material_intent",
+            "client_order_id": identity.client_order_id,
+            "intent_hash": identity.intent_hash,
+            "intent_version": 1,
+            "source_risk_event_id": str(candidate.risk_event_id),
+        },
     )
 
 
@@ -952,8 +1147,13 @@ def _update_paper_execution_run(
         )
 
 
-def _paper_order_payload(paper_order: PaperOrder) -> dict[str, Any]:
-    return {
+def _paper_order_payload(
+    paper_order: PaperOrder,
+    *,
+    intent_decision: dict[str, Any] | None = None,
+    supersedes_client_order_id: str | None = None,
+) -> dict[str, Any]:
+    payload = {
         "paper_order_id": str(paper_order.id),
         "client_order_id": paper_order.client_order_id,
         "broker_order_id": paper_order.broker_order_id,
@@ -967,7 +1167,20 @@ def _paper_order_payload(paper_order: PaperOrder) -> dict[str, Any]:
         "last_submission_error": paper_order.last_submission_error,
         "last_sync_error": paper_order.last_sync_error,
         "submitted_at": paper_order.submitted_at.isoformat() if paper_order.submitted_at else None,
+        "intent_context": {
+            "intent_hash": paper_order.intent_hash,
+            "intent_version": paper_order.intent_version,
+            "supersedes_paper_order_id": (
+                str(paper_order.supersedes_paper_order_id)
+                if paper_order.supersedes_paper_order_id is not None
+                else None
+            ),
+            "supersedes_client_order_id": supersedes_client_order_id,
+        },
     }
+    if intent_decision is not None:
+        payload["intent_decision"] = intent_decision
+    return payload
 
 
 def _finalize_blocked_paper_execution_run(
@@ -1044,6 +1257,43 @@ def _is_resubmittable_order(paper_order: PaperOrder, *, failure_threshold: int) 
     )
 
 
+def _broker_has_touched_order(paper_order: PaperOrder) -> bool:
+    if paper_order.broker_order_id or paper_order.submitted_at or paper_order.last_broker_update_at:
+        return True
+    return paper_order.status in {
+        OrderLifecycleState.SUBMITTED,
+        OrderLifecycleState.PARTIALLY_FILLED,
+        OrderLifecycleState.FILLED,
+        OrderLifecycleState.CANCELED,
+        OrderLifecycleState.REJECTED,
+        OrderLifecycleState.EXPIRED,
+        OrderLifecycleState.UNKNOWN,
+    }
+
+
+def _record_intent_decision_event(
+    session,
+    *,
+    strategy_run_id: uuid.UUID,
+    paper_order_id: uuid.UUID,
+    event_type: str,
+    message: str,
+    details: dict[str, Any],
+) -> None:
+    session.add(
+        ExecutionEvent(
+            strategy_run_id=strategy_run_id,
+            paper_order_id=paper_order_id,
+            event_type=event_type,
+            severity="info",
+            blocks_execution=False,
+            event_at=datetime.now(UTC),
+            message=message,
+            details=details,
+        )
+    )
+
+
 def _broker_transition_event(status: ExecutionOrderStatus) -> OrderTransitionEventType:
     if status in {ExecutionOrderStatus.PENDING, ExecutionOrderStatus.ACCEPTED}:
         return OrderTransitionEventType.BROKER_ACKNOWLEDGED
@@ -1070,9 +1320,9 @@ def _sync_paper_orders(
 ) -> int:
     synced_count = 0
     for broker_order in broker_orders:
-        local_order = local_orders_by_broker_id.get(broker_order.broker_order_id)
+        local_order = local_orders_by_client_id.get(broker_order.client_order_id)
         if local_order is None:
-            local_order = local_orders_by_client_id.get(broker_order.client_order_id)
+            local_order = local_orders_by_broker_id.get(broker_order.broker_order_id)
         if local_order is None:
             continue
 
