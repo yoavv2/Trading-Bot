@@ -22,6 +22,7 @@ from trading_platform.db.models import (
     AccountSnapshot,
     DailyBar,
     ExecutionEvent,
+    KillSwitchState,
     MarketSession,
     OrderEvent,
     OrderTransitionEventType,
@@ -212,6 +213,62 @@ class ExplodingBrokerClient:
 
     def get_account(self) -> BrokerAccountSnapshot:
         raise AssertionError("paper session should not read broker account while strategy is disabled")
+
+
+class ExplodingExecutionService(ExecutionService):
+    def __init__(self) -> None:
+        self.submitted_intents: list[OrderIntent] = []
+
+    def describe(self) -> dict[str, object]:
+        return {"service": "execution", "status": "available", "provider": "exploding"}
+
+    def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        raise AssertionError(
+            "execution service should not submit orders while kill switch is tripped"
+        )
+
+
+class MidRunTrippingExecutionService(ExecutionService):
+    """Submits the first candidate successfully, then trips the kill switch."""
+
+    def __init__(self, *, settings) -> None:
+        self._settings = settings
+        self.submitted_intents: list[OrderIntent] = []
+        self._tripped = False
+
+    def describe(self) -> dict[str, object]:
+        return {"service": "execution", "status": "available", "provider": "mid_run_tripper"}
+
+    def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        if self._tripped:
+            raise AssertionError(
+                "execution service should not submit more orders after mid-run kill switch trip"
+            )
+        self.submitted_intents.append(intent)
+        OperatorControlService(settings=self._settings).trip_kill_switch(
+            reason="mid-run trip in test",
+            actor="pytest",
+            trigger_source="pytest",
+        )
+        self._tripped = True
+        return OrderSubmissionResult(
+            client_order_id=intent.client_order_id,
+            broker_order_id=f"mid-run-{intent.symbol.lower()}-001",
+            symbol=intent.symbol,
+            side=intent.side,
+            quantity=intent.quantity,
+            order_type=intent.order_type,
+            time_in_force=intent.time_in_force,
+            status=ExecutionOrderStatus.PENDING,
+            broker_status="new",
+            submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+            raw_payload={
+                "id": f"mid-run-{intent.symbol.lower()}-001",
+                "client_order_id": intent.client_order_id,
+                "symbol": intent.symbol,
+                "status": "new",
+            },
+        )
 
 
 def _seed_market_data(session_date: date) -> None:
@@ -1148,3 +1205,333 @@ def test_paper_execution_module_routes_lifecycle_through_order_state_machine() -
 
     assert "apply_order_transition" in source
     assert re.search(r"\b(?:pending_order|persisted_order|existing_order|local_order|paper_order)\.status\s*=(?!=)", source) is None
+
+
+def test_run_paper_order_submission_blocks_when_global_kill_switch_is_tripped(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    control_service = OperatorControlService(settings=settings)
+    control_service.trip_kill_switch(
+        reason="global halt before submission",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    execution_service = ExplodingExecutionService()
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="pytest",
+    )
+
+    assert report.status == StrategyRunStatus.FAILED.value
+    assert report.result_summary["action"] == "blocked_global_kill_switch"
+    assert report.result_summary["blocked_reason"] == "global_kill_switch_tripped"
+    assert report.result_summary["kill_switch"]["state"] == KillSwitchState.TRIPPED.value
+    assert report.result_summary["kill_switch"]["is_tripped"] is True
+
+    with session_scope(settings) as session:
+        blocked_run = session.get(StrategyRun, uuid.UUID(report.run_id))
+        blocked_events = session.execute(
+            select(ExecutionEvent)
+            .where(ExecutionEvent.strategy_run_id == uuid.UUID(report.run_id))
+        ).scalars().all()
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+
+    assert blocked_run is not None
+    assert blocked_run.run_type == StrategyRunType.PAPER_EXECUTION
+    assert blocked_run.status == StrategyRunStatus.FAILED
+    assert len(blocked_events) == 1
+    assert blocked_events[0].event_type == "paper_execution_blocked"
+    assert blocked_events[0].blocks_execution is True
+    assert blocked_events[0].details["blocked_reason"] == "global_kill_switch_tripped"
+    assert paper_orders == []
+
+
+def test_run_paper_order_submission_persists_block_until_manual_kill_switch_reset(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    control_service = OperatorControlService(settings=settings)
+    control_service.trip_kill_switch(
+        reason="global halt pending manual reset",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    first_attempt = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=ExplodingExecutionService(),
+        trigger_source="pytest",
+    )
+    second_attempt = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=ExplodingExecutionService(),
+        trigger_source="pytest",
+    )
+
+    assert first_attempt.result_summary["blocked_reason"] == "global_kill_switch_tripped"
+    assert second_attempt.result_summary["blocked_reason"] == "global_kill_switch_tripped"
+
+    control_service.reset_kill_switch(
+        reason="incident resolved",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    allowed_execution_service = FakeExecutionService()
+    resumed_report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=allowed_execution_service,
+        trigger_source="pytest",
+    )
+
+    assert resumed_report.status == StrategyRunStatus.SUCCEEDED.value
+    assert resumed_report.result_summary.get("blocked_reason") is None
+    assert resumed_report.result_summary["submitted_count"] == 2
+    assert {intent.symbol for intent in allowed_execution_service.submitted_intents} == {
+        "AAPL",
+        "MSFT",
+    }
+
+
+def test_run_paper_order_submission_halts_mid_run_when_kill_switch_trips_between_submissions(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = MidRunTrippingExecutionService(settings=settings)
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="pytest",
+    )
+
+    assert report.status == StrategyRunStatus.FAILED.value
+    assert report.result_summary["action"] == "blocked_mid_run_global_kill_switch"
+    assert report.result_summary["blocked_reason"] == "global_kill_switch_tripped"
+    assert report.result_summary["stage"] == "blocked_mid_run"
+    assert report.result_summary["submitted_count"] == 1
+    assert report.result_summary["skipped_by_kill_switch_count"] == 1
+    assert len(execution_service.submitted_intents) == 1
+
+    submitted_client_order_ids = {
+        entry["client_order_id"] for entry in report.result_summary["submitted_orders"]
+    }
+    skipped_symbols = {
+        entry["symbol"] for entry in report.result_summary["skipped_by_kill_switch"]
+    }
+    assert len(submitted_client_order_ids) == 1
+    assert skipped_symbols.issubset({"AAPL", "MSFT"})
+    assert len(skipped_symbols) == 1
+    submitted_symbol = execution_service.submitted_intents[0].symbol
+    assert submitted_symbol not in skipped_symbols
+    assert {submitted_symbol} | skipped_symbols == {"AAPL", "MSFT"}
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+        persisted_symbols = {order.symbol_ref.ticker for order in paper_orders}
+        blocked_events = session.execute(
+            select(ExecutionEvent)
+            .where(ExecutionEvent.strategy_run_id == uuid.UUID(report.run_id))
+            .where(ExecutionEvent.event_type == "paper_execution_blocked")
+        ).scalars().all()
+        blocked_event_details = [dict(event.details) for event in blocked_events]
+        blocked_event_blocks = [event.blocks_execution for event in blocked_events]
+
+    assert persisted_symbols == {submitted_symbol}
+    assert len(blocked_events) == 1
+    assert blocked_event_blocks == [True]
+    assert blocked_event_details[0]["blocked_reason"] == "global_kill_switch_tripped"
+
+
+def test_run_paper_session_runs_reconciliation_before_blocking_on_tripped_kill_switch(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+        status="pending_submission",
+        broker_order_id=None,
+        broker_status=None,
+    )
+    settings = load_settings()
+    control_service = OperatorControlService(settings=settings)
+    control_service.trip_kill_switch(
+        reason="ensure reconciliation still runs while tripped",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    execution_service = ExplodingExecutionService()
+    broker_client = FakeBrokerClient(
+        orders=[
+            BrokerOrderSnapshot(
+                broker_order_id="recovered-aapl-001",
+                client_order_id=build_client_order_id(
+                    prefix=settings.execution.client_order_id_prefix,
+                    strategy_id="trend_following_daily",
+                    session_date=date(2024, 1, 5),
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                ),
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
+                status=ExecutionOrderStatus.PENDING,
+                broker_status="new",
+                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                filled_at=None,
+                canceled_at=None,
+                updated_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                raw_payload={"id": "recovered-aapl-001", "status": "new"},
+            )
+        ],
+        fills=[],
+        positions=[],
+        account=BrokerAccountSnapshot(
+            cash=Decimal("100000.000000"),
+            buying_power=Decimal("100000.000000"),
+            equity=Decimal("100000.000000"),
+            long_market_value=Decimal("0"),
+            short_market_value=Decimal("0"),
+            raw_payload={"equity": "100000.000000"},
+        ),
+    )
+
+    report = run_paper_session(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        broker_client=broker_client,
+        trigger_source="pytest",
+    )
+
+    assert report.action == "blocked_global_kill_switch"
+    assert report.result_summary["session_preflight"]["reconciliation"][
+        "recovered_order_count"
+    ] == 1
+    assert report.result_summary["session_preflight"]["kill_switch"]["is_tripped"] is True
+    assert report.result_summary["blocked_reason"] == "global_kill_switch_tripped"
+    assert execution_service.submitted_intents == []
+
+    with session_scope(settings) as session:
+        aapl_order = session.execute(
+            select(PaperOrder).where(PaperOrder.client_order_id.like("%"))
+        ).scalar_one()
+
+    assert aapl_order.broker_order_id == "recovered-aapl-001"
+    assert aapl_order.status == "submitted"
+
+
+def test_sync_paper_state_continues_reading_broker_state_while_kill_switch_is_tripped(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    settings = load_settings()
+    control_service = OperatorControlService(settings=settings)
+    control_service.trip_kill_switch(
+        reason="read-only flow must remain available",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+
+    client_order_id = build_client_order_id(
+        prefix=settings.execution.client_order_id_prefix,
+        strategy_id="trend_following_daily",
+        session_date=date(2024, 1, 5),
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        quantity=Decimal("10.000000"),
+    )
+    broker_client = FakeBrokerClient(
+        orders=[
+            BrokerOrderSnapshot(
+                broker_order_id="existing-aapl-001",
+                client_order_id=client_order_id,
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
+                status=ExecutionOrderStatus.FILLED,
+                broker_status="filled",
+                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                canceled_at=None,
+                updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                raw_payload={"id": "existing-aapl-001", "status": "filled"},
+            )
+        ],
+        fills=[
+            BrokerFillSnapshot(
+                broker_fill_id="fill-aapl-001",
+                broker_order_id="existing-aapl-001",
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                quantity=Decimal("10.000000"),
+                price=Decimal("120.250000"),
+                filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                raw_payload={"id": "fill-aapl-001", "order_id": "existing-aapl-001"},
+            )
+        ],
+        positions=[
+            BrokerPositionSnapshot(
+                symbol="AAPL",
+                quantity=Decimal("10.000000"),
+                average_entry_price=Decimal("120.250000"),
+                cost_basis=Decimal("1202.500000"),
+                market_value=Decimal("1215.000000"),
+                current_price=Decimal("121.500000"),
+                raw_payload={"symbol": "AAPL"},
+            )
+        ],
+        account=BrokerAccountSnapshot(
+            cash=Decimal("98797.500000"),
+            buying_power=Decimal("98797.500000"),
+            equity=Decimal("100012.500000"),
+            long_market_value=Decimal("1215.000000"),
+            short_market_value=Decimal("0"),
+            raw_payload={"equity": "100012.500000"},
+        ),
+    )
+
+    report = sync_paper_state(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=broker_client,
+    )
+
+    assert report.orders_synced == 1
+    assert report.fills_ingested == 1
+    assert report.open_positions == 1
+
+    with session_scope(settings) as session:
+        paper_order = session.execute(select(PaperOrder)).scalar_one()
+        snapshot = session.execute(
+            select(AccountSnapshot).order_by(AccountSnapshot.snapshot_at.desc())
+        ).scalar_one()
+
+    assert paper_order.status == "filled"
+    assert snapshot.snapshot_source == "broker_sync"

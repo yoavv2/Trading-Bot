@@ -40,7 +40,12 @@ from trading_platform.services.alpaca import (
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.market_data_access import latest_completed_session
-from trading_platform.services.operator_controls import load_strategy_control_state
+from trading_platform.services.operator_controls import (
+    BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+    KillSwitchStateSnapshot,
+    load_kill_switch_state,
+    load_strategy_control_state,
+)
 from trading_platform.services.order_identity import (
     DerivedOrderIdentity,
     build_client_order_id as _build_client_order_id,
@@ -218,6 +223,10 @@ def run_paper_order_submission(
         settings=resolved_settings,
         registry=resolved_registry,
     )
+    kill_switch_state = load_kill_switch_state(
+        settings=resolved_settings,
+        registry=resolved_registry,
+    )
 
     run_id = _create_paper_execution_run(
         resolved_settings,
@@ -227,6 +236,35 @@ def run_paper_order_submission(
         requested_risk_run_id=risk_run_id,
         strategy_status=control_state.status,
     )
+    if kill_switch_state.is_tripped:
+        report = _finalize_blocked_paper_execution_run(
+            resolved_settings,
+            run_id,
+            strategy_id=strategy_id,
+            as_of_session=as_of_session,
+            requested_risk_run_id=risk_run_id,
+            trigger_source=trigger_source,
+            strategy_status=control_state.status,
+            blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+            action="blocked_global_kill_switch",
+            message=(
+                "Global kill switch is tripped; paper execution halted before broker submission begins."
+            ),
+            extra_details={"kill_switch": kill_switch_state.to_dict()},
+        )
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_execution_blocked",
+            strategy_id=strategy_id,
+            run_id=report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            kill_switch_state=kill_switch_state.state,
+            blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+            trigger_source=trigger_source,
+        )
+        return report
     if not control_state.is_execution_enabled:
         report = _finalize_blocked_paper_execution_run(
             resolved_settings,
@@ -237,6 +275,7 @@ def run_paper_order_submission(
             trigger_source=trigger_source,
             strategy_status=control_state.status,
             blocked_reason="strategy_disabled",
+            action="blocked_strategy_disabled",
         )
         emit_structured_log(
             logger,
@@ -285,9 +324,39 @@ def run_paper_order_submission(
         existing_orders: list[dict[str, Any]] = []
         reused_orders: list[dict[str, Any]] = []
         versioned_orders: list[dict[str, Any]] = []
+        skipped_by_kill_switch: list[dict[str, Any]] = []
         safety_threshold = resolved_settings.execution.safety.repeated_failure_threshold
+        mid_run_kill_switch: KillSwitchStateSnapshot | None = None
 
         for candidate in candidates:
+            mid_run_kill_switch = load_kill_switch_state(
+                settings=resolved_settings,
+                registry=resolved_registry,
+            )
+            if mid_run_kill_switch.is_tripped:
+                skipped_by_kill_switch.append(
+                    {
+                        "symbol": candidate.symbol,
+                        "side": candidate.side.value,
+                        "quantity": float(candidate.quantity),
+                        "session_date": candidate.session_date.isoformat(),
+                        "source_risk_event_id": str(candidate.risk_event_id),
+                    }
+                )
+                emit_structured_log(
+                    logger,
+                    logging.WARNING,
+                    "paper_execution_skipped",
+                    strategy_id=strategy_id,
+                    run_id=str(run_id),
+                    session_date=as_of_session.isoformat(),
+                    symbol=candidate.symbol,
+                    kill_switch_state=mid_run_kill_switch.state,
+                    blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+                    trigger_source=trigger_source,
+                )
+                continue
+
             order_type = resolved_settings.execution.default_order_type
             time_in_force = resolved_settings.execution.default_time_in_force
 
@@ -474,8 +543,11 @@ def run_paper_order_submission(
                 if intent_decision.action == "create_new_version":
                     versioned_orders.append(payload)
 
-        summary = {
-            "stage": "completed",
+        halted_mid_run = bool(skipped_by_kill_switch) and (
+            mid_run_kill_switch is not None and mid_run_kill_switch.is_tripped
+        )
+        summary: dict[str, Any] = {
+            "stage": "blocked_mid_run" if halted_mid_run else "completed",
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
             "requested_risk_run_id": risk_run_id,
@@ -485,13 +557,25 @@ def run_paper_order_submission(
             "existing_count": len(existing_orders),
             "reused_count": len(reused_orders),
             "versioned_count": len(versioned_orders),
+            "skipped_by_kill_switch_count": len(skipped_by_kill_switch),
             "submitted_orders": submitted_orders,
             "existing_orders": existing_orders,
             "reused_orders": reused_orders,
             "versioned_orders": versioned_orders,
+            "skipped_by_kill_switch": skipped_by_kill_switch,
             "broker_provider": resolved_settings.broker.provider,
             "execution_defaults": resolved_settings.execution.model_dump(mode="json"),
         }
+        halted_message: str | None = None
+        if halted_mid_run and mid_run_kill_switch is not None:
+            halted_message = (
+                "Global kill switch tripped during session; "
+                f"{len(skipped_by_kill_switch)} pending candidate(s) halted before broker submission."
+            )
+            summary["blocked_reason"] = BLOCKED_REASON_GLOBAL_KILL_SWITCH
+            summary["action"] = "blocked_mid_run_global_kill_switch"
+            summary["message"] = halted_message
+            summary["kill_switch"] = mid_run_kill_switch.to_dict()
     except Exception as exc:
         _update_paper_execution_run(
             resolved_settings,
@@ -525,11 +609,37 @@ def run_paper_order_submission(
         if owns_execution_service and hasattr(broker_execution, "close"):
             broker_execution.close()
 
+    completed_at = datetime.now(UTC)
+    if halted_mid_run and mid_run_kill_switch is not None:
+        report = _finalize_mid_run_kill_switch_halt(
+            resolved_settings,
+            run_id,
+            completed_at=completed_at,
+            summary=summary,
+            message=halted_message
+            or "Global kill switch tripped during session; pending candidates halted before broker submission.",
+        )
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_execution_blocked",
+            strategy_id=strategy_id,
+            run_id=report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            kill_switch_state=mid_run_kill_switch.state,
+            blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+            trigger_source=trigger_source,
+            submitted_count=summary["submitted_count"],
+            skipped_by_kill_switch_count=summary["skipped_by_kill_switch_count"],
+        )
+        return report
+
     report = _update_paper_execution_run(
         resolved_settings,
         run_id,
         status=StrategyRunStatus.SUCCEEDED,
-        completed_at=datetime.now(UTC),
+        completed_at=completed_at,
         result_summary=summary,
     )
     emit_structured_log(
@@ -580,6 +690,10 @@ def run_paper_session(
         settings=resolved_settings,
         registry=registry,
     )
+    kill_switch_state = load_kill_switch_state(
+        settings=resolved_settings,
+        registry=registry,
+    )
     existing_orders = list(session_plan.existing_orders)
     base_summary = {
         "strategy_id": resolved_strategy_id,
@@ -590,6 +704,7 @@ def run_paper_session(
         "missing_count": len(session_plan.missing_candidates),
         "existing_orders": existing_orders,
         "strategy_status": control_state.status,
+        "kill_switch": kill_switch_state.to_dict(),
     }
 
     if not control_state.is_execution_enabled:
@@ -731,24 +846,41 @@ def run_paper_session(
     )
     result_summary = dict(execution_report.result_summary)
     result_summary["session_preflight"] = base_summary
-    emit_structured_log(
-        logger,
-        logging.INFO,
-        "paper_session_completed",
-        strategy_id=resolved_strategy_id,
-        run_id=execution_report.run_id,
-        session_date=as_of_session.isoformat(),
-        strategy_status=control_state.status,
-        trigger_source=resolved_trigger_source,
-        action="submitted_missing_orders",
-    )
+    blocked_reason = result_summary.get("blocked_reason")
+    if blocked_reason == BLOCKED_REASON_GLOBAL_KILL_SWITCH:
+        action = "blocked_global_kill_switch"
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_session_blocked",
+            strategy_id=resolved_strategy_id,
+            run_id=execution_report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            kill_switch_state=kill_switch_state.state,
+            blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+            trigger_source=resolved_trigger_source,
+        )
+    else:
+        action = "submitted_missing_orders"
+        emit_structured_log(
+            logger,
+            logging.INFO,
+            "paper_session_completed",
+            strategy_id=resolved_strategy_id,
+            run_id=execution_report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            trigger_source=resolved_trigger_source,
+            action=action,
+        )
 
     return PaperSessionRunReport(
         strategy_id=resolved_strategy_id,
         session_date=as_of_session.isoformat(),
         trigger_source=resolved_trigger_source,
         source_risk_run_id=str(session_plan.source_risk_run_id),
-        action="submitted_missing_orders",
+        action=action,
         execution_run_id=execution_report.run_id,
         execution_status=execution_report.status,
         result_summary=result_summary,
@@ -1193,22 +1325,28 @@ def _finalize_blocked_paper_execution_run(
     trigger_source: str,
     strategy_status: str,
     blocked_reason: str,
+    action: str | None = None,
+    message: str | None = None,
+    extra_details: dict[str, Any] | None = None,
 ) -> PaperExecutionRunReport:
     completed_at = datetime.now(UTC)
-    message = (
+    resolved_action = action or f"blocked_{blocked_reason}"
+    resolved_message = message or (
         f"Strategy '{strategy_id}' is disabled; paper execution blocked before broker submission begins."
     )
-    result_summary = {
+    result_summary: dict[str, Any] = {
         "stage": "blocked",
-        "action": "blocked_strategy_disabled",
+        "action": resolved_action,
         "strategy_id": strategy_id,
         "as_of_session": as_of_session.isoformat(),
         "requested_risk_run_id": requested_risk_run_id,
         "blocked_reason": blocked_reason,
         "strategy_status": strategy_status,
         "trigger_source": trigger_source,
-        "message": message,
+        "message": resolved_message,
     }
+    if extra_details:
+        result_summary.update(extra_details)
 
     with session_scope(settings) as session:
         strategy_run = session.get(StrategyRun, run_id)
@@ -1217,7 +1355,7 @@ def _finalize_blocked_paper_execution_run(
 
         strategy_run.status = StrategyRunStatus.FAILED
         strategy_run.completed_at = completed_at
-        strategy_run.error_message = message
+        strategy_run.error_message = resolved_message
         strategy_run.result_summary = result_summary
         session.add(
             ExecutionEvent(
@@ -1227,7 +1365,7 @@ def _finalize_blocked_paper_execution_run(
                 severity="warning",
                 blocks_execution=True,
                 event_at=completed_at,
-                message=message,
+                message=resolved_message,
                 details=result_summary,
             )
         )
@@ -1238,6 +1376,50 @@ def _finalize_blocked_paper_execution_run(
         return PaperExecutionRunReport(
             run_id=str(strategy_run.id),
             strategy_id=strategy.strategy_id if strategy is not None else strategy_id,
+            status=strategy_run.status.value,
+            trigger_source=strategy_run.trigger_source,
+            started_at=strategy_run.started_at.isoformat(),
+            completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+            result_summary=strategy_run.result_summary,
+        )
+
+
+def _finalize_mid_run_kill_switch_halt(
+    settings: Settings,
+    run_id: uuid.UUID,
+    *,
+    completed_at: datetime,
+    summary: dict[str, Any],
+    message: str,
+) -> PaperExecutionRunReport:
+    with session_scope(settings) as session:
+        strategy_run = session.get(StrategyRun, run_id)
+        if strategy_run is None:
+            raise LookupError(f"Missing strategy_run '{run_id}'.")
+
+        strategy_run.status = StrategyRunStatus.FAILED
+        strategy_run.completed_at = completed_at
+        strategy_run.error_message = message
+        strategy_run.result_summary = summary
+        session.add(
+            ExecutionEvent(
+                strategy_run_id=strategy_run.id,
+                paper_order_id=None,
+                event_type="paper_execution_blocked",
+                severity="warning",
+                blocks_execution=True,
+                event_at=completed_at,
+                message=message,
+                details=summary,
+            )
+        )
+        session.flush()
+        session.refresh(strategy_run)
+        strategy = strategy_run.strategy
+
+        return PaperExecutionRunReport(
+            run_id=str(strategy_run.id),
+            strategy_id=strategy.strategy_id if strategy is not None else "unknown",
             status=strategy_run.status.value,
             trigger_source=strategy_run.trigger_source,
             started_at=strategy_run.started_at.isoformat(),
