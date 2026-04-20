@@ -10,7 +10,10 @@ from typing import Any
 
 from trading_platform.core.logging import emit_structured_log
 from trading_platform.core.settings import Settings, load_settings
-from trading_platform.services.operator_controls import load_strategy_control_state
+from trading_platform.services.operator_controls import (
+    load_kill_switch_state,
+    load_strategy_control_state,
+)
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.registry import StrategyRegistry
 
@@ -18,24 +21,28 @@ from trading_platform.strategies.registry import StrategyRegistry
 @dataclass(frozen=True)
 class OperatorStatusReport:
     strategy: dict[str, Any]
+    kill_switch: dict[str, Any]
     latest_control: dict[str, Any] | None
     latest_account_snapshot: dict[str, Any] | None
     latest_paper_execution: dict[str, Any] | None
     latest_reconciliation: dict[str, Any] | None
     latest_paper_session: dict[str, Any] | None
     recent_blocking_events: list[dict[str, Any]]
+    recent_blocked_paper_executions: list[dict[str, Any]]
     recent_failed_runs: list[dict[str, Any]]
     inspection_limit: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "strategy": self.strategy,
+            "kill_switch": self.kill_switch,
             "latest_control": self.latest_control,
             "latest_account_snapshot": self.latest_account_snapshot,
             "latest_paper_execution": self.latest_paper_execution,
             "latest_reconciliation": self.latest_reconciliation,
             "latest_paper_session": self.latest_paper_session,
             "recent_blocking_events": self.recent_blocking_events,
+            "recent_blocked_paper_executions": self.recent_blocked_paper_executions,
             "recent_failed_runs": self.recent_failed_runs,
             "inspection_limit": self.inspection_limit,
         }
@@ -64,6 +71,10 @@ class OperatorStatusService:
         operator_reads = OperatorReadService(self.settings)
         strategy_state = load_strategy_control_state(
             strategy_id,
+            settings=self.settings,
+            registry=self._registry,
+        )
+        kill_switch_snapshot = load_kill_switch_state(
             settings=self.settings,
             registry=self._registry,
         )
@@ -109,6 +120,12 @@ class OperatorStatusService:
             ),
             limit=inspection_limit,
         )
+        recent_blocked_paper_executions = operator_reads.list_blocked_paper_executions(
+            OperatorReadFilters(
+                strategy_id=strategy_id,
+                limit=inspection_limit,
+            )
+        )
         recent_failed_runs = operator_reads.list_runs(
             OperatorReadFilters(
                 strategy_id=strategy_id,
@@ -123,12 +140,14 @@ class OperatorStatusService:
 
         report = OperatorStatusReport(
             strategy=strategy_state.to_dict(),
+            kill_switch=kill_switch_snapshot.to_dict(),
             latest_control=latest_control,
             latest_account_snapshot=latest_account_snapshot,
             latest_paper_execution=latest_paper_execution,
             latest_reconciliation=latest_reconciliation,
             latest_paper_session=latest_paper_session,
             recent_blocking_events=recent_blocking_events,
+            recent_blocked_paper_executions=recent_blocked_paper_executions,
             recent_failed_runs=recent_failed_runs,
             inspection_limit=inspection_limit,
         )
@@ -138,8 +157,10 @@ class OperatorStatusService:
             "operator_status_generated",
             strategy_id=strategy_id,
             strategy_status=strategy_state.status,
+            kill_switch_state=kill_switch_snapshot.state,
             inspection_limit=inspection_limit,
             blocking_event_count=len(recent_blocking_events),
+            blocked_paper_execution_count=len(recent_blocked_paper_executions),
             failed_run_count=len(recent_failed_runs),
         )
         return report
@@ -172,6 +193,9 @@ def render_operator_status_report(
         f"- Status: `{report.strategy['status']}`",
         f"- Execution enabled: `{str(report.strategy['is_execution_enabled']).lower()}`",
         f"- Updated at: `{report.strategy['updated_at']}`",
+        f"- Global kill switch: `{report.kill_switch['state']}` "
+        f"(last changed `{report.kill_switch['last_changed_at']}` by "
+        f"`{report.kill_switch['last_change_actor']}`)",
     ]
     if report.latest_paper_session is not None:
         lines.extend(
@@ -191,6 +215,14 @@ def render_operator_status_report(
         for event in report.recent_blocking_events:
             lines.append(
                 f"- `{event['event_type']}` at `{event['event_at']}`: {event['message']}"
+            )
+
+    if report.recent_blocked_paper_executions:
+        lines.extend(["", "## Recent Blocked Paper Executions"])
+        for blocked in report.recent_blocked_paper_executions:
+            lines.append(
+                f"- `{blocked['blocked_reason']}` run `{blocked['run_id']}` at "
+                f"`{blocked['started_at']}` (action=`{blocked['action']}`)"
             )
 
     if report.recent_failed_runs:

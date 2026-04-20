@@ -13,11 +13,13 @@ from sqlalchemy.orm import aliased
 
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
+    GLOBAL_KILL_SWITCH_NAME,
     AccountSnapshot,
     BacktestEquitySnapshot,
     BacktestSignal,
     BacktestTrade,
     ExecutionEvent,
+    KillSwitchState,
     PaperFill,
     PaperOrder,
     Position,
@@ -27,6 +29,7 @@ from trading_platform.db.models import (
     StrategyRunStatus,
     StrategyRunType,
     Symbol,
+    SystemControl,
 )
 from trading_platform.db.session import session_scope
 
@@ -367,6 +370,74 @@ class OperatorReadService:
             for risk_event, strategy_run, strategy, ticker in rows
         ]
         return _apply_window_and_limit(items, resolved_filters, key_fn=_session_date_from_payload)
+
+    def get_kill_switch_state(self) -> dict[str, Any]:
+        with session_scope(self.settings) as session:
+            control = session.execute(
+                select(SystemControl).where(SystemControl.name == GLOBAL_KILL_SWITCH_NAME)
+            ).scalar_one_or_none()
+            if control is None:
+                raise LookupError(
+                    f"Missing global kill switch row '{GLOBAL_KILL_SWITCH_NAME}'; "
+                    "database migrations may not be current."
+                )
+            return {
+                "name": control.name,
+                "state": control.state.value,
+                "is_tripped": control.state == KillSwitchState.TRIPPED,
+                "last_changed_at": control.last_changed_at.isoformat(),
+                "last_change_actor": control.last_change_actor,
+                "last_change_reason": control.last_change_reason,
+                "last_change_run_id": (
+                    str(control.last_change_run_id)
+                    if control.last_change_run_id is not None
+                    else None
+                ),
+            }
+
+    def list_blocked_paper_executions(
+        self, filters: OperatorReadFilters | None = None
+    ) -> list[dict[str, Any]]:
+        resolved_filters = filters or OperatorReadFilters()
+
+        with session_scope(self.settings) as session:
+            stmt = (
+                select(StrategyRun, Strategy)
+                .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+                .where(Strategy.strategy_id == resolved_filters.strategy_id)
+                .where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
+                .where(StrategyRun.status == StrategyRunStatus.FAILED)
+            )
+            rows = session.execute(
+                stmt.order_by(StrategyRun.started_at.desc(), StrategyRun.created_at.desc())
+            ).all()
+
+        items: list[dict[str, Any]] = []
+        for strategy_run, strategy in rows:
+            result_summary = strategy_run.result_summary or {}
+            blocked_reason = result_summary.get("blocked_reason")
+            if blocked_reason is None:
+                continue
+            items.append(
+                {
+                    "run_id": str(strategy_run.id),
+                    "strategy_id": strategy.strategy_id,
+                    "started_at": strategy_run.started_at.isoformat(),
+                    "completed_at": _dt_value(strategy_run.completed_at),
+                    "trigger_source": strategy_run.trigger_source,
+                    "as_of_session": _run_session_date(strategy_run),
+                    "blocked_reason": blocked_reason,
+                    "action": result_summary.get("action"),
+                    "stage": result_summary.get("stage"),
+                    "message": strategy_run.error_message or result_summary.get("message"),
+                    "submitted_count": result_summary.get("submitted_count"),
+                    "skipped_by_kill_switch_count": result_summary.get(
+                        "skipped_by_kill_switch_count"
+                    ),
+                    "kill_switch": result_summary.get("kill_switch"),
+                }
+            )
+        return _apply_window_and_limit(items, resolved_filters, key_fn=_run_payload_date)
 
     def list_execution_events(self, filters: OperatorReadFilters | None = None) -> list[dict[str, Any]]:
         resolved_filters = filters or OperatorReadFilters()

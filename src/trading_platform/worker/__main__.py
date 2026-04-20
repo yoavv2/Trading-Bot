@@ -16,6 +16,7 @@ from trading_platform.services.backtesting import resolve_backtest_window, run_b
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
 from trading_platform.services.operator_controls import (
     OperatorControlService,
+    render_kill_switch_report,
     render_operator_control_report,
 )
 from trading_platform.services.operator_status import (
@@ -136,10 +137,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     operator_control_parser = subparsers.add_parser(
         "operator-control",
-        help="Enable or disable persisted strategy execution.",
+        help=(
+            "Enable or disable persisted strategy execution, or trip/reset/show "
+            "the durable global kill switch."
+        ),
     )
-    operator_control_parser.add_argument("action", choices=("enable", "disable"))
-    operator_control_parser.add_argument("--strategy", default="trend_following_daily")
+    operator_control_parser.add_argument(
+        "action",
+        choices=(
+            "enable",
+            "disable",
+            "trip-kill-switch",
+            "reset-kill-switch",
+            "show-kill-switch",
+        ),
+        help=(
+            "enable/disable scope the per-strategy control; trip-kill-switch and "
+            "reset-kill-switch mutate the persisted global submission halt; "
+            "show-kill-switch prints the current global state without mutation."
+        ),
+    )
+    operator_control_parser.add_argument(
+        "--strategy",
+        default="trend_following_daily",
+        help=(
+            "Target strategy for enable/disable. Ignored by kill-switch actions, "
+            "which always act on the global submission halt."
+        ),
+    )
     operator_control_parser.add_argument("--reason")
     operator_control_parser.add_argument("--actor", default="worker_cli")
     operator_control_parser.add_argument("--trigger-source", default="worker_cli")
@@ -448,6 +473,11 @@ def run_operator_control_command(args: argparse.Namespace) -> None:
     configure_logging(settings.logging)
     logger = logging.getLogger("trading_platform.worker")
     service = OperatorControlService(settings=settings)
+
+    if args.action in {"trip-kill-switch", "reset-kill-switch", "show-kill-switch"}:
+        _run_kill_switch_action(service, args, logger)
+        return
+
     if args.action == "disable":
         report = service.disable_strategy(
             args.strategy,
@@ -476,6 +506,54 @@ def run_operator_control_command(args: argparse.Namespace) -> None:
         },
     )
     print(render_operator_control_report(report, summary_format=args.summary_format))
+
+
+def _run_kill_switch_action(
+    service: OperatorControlService,
+    args: argparse.Namespace,
+    logger: logging.Logger,
+) -> None:
+    if args.action == "show-kill-switch":
+        snapshot = service.get_kill_switch_state()
+        logger.info(
+            "worker_kill_switch_state_read",
+            extra={
+                "context": build_log_context(
+                    run_id=snapshot.last_change_run_id,
+                    kill_switch_state=snapshot.state,
+                    action="show-kill-switch",
+                    trigger_source=args.trigger_source,
+                )
+            },
+        )
+        print(json.dumps(snapshot.to_dict(), indent=2))
+        return
+
+    if args.action == "trip-kill-switch":
+        report = service.trip_kill_switch(
+            reason=args.reason,
+            actor=args.actor,
+            trigger_source=args.trigger_source,
+        )
+    else:
+        report = service.reset_kill_switch(
+            reason=args.reason,
+            actor=args.actor,
+            trigger_source=args.trigger_source,
+        )
+
+    logger.info(
+        "worker_kill_switch_applied",
+        extra={
+            "context": build_log_context(
+                run_id=report.run_id,
+                kill_switch_state=report.current_state,
+                action=args.action,
+                trigger_source=args.trigger_source,
+            )
+        },
+    )
+    print(render_kill_switch_report(report, summary_format=args.summary_format))
 
 
 def run_operator_status_command(args: argparse.Namespace) -> None:
