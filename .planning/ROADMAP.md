@@ -42,7 +42,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Milestone v1.1 — Execution Correctness & Hardening
 
-- [ ] **Phase 7: Correctness Kernel** - Enforce a closed order state machine with a single transition entry point, deterministic client_order_id idempotency, and a persistent kill switch.
+- [x] **Phase 7: Correctness Kernel** - Enforce a closed order state machine with a single transition entry point, deterministic client_order_id idempotency, and a persistent kill switch. (completed 2026-04-20)
 - [ ] **Phase 8: Concurrency Guard** - Enforce at-most-one active run per (strategy_id, session_date) via PostgreSQL advisory lock with stale-run detection and crash-safe release.
 - [ ] **Phase 9: Reconciliation Rewrite** - Replace string-classified reconciliation with typed snapshots, an indexed O(n) matcher, a closed findings enum, and a materialized report.
 - [ ] **Phase 10: Startup Hardening** - Gate process startup on validated config, sanitized logs with no credential leakage, and a single canonical DB connection lifecycle.
@@ -170,7 +170,7 @@ Plans:
   3. Given identical `(strategy_id, session_date, symbol, side, intent_hash)` inputs, `client_order_id` produces the same byte-for-byte value across separate processes and restarts; a DB `UNIQUE` constraint enforces one row per intent.
   4. Retry of an existing intent returns the persisted row rather than inserting a duplicate; broker-response matching resolves by `client_order_id` first.
   5. Kill-switch state is persisted in the DB, checked before every broker submission, survives a worker restart without manual reset, and when tripped allows reconciliation and logging to continue while blocking only new submissions.
-**Plans:** 2/3 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 07-01: Build the closed order-lifecycle kernel
@@ -246,7 +246,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 4. Risk and Portfolio | 2/2 | Complete | 2026-03-14 |
 | 5. Paper Execution | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | 3/3 | Complete | 2026-03-15 |
-| 7. Correctness Kernel | 3/3 | Complete | 2026-04-20 |
+| 7. Correctness Kernel | 3/3 | Complete    | 2026-04-20 |
 | 8. Concurrency Guard | 0/TBD | Not started | - |
 | 9. Reconciliation Rewrite | 0/TBD | Not started | - |
 | 10. Startup Hardening | 0/TBD | Not started | - |
