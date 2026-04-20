@@ -1,19 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Execution Correctness & Hardening
-current_phase: "07"
-current_phase_name: Correctness Kernel
-current_plan: "07-03"
-status: Executing Phase 7 — 07-02 complete, 07-03 next
-stopped_at: null
-last_updated: "2026-04-19T12:02:08Z"
-last_activity: 2026-04-19
+milestone: v1.0
+milestone_name: — Completed 2026-03-15
+status: completed
+stopped_at: Completed 07-03 — global kill switch landed; Phase 7 correctness kernel complete
+last_updated: "2026-04-20T07:41:38.938Z"
+last_activity: 2026-04-20 — completed 07-03 global kill switch persistence, enforcement, and operator surface
 progress:
-  total_phases: 6
-  completed_phases: 0
-  total_plans: 3
-  completed_plans: 2
+  total_phases: 12
+  completed_phases: 7
+  total_plans: 20
+  completed_plans: 20
   percent: 67
 ---
 
@@ -24,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (executing Phase 7; 07-02 complete, 07-03 next)
+**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (Phase 7 complete; Phase 8 LOCK next)
 
 ## Current Position
 
-Phase: 07 — Correctness Kernel
-Plan: 07-03 — Global Kill Switch
-Status: Executing Phase 7 — 07-02 complete, 07-03 next
-Last activity: 2026-04-19 — completed 07-02 deterministic intent identity and idempotent submission flow
+Phase: 08 — Advisory Locks (next)
+Plan: 08-01 (not started)
+Status: Phase 7 correctness kernel complete — order state machine, deterministic idempotency, and global kill switch landed
+Last activity: 2026-04-20 — completed 07-03 global kill switch persistence, enforcement, and operator surface
 Progress: [███████░░░] 67%
 
 ## Performance Metrics
@@ -56,7 +53,7 @@ Progress: [███████░░░] 67%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 7 | 2/3 | - | - |
+| 7 | 3/3 | - | - |
 | 8 | 0/TBD | - | - |
 | 9 | 0/TBD | - | - |
 | 10 | 0/TBD | - | - |
@@ -64,8 +61,8 @@ Progress: [███████░░░] 67%
 | 12 | 0/TBD | - | - |
 
 **Recent Trend:**
-- Last 5 plans: 06-01, 06-02, 06-03, 07-01, 07-02 completed
-- Trend: Phase 7 is two-thirds complete; kill-switch hardening is the remaining correctness-kernel slice
+- Last 5 plans: 06-02, 06-03, 07-01, 07-02, 07-03 completed
+- Trend: Phase 7 correctness kernel fully landed; next is Phase 8 advisory locks
 
 *Updated after each plan completion*
 | Phase 02-data-and-strategy P02 | 6 | 3 tasks | 14 files |
@@ -80,6 +77,7 @@ Progress: [███████░░░] 67%
 | Phase 05-paper-execution P03 | 138min | 3 tasks | 14 files |
 | Phase 06-analytics-and-apis P01 | 15min | 3 tasks | 10 files |
 | Phase 06-analytics-and-apis P02 | 20min | 3 tasks | 9 files |
+| Phase 07-correctness-kernel P03 | 48min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -143,6 +141,12 @@ Recent decisions affecting current work:
 - [07-02]: Deterministic intent identity is derived from `strategy_id`, `session_date`, `symbol`, `side`, and quantity instead of `risk_event_id`.
 - [07-02]: Same-intent retries reuse the persisted order row and `client_order_id`; broker-touched material changes create explicit successor versions with predecessor links.
 - [07-02]: Reconciliation and operator reads now prefer `client_order_id` matching and expose intent lineage in order payloads.
+- [07-03]: Global kill switch persists in new `system_controls` table — separated from per-strategy state so a tripped switch blocks every strategy irrespective of individual status.
+- [07-03]: Kill-switch check runs at batch entry AND between per-candidate submissions so a mid-run trip halts remaining orders without discarding already-submitted work.
+- [07-03]: Read-only flows (reconciliation, broker state sync, operator status reads) continue while switch is tripped; only new submissions are blocked.
+- [07-03]: Blocked submissions persist as FAILED `paper_execution` runs with `blocked_reason=global_kill_switch_tripped` plus `kill_switch_trip` execution events — visible in operator CLI, reads, and status surfaces.
+- [07-03]: Kill switch clears only via explicit `reset-kill-switch` CLI action; automatic recovery would defeat the operator-intent audit trail.
+- [07-03]: CLI extends existing `operator-control` subcommand with `trip-kill-switch` / `reset-kill-switch` / `show-kill-switch` actions rather than introducing a parallel top-level command.
 
 ### Pending Todos
 
@@ -156,6 +160,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-04-19T12:02:08Z
-Stopped at: In progress — 07-02 complete, start 07-03 (Global Kill Switch)
+Last session: 2026-04-20T08:00:00Z
+Stopped at: Completed 07-03 — global kill switch landed; Phase 7 correctness kernel complete
 Resume file: None

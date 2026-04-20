@@ -52,11 +52,11 @@ Requirements grouped by tier. Each is an enforceable invariant. Each maps to one
 
 #### Safety (SAFE)
 
-- [ ] **SAFE-01**: Kill-switch state is persisted in the DB (or a central config row) — never in-process memory only
-- [ ] **SAFE-02**: Kill-switch state is checked before every broker submission AND before every batch-execution entry point
-- [ ] **SAFE-03**: When tripped, the kill switch halts only new submissions; reconciliation, state transitions, lifecycle sync, and logging continue running
-- [ ] **SAFE-04**: A change to kill-switch state takes effect on the next submission check without a worker restart
-- [ ] **SAFE-05**: Kill-switch state is restart-safe — a tripped switch stays tripped across worker restart and is re-read at boot
+- [x] **SAFE-01**: Kill-switch state is persisted in the DB (or a central config row) — never in-process memory only
+- [x] **SAFE-02**: Kill-switch state is checked before every broker submission AND before every batch-execution entry point
+- [x] **SAFE-03**: When tripped, the kill switch halts only new submissions; reconciliation, state transitions, lifecycle sync, and logging continue running
+- [x] **SAFE-04**: A change to kill-switch state takes effect on the next submission check without a worker restart
+- [x] **SAFE-05**: Kill-switch state is restart-safe — a tripped switch stays tripped across worker restart and is re-read at boot
 
 ### Tier 1 — Operational Hardening
 
@@ -175,11 +175,11 @@ Explicitly excluded from v1.1.
 | RECON-07 | Phase 9 | Pending |
 | RECON-08 | Phase 9 | Pending |
 | RECON-09 | Phase 9 | Pending |
-| SAFE-01 | Phase 7 | Pending |
-| SAFE-02 | Phase 7 | Pending |
-| SAFE-03 | Phase 7 | Pending |
-| SAFE-04 | Phase 7 | Pending |
-| SAFE-05 | Phase 7 | Pending |
+| SAFE-01 | Phase 7 | Complete |
+| SAFE-02 | Phase 7 | Complete |
+| SAFE-03 | Phase 7 | Complete |
+| SAFE-04 | Phase 7 | Complete |
+| SAFE-05 | Phase 7 | Complete |
 | CFG-01 | Phase 10 | Pending |
 | CFG-02 | Phase 10 | Pending |
 | CFG-03 | Phase 10 | Pending |

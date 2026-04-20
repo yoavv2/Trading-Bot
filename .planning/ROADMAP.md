@@ -246,7 +246,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 4. Risk and Portfolio | 2/2 | Complete | 2026-03-14 |
 | 5. Paper Execution | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | 3/3 | Complete | 2026-03-15 |
-| 7. Correctness Kernel | 2/3 | In progress | - |
+| 7. Correctness Kernel | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | 0/TBD | Not started | - |
 | 9. Reconciliation Rewrite | 0/TBD | Not started | - |
 | 10. Startup Hardening | 0/TBD | Not started | - |
