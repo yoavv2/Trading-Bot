@@ -79,7 +79,7 @@ Explicitly excluded. Documented to prevent scope creep.
 | Live trading controls | No live trading exists; console is read-only |
 | Any write/mutation from the UI (incl. kill switch) | Console v0 is inspection-only; mutations deferred to CTRL-01/02 |
 | Polished visuals hiding backend uncertainty | UI must expose system state honestly, including errors and unverified areas |
-| New FastAPI endpoints beyond the existing read surface | Milestone rule: no new backend capabilities |
+| New FastAPI endpoints beyond the existing read surface | Milestone rule: no new backend capabilities. Approved narrow exceptions (2026-07-07): one GET route exposing existing `get_kill_switch_state()` (Phase 13) and `equity_curve` field added to existing analytics response (Phase 16) — read-only exposure of already-computed state only |
 
 ## Traceability
 
@@ -87,13 +87,35 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| — | — | — |
+| CONS-01 | Phase 13 | Pending |
+| CONS-02 | Phase 13 | Pending |
+| CONS-03 | Phase 13 | Pending |
+| STAT-01 | Phase 13 | Pending |
+| STAT-02 | Phase 13 | Pending |
+| STAT-03 | Phase 13 | Pending |
+| STRA-01 | Phase 14 | Pending |
+| STRA-02 | Phase 14 | Pending |
+| RUNS-01 | Phase 14 | Pending |
+| RUNS-02 | Phase 14 | Pending |
+| RUNS-03 | Phase 14 | Pending |
+| RUNS-04 | Phase 14 | Pending |
+| RUNS-05 | Phase 14 | Pending |
+| RUNS-06 | Phase 14 | Pending |
+| PAPR-01 | Phase 15 | Pending |
+| PAPR-02 | Phase 15 | Pending |
+| PAPR-03 | Phase 15 | Pending |
+| PAPR-04 | Phase 15 | Pending |
+| ANLX-01 | Phase 16 | Pending |
+| ANLX-02 | Phase 16 | Pending |
+| KILL-01 | Phase 13 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21 ⚠️ (roadmap pending)
+- Mapped to phases: 21
+- Unmapped: 0 ✓
+
+**Known gaps (tracked, not coverage failures):** STAT-03 and KILL-01 (Phase 13) and ANLX-01 (Phase 16) map to a phase but depend on a currently-unwired backend read endpoint/field. See ROADMAP.md "Known Gaps (Backend Read-Surface)" for detail and resolution path.
 
 ---
 *Requirements defined: 2026-07-07*
-*Last updated: 2026-07-07 after initial definition*
+*Last updated: 2026-07-07 after roadmap creation — all 21 v1.2 requirements mapped to phases 13-16; 3 known backend read-surface gaps flagged in ROADMAP.md*
