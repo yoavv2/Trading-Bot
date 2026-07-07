@@ -1,104 +1,104 @@
 # Technology Stack
 
-**Analysis Date:** 2026-04-16
+**Analysis Date:** 2026-07-07
 
 ## Languages
 
 **Primary:**
-- Python 3.12+ - Core application, API, worker, and strategy implementations
-- SQL - Database schema and migrations via Alembic
-
-**Secondary:**
-- YAML - Configuration files for app settings and strategy parameters
+- Python 3.13+ - Core application language, required by `pyproject.toml` (>=3.12)
 
 ## Runtime
 
 **Environment:**
-- Python 3.13 (per Dockerfile)
-- CPython interpreter
+- Python 3.13 (from `.venv/pyvenv.cfg`)
+- Docker container: `python:3.13-slim` (Dockerfile)
 
 **Package Manager:**
-- pip (via setuptools)
-- Lockfile: Not detected (using `pyproject.toml` only)
+- pip with setuptools
+- Lockfile: Not detected (uses `pyproject.toml` for versioning)
 
 ## Frameworks
 
 **Core:**
-- FastAPI 0.131.0+ - REST API framework with async request handling
-- Uvicorn 0.34.0+ - ASGI server for hosting FastAPI application
-- SQLAlchemy 2.0.0+ - ORM for database modeling and queries
-- Pydantic 2.12.0+ (via pydantic-settings) - Data validation and settings management
+- FastAPI 0.131+ - REST API framework for HTTP endpoints
+- Uvicorn 0.34+ - ASGI web server for running the API
+
+**Database:**
+- SQLAlchemy 2.0+ - ORM for database operations
+- Alembic 1.18+ - Database schema migrations
+- psycopg[binary] 3.2+ - PostgreSQL driver
 
 **Testing:**
-- pytest 9.0.0+ - Testing framework
-- Config: `pytest.ini_options` in `pyproject.toml`
+- pytest 9.0+ - Test runner and framework
 
 **Build/Dev:**
-- Alembic 1.18.0+ - Database migration management
-- setuptools 69+ - Package build system
+- setuptools 69+ - Package building and installation
 
 ## Key Dependencies
 
 **Critical:**
-- `exchange-calendars` 4.5+ - NYSE (XNYS) trading calendar for session dates and trading hours
-- `httpx` 0.28.0+ - HTTP client for Polygon.io and Alpaca API calls with retry logic
-- `psycopg[binary]` 3.2.0+ - PostgreSQL adapter for SQLAlchemy connections
-- `PyYAML` 6.0.2+ - Configuration file parsing
+- `fastapi` - REST API framework; enables all HTTP endpoints in `src/trading_platform/api/`
+- `sqlalchemy` - ORM for all database models in `src/trading_platform/db/models/`
+- `psycopg[binary]` - PostgreSQL connectivity required by `DatabaseSettings` in `src/trading_platform/core/settings.py`
+- `httpx` - HTTP client used by both `PolygonClient` (`src/trading_platform/services/polygon.py`) and `AlpacaClient` (`src/trading_platform/services/alpaca.py`)
 
-**Infrastructure:**
-- `pandas` - Data manipulation for calendar date operations (via exchange-calendars)
+**Data Processing:**
+- `pandas` - Data manipulation and analysis for market data processing
+- `exchange-calendars` - Market calendar management for NYSE (XNYS) sessions
+
+**Configuration:**
+- `pydantic-settings` - Environment variable management with settings loading
+- `PyYAML` - YAML file parsing for `app.yaml` and strategy configurations
+- `pydantic` - Data validation for all settings classes in `src/trading_platform/core/settings.py`
 
 ## Configuration
 
 **Environment:**
-- Configuration hierarchy:
-  1. Built-in defaults in `src/trading_platform/core/settings.py`
-  2. YAML config file at `config/app.yaml`
-  3. Strategy-specific YAML files in `config/strategies/`
-  4. Environment variable overrides with `TRADING_PLATFORM_` prefix
-
-- Key environment variables:
-  - `TRADING_PLATFORM_APP__ENVIRONMENT` - Environment name (local/test/development/staging/production)
-  - `TRADING_PLATFORM_DATABASE__*` - Database connection settings
-  - `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY` - Polygon.io API key (required)
-  - `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` - Alpaca API key (required for live trading)
-  - `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET` - Alpaca API secret (required for live trading)
-  - `TRADING_PLATFORM_API__PORT` - API server port (default: 8000)
-  - `TRADING_PLATFORM_LOGGING__LEVEL` - Log level (default: INFO)
+- Loaded from `config/app.yaml` (default location: `PROJECT_ROOT/config/app.yaml`)
+- Environment overrides via `TRADING_PLATFORM_*` variables with nested delimiter `__`
+- Optional `.env` file support via pydantic-settings
+- Entry point: `src/trading_platform/core/settings.py::load_settings()`
 
 **Build:**
-- `pyproject.toml` - Package metadata, dependencies, entry points
-- `Dockerfile` - Container image specification (Python 3.13-slim base)
-- `docker-compose.yml` - Multi-service orchestration (database, API, worker)
-- `alembic.ini` - Database migration configuration
+- `pyproject.toml` - Project metadata, dependencies, setuptools configuration
+- `Dockerfile` - Multi-stage containerization for production
+- `docker-compose.yml` - Local development services (PostgreSQL database, API, worker)
+
+**Configuration Files:**
+- `config/app.yaml` - Application settings (database, API, broker, market data, execution)
+- `config/strategies/*.yaml` - Strategy-specific configurations (loaded dynamically)
+- `alembic.ini` - Database migration tool configuration
 
 ## Platform Requirements
 
 **Development:**
-- Python 3.12+
-- PostgreSQL 16+ (via docker-compose or local install)
-- YAML configuration files in `config/` directory
-- Polygon.io API key for market data access
+- Python 3.13+ with venv support
+- PostgreSQL 16+ (via docker-compose in development)
+- Docker and docker-compose for local testing
 
 **Production:**
-- Docker and Docker Compose (for containerized deployment)
-- PostgreSQL database (16+ recommended)
-- Secure credential management for Polygon.io and Alpaca API keys
-- Uvicorn-compatible ASGI hosting or Docker
+- Docker container runtime (python:3.13-slim base image)
+- PostgreSQL 16+ database (separate service)
+- Environment variables for secrets injection
 
-## Database
+## Entry Points
 
-**Type:**
-- PostgreSQL 16 (Alpine Linux variant in docker-compose)
-- Driver: `psycopg` (PostgreSQL native binary adapter)
-- Connection string format: `postgresql+psycopg://{user}:{password}@{host}:{port}/{database}`
+**API Service:**
+- `trading-platform-api` (setuptools script) → `src/trading_platform/api/app.py::main()`
+- Runs uvicorn on configurable host/port (default: 0.0.0.0:8000)
+- FastAPI app instance at `src/trading_platform/api/app.py::app`
 
-**Migrations:**
-- Tool: Alembic 1.18.0+
-- Location: `alembic/` directory with versioned migration scripts
-- Models: SQLAlchemy ORM with declarative base in `src/trading_platform/db/base.py`
-- Naming convention: Enforced via `NAMING_CONVENTION` in base module
+**Worker Service:**
+- `trading-platform-worker` (setuptools script) → `src/trading_platform/worker/__main__.py::main()`
+- Daemon process for scheduled execution and async jobs
+
+## Testing
+
+**Test Runner:**
+- pytest with configuration in `pyproject.toml` (testpaths: tests/)
+- Run via: `make test` or `.venv/bin/pytest`
+- Test files located in `tests/` directory
 
 ---
 
-*Stack analysis: 2026-04-16*
+*Stack analysis: 2026-07-07*

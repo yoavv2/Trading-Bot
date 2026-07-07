@@ -1,154 +1,148 @@
 # External Integrations
 
-**Analysis Date:** 2026-04-16
+**Analysis Date:** 2026-07-07
 
 ## APIs & External Services
 
 **Market Data:**
-- Polygon.io - Daily OHLCV bar ingestion for US equities
-  - SDK/Client: Custom `PolygonClient` in `src/trading_platform/services/polygon.py`
-  - Auth: `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY` (environment variable)
-  - Base URL: `https://api.polygon.io`
-  - Endpoints used:
-    - `GET /v2/aggs/ticker/{symbol}/range/1/day/{from_date}/{to_date}` - Daily aggregates with pagination
-  - Configuration: `PolygonProviderSettings` in `src/trading_platform/core/settings.py`
-  - Retry policy: Exponential backoff with configurable max retries (default: 3) and backoff factor (default: 0.5)
-  - Timeout: 30 seconds default
+- Polygon.io - Historical daily OHLCV bars and symbol metadata
+  - SDK/Client: Custom httpx-based client in `src/trading_platform/services/polygon.py`
+  - Auth: Bearer token via `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY`
+  - Usage: `PolygonClient` for `/v2/aggs/ticker/{symbol}/range/` endpoint
+  - Config source: `src/trading_platform/core/settings.py::PolygonProviderSettings`
 
-**Execution/Broker:**
-- Alpaca - Paper-trading order submission and position/account snapshots
-  - SDK/Client: Custom `AlpacaClient` in `src/trading_platform/services/alpaca.py`
-  - Auth: 
-    - `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` (environment variable)
-    - `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET` (environment variable)
-  - Base URL: `https://paper-api.alpaca.markets`
-  - Endpoints used:
-    - `POST /v2/orders` - Submit market orders
-    - `GET /v2/orders` - List orders with status filtering
-    - `GET /v2/account` - Get account/buying power snapshot
-    - `GET /v2/positions` - List current positions
-    - `GET /v2/account/activities/FILL` - Fetch executed fills
-  - Configuration: `AlpacaBrokerSettings` in `src/trading_platform/core/settings.py`
-  - Retry policy: Exponential backoff (max retries: 3, backoff factor: 0.5)
-  - Timeout: 30 seconds default
-  - Status codes handled: 401/403 (auth errors), 429/500/502/503/504 (transient)
+**Broker & Execution:**
+- Alpaca Markets - Paper trading and order submission (not live)
+  - SDK/Client: Custom httpx-based client in `src/trading_platform/services/alpaca.py`
+  - Auth: Two credentials via `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` and `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET`
+  - Base URL: `https://paper-api.alpaca.markets` (configurable in `config/app.yaml`)
+  - Usage:
+    - POST `/v2/orders` - Order submission
+    - GET `/v2/orders` - List orders
+    - GET `/v2/account/activities/FILL` - Fetch fills/executions
+    - GET `/v2/positions` - Current positions
+    - GET `/v2/account` - Account snapshot
+  - Config source: `src/trading_platform/core/settings.py::AlpacaBrokerSettings`
 
 ## Data Storage
 
 **Databases:**
-- PostgreSQL 16 (Alpine)
-  - Connection: Via `TRADING_PLATFORM_DATABASE__*` environment variables
-  - Client: SQLAlchemy 2.0.0+ with `psycopg` driver
-  - Pooling: Connection pooling with `pool_pre_ping=True` for stale connection cleanup
-  - Models location: `src/trading_platform/db/models/`
+- PostgreSQL 16+
+  - Connection: `postgresql+psycopg://user:password@host:5432/trading_platform`
+  - Driver: psycopg (binary) 3.2+
+  - Client: SQLAlchemy 2.0+ ORM with synchronous session factory
+  - Configuration: `src/trading_platform/core/settings.py::DatabaseSettings`
   - Session management: `src/trading_platform/db/session.py`
+  - Migrations: Alembic 1.18+ (migrations in `alembic/versions/`)
+
+**Database Models:**
+Located in `src/trading_platform/db/models/`:
+- `daily_bar.py` - Market data from Polygon
+- `symbol.py` - Symbol metadata and universe
+- `market_session.py` - Trading session calendar
+- `strategy.py` - Strategy registry
+- `strategy_run.py` - Historical backtest/paper runs
+- `backtest_equity_snapshot.py`, `backtest_metric.py`, `backtest_signal.py`, `backtest_trade.py` - Backtest results
+- `paper_order.py`, `paper_fill.py` - Paper trading execution records
+- `execution_event.py`, `order_event.py` - Execution state machine events
+- `position.py` - Current portfolio positions
+- `risk_event.py` - Risk constraint violations
+- `account_snapshot.py` - Broker account state snapshots
+- `system_control.py` - Global system state (kill switches, operator mode)
 
 **File Storage:**
 - Local filesystem only
-  - Data directory: `.data/` (configurable via `TRADING_PLATFORM_PATHS__DATA_DIR`)
-  - Contains backtest output, ingest logs, and local state files
+- Data directory: `.data/` (configurable as `paths.data_dir` in `config/app.yaml`)
+- Backtest reports: `.data/backtest-reports/{run_id}/`
 
 **Caching:**
-- None - Application uses database as single source of truth
-- SQLAlchemy engine and session factories are cached in-process via `_ENGINE_CACHE` and `_SESSION_FACTORY_CACHE` dictionaries
+- In-memory engine/session factory caching in `src/trading_platform/db/session.py`
+- Settings loading cache via `@lru_cache` in `src/trading_platform/core/settings.py::load_settings()`
+- No distributed caching (Redis, Memcached, etc.)
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- Custom API key-based authentication for external services
-  - Polygon.io: Bearer token in `Authorization` header
-  - Alpaca: Custom headers `APCA-API-KEY-ID` and `APCA-API-SECRET-KEY`
-- Single-user operator mode - no per-user authentication
-  - `TRADING_PLATFORM_APP__OPERATOR_MODE` = "single_user"
+- Custom - No third-party identity provider
+- Operator mode: Single-user only (hardcoded in `src/trading_platform/core/settings.py::AppMetadata.operator_mode`)
 
-**Security Notes:**
-- Credentials stored as environment variables (never in code)
-- `.env` files supported via `pydantic-settings` but not committed
-- Alpaca client validates credentials on initialization and raises `AlpacaAuthError` on 401/403
+**API Auth Patterns:**
+- No authentication on REST endpoints (internal tool)
+- External service authentication:
+  - Polygon: Bearer token in Authorization header
+  - Alpaca: Custom headers `APCA-API-KEY-ID` and `APCA-API-SECRET-KEY`
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- None detected
+- Not detected - No Sentry, Rollbar, or similar integration
 
 **Logs:**
-- Structured JSON logging to stdout/stderr
-  - Framework: Python logging module with custom configuration
-  - Format: JSON with contextual metadata
-  - Service name: `trading-platform-api` (worker: `trading-platform-worker`)
-  - Configuration: `LoggingSettings` in `src/trading_platform/core/settings.py`
-  - Location: `src/trading_platform/core/logging.py`
-  - Configured level: Defaults to INFO (overridable via `TRADING_PLATFORM_LOGGING__LEVEL`)
-  - Example logs: `polygon_fetch_bars`, `polygon_request_retry`, `alpaca_request_retry`, `market_sessions_upserted`
+- Structured JSON logging to stdout
+- Logger configuration: `src/trading_platform/core/logging.py::configure_logging()`
+- Log level configured in `config/app.yaml::logging.level` (default: INFO)
+- Service name: `logging.service` (default: "trading-platform-api")
+
+**Retry Logic:**
+- Polygon client: Exponential backoff configured in `PolygonProviderSettings` (max_retries, retry_backoff_factor)
+- Alpaca client: Exponential backoff configured in `AlpacaBrokerSettings` (max_retries, retry_backoff_factor)
+- Transient HTTP errors (429, 5xx) trigger retries; auth errors (401, 403) fail immediately
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Docker containers (application containerized)
-  - Base image: `python:3.13-slim`
-  - Built from `Dockerfile` in project root
-  - Entry points:
-    - API: `uvicorn trading_platform.api.app:app --host 0.0.0.0 --port 8000`
-    - Worker: `python -m trading_platform.worker serve --interval-seconds 30`
+- Docker containers (development and production)
+- Docker Compose for local development: `docker-compose.yml`
+- Images built from `Dockerfile` (python:3.13-slim base)
 
-**Deployment Stack:**
-- Docker Compose for local/development:
-  - Service: `db` (PostgreSQL 16-Alpine)
-  - Service: `api` (FastAPI server on port 8000)
-  - Service: `worker` (Background task processor)
-  - Health checks on database readiness before dependent services start
-  - Volume: `postgres_data` for data persistence
+**Local Development:**
+- Makefile targets for common operations:
+  - `make up` / `make down` - Start/stop docker-compose
+  - `make migrate` - Run database migrations
+  - `make test` - Run pytest suite
+  - `make ingest-bars`, `make backtest`, `make run-paper-session` - CLI operations
 
 **CI Pipeline:**
-- None detected
+- Not detected - No GitHub Actions, GitLab CI, CircleCI, or similar configuration
 
 ## Environment Configuration
 
 **Required env vars:**
-- `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY` - Polygon.io API key (fails if missing)
-- `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` - Alpaca API key (fails if missing for live trading)
-- `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET` - Alpaca API secret (fails if missing for live trading)
+- `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY` - Polygon.io API key (required)
+- `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` - Alpaca API key (required)
+- `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET` - Alpaca API secret (required)
 
-**Recommended env vars:**
-- `TRADING_PLATFORM_DATABASE__HOST` - Database host (default: `db` in docker-compose)
-- `TRADING_PLATFORM_DATABASE__PORT` - Database port (default: 5432)
-- `TRADING_PLATFORM_DATABASE__NAME` - Database name (default: `trading_platform`)
-- `TRADING_PLATFORM_DATABASE__USER` - Database user (default: `trading_platform`)
-- `TRADING_PLATFORM_DATABASE__PASSWORD` - Database password (default: `trading_platform`)
-- `TRADING_PLATFORM_APP__ENVIRONMENT` - Environment (local/test/development/staging/production)
-- `TRADING_PLATFORM_API__PORT` - API port (default: 8000)
+**Database env vars (optional - override defaults in config/app.yaml):**
+- `TRADING_PLATFORM_DATABASE__HOST` - PostgreSQL host (default: localhost)
+- `TRADING_PLATFORM_DATABASE__PORT` - PostgreSQL port (default: 5432)
+- `TRADING_PLATFORM_DATABASE__NAME` - Database name (default: trading_platform)
+- `TRADING_PLATFORM_DATABASE__USER` - Database user (default: trading_platform)
+- `TRADING_PLATFORM_DATABASE__PASSWORD` - Database password (default: trading_platform)
+
+**Docker Compose env vars:**
+- `POSTGRES_DB` - Database name (default: trading_platform)
+- `POSTGRES_USER` - Database user (default: trading_platform)
+- `POSTGRES_PASSWORD` - Database password (default: trading_platform)
 
 **Secrets location:**
-- Environment variables (`.env` file or shell exports)
-- Credentials file example: `.env.example` documents expected variables
-- No secrets are hardcoded or stored in configuration files
+- Environment variables (recommended for production)
+- `.env` file (for local development, via pydantic-settings)
+- NOTE: .env files should never be committed
+
+**Configuration precedence (highest to lowest):**
+1. Environment variables with `TRADING_PLATFORM_` prefix
+2. Strategy YAML files from `config/strategies/`
+3. Main config file `config/app.yaml`
+4. Pydantic model defaults in `src/trading_platform/core/settings.py`
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- None detected
+- Not detected - No webhook endpoints
 
 **Outgoing:**
-- None - Application polls Alpaca and Polygon.io; does not register webhooks
-
-## HTTP Client Configuration
-
-**Client Library:**
-- httpx 0.28.0+ for all external API calls
-- Synchronous client mode (used in both API and worker contexts)
-- Features:
-  - Timeout enforcement (30 seconds default)
-  - Automatic retry with exponential backoff for transient errors
-  - Custom header injection for authentication
-  - JSON request/response handling
-
-**Error Handling:**
-- Transient errors (429, 500-504): Retry with backoff
-- Authentication errors (401, 403): Raise non-recoverable error immediately
-- Network errors (timeouts, connection errors): Retry with backoff
-- Max retries: 3 (configurable per provider)
-- Backoff factor: 0.5 (exponential: 0.5s, 1s, 2s)
+- Not detected - No external webhook notifications
 
 ---
 
-*Integration audit: 2026-04-16*
+*Integration audit: 2026-07-07*
