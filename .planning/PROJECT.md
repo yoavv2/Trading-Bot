@@ -10,41 +10,34 @@ The initial product focus is a Daily Trend Following workflow for U.S. equities 
 
 Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
 
-## Current Milestone: v1.1 Execution Correctness & Hardening
+## Current Milestone: v1.2 Operator Console v0
 
-**Goal:** Prove every order intent has exactly one legal lifecycle, one broker identity, and one audit trace before extending platform capabilities.
+**Goal:** Give the single operator a read-only Next.js console over the existing FastAPI read endpoints so every backtest/risk/paper run is inspectable — signals, blocked trades, orders, fills, positions, statistics, kill-switch state — without reading raw logs.
 
-**Thesis:** The central weakness is not file size or missing features — it is the absence of a hard boundary around two areas: order state transitions and reconciliation between local DB and broker. Implicit state machines, non-idempotent submissions, unenforced single-instance invariants, and string-classified reconciliation findings are all symptoms of a missing formal execution model. Stabilize the core before widening scope.
+**Scope rule:** Every screen that increases inspectability — yes. Every screen that adds a new capability — no. This is a debugging instrument, not a marketing product. Working name is Operator Console v0, explicitly not "Trading Dashboard v1" — a full dashboard now would create an illusion of maturity while backend blockers remain (Polygon production-path read unverified, Alpaca unconfigured, test gaps around retry/reconciliation/risk edges). A narrow UI instead exposes system state and makes runs checkable.
 
-**Target features:**
+**Target features (read-only inspection):**
+- System status — health, environment, DB connection, latest run, kill-switch state
+- Strategy overview — `TrendFollowingDailyV1`, enabled/disabled, config summary
+- Runs table — backtest/risk/paper runs, status, session date, created_at, errors
+- Run detail page — signals, risk decisions, blocked reasons, orders, fills, metrics
+- Paper trading status — current positions, open orders, latest reconciliation result, account snapshot
+- Analytics view — equity curve, Sharpe, drawdown, win rate, P&L, trade count
+- Kill-switch display — current state shown clearly; changing it deferred or behind a very explicit local-only action
 
-Tier 0 — correctness kernel (blocking before new features):
-- Formal order state machine with closed transition map and single `apply_order_transition(order, event)` entry point
-- Deterministic `client_order_id` for every submission so partial broker failures cannot duplicate intents
-- Concurrency guard per `(strategy_id, session_date)` via DB advisory lock, lease table with heartbeat, or unique-active-run constraint
-- Reconciliation correctness rewrite: normalized snapshots, typed findings (enum/dataclass, not strings), matched by typed identity, materialized report
-- Emergency halt / kill switch for new submissions (full event sourcing deferred)
+**Explicit non-goals for v1.2:**
+- Real-time websocket dashboard
+- Mobile app
+- Multi-user auth/RBAC
+- SaaS-style onboarding
+- Strategy builder
+- Multi-strategy comparison beyond what already exists
+- Live trading controls
+- UI that hides backend uncertainty behind polished visuals
 
-Tier 1 — operational hardening:
-- Fail-fast startup config validation (secrets per execution mode, broker vs paper/live, mutually exclusive flags, DB settings, tolerance ranges) — process refuses to boot on invalid config
-- Log sanitization policy — no credentials, connection URLs with passwords, or auth headers in logs; broker order IDs hashed or gated behind debug flag
-- DB connection lifecycle consolidation — pick one model (process-level immutable or explicit lifecycle manager); resolve `@lru_cache` vs `_ENGINE_CACHE` inconsistency
+## Paused Milestone: v1.1 Execution Correctness & Hardening (Phase 7/12 complete)
 
-Tier 2 — performance (only after correctness):
-- Fix N+1 query in paper preflight
-- Replace O(n²) reconciliation with indexed maps keyed by symbol/account/side
-- Add covering indices matching real query shapes
-
-Tier 3 — maintainability:
-- Split bloated `worker/__main__.py` into `worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile}.py` — orchestration boundaries only, not domain semantics
-- Restructure services into `services/execution/{submit_orders,sync_orders,transition,idempotency}.py`, `services/reconciliation/{snapshot,matcher,findings,report}.py`, `services/config/{validation,secrets}.py`
-- Extract scattered tolerance constants, consolidate settings sprawl, add lint/format/static-check toolchain
-
-**Explicit non-goals for v1.1:**
-- Full event sourcing / historical replay — out of scope; kill switch is the needed primitive
-- New product features (new strategies, intraday, multi-broker, dashboard) — v1.1 is hardening only
-- Architecture redesign — layering is sound; restructure is bounded to orchestration split
-- Performance-first work ahead of correctness — speed without state integrity is negative value
+Phase 7 (Correctness Kernel: order state machine, deterministic `client_order_id` idempotency, persistent kill switch) shipped 2026-04-20. Phases 8–12 (concurrency guard, reconciliation rewrite, startup hardening, query performance, structural refactor) are paused, to resume after v1.2. Full remaining scope archived in `.planning/milestones/v1.1-paused/` and recorded in MILESTONES.md. The `.planning/00-VERIFY.md` gate remains binding for resuming Phase 8+ backend work.
 
 ## Requirements
 
@@ -571,4 +564,4 @@ The future API should expose platform data cleanly to the dashboard without dire
 | Defer dashboard work until the engine is trustworthy | The engine, analytics, and paper workflow must be credible before UI investment | — Pending |
 
 ---
-*Last updated: 2026-04-18 after starting milestone v1.1 (Execution Correctness & Hardening)*
+*Last updated: 2026-07-07 after starting milestone v1.2 (Operator Console v0); v1.1 paused at Phase 7/12*

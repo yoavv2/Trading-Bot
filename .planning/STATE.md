@@ -1,35 +1,34 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: — Completed 2026-03-15
-status: completed
-stopped_at: Completed 07-03 — global kill switch landed; Phase 7 correctness kernel complete
-last_updated: "2026-04-20T11:18:47.151Z"
-last_activity: 2026-04-20 — completed 07-03 global kill switch persistence, enforcement, and operator surface
+milestone: v1.2
+milestone_name: Operator Console v0
+status: defining_requirements
+stopped_at: Milestone started — requirements not yet defined
+last_updated: "2026-07-07T00:00:00Z"
+last_activity: 2026-07-07 — Milestone v1.2 started; v1.1 paused at Phase 7/12
 progress:
-  total_phases: 12
-  completed_phases: 7
-  total_plans: 20
-  completed_plans: 20
-  percent: 67
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-18)
+See: .planning/PROJECT.md (updated 2026-07-07)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 — Execution Correctness & Hardening (Phase 7 complete; Phase 8 LOCK next)
+**Current focus:** Milestone v1.2 Operator Console v0 — defining requirements
 
 ## Current Position
 
-Phase: 08 — Advisory Locks (next)
-Plan: 08-01 (not started)
-Status: Phase 7 correctness kernel complete — order state machine, deterministic idempotency, and global kill switch landed
-Last activity: 2026-04-20 — completed 07-03 global kill switch persistence, enforcement, and operator surface
-Progress: [███████░░░] 67%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-07-07 — Milestone v1.2 (Operator Console v0) started; v1.1 paused at Phase 7/12, remaining scope archived in .planning/milestones/v1.1-paused/
 
 ## Performance Metrics
 
@@ -154,12 +153,16 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
+- `00-VERIFY` remains the gate for resuming v1.1 backend work (Phase 8+). It does NOT block v1.2 Operator Console read-only UI work, which consumes existing read endpoints only.
+- The operator `.env` currently overrides the temporary app-boot test environment (`local` instead of expected `test`), so the focused baseline is not green.
+- Polygon has a configured non-placeholder credential but has not completed an authorized read-only request in this verification pass.
+- Alpaca paper credentials are not configured, so account, positions, and orders remain unverified.
 - Docker daemon was unavailable during Phase 1 and 2-01 verification; local PostgreSQL@14 (Homebrew) used instead of Docker Compose.
 - Local PostgreSQL-backed verification requires elevated sandbox access in this environment, but the Phase 4 verification slice passed once rerun against the local database.
 - The Postgres-backed Phase 06 verification slice also required elevated local access, and the temporary-database fixtures now terminate same-user sessions explicitly before dropping test databases.
 
 ## Session Continuity
 
-Last session: 2026-04-20T08:00:00Z
-Stopped at: Completed 07-03 — global kill switch landed; Phase 7 correctness kernel complete
-Resume file: None
+Last session: 2026-07-02T07:39:24Z
+Stopped at: 00-VERIFY in progress — waiting on authorized external/local integration checks
+Resume file: .planning/00-VERIFY.md
