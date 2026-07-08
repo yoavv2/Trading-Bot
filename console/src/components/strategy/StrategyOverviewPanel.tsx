@@ -92,7 +92,7 @@ export function StrategyOverviewPanel() {
                     {strategy.display_name}
                   </h3>
                   <span className="text-xs text-zinc-500">
-                    v{strategy.version}
+                    {strategy.version}
                   </span>
                   <span
                     className={
