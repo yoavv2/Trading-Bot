@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session sync-paper-state reconcile-paper-execution test
+.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session sync-paper-state reconcile-paper-execution test console console-install
 
 up:
 	$(COMPOSE) up --build -d
@@ -83,3 +83,9 @@ reconcile-paper-execution:
 
 test:
 	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py tests/test_strategy_registry.py tests/test_dry_run.py tests/test_market_data_ingestion.py tests/test_market_data_access.py tests/test_trend_following_strategy.py -q
+
+console-install:
+	cd console && npm install
+
+console:
+	cd console && npm run dev

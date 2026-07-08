@@ -140,6 +140,19 @@ Override the default strategy for the dry-run flow with:
 make dry-run STRATEGY=trend_following_daily
 ```
 
+## Operator Console
+
+A read-only Next.js operator console lives at `console/`. It proxies to this
+FastAPI app's read surface (no new backend capabilities) so an operator can see
+run/strategy/analytics/system status without touching the API directly. Start
+it with:
+
+```bash
+make console
+```
+
+See `console/README.md` for setup (`.env.local`) and the proxy design.
+
 ## Configuration Model
 
 Runtime settings are assembled in this order:

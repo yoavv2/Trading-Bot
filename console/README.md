@@ -1,36 +1,47 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Operator Console
 
-## Getting Started
+Read-only Next.js operator console for the trading platform. This is a
+debugging instrument for a single operator, not a customer-facing dashboard —
+every screen it will grow shows what the running system is doing right now
+and lets the operator halt it if needed.
 
-First, run the development server:
+## Prerequisites
+
+- Node.js 22+
+- The FastAPI backend running and reachable, e.g.:
+  ```bash
+  PYTHONPATH=src .venv/bin/python -m uvicorn trading_platform.api.app:app --port 8000
+  ```
+  or via `docker compose up` (the `api` service listens on port 8000 the same way).
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd console
+npm install         # first time only (or: make console-install from repo root)
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Edit `.env.local` if the API is not at the default `http://127.0.0.1:8000`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+TRADING_CONSOLE_API_BASE_URL=http://127.0.0.1:8000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Start
 
-## Learn More
+From the repo root:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+make console
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+(equivalent to `cd console && npm run dev`). Then open http://localhost:3000.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Proxy design
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The FastAPI backend has no CORS middleware and none is planned — instead, every
+browser call the console makes goes through Next.js rewrites under `/backend/*`
+(configured in `next.config.ts`), which the Next.js server forwards to
+`TRADING_CONSOLE_API_BASE_URL`. Because the browser only ever talks to the
+Next.js origin, no CORS configuration is needed on the backend.
