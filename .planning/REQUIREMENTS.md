@@ -12,8 +12,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Console Foundation
 
 - [x] **CONS-01**: Operator can start the console locally with a single documented command; it reads the FastAPI base URL from local env config
-- [ ] **CONS-02**: When the API is unreachable or an endpoint returns an error, the affected screen shows an explicit error state with the failing endpoint and status — never an empty or fake-success render
-- [ ] **CONS-03**: Every screen shows when its data was fetched (as-of timestamp) with manual refresh
+- [x] **CONS-02**: When the API is unreachable or an endpoint returns an error, the affected screen shows an explicit error state with the failing endpoint and status — never an empty or fake-success render
+- [x] **CONS-03**: Every screen shows when its data was fetched (as-of timestamp) with manual refresh
 
 ### System Status
 
@@ -88,8 +88,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | CONS-01 | Phase 13 | Complete |
-| CONS-02 | Phase 13 | Pending |
-| CONS-03 | Phase 13 | Pending |
+| CONS-02 | Phase 13 | Complete |
+| CONS-03 | Phase 13 | Complete |
 | STAT-01 | Phase 13 | Pending |
 | STAT-02 | Phase 13 | Pending |
 | STAT-03 | Phase 13 | Complete |

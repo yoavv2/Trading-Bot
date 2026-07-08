@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
-status: Phase 13 in progress — plan 02/4 complete
-stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-07-08T09:19:24.983Z"
-last_activity: 2026-07-08 — Phase 13 plan 02 executed (Next.js console scaffold at console/ with env-driven /backend proxy, CONS-01)
+status: executing
+stopped_at: Completed 13-03-PLAN.md
+last_updated: "2026-07-08T09:46:46.963Z"
+last_activity: 2026-07-08 — Phase 13 plan 03 executed (shared fetchApi/useApiQuery client + ErrorState/FetchMeta components + global KillSwitchBanner, CONS-02/CONS-03/KILL-01)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -24,28 +24,28 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 13 of 16 in v1.2 (Console Foundation & System Status) — plan 02/4 complete
-Plan: 02 complete (13-03-PLAN.md next; run `/gsd:execute-phase 13` to continue)
-Status: Phase 13 in progress — plan 02/4 complete
-Last activity: 2026-07-08 — Phase 13 plan 02 executed (Next.js console scaffold at console/ with env-driven /backend proxy, CONS-01)
+Phase: 13 of 16 in v1.2 (Console Foundation & System Status) — plan 03/4 complete
+Plan: 03 complete (13-04-PLAN.md next; run `/gsd:execute-phase 13` to continue)
+Status: Phase 13 in progress — plan 03/4 complete
+Last activity: 2026-07-08 — Phase 13 plan 03 executed (shared fetchApi/useApiQuery client + ErrorState/FetchMeta components + global KillSwitchBanner, CONS-02/CONS-03/KILL-01)
 
-Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [██████░░░░] 7/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 0 of 4, Phase 13: 2/4 plans done)
+Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [██████░░░░] 7/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 0 of 4, Phase 13: 3/4 plans done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18 (v1.0: 16, v1.1: 3, v1.2: 2)
-- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min
+- Total plans completed: 19 (v1.0: 16, v1.1: 3, v1.2: 3)
+- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min
 - Total execution time: -
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
 **v1.1 By Phase:** 7: 3/3 complete; 8-12: 0/TBD (paused, resume after v1.2)
 
-**v1.2 By Phase:** 13: 2/4 (01 done: kill-switch route, 02 done: console scaffold + proxy), 14: 0/TBD, 15: 0/TBD, 16: 0/TBD
+**v1.2 By Phase:** 13: 3/4 (01 done: kill-switch route, 02 done: console scaffold + proxy, 03 done: shared fetch client + kill-switch banner), 14: 0/TBD, 15: 0/TBD, 16: 0/TBD
 
 **Recent Trend:**
-- Last activity: Phase 13 plan 02 executed — Next.js console scaffold with env-driven /backend proxy, dark nav shell, make console (~20 min, 2 tasks, 19 files)
+- Last activity: Phase 13 plan 03 executed — vitest-covered fetchApi/useApiQuery client, shared ErrorState/FetchMeta components, global KillSwitchBanner mounted in root layout (~16 min, 2 tasks, 9 files)
 - Trend: v1.1 paused at Phase 7/12 to prioritize the read-only operator console before resuming backend hardening
 
 *Updated after each plan completion*
@@ -65,6 +65,7 @@ Recent decisions affecting current work:
 - [Phase 13]: Thin GET /api/v1/system/kill-switch route added as the only approved v1.2 backend change (STAT-03, KILL-01)
 - [13-02]: create-next-app scaffold worked around npm's rejection of a package named "console" (core module name) by scaffolding to a temp dir and moving it into console/; package.json name field is operator-console, folder is unaffected
 - [13-02]: Narrowed console/.gitignore's blanket `.env*` rule with `!.env.example` — the current create-next-app template ignores all .env* files including .env.example, which would have broken the CONS-01 requirement that .env.example be committed
+- [13-03]: Added a narrowly-scoped, commented eslint-disable for react-hooks/set-state-in-effect in useApiQuery's mount effect rather than adding request-id/version state indirection, to keep the shared fetch hook a deliberate minimal instrument per plan scope
 
 ### Pending Todos
 
@@ -81,6 +82,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-08T09:19:24.981Z
-Stopped at: Completed 13-02-PLAN.md
-Resume file: .planning/phases/13-console-foundation-and-system-status/13-03-PLAN.md
+Last session: 2026-07-08T09:45:55.848Z
+Stopped at: Completed 13-03-PLAN.md
+Resume file: .planning/phases/13-console-foundation-and-system-status/13-04-PLAN.md
