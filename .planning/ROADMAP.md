@@ -92,13 +92,14 @@ Plans:
   1. Operator can view `TrendFollowingDailyV1` with its enabled/disabled status and config summary (universe, entry/exit rules, risk params) (STRA-01, STRA-02).
   2. Operator can view a runs table spanning backtest/risk/paper run types with status, session date, created_at, and error indication, and can filter it by run type and status (RUNS-01, RUNS-02).
   3. Operator can open a run detail page and see that run's signals, risk decisions including blocked trades with human-readable reasons, orders and fills with `client_order_id` intent lineage, and the run's persisted metrics (RUNS-03, RUNS-04, RUNS-05, RUNS-06).
-**Plans**: 4 plans
+**Plans**: 5 plans
 
 Plans:
 - [ ] 14-01-PLAN.md — Strategy Overview screen (enabled/disabled + config summary) + nav links (STRA-01, STRA-02)
 - [ ] 14-02-PLAN.md — Filterable Runs table with drill-down links (RUNS-01, RUNS-02)
 - [ ] 14-03-PLAN.md — Run detail shell + Signals & Risk Decisions + run-scoped filter/CappedDisclosure primitives (RUNS-03, RUNS-04)
 - [ ] 14-04-PLAN.md — Run detail Orders/Fills (client_order_id lineage) + persisted Metrics (RUNS-05, RUNS-06)
+- [ ] 14-05-PLAN.md — Operator live-verify checkpoint: end-to-end strategy/runs drill-down + truncation-disclosure honesty (verifies STRA-01/02, RUNS-01..06)
 
 ### Phase 15: Paper Trading Status
 **Goal**: Operator can check the live paper-trading state — what's open, what the broker says, what the account looks like — on one screen.
