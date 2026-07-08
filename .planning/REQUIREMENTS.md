@@ -23,8 +23,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Strategy Overview
 
-- [ ] **STRA-01**: Operator can view `TrendFollowingDailyV1` with its enabled/disabled status
-- [ ] **STRA-02**: Operator can view the strategy's config summary (universe, entry/exit rules, risk params)
+- [x] **STRA-01**: Operator can view `TrendFollowingDailyV1` with its enabled/disabled status
+- [x] **STRA-02**: Operator can view the strategy's config summary (universe, entry/exit rules, risk params)
 
 ### Runs
 
@@ -93,8 +93,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STAT-01 | Phase 13 | Complete |
 | STAT-02 | Phase 13 | Complete |
 | STAT-03 | Phase 13 | Complete |
-| STRA-01 | Phase 14 | Pending |
-| STRA-02 | Phase 14 | Pending |
+| STRA-01 | Phase 14 | Complete |
+| STRA-02 | Phase 14 | Complete |
 | RUNS-01 | Phase 14 | Complete |
 | RUNS-02 | Phase 14 | Complete |
 | RUNS-03 | Phase 14 | Pending |
