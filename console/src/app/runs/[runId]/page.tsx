@@ -7,6 +7,8 @@ import {
   type RunDetailResponse,
 } from "@/components/runs/detail/RunHeaderPanel";
 import { SignalsRiskPanel } from "@/components/runs/detail/SignalsRiskPanel";
+import { OrdersFillsPanel } from "@/components/runs/detail/OrdersFillsPanel";
+import { MetricsPanel } from "@/components/runs/detail/MetricsPanel";
 
 type RunDetailPageProps = {
   params: Promise<{ runId: string }>;
@@ -42,11 +44,12 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
         <>
           <SignalsRiskPanel runId={runId} strategyId={run.strategy_id} />
 
-          {/*
-            14-04 drop-in point (RunDetailContext = { runId, strategyId: run.strategy_id, runType: run.run_type }):
-            <OrdersFillsPanel runId={runId} strategyId={run.strategy_id} runType={run.run_type} />
-            <MetricsPanel runId={runId} strategyId={run.strategy_id} runType={run.run_type} />
-          */}
+          <OrdersFillsPanel runId={runId} strategyId={run.strategy_id} />
+          <MetricsPanel
+            runId={runId}
+            strategyId={run.strategy_id}
+            runType={run.run_type}
+          />
         </>
       ) : null}
     </main>
