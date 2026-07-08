@@ -37,6 +37,12 @@ export default function RootLayout({
           <Link href="/" className="text-zinc-400 hover:text-zinc-100">
             System Status
           </Link>
+          <Link href="/strategy" className="text-zinc-400 hover:text-zinc-100">
+            Strategy
+          </Link>
+          <Link href="/runs" className="text-zinc-400 hover:text-zinc-100">
+            Runs
+          </Link>
         </nav>
         <KillSwitchBanner />
         {children}
