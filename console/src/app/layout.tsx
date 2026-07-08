@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { KillSwitchBanner } from "@/components/KillSwitchBanner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -37,7 +38,7 @@ export default function RootLayout({
             System Status
           </Link>
         </nav>
-        {/* KillSwitchBanner mounts here (plan 13-03) — must render on every screen */}
+        <KillSwitchBanner />
         {children}
       </body>
     </html>

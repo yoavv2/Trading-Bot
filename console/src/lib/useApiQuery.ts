@@ -36,6 +36,12 @@ export function useApiQuery<T>(endpoint: string): QueryState<T> {
 
   useEffect(() => {
     mountedRef.current = true;
+    // Deliberate: this hand-rolled fetch instrument (no SWR/TanStack per plan
+    // scope) needs an immediate "in flight" signal on mount and on endpoint
+    // change, so eslint-plugin-react-hooks' set-state-in-effect check — tuned
+    // for external-store sync patterns — flags this call. `runFetch` always
+    // resolves loading via its guarded `.then()`, so this is safe.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     runFetch();
     return () => {
       mountedRef.current = false;
