@@ -17,8 +17,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### System Status
 
-- [ ] **STAT-01**: Operator can view health, environment name, and DB connection state from the health/system endpoints
-- [ ] **STAT-02**: Operator can view the latest run (any type) with its status and errors
+- [x] **STAT-01**: Operator can view health, environment name, and DB connection state from the health/system endpoints
+- [x] **STAT-02**: Operator can view the latest run (any type) with its status and errors
 - [x] **STAT-03**: Operator can view current kill-switch state on the system status screen
 
 ### Strategy Overview
@@ -90,8 +90,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONS-01 | Phase 13 | Complete |
 | CONS-02 | Phase 13 | Complete |
 | CONS-03 | Phase 13 | Complete |
-| STAT-01 | Phase 13 | Pending |
-| STAT-02 | Phase 13 | Pending |
+| STAT-01 | Phase 13 | Complete |
+| STAT-02 | Phase 13 | Complete |
 | STAT-03 | Phase 13 | Complete |
 | STRA-01 | Phase 14 | Pending |
 | STRA-02 | Phase 14 | Pending |
