@@ -32,8 +32,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **RUNS-02**: Operator can filter the runs table by run type and status
 - [x] **RUNS-03**: Operator can open a run detail page showing its signals
 - [x] **RUNS-04**: Run detail shows risk decisions including blocked trades with human-readable blocked reasons
-- [ ] **RUNS-05**: Run detail shows orders and fills, including intent lineage (client_order_id)
-- [ ] **RUNS-06**: Run detail shows the run's persisted metrics
+- [x] **RUNS-05**: Run detail shows orders and fills, including intent lineage (client_order_id)
+- [x] **RUNS-06**: Run detail shows the run's persisted metrics
 
 ### Paper Trading Status
 
@@ -99,8 +99,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RUNS-02 | Phase 14 | Complete |
 | RUNS-03 | Phase 14 | Complete |
 | RUNS-04 | Phase 14 | Complete |
-| RUNS-05 | Phase 14 | Pending |
-| RUNS-06 | Phase 14 | Pending |
+| RUNS-05 | Phase 14 | Complete |
+| RUNS-06 | Phase 14 | Complete |
 | PAPR-01 | Phase 15 | Pending |
 | PAPR-02 | Phase 15 | Pending |
 | PAPR-03 | Phase 15 | Pending |

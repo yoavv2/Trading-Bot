@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: "Completed 14-03-PLAN.md (Run detail shell + Signals/Risk Decisions panel); Completed 14-02-PLAN.md (Runs screen: filterable table + drill-down links); Completed 14-01-PLAN.md (Strategy overview screen + nav links)"
-last_updated: "2026-07-08T16:33:00.000Z"
-last_activity: "2026-07-08 — Phase 14 Wave 1 executing: 14-01 (Strategy overview screen + nav links), 14-02 (Runs list), and 14-03 (Run detail shell + Signals/Risk Decisions) completed in parallel"
+stopped_at: Completed 14-04-PLAN.md (Orders/Fills panel + run-type-aware Metrics panel)
+last_updated: "2026-07-08T20:20:35.858Z"
+last_activity: "2026-07-08 — Phase 14 Wave 1: 14-03 (Run detail shell, RunHeaderPanel, SignalsRiskPanel, runScopedFilter/CappedDisclosure primitives) completed"
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -24,28 +24,28 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 14 of 16 in v1.2 (Strategy & Runs Inspection) — IN PROGRESS (Wave 1 executing: 14-01 done, 14-02 done, 14-03 done)
-Plan: Phase 14 Wave 1 executing (14-01, 14-02, 14-03 in parallel); 14-01 (Strategy overview screen), 14-02 (Runs list), and 14-03 (Run detail shell + Signals/Risk Decisions) complete
-Status: Phase 14 in progress — Wave 1 plans executing in parallel
-Last activity: 2026-07-08 — Phase 14 Wave 1: 14-03 (Run detail shell, RunHeaderPanel, SignalsRiskPanel, runScopedFilter/CappedDisclosure primitives) completed
+Phase: 14 of 16 in v1.2 (Strategy & Runs Inspection) — IN PROGRESS (Wave 1 complete: 14-01, 14-02, 14-03 done; Wave 2: 14-04 done)
+Plan: 14-04 (Orders & Fills panel with client_order_id intent lineage + run-type-aware Metrics panel) complete; only 14-05 (operator live-verify checkpoint) remains in Phase 14
+Status: Phase 14 in progress — 4 of 5 plans complete, 14-05 checkpoint plan remaining
+Last activity: 2026-07-08 — Phase 14: 14-04 (OrdersFillsPanel, MetricsPanel, mounted on run detail page) completed
 
 Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [███████░░░] 8/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 1 of 4, Phase 13 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 21 (v1.0: 16, v1.1: 3, v1.2: 5)
-- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min
+- Total plans completed: 22 (v1.0: 16, v1.1: 3, v1.2: 6)
+- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min
 - Total execution time: -
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
 **v1.1 By Phase:** 7: 3/3 complete; 8-12: 0/TBD (paused, resume after v1.2)
 
-**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: in progress (14-02: Runs screen — filterable table + drill-down links, ~12 min, 2 tasks, 3 files; 14-01: Strategy overview screen + nav links, ~10 min, 2 tasks, 3 files; 14-03: Run detail shell + Signals/Risk Decisions panel + runScopedFilter/CappedDisclosure primitives, ~10 min, 2 tasks, 6 files), 15: 0/TBD, 16: 0/TBD
+**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 4/5 complete (14-02: Runs screen — filterable table + drill-down links, ~12 min, 2 tasks, 3 files; 14-01: Strategy overview screen + nav links, ~10 min, 2 tasks, 3 files; 14-03: Run detail shell + Signals/Risk Decisions panel + runScopedFilter/CappedDisclosure primitives, ~10 min, 2 tasks, 6 files; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel, ~20 min, 2 tasks, 3 files), 14-05 (operator live-verify checkpoint) remaining, 15: 0/TBD, 16: 0/TBD
 
 **Recent Trend:**
-- Last activity: Phase 14 Wave 1 plans 14-01, 14-02, 14-03 executed in parallel — strategy overview screen, runs list, and run detail shell (RunHeaderPanel + SignalsRiskPanel + runScopedFilter/CappedDisclosure primitives for RUNS-03/RUNS-04). Phase 13 (Console Foundation & System Status) is complete; Phase 14 Wave 1 now fully done pending 14-04/14-05.
+- Last activity: Phase 14: 14-04 completed — OrdersFillsPanel (RUNS-05 orders/fills with client_order_id intent lineage) and run-type-aware MetricsPanel (RUNS-06 persisted metrics), both mounted on the run detail page. Only 14-05 (operator live-verify checkpoint) remains before Phase 14 is complete.
 - Trend: v1.1 paused at Phase 7/12 to prioritize the read-only operator console before resuming backend hardening
 
 *Updated after each plan completion*
@@ -71,6 +71,7 @@ Recent decisions affecting current work:
 - [14-01]: Strategy Overview screen composed directly from useApiQuery/FetchMeta/ErrorState (not the status-screen-scoped StatusPanel wrapper), per the 13-04 scoping decision; open-ended config dicts (indicators/exits/risk) render generically via Object.entries + JSON.stringify.
 - [14-02]: RunsTable/RunFilters composed directly from useApiQuery/ErrorState/FetchMeta (not StatusPanel), consistent with the 13-04 scoping decision; RUNS-01 "created_at" satisfied by started_at (labeled "Started") with an inline honesty comment, since the runs serializer exposes no distinct created_at field.
 - [Phase 14]: [14-03]: Run fetch owned by the run-detail page (not RunHeaderPanel) via a single useApiQuery call passed down as props, per the plan's explicit alternative — avoids double-fetching /api/v1/runs/{runId} and gates SignalsRiskPanel on a resolved strategy_id.
+- [Phase 14]: [14-04]: MetricsPanel gates run-type at the render boundary (mounting a fetching child only for backtest/paper_execution) rather than conditionally calling useApiQuery inline, keeping every hook call unconditional per rules-of-hooks.
 
 ### Pending Todos
 
@@ -87,6 +88,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-08T16:33:00.000Z
-Stopped at: Completed 14-03-PLAN.md (Run detail shell + Signals/Risk Decisions panel); Completed 14-02-PLAN.md (Runs screen: filterable table + drill-down links); Completed 14-01-PLAN.md (Strategy overview screen + nav links)
-Resume file: None — Wave 1 of Phase 14 complete; 14-04 (wave 2, depends_on 14-03) and 14-05 remain
+Last session: 2026-07-08T20:20:35.855Z
+Stopped at: Completed 14-04-PLAN.md (Orders/Fills panel + run-type-aware Metrics panel)
+Resume file: None
