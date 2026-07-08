@@ -22,6 +22,7 @@ from trading_platform.api.app import create_app  # noqa: E402
 from trading_platform.core.settings import clear_settings_cache, load_settings  # noqa: E402
 from trading_platform.services.analytics import StrategyAnalyticsService  # noqa: E402
 from trading_platform.services.backtesting import run_backtest  # noqa: E402
+from trading_platform.services.operator_controls import OperatorControlService  # noqa: E402
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService  # noqa: E402
 
 
@@ -257,6 +258,41 @@ def test_api_reads_return_not_found_for_missing_resources(
     assert missing_analytics.status_code == 404
     assert missing_run_list.status_code == 404
     assert missing_run_detail.status_code == 404
+
+
+def test_system_kill_switch_route_reports_persisted_state(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    with _build_client() as client:
+        armed = client.get("/api/v1/system/kill-switch")
+
+    assert armed.status_code == 200
+    armed_body = armed.json()
+    assert armed_body["name"] == "global_kill_switch"
+    assert armed_body["state"] == "armed"
+    assert armed_body["is_tripped"] is False
+    for key in (
+        "last_changed_at",
+        "last_change_actor",
+        "last_change_reason",
+        "last_change_run_id",
+    ):
+        assert key in armed_body
+
+    settings = load_settings()
+    OperatorControlService(settings=settings).trip_kill_switch(
+        reason="pytest halt", actor="pytest", trigger_source="pytest"
+    )
+
+    with _build_client() as client:
+        tripped = client.get("/api/v1/system/kill-switch")
+
+    assert tripped.status_code == 200
+    tripped_body = tripped.json()
+    assert tripped_body["state"] == "tripped"
+    assert tripped_body["is_tripped"] is True
+    assert tripped_body["last_change_reason"] == "pytest halt"
 
 
 def test_api_reads_return_empty_state_for_known_strategy(
