@@ -76,7 +76,13 @@ Full remaining scope, requirements, and phase details: `.planning/milestones/v1.
   2. When the API is unreachable or any endpoint errors, the affected screen shows an explicit error state naming the failing endpoint and status — never an empty or fake-success render (CONS-02); every screen shows an as-of fetch timestamp with a manual refresh control (CONS-03).
   3. Operator can view health, environment name, and DB connection state, plus the latest run of any type with its status and errors, on a system status screen (STAT-01, STAT-02).
   4. Kill-switch state is visible on the system status screen and as a global banner on every console screen whenever tripped (STAT-03, KILL-01) — per Known Gaps #1 resolution, this phase includes the approved narrow exception: one thin GET route exposing the existing `get_kill_switch_state()` service method.
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Thin GET /api/v1/system/kill-switch route + route-level test (approved narrow exception)
+- [ ] 13-02-PLAN.md — Next.js console scaffold in console/, env-driven /backend proxy, app shell, documented start command
+- [ ] 13-03-PLAN.md — Shared fetchApi/useApiQuery + ErrorState/FetchMeta pattern (vitest-covered) and global KillSwitchBanner in layout
+- [ ] 13-04-PLAN.md — System status screen (health, readiness/DB, system info, kill-switch, latest run) + operator verification checkpoint
 
 ### Phase 14: Strategy & Runs Inspection
 **Goal**: Operator can see the strategy's current state and drill from a runs table into any single run's complete audit trail without reading logs or querying the database.
@@ -126,7 +132,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
-| 13. Console Foundation & System Status | v1.2 | 0/TBD | Not started | - |
+| 13. Console Foundation & System Status | v1.2 | 0/4 | Planned | - |
 | 14. Strategy & Runs Inspection | v1.2 | 0/TBD | Not started | - |
 | 15. Paper Trading Status | v1.2 | 0/TBD | Not started | - |
 | 16. Analytics & Charting | v1.2 | 0/TBD | Not started | - |
