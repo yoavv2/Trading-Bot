@@ -19,7 +19,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 - [ ] **STAT-01**: Operator can view health, environment name, and DB connection state from the health/system endpoints
 - [ ] **STAT-02**: Operator can view the latest run (any type) with its status and errors
-- [ ] **STAT-03**: Operator can view current kill-switch state on the system status screen
+- [x] **STAT-03**: Operator can view current kill-switch state on the system status screen
 
 ### Strategy Overview
 
@@ -49,7 +49,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Kill Switch
 
-- [ ] **KILL-01**: A tripped kill switch is visibly indicated on every console screen (global banner), not only on the status page
+- [x] **KILL-01**: A tripped kill switch is visibly indicated on every console screen (global banner), not only on the status page
 
 ## Future Requirements
 
@@ -92,7 +92,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONS-03 | Phase 13 | Pending |
 | STAT-01 | Phase 13 | Pending |
 | STAT-02 | Phase 13 | Pending |
-| STAT-03 | Phase 13 | Pending |
+| STAT-03 | Phase 13 | Complete |
 | STRA-01 | Phase 14 | Pending |
 | STRA-02 | Phase 14 | Pending |
 | RUNS-01 | Phase 14 | Pending |
@@ -107,7 +107,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PAPR-04 | Phase 15 | Pending |
 | ANLX-01 | Phase 16 | Pending |
 | ANLX-02 | Phase 16 | Pending |
-| KILL-01 | Phase 13 | Pending |
+| KILL-01 | Phase 13 | Complete |
 
 **Coverage:**
 - v1.2 requirements: 21 total
