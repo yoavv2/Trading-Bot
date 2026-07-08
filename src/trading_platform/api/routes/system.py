@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
-from trading_platform.api.dependencies import build_operator_read_catalog, get_settings, get_strategy_registry
+from trading_platform.api.dependencies import (
+    build_operator_read_catalog,
+    get_operator_read_service,
+    get_settings,
+    get_strategy_registry,
+)
 from trading_platform.core.settings import Settings
+from trading_platform.services.operator_reads import OperatorReadService
 from trading_platform.strategies.registry import StrategyRegistry
 
 router = APIRouter(prefix="/api/v1", tags=["system"])
@@ -41,3 +47,13 @@ def system(
         },
         "operator_read_api": build_operator_read_catalog(settings.api.base_path),
     }
+
+
+@router.get("/system/kill-switch")
+def kill_switch_state(
+    operator_reads: OperatorReadService = Depends(get_operator_read_service),
+) -> dict[str, object]:
+    try:
+        return operator_reads.get_kill_switch_state()
+    except LookupError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
