@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 14-04-PLAN.md (Orders/Fills panel + run-type-aware Metrics panel)
-last_updated: "2026-07-08T20:20:35.858Z"
-last_activity: "2026-07-08 — Phase 14 Wave 1: 14-03 (Run detail shell, RunHeaderPanel, SignalsRiskPanel, runScopedFilter/CappedDisclosure primitives) completed"
+stopped_at: Completed 14-05-PLAN.md (operator live-verify checkpoint — approved)
+last_updated: "2026-07-09T00:15:00.000Z"
+last_activity: "2026-07-09 — Phase 14 plan 05: operator live-verified strategy/runs inspection end-to-end and approved; found+fixed vv1 version-prefix bug (ddddd8d), logged completed_at<started_at backend data anomaly for a future backend phase"
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -79,6 +79,7 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
+- BACKEND DATA-INTEGRITY (found 2026-07-09 during 14-05 live verification, deferred to a future backend phase): an `operator_control` `strategy_run` had `completed_at` (2026-07-08T17:47:49.391645+03:00) earlier than `started_at` (2026-07-08T17:47:49.468307+03:00). Not a console bug — `RunHeaderPanel` maps/renders both fields correctly; the read-only console honestly surfaces the backend's inverted timestamps. v1.2 authorizes no backend writes, so correcting the timestamp-generation ordering for `operator_control` runs is out of scope here. No blocker to Phase 14/15/16.
 - RESOLVED 2026-07-07: both backend read-surface gaps approved as narrow exceptions — Phase 13 adds one thin GET route for `get_kill_switch_state()`; Phase 16 adds the existing `equity_curve` field to the analytics response. No other backend change authorized under this exception.
 - `00-VERIFY` remains the gate for resuming v1.1 backend work (Phase 8+). It does NOT block v1.2 Operator Console read-only UI work, which consumes existing read endpoints only.
 - The operator `.env` currently overrides the temporary app-boot test environment (`local` instead of expected `test`), so the focused baseline is not green.
