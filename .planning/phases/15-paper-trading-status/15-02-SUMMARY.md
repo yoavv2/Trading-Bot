@@ -67,6 +67,7 @@ Each task was committed atomically:
 1. **Task 1: Current-positions panel (PAPR-01)** - `5bf01bb` (feat)
 2. **Task 2: Open-orders panel (PAPR-02)** - `bbeb485` (feat)
 3. **Task 3: Compose positions + open orders into the /paper page** - `483ed4b` (feat)
+4. **Post-task fix: inline fetch endpoint URLs into useApiQuery calls** - `0d5f8ff` (fix, Rule 1 — see Deviations)
 
 **Plan metadata:** (this commit, see final_commit step)
 
@@ -81,7 +82,20 @@ Each task was committed atomically:
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+### Auto-fixed Issues
+
+**1. [Rule 1 - Bug] Fetch endpoint constant broke the key_links verification pattern**
+- **Found during:** Post-task self-review (advisor call after Task 3 committed)
+- **Issue:** Both panels initially extracted the fetch URL into a module-level `const ENDPOINT` on a line separate from the `useApiQuery(...)` call. The plan's `key_links` patterns (`useApiQuery.*operations/positions`, `useApiQuery.*operations/orders`) are line-based regexes, so they never matched — a line-based verifier would have flagged both links as unmet even though the panels fetched the correct endpoints correctly at runtime.
+- **Fix:** Inlined the endpoint URL string directly into the `useApiQuery<CollectionResponse<T>>("...")` call in both panels, matching the plan's literal task-action text and making the pattern match regardless of verifier implementation.
+- **Files modified:** `console/src/components/paper/PositionsPanel.tsx`, `console/src/components/paper/OpenOrdersPanel.tsx`
+- **Verification:** Re-ran `npm run build` and `npm run lint` (both clean) and confirmed `grep -nE "useApiQuery.*operations/positions"` / `.../orders` now match on a single line in each file; direct-fetch grep still returns nothing.
+- **Committed in:** `0d5f8ff`
+
+---
+
+**Total deviations:** 1 auto-fixed (1 bug)
+**Impact on plan:** No behavior change — same endpoint, same fetch instrument. Purely a verification-pattern-matching fix caught before declaring the plan complete.
 
 ## Issues Encountered
 
