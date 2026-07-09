@@ -109,7 +109,12 @@ Plans:
   1. Operator can view current positions and open orders (PAPR-01, PAPR-02).
   2. Operator can view the latest reconciliation result and its findings (PAPR-03).
   3. Operator can view the latest account snapshot — equity, cash, buying power (PAPR-04).
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 15-01-PLAN.md — Paper Trading screen: account snapshot + reconciliation from the shared analytics fetch + nav link (PAPR-03, PAPR-04)
+- [ ] 15-02-PLAN.md — Current positions + open orders panels composed into /paper (PAPR-01, PAPR-02)
+- [ ] 15-03-PLAN.md — Operator live-verify checkpoint: /paper honest empty states + filter disclosure + endpoint-named errors (verifies PAPR-01..04)
 
 ### Phase 16: Analytics & Charting
 **Goal**: Operator can visually assess a backtest run's performance with an equity curve chart and its standard summary statistics.
@@ -141,7 +146,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
-| 15. Paper Trading Status | v1.2 | 0/TBD | Not started | - |
+| 15. Paper Trading Status | v1.2 | 0/3 | Not started | - |
 | 16. Analytics & Charting | v1.2 | 0/TBD | Not started | - |
 
 ---
