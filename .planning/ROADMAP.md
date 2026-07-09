@@ -63,7 +63,7 @@ Full remaining scope, requirements, and phase details: `.planning/milestones/v1.
 - [x] **Phase 13: Console Foundation & System Status** - App shell, env-driven API client, shared error/as-of-timestamp pattern, health/system screen, kill-switch global banner. (completed 2026-07-08)
 - [x] **Phase 14: Strategy & Runs Inspection** - Strategy overview, filterable runs table, and full run-detail audit trail (signals, risk decisions, orders/fills, metrics). (completed 2026-07-09)
 - [x] **Phase 15: Paper Trading Status** - Positions, open orders, latest reconciliation result, latest account snapshot. (completed 2026-07-09)
-- [ ] **Phase 16: Analytics & Charting** - Equity curve chart and summary statistics for a selected backtest run.
+- [x] **Phase 16: Analytics & Charting** - Equity curve chart and summary statistics for a selected backtest run. (completed 2026-07-09)
 
 ## Phase Details
 
@@ -152,7 +152,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 16. Analytics & Charting | v1.2 | 2/3 | In Progress | - |
+| 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 
 ---
 *Roadmap updated: 2026-07-07 — v1.2 Operator Console v0 phases 13-16 added; v1.0/v1.1 collapsed to historical summary; full v1.1 detail archived in `.planning/milestones/v1.1-paused/`.*

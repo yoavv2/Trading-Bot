@@ -44,7 +44,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Analytics
 
-- [ ] **ANLX-01**: Operator can view an equity curve chart for a selected backtest run
+- [x] **ANLX-01**: Operator can view an equity curve chart for a selected backtest run
 - [x] **ANLX-02**: Operator can view summary metrics for a run: Sharpe, max drawdown, win rate, P&L, trade count
 
 ### Kill Switch
@@ -105,7 +105,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PAPR-02 | Phase 15 | Complete |
 | PAPR-03 | Phase 15 | Complete |
 | PAPR-04 | Phase 15 | Complete |
-| ANLX-01 | Phase 16 | Pending (16-02 frontend + 16-01 backend equity_curve exposure both delivered; awaiting 16-03 operator live-verify to confirm end-to-end before marking complete) |
+| ANLX-01 | Phase 16 | Complete (16-02 frontend + 16-01 backend equity_curve exposure delivered; 16-03 operator live-verify confirmed the Recharts equity curve renders real data end-to-end, incl. the dcd4232 YAxis auto-scale fix) |
 | ANLX-02 | Phase 16 | Complete |
 | KILL-01 | Phase 13 | Complete |
 
@@ -114,7 +114,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 - Mapped to phases: 21
 - Unmapped: 0 ✓
 
-**Known gaps (tracked, not coverage failures):** STAT-03 and KILL-01 (Phase 13) and ANLX-01 (Phase 16) map to a phase but depend on a currently-unwired backend read endpoint/field. See ROADMAP.md "Known Gaps (Backend Read-Surface)" for detail and resolution path. As of 16-01, both the ANLX-01 frontend (EquityCurveChart, 16-02) and backend (`equity_curve` passthrough, 16-01) are delivered; the chart should now render real data. ANLX-01 remains Pending — not yet marked complete — until 16-03 (operator live-verify checkpoint) confirms it end-to-end.
+**Known gaps (resolved):** STAT-03 and KILL-01 (Phase 13) and ANLX-01 (Phase 16) originally depended on unwired backend read surfaces (see ROADMAP.md "Known Gaps (Backend Read-Surface)"). All three narrow backend exceptions have shipped: Phase 13 added the thin GET kill-switch route (STAT-03, KILL-01) and Phase 16-01 added the `equity_curve` passthrough (ANLX-01). ANLX-01 is now Complete — 16-03 operator live-verify confirmed the equity curve renders real data end-to-end. No open coverage gaps remain.
 
 ---
 *Requirements defined: 2026-07-07*
