@@ -37,8 +37,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Paper Trading Status
 
-- [ ] **PAPR-01**: Operator can view current positions
-- [ ] **PAPR-02**: Operator can view open orders
+- [x] **PAPR-01**: Operator can view current positions
+- [x] **PAPR-02**: Operator can view open orders
 - [x] **PAPR-03**: Operator can view the latest reconciliation result and its findings
 - [x] **PAPR-04**: Operator can view the latest account snapshot (equity, cash, buying power)
 
@@ -101,8 +101,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RUNS-04 | Phase 14 | Complete |
 | RUNS-05 | Phase 14 | Complete |
 | RUNS-06 | Phase 14 | Complete |
-| PAPR-01 | Phase 15 | Pending |
-| PAPR-02 | Phase 15 | Pending |
+| PAPR-01 | Phase 15 | Complete |
+| PAPR-02 | Phase 15 | Complete |
 | PAPR-03 | Phase 15 | Complete |
 | PAPR-04 | Phase 15 | Complete |
 | ANLX-01 | Phase 16 | Pending |

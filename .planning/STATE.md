@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 15-01-PLAN.md (Paper account + reconciliation panels, /paper route, nav link)
-last_updated: "2026-07-09T07:11:33.323Z"
-last_activity: "2026-07-09 — Phase 15 plan 15-01 complete: PaperAccountPanel (PAPR-04) + PaperReconciliationPanel (PAPR-03) + PaperAnalyticsSection (single shared analytics fetch) + /paper route + "Paper Trading" nav link"
+stopped_at: Completed 15-02-PLAN.md (Positions + open-orders panels composed into /paper)
+last_updated: "2026-07-09T07:16:13.000Z"
+last_activity: "2026-07-09 — Phase 15 plan 15-02 complete: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper below the analytics section — all four PAPR panels now live"
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 12
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
@@ -24,28 +24,28 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 15 of 16 in v1.2 (Paper Trading Status) — IN PROGRESS (1/3 plans complete)
-Plan: 15-01 complete; next is 15-02 (positions + open orders panels)
-Status: Executing Phase 15 — plan 15-01 done, 15-02 ready
-Last activity: 2026-07-09 — Phase 15 plan 15-01 complete: PaperAccountPanel (PAPR-04) + PaperReconciliationPanel (PAPR-03) + PaperAnalyticsSection (single shared analytics fetch) + /paper route + "Paper Trading" nav link
+Phase: 15 of 16 in v1.2 (Paper Trading Status) — IN PROGRESS (2/3 plans complete)
+Plan: 15-02 complete; next is 15-03 (operator live-verify checkpoint)
+Status: Executing Phase 15 — plan 15-02 done, 15-03 ready
+Last activity: 2026-07-09 — Phase 15 plan 15-02 complete: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper below the analytics section — all four PAPR panels now live
 
 Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [█████░░░░░] 9/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 2 of 4, Phase 15 in progress)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 23 (v1.0: 16, v1.1: 3, v1.2: 7)
-- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min
+- Total plans completed: 24 (v1.0: 16, v1.1: 3, v1.2: 8)
+- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min
 - Total execution time: -
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
 **v1.1 By Phase:** 7: 3/3 complete; 8-12: 0/TBD (paused, resume after v1.2)
 
-**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 1/3 (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link), 16: 0/TBD
+**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 2/3 (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper), 16: 0/TBD
 
 **Recent Trend:**
-- Last activity: Phase 15 (Paper Trading Status) plan 15-01 complete — analytics-fed account (PAPR-04) and reconciliation (PAPR-03) panels at /paper, both sharing a single useApiQuery fetch, with honest null-state rendering for the currently-unconfigured Alpaca paper account.
+- Last activity: Phase 15 (Paper Trading Status) plan 15-02 complete — self-fetching PositionsPanel (PAPR-01, open-by-default with non-open disclosure/reveal) and OpenOrdersPanel (PAPR-02, OPEN_STATUSES filter with terminal-status disclosure/reveal), both composed into /paper below the analytics section; all four PAPR panels now live on one screen.
 - Trend: v1.1 paused at Phase 7/12 to prioritize the read-only operator console before resuming backend hardening
 
 *Updated after each plan completion*
@@ -74,6 +74,7 @@ Recent decisions affecting current work:
 - [Phase 14]: [14-04]: MetricsPanel gates run-type at the render boundary (mounting a fetching child only for backtest/paper_execution) rather than conditionally calling useApiQuery inline, keeping every hook call unconditional per rules-of-hooks.
 - [15-01]: PaperAnalyticsSection owns the single useApiQuery call to /api/v1/analytics/strategies/trend_following_daily and passes the `.paper` slice down to presentational PaperAccountPanel/PaperReconciliationPanel, per the 14-03 shared-fetch precedent; this plan also owns the Phase 15 nav edit (adds "Paper Trading" to layout.tsx) so 15-02 doesn't touch it.
 - [15-01]: recent_execution_findings rendered under a heading that explicitly states its true scope ("strategy-wide, most-recent") rather than implying it belongs to the single latest reconciliation run, to satisfy the PAPR-03 honesty bar.
+- [15-02]: PositionsPanel/OpenOrdersPanel deliberately do NOT import CappedDisclosure/runScopedFilter (run-detail-scoped) even though they solve the same disclosure problem as OrdersFillsPanel — inlined equivalent, paper-local hidden-count and 100-row-cap logic instead, per the plan's explicit scoping constraint; the empty-state branch always checks the cap first so a filtered-empty result under `count >= 100` never reads as a false definitive "none".
 
 ### Pending Todos
 
@@ -91,6 +92,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-09T07:11:33.320Z
-Stopped at: Completed 15-01-PLAN.md (Paper account + reconciliation panels, /paper route, nav link)
+Last session: 2026-07-09T07:16:13.000Z
+Stopped at: Completed 15-02-PLAN.md (Positions + open-orders panels composed into /paper)
 Resume file: None
