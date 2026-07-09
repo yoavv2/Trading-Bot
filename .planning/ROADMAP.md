@@ -152,7 +152,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 16. Analytics & Charting | v1.2 | 0/3 | Not started | - |
+| 16. Analytics & Charting | v1.2 | 1/3 | In Progress | - |
 
 ---
 *Roadmap updated: 2026-07-07 — v1.2 Operator Console v0 phases 13-16 added; v1.0/v1.1 collapsed to historical summary; full v1.1 detail archived in `.planning/milestones/v1.1-paused/`.*
