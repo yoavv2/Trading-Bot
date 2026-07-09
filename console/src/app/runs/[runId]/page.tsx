@@ -9,6 +9,7 @@ import {
 import { SignalsRiskPanel } from "@/components/runs/detail/SignalsRiskPanel";
 import { OrdersFillsPanel } from "@/components/runs/detail/OrdersFillsPanel";
 import { MetricsPanel } from "@/components/runs/detail/MetricsPanel";
+import { BacktestAnalyticsSection } from "@/components/runs/detail/BacktestAnalyticsSection";
 
 type RunDetailPageProps = {
   params: Promise<{ runId: string }>;
@@ -50,6 +51,12 @@ export default function RunDetailPage({ params }: RunDetailPageProps) {
             strategyId={run.strategy_id}
             runType={run.run_type}
           />
+          {run.run_type === "backtest" ? (
+            <BacktestAnalyticsSection
+              runId={runId}
+              strategyId={run.strategy_id}
+            />
+          ) : null}
         </>
       ) : null}
     </main>
