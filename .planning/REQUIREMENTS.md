@@ -105,7 +105,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PAPR-02 | Phase 15 | Complete |
 | PAPR-03 | Phase 15 | Complete |
 | PAPR-04 | Phase 15 | Complete |
-| ANLX-01 | Phase 16 | Pending (16-02 frontend delivered; blocked on 16-01 backend equity_curve exposure) |
+| ANLX-01 | Phase 16 | Pending (16-02 frontend + 16-01 backend equity_curve exposure both delivered; awaiting 16-03 operator live-verify to confirm end-to-end before marking complete) |
 | ANLX-02 | Phase 16 | Complete |
 | KILL-01 | Phase 13 | Complete |
 
@@ -114,7 +114,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 - Mapped to phases: 21
 - Unmapped: 0 ✓
 
-**Known gaps (tracked, not coverage failures):** STAT-03 and KILL-01 (Phase 13) and ANLX-01 (Phase 16) map to a phase but depend on a currently-unwired backend read endpoint/field. See ROADMAP.md "Known Gaps (Backend Read-Surface)" for detail and resolution path. As of 16-02, the ANLX-01 frontend (EquityCurveChart, honest not-available state) is built and tested; the operator still cannot view a populated chart until 16-01 (backend `equity_curve` passthrough) executes — ANLX-01 remains Pending until then and is verified end-to-end in 16-03.
+**Known gaps (tracked, not coverage failures):** STAT-03 and KILL-01 (Phase 13) and ANLX-01 (Phase 16) map to a phase but depend on a currently-unwired backend read endpoint/field. See ROADMAP.md "Known Gaps (Backend Read-Surface)" for detail and resolution path. As of 16-01, both the ANLX-01 frontend (EquityCurveChart, 16-02) and backend (`equity_curve` passthrough, 16-01) are delivered; the chart should now render real data. ANLX-01 remains Pending — not yet marked complete — until 16-03 (operator live-verify checkpoint) confirms it end-to-end.
 
 ---
 *Requirements defined: 2026-07-07*
