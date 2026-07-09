@@ -137,6 +137,7 @@ class StrategyAnalyticsService(AnalyticsService):
             "completed_at": report["completed_at"],
             "summary": report["summary"],
             "metrics": report["metrics"],
+            "equity_curve": report["equity_curve"],
         }
 
     def _summarize_paper(

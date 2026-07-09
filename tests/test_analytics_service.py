@@ -474,6 +474,10 @@ def test_strategy_analytics_service_summarizes_backtest_and_paper_state(
     assert summary["backtest"]["metrics"]["trade_count"] == 1
     assert summary["backtest"]["metrics"]["cagr_pct"] < 0.0
     assert summary["backtest"]["metrics"]["turnover_pct"] > 0.0
+    assert "equity_curve" in summary["backtest"]
+    assert len(summary["backtest"]["equity_curve"]) > 0
+    assert "session_date" in summary["backtest"]["equity_curve"][0]
+    assert "total_equity" in summary["backtest"]["equity_curve"][0]
 
     paper = summary["paper"]
     assert paper["latest_account_snapshot"]["total_equity"] == pytest.approx(100012.5)
