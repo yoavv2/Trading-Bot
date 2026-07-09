@@ -47,7 +47,12 @@ export function EquityCurveChart({ points }: EquityCurveChartProps) {
         <LineChart data={points}>
           <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
           <XAxis dataKey="session_date" stroke="#a1a1aa" fontSize={11} />
-          <YAxis stroke="#a1a1aa" fontSize={11} />
+          <YAxis
+            stroke="#a1a1aa"
+            fontSize={11}
+            domain={["auto", "auto"]}
+            allowDecimals={false}
+          />
           <Tooltip
             contentStyle={{
               backgroundColor: "#18181b",
