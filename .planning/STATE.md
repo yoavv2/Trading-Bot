@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 14-05-PLAN.md (operator live-verify checkpoint — approved)
-last_updated: "2026-07-09T00:15:00.000Z"
-last_activity: "2026-07-09 — Phase 14 plan 05: operator live-verified strategy/runs inspection end-to-end and approved; found+fixed vv1 version-prefix bug (ddddd8d), logged completed_at<started_at backend data anomaly for a future backend phase"
+stopped_at: Phase 14 complete (5/5 plans; operator-verified, VERIFICATION passed 8/8)
+last_updated: "2026-07-09T05:55:00.000Z"
+last_activity: "2026-07-09 — Phase 14 (Strategy & Runs Inspection) COMPLETE: 5/5 plans, operator live sign-off, verifier passed 8/8 requirements. Ready for /gsd:plan-phase 15"
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
   completed_plans: 9
 ---
@@ -24,12 +24,12 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 14 of 16 in v1.2 (Strategy & Runs Inspection) — IN PROGRESS (Wave 1 complete: 14-01, 14-02, 14-03 done; Wave 2: 14-04 done)
-Plan: 14-04 (Orders & Fills panel with client_order_id intent lineage + run-type-aware Metrics panel) complete; only 14-05 (operator live-verify checkpoint) remains in Phase 14
-Status: Phase 14 in progress — 4 of 5 plans complete, 14-05 checkpoint plan remaining
-Last activity: 2026-07-08 — Phase 14: 14-04 (OrdersFillsPanel, MetricsPanel, mounted on run detail page) completed
+Phase: 14 of 16 in v1.2 (Strategy & Runs Inspection) — COMPLETE (5/5 plans, operator-verified, VERIFICATION passed 8/8)
+Plan: Phase 14 complete; run `/gsd:plan-phase 15` to plan Paper Trading Status
+Status: Phase 14 complete — ready for Phase 15 planning
+Last activity: 2026-07-09 — Phase 14 complete: all 5 plans (Strategy screen, Runs table + server-side filters, run-detail audit trail, operator live sign-off); vv1 version-prefix bug fixed live; backend completed_at<started_at anomaly logged as out-of-scope
 
-Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [███████░░░] 8/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 1 of 4, Phase 13 done)
+Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [█████░░░░░] 9/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 2 of 4, Phases 13-14 done)
 
 ## Performance Metrics
 
@@ -42,10 +42,10 @@ Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-y
 
 **v1.1 By Phase:** 7: 3/3 complete; 8-12: 0/TBD (paused, resume after v1.2)
 
-**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 4/5 complete (14-02: Runs screen — filterable table + drill-down links, ~12 min, 2 tasks, 3 files; 14-01: Strategy overview screen + nav links, ~10 min, 2 tasks, 3 files; 14-03: Run detail shell + Signals/Risk Decisions panel + runScopedFilter/CappedDisclosure primitives, ~10 min, 2 tasks, 6 files; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel, ~20 min, 2 tasks, 3 files), 14-05 (operator live-verify checkpoint) remaining, 15: 0/TBD, 16: 0/TBD
+**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 0/TBD, 16: 0/TBD
 
 **Recent Trend:**
-- Last activity: Phase 14: 14-04 completed — OrdersFillsPanel (RUNS-05 orders/fills with client_order_id intent lineage) and run-type-aware MetricsPanel (RUNS-06 persisted metrics), both mounted on the run detail page. Only 14-05 (operator live-verify checkpoint) remains before Phase 14 is complete.
+- Last activity: Phase 14 (Strategy & Runs Inspection) COMPLETE — all 5 plans, operator live sign-off against a running backend, verifier passed 8/8 requirements (STRA-01/02, RUNS-01..06). One UI bug found+fixed live (vv1 version prefix); one backend timestamp anomaly logged as out-of-scope.
 - Trend: v1.1 paused at Phase 7/12 to prioritize the read-only operator console before resuming backend hardening
 
 *Updated after each plan completion*

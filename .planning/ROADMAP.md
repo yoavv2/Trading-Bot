@@ -61,7 +61,7 @@ Full remaining scope, requirements, and phase details: `.planning/milestones/v1.
 **Milestone Goal:** Read-only Next.js console over the existing FastAPI read surface — every run, decision, and system state inspectable without reading raw logs. No new backend capabilities.
 
 - [x] **Phase 13: Console Foundation & System Status** - App shell, env-driven API client, shared error/as-of-timestamp pattern, health/system screen, kill-switch global banner. (completed 2026-07-08)
-- [ ] **Phase 14: Strategy & Runs Inspection** - Strategy overview, filterable runs table, and full run-detail audit trail (signals, risk decisions, orders/fills, metrics).
+- [x] **Phase 14: Strategy & Runs Inspection** - Strategy overview, filterable runs table, and full run-detail audit trail (signals, risk decisions, orders/fills, metrics). (completed 2026-07-09)
 - [ ] **Phase 15: Paper Trading Status** - Positions, open orders, latest reconciliation result, latest account snapshot.
 - [ ] **Phase 16: Analytics & Charting** - Equity curve chart and summary statistics for a selected backtest run.
 
@@ -140,7 +140,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
-| 14. Strategy & Runs Inspection | v1.2 | 5/5 | In Progress | - |
+| 14. Strategy & Runs Inspection | v1.2 | Complete    | 2026-07-09 | - |
 | 15. Paper Trading Status | v1.2 | 0/TBD | Not started | - |
 | 16. Analytics & Charting | v1.2 | 0/TBD | Not started | - |
 
