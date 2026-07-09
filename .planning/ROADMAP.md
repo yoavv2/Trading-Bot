@@ -140,7 +140,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
-| 14. Strategy & Runs Inspection | v1.2 | Complete    | 2026-07-09 | - |
+| 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 0/TBD | Not started | - |
 | 16. Analytics & Charting | v1.2 | 0/TBD | Not started | - |
 
