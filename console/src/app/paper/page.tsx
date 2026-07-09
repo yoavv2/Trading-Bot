@@ -1,9 +1,11 @@
 import { PaperAnalyticsSection } from "@/components/paper/PaperAnalyticsSection";
+import { PositionsPanel } from "@/components/paper/PositionsPanel";
+import { OpenOrdersPanel } from "@/components/paper/OpenOrdersPanel";
 
 /**
- * Paper Trading Status screen (PAPR-03/PAPR-04): the operator sees the
- * latest account snapshot and reconciliation result without reading logs
- * or the DB. Positions + open orders panels land in 15-02.
+ * Paper Trading Status screen (PAPR-01/PAPR-02/PAPR-03/PAPR-04): the
+ * operator sees the latest account snapshot, reconciliation result,
+ * current positions, and open orders without reading logs or the DB.
  */
 export default function PaperPage() {
   return (
@@ -11,7 +13,11 @@ export default function PaperPage() {
       <h1 className="mb-4 text-xl font-semibold text-zinc-100">
         Paper Trading Status
       </h1>
-      <PaperAnalyticsSection />
+      <div className="space-y-6">
+        <PaperAnalyticsSection />
+        <PositionsPanel />
+        <OpenOrdersPanel />
+      </div>
     </main>
   );
 }
