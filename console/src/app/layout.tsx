@@ -43,6 +43,9 @@ export default function RootLayout({
           <Link href="/runs" className="text-zinc-400 hover:text-zinc-100">
             Runs
           </Link>
+          <Link href="/paper" className="text-zinc-400 hover:text-zinc-100">
+            Paper Trading
+          </Link>
         </nav>
         <KillSwitchBanner />
         {children}
