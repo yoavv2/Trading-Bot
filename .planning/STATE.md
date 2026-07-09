@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 15-02-PLAN.md (Positions + open-orders panels composed into /paper)
+stopped_at: Completed 15-03-PLAN.md (Operator live-verify checkpoint — approved, Phase 15 complete)
 last_updated: "2026-07-09T07:16:13.000Z"
-last_activity: "2026-07-09 — Phase 15 plan 15-02 complete: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper below the analytics section — all four PAPR panels now live"
+last_activity: "2026-07-09 — Phase 15 plan 15-03 complete: operator live-verified /paper end-to-end and approved — all four PAPR surfaces confirmed honest-empty (Alpaca creds unconfigured) with endpoint-named ErrorStates on API-down; Phase 15 (Paper Trading Status) complete"
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -24,28 +24,28 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 15 of 16 in v1.2 (Paper Trading Status) — IN PROGRESS (2/3 plans complete)
-Plan: 15-02 complete; next is 15-03 (operator live-verify checkpoint)
-Status: Executing Phase 15 — plan 15-02 done, 15-03 ready
-Last activity: 2026-07-09 — Phase 15 plan 15-02 complete: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper below the analytics section — all four PAPR panels now live
+Phase: 15 of 16 in v1.2 (Paper Trading Status) — COMPLETE (3/3 plans complete)
+Plan: 15-03 complete (operator live-verify checkpoint — approved); next is Phase 16 (Analytics & Charting)
+Status: Phase 15 complete — ready for `/gsd:plan-phase 16`
+Last activity: 2026-07-09 — Phase 15 plan 15-03 complete: operator live-verified /paper end-to-end and approved — all four PAPR surfaces confirmed honest-empty (Alpaca creds unconfigured) with endpoint-named ErrorStates on API-down; Phase 15 (Paper Trading Status) complete
 
-Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [█████░░░░░] 9/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 2 of 4, Phase 15 in progress)
+Progress (phases across all milestones, v1.1 Phases 8-12 counted as paused/not-yet-executing): [██████░░░░] 10/16 phases complete (v1.0: 6, v1.1: 1 of 6, v1.2: 3 of 4)
 
 ## Performance Metrics
 
 **Velocity:**
 - Total plans completed: 24 (v1.0: 16, v1.1: 3, v1.2: 8)
-- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min
+- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session
 - Total execution time: -
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
 **v1.1 By Phase:** 7: 3/3 complete; 8-12: 0/TBD (paused, resume after v1.2)
 
-**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 2/3 (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper), 16: 0/TBD
+**v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 3/3 complete (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper; 15-03: operator live-verify checkpoint — approved, all four PAPR surfaces honest-empty with Alpaca creds unconfigured), 16: 0/TBD
 
 **Recent Trend:**
-- Last activity: Phase 15 (Paper Trading Status) plan 15-02 complete — self-fetching PositionsPanel (PAPR-01, open-by-default with non-open disclosure/reveal) and OpenOrdersPanel (PAPR-02, OPEN_STATUSES filter with terminal-status disclosure/reveal), both composed into /paper below the analytics section; all four PAPR panels now live on one screen.
+- Last activity: Phase 15 (Paper Trading Status) plan 15-03 complete — operator live-verified the full /paper screen end-to-end and approved on the first pass, no bugs found; all four PAPR surfaces confirmed to render honest empty states (Alpaca paper credentials unconfigured) and endpoint-named ErrorStates on API-down. Phase 15 is now complete.
 - Trend: v1.1 paused at Phase 7/12 to prioritize the read-only operator console before resuming backend hardening
 
 *Updated after each plan completion*
@@ -75,6 +75,7 @@ Recent decisions affecting current work:
 - [15-01]: PaperAnalyticsSection owns the single useApiQuery call to /api/v1/analytics/strategies/trend_following_daily and passes the `.paper` slice down to presentational PaperAccountPanel/PaperReconciliationPanel, per the 14-03 shared-fetch precedent; this plan also owns the Phase 15 nav edit (adds "Paper Trading" to layout.tsx) so 15-02 doesn't touch it.
 - [15-01]: recent_execution_findings rendered under a heading that explicitly states its true scope ("strategy-wide, most-recent") rather than implying it belongs to the single latest reconciliation run, to satisfy the PAPR-03 honesty bar.
 - [15-02]: PositionsPanel/OpenOrdersPanel deliberately do NOT import CappedDisclosure/runScopedFilter (run-detail-scoped) even though they solve the same disclosure problem as OrdersFillsPanel — inlined equivalent, paper-local hidden-count and 100-row-cap logic instead, per the plan's explicit scoping constraint; the empty-state branch always checks the cap first so a filtered-empty result under `count >= 100` never reads as a false definitive "none".
+- [15-03]: Operator approved the live-verify checkpoint with all broker-backed data empty (Alpaca paper credentials unconfigured) — this is the checkpoint's designed condition, not a shortfall: the plan's data-availability note frames honest-empty-rendering as the primary thing this checkpoint proves. Populated-data rendering (non-empty account/positions/orders, hidden-row reveal controls, real >100-row truncation) remains live-unverified until Alpaca paper creds are configured; the same six verification steps re-confirm it then. No code change implied — Phase 15 is complete.
 
 ### Pending Todos
 
@@ -87,11 +88,11 @@ Recent decisions affecting current work:
 - `00-VERIFY` remains the gate for resuming v1.1 backend work (Phase 8+). It does NOT block v1.2 Operator Console read-only UI work, which consumes existing read endpoints only.
 - The operator `.env` currently overrides the temporary app-boot test environment (`local` instead of expected `test`), so the focused baseline is not green.
 - Polygon has a configured non-placeholder credential but has not completed an authorized read-only request in this verification pass.
-- Alpaca paper credentials are not configured, so account, positions, and orders remain unverified.
+- Alpaca paper credentials are not configured, so account, positions, and orders remain unverified with POPULATED data — the /paper screen's honest-empty rendering for all four surfaces WAS live-verified and approved in 15-03 (2026-07-09). Populated-data rendering (real balances/positions/orders, hidden-row reveal controls, >100-row truncation) remains unverified until Alpaca paper creds are configured.
 - Docker daemon was unavailable during Phase 1 and 2-01 verification; local PostgreSQL@14 (Homebrew) used instead of Docker Compose.
 
 ## Session Continuity
 
 Last session: 2026-07-09T07:16:13.000Z
-Stopped at: Completed 15-02-PLAN.md (Positions + open-orders panels composed into /paper)
-Resume file: None
+Stopped at: Completed 15-03-PLAN.md (Operator live-verify checkpoint — approved, Phase 15 complete)
+Resume file: None — Phase 15 complete; next step is `/gsd:plan-phase 16`
