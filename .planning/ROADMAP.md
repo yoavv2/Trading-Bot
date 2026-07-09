@@ -123,7 +123,12 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Operator can select a backtest run and view its equity curve as a chart using the locked charting library (ANLX-01) — per Known Gaps #2 resolution, this phase includes the approved narrow exception: the already-computed `equity_curve` field is added to the existing analytics response.
   2. Operator can view summary metrics for a selected run — Sharpe, max drawdown, win rate, P&L, and trade count (ANLX-02).
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 16-01-PLAN.md — Serialize the already-computed `equity_curve` into the analytics response + service test (approved narrow backend exception) (ANLX-01)
+- [ ] 16-02-PLAN.md — Recharts equity curve + curated summary-metrics panel on the backtest run-detail surface, single-fetch owner (ANLX-01, ANLX-02)
+- [ ] 16-03-PLAN.md — Operator live-verify checkpoint: equity curve + summary metrics, backtest-only gating, honest not-available/endpoint-named errors (verifies ANLX-01, ANLX-02)
 
 ## Progress
 
@@ -147,7 +152,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 16. Analytics & Charting | v1.2 | 0/TBD | Not started | - |
+| 16. Analytics & Charting | v1.2 | 0/3 | Not started | - |
 
 ---
 *Roadmap updated: 2026-07-07 — v1.2 Operator Console v0 phases 13-16 added; v1.0/v1.1 collapsed to historical summary; full v1.1 detail archived in `.planning/milestones/v1.1-paused/`.*
