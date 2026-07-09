@@ -1,0 +1,52 @@
+# Render Blueprint — FREE-TIER DEPLOYMENT CHECKPOINT (not production-ready).
+#
+# Scope: FastAPI READ-ONLY API only.
+#   - Database is EXTERNAL (Neon free Postgres), not a Render-managed DB.
+#   - The worker (trading_platform.worker) is NOT deployed here — it stays on
+#     Docker / manual CLI. No paper execution, broker sync, or kill-switch jobs.
+#
+# Free-tier caveats (accepted):
+#   - The web service sleeps after ~15 min idle; the first request after sleep
+#     is a slow cold start.
+#   - The service is PUBLIC and UNAUTHENTICATED. Every route is read-only (GET),
+#     so this is a data-disclosure risk, not a control/execution risk — but it is
+#     still not production-safe.
+#
+# Setup: Render Dashboard -> New -> Blueprint -> connect this repo. Render reads
+# this file, then prompts for the four DB secrets below (sync: false). Paste the
+# values from your Neon connection details.
+
+services:
+  - type: web
+    name: trading-platform-api
+    runtime: docker
+    plan: free
+    # Pick the region closest to your Neon project to minimize DB latency.
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # Free tier has no preDeploy hook, so migrations are chained into the start
+    # command: apply the schema to Neon, then bind uvicorn to Render's $PORT.
+    # `alembic upgrade head` is idempotent (a no-op once the DB is at head), so
+    # re-running it on every cold start is safe.
+    dockerCommand: sh -c "alembic upgrade head && uvicorn trading_platform.api.app:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      # Honest environment label for the deployed API.
+      - key: TRADING_PLATFORM_APP__ENVIRONMENT
+        value: staging
+      # --- Neon Postgres connection (entered in the Render dashboard) ---
+      # HOST: use the Neon DIRECT host, e.g. ep-xxxx-xxxx.<region>.aws.neon.tech
+      - key: TRADING_PLATFORM_DATABASE__HOST
+        sync: false
+      - key: TRADING_PLATFORM_DATABASE__PORT
+        value: "5432"
+      - key: TRADING_PLATFORM_DATABASE__NAME
+        sync: false
+      - key: TRADING_PLATFORM_DATABASE__USER
+        sync: false
+      - key: TRADING_PLATFORM_DATABASE__PASSWORD
+        sync: false
+      # Polygon / Alpaca credentials are intentionally omitted: they are consumed
+      # only by the worker at ingest/execution time. The read-only API does not
+      # instantiate a market-data or broker client, so it does not need them.
