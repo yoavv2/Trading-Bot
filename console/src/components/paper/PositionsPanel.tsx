@@ -29,9 +29,6 @@ type CollectionResponse<T> = {
   items: T[];
 };
 
-const ENDPOINT =
-  "/api/v1/operations/positions?strategy_id=trend_following_daily&limit=100";
-
 /**
  * PAPR-01: current (open) positions panel. Self-fetches
  * /api/v1/operations/positions. Neither the RUN-status `status` query
@@ -42,7 +39,7 @@ const ENDPOINT =
  */
 export function PositionsPanel() {
   const { loading, result, refetch } =
-    useApiQuery<CollectionResponse<PositionItem>>(ENDPOINT);
+    useApiQuery<CollectionResponse<PositionItem>>("/api/v1/operations/positions?strategy_id=trend_following_daily&limit=100");
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">

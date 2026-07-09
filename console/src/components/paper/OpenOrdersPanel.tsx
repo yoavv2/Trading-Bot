@@ -46,9 +46,6 @@ const OPEN_STATUSES = new Set([
   "partially_filled",
 ]);
 
-const ENDPOINT =
-  "/api/v1/operations/orders?strategy_id=trend_following_daily&limit=100";
-
 /**
  * PAPR-02: open-orders panel. Self-fetches /api/v1/operations/orders.
  * Neither the RUN-status `status` query param nor any other server-side
@@ -59,7 +56,7 @@ const ENDPOINT =
  */
 export function OpenOrdersPanel() {
   const { loading, result, refetch } =
-    useApiQuery<CollectionResponse<OrderItem>>(ENDPOINT);
+    useApiQuery<CollectionResponse<OrderItem>>("/api/v1/operations/orders?strategy_id=trend_following_daily&limit=100");
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
