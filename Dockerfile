@@ -17,5 +17,11 @@ RUN pip install --upgrade pip && pip install .
 COPY alembic.ini ./
 COPY alembic ./alembic
 
-CMD ["uvicorn", "trading_platform.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Free tier has no preDeploy hook, so migrations are chained into the start
+# command: apply the schema (idempotent — a no-op once the DB is at head), then
+# bind uvicorn to Render's $PORT (falling back to 8000 for local runs).
+# Exec form with an explicit `sh -c` so the shell — not Render's dockerCommand
+# string-parser — owns `&&` and `$PORT`. `exec` makes uvicorn PID 1 for clean
+# SIGTERM on shutdown.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn trading_platform.api.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
 
