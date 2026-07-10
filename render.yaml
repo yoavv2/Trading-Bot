@@ -35,6 +35,17 @@ services:
       # Honest environment label for the deployed API.
       - key: TRADING_PLATFORM_APP__ENVIRONMENT
         value: staging
+      # Config lives at /app/config in the image (Dockerfile: WORKDIR /app +
+      # COPY config ./config). The settings loader derives its default config
+      # path from the *installed package* location (site-packages) once the app
+      # is `pip install`ed, which points outside /app and fails. These absolute
+      # overrides are passed through verbatim by the loader (they respect
+      # TRADING_PLATFORM_CONFIG_FILE / _STRATEGY_CONFIG_DIR), fixing path
+      # resolution without touching application code.
+      - key: TRADING_PLATFORM_CONFIG_FILE
+        value: /app/config/app.yaml
+      - key: TRADING_PLATFORM_STRATEGY_CONFIG_DIR
+        value: /app/config/strategies
       # --- Neon Postgres connection (entered in the Render dashboard) ---
       # HOST: use the Neon DIRECT host, e.g. ep-xxxx-xxxx.<region>.aws.neon.tech
       - key: TRADING_PLATFORM_DATABASE__HOST
