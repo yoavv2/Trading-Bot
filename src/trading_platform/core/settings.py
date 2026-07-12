@@ -233,10 +233,16 @@ class PaperSessionRunnerSettings(BaseModel):
 
 
 class ExecutionSafetySettings(BaseModel):
-    """Safety thresholds that gate new paper execution when state is ambiguous."""
+    """Safety thresholds that gate new paper execution when state is ambiguous.
+
+    `stale_run_timeout_minutes` is the wall-clock threshold on `started_at` past
+    which a `running` strategy run is considered stale and reclaimable (Phase 8
+    concurrency guard).
+    """
 
     repeated_failure_threshold: int = Field(default=3, ge=1)
     block_on_unresolved_reconciliation: bool = True
+    stale_run_timeout_minutes: int = Field(default=30, ge=1)
 
 
 class ExecutionSettings(BaseModel):
