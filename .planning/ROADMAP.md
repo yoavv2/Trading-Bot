@@ -163,7 +163,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 5. Paper Execution | v1.0 | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | v1.0 | 3/3 | Complete | 2026-03-15 |
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
-| 8. Concurrency Guard | v1.1 | 2/5 | In Progress | - |
+| 8. Concurrency Guard | v1.1 | 3/5 | In Progress | - |
 | 9. Reconciliation Rewrite | v1.1 | 0/TBD | Paused | - |
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
