@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Execution Correctness & Hardening
 status: executing
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-07-12T16:46:06.695Z"
-last_activity: "2026-07-12 — Phase 8 plan 08-01 complete: added `StrategyRunStatus.STALE` closed-enum member with PG migration 0016 (chains from 0015_phase7_kill_switch), and externalized `execution.safety.stale_run_timeout_minutes` (default 30, env-overridable). `tests/test_stale_run_config.py` (3 tests) proves default, env override, and a STALE-status `StrategyRun` row round-tripping against a migrated PostgreSQL database. Two atomic commits (2e39682, 92c4276); no deviations."
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-07-12T16:46:37.000Z"
+last_activity: "2026-07-12 — Phase 8 Wave 1 complete (08-01 + 08-02). 08-02 built the greenfield advisory-lock primitive `session_run_lock()` (session-level pg_try_advisory_lock on one dedicated AUTOCOMMIT connection), `ConcurrentRunLockedError`, and `advisory_lock_key()`. 10 tests (6 unit, 4 Postgres integration) prove non-blocking same-tuple contention, disjoint-tuple concurrency, release-on-normal-exit, and crash-release. Two atomic commits (6c235b2, 50de304); no deviations. LOCK-01 and LOCK-06 mechanisms proven in isolation. Next: 08-03 (Wave 2, depends on 08-01 + 08-02)."
 progress:
   total_phases: 5
   completed_phases: 4
@@ -27,15 +27,15 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 Phase: 8 of 12 in v1.1 (Concurrency Guard) — resumed after v1.2 completion; Wave 1 (plans 01 and 02, both `depends_on: []`) complete
 Plan: 08-01 complete (this plan: STALE enum + stale_run_timeout_minutes config foundation, LOCK-04). 08-02 (advisory-lock primitive, LOCK-01/LOCK-06) also complete, landed by a concurrent Wave-1 executor (commits 6c235b2, 50de304; see 08-02-SUMMARY.md for its own detail). Next: 08-03 (Wave 2, depends on 08-01 + 08-02).
 Status: Ready to execute 08-03
-Last activity: 2026-07-12 — Phase 8 Wave 1 complete. This plan (08-01) added `StrategyRunStatus.STALE` closed-enum member with PG migration 0016 (chains from 0015_phase7_kill_switch), and externalized `execution.safety.stale_run_timeout_minutes` (default 30, env-overridable). `tests/test_stale_run_config.py` (3 tests) proves default, env override, and a STALE-status `StrategyRun` row round-tripping against a migrated PostgreSQL database. Two atomic commits (2e39682, 92c4276); no deviations.
+Last activity: 2026-07-12 — Phase 8 Wave 1 complete. 08-01 added `StrategyRunStatus.STALE` closed-enum member with PG migration 0016 (chains from 0015_phase7_kill_switch), and externalized `execution.safety.stale_run_timeout_minutes` (default 30, env-overridable); `tests/test_stale_run_config.py` (3 tests) proves default, env override, and a STALE-status `StrategyRun` row round-tripping against a migrated PostgreSQL database (commits 2e39682, 92c4276). 08-02 built the greenfield advisory-lock primitive `session_run_lock()` (session-level `pg_try_advisory_lock` on one dedicated AUTOCOMMIT connection), `ConcurrentRunLockedError`, and `advisory_lock_key()`; 10 tests (6 unit, 4 Postgres integration) prove non-blocking same-tuple contention, disjoint-tuple concurrency, release-on-normal-exit, and crash-release (commits 6c235b2, 50de304). No deviations in either plan.
 
 Progress (phases across all milestones, v1.1 Phases 9-12 counted as paused/not-yet-executing): [██████░░░░] 11/16 phases complete (v1.0: 6, v1.1: 1 of 6 complete + Phase 8 now in progress (2/5 plans, Wave 1 done), v1.2: 4 of 4 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 27 (v1.0: 16, v1.1: 4, v1.2: 10)
-- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
+- Total plans completed: 28 (v1.0: 16, v1.1: 5, v1.2: 10)
+- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
 - Total execution time: -
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
@@ -45,7 +45,7 @@ Progress (phases across all milestones, v1.1 Phases 9-12 counted as paused/not-y
 **v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 3/3 complete (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper; 15-03: operator live-verify checkpoint — approved, all four PAPR surfaces honest-empty with Alpaca creds unconfigured), 16: 3/3 complete (16-02: EquityCurveChart (ANLX-01 frontend) + SummaryMetricsPanel (ANLX-02) + BacktestAnalyticsSection single-fetch owner, mounted on run-detail for backtest runs only, executed ahead of 16-01 per explicit human override; 16-01: backend equity_curve passthrough — single-line addition to StrategyAnalyticsService._summarize_backtest exposing the already-computed field, service-level pytest extended; 16-03: operator live-verify checkpoint — approved, all 6 steps passed against fresh servers, one in-scope YAxis auto-scale live-fix (dcd4232), ANLX-01 AND ANLX-02 confirmed Complete). Awaiting orchestrator phase-complete.
 
 **Recent Trend:**
-- Last activity: v1.2 Operator Console v0 shipped complete (Phases 13-16, 4/4); v1.1 resumed 2026-07-12 with Phase 8 (Concurrency Guard). Plan 08-01 complete — STALE enum + stale_run_timeout_minutes config foundation (LOCK-04); 08-02 (advisory lock primitive) next.
+- Last activity: v1.2 Operator Console v0 shipped complete (Phases 13-16, 4/4); v1.1 resumed 2026-07-12 with Phase 8 (Concurrency Guard). Wave 1 (08-01, 08-02) complete — STALE enum + stale_run_timeout_minutes config foundation (LOCK-04) and the advisory-lock primitive session_run_lock()/ConcurrentRunLockedError (LOCK-01, LOCK-06); 08-03 (Wave 2, stale-run detection + reclaim) next.
 - Trend: v1.1 resumed at Phase 8/12 after prioritizing and shipping the read-only operator console (v1.2)
 
 *Updated after each plan completion*
@@ -101,6 +101,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-12T16:42:29.708Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-07-12T16:46:37.000Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file: None
