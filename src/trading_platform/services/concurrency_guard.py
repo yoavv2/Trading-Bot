@@ -1,16 +1,32 @@
 """Session-level PostgreSQL advisory-lock primitive guarding concurrent runs.
 
 At most one active run per ``(strategy_id, session_date)`` may perform side
-effects (broker calls, state-affecting DB writes). This module builds the
-typed denial exception and the deterministic advisory-lock key derivation
-that the ``session_run_lock()`` context manager (added next) relies on.
+effects (broker calls, state-affecting DB writes). ``session_run_lock()`` is
+the contract every side-effecting run acquires before doing anything: it
+takes a non-blocking session-level advisory lock on ONE dedicated connection
+held for the whole guarded region. A second, concurrent attempt to hold the
+same lock fails immediately with a typed :class:`ConcurrentRunLockedError` --
+it never blocks or hangs. The lock is released explicitly on normal exit; if
+the process crashes instead, PostgreSQL auto-releases session-level advisory
+locks when the holding connection drops, so the guarantee holds even then.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
+
+from sqlalchemy import text
+
+from trading_platform.core.logging import emit_structured_log
+from trading_platform.core.settings import Settings, load_settings
+from trading_platform.db.session import get_engine
+
+logger = logging.getLogger(__name__)
 
 # Distinct from argparse's usage exit code (2); signals "another run holds
 # the lock" to a scheduler/operator, as opposed to a generic crash/failure.
@@ -44,3 +60,46 @@ class ConcurrentRunLockedError(RuntimeError):
             f"Another session holds the run lock for strategy '{self.strategy_id}' "
             f"session {self.session_date}."
         )
+
+
+@contextmanager
+def session_run_lock(
+    *,
+    strategy_id: str,
+    session_date: date,
+    settings: Settings | None = None,
+) -> Iterator[None]:
+    """Acquire the non-blocking advisory lock for the guarded region.
+
+    Opens ONE dedicated connection (autocommit, no long-lived transaction)
+    from the shared engine and holds it for the whole guarded region -- the
+    guarded body's own DB writes must use separate pooled ``session_scope``
+    connections, not this one. Raises ``ConcurrentRunLockedError`` and exits
+    immediately (no retry, no hang) if another session already holds the
+    lock for this tuple.
+    """
+    resolved_settings = settings if settings is not None else load_settings()
+    key = advisory_lock_key(strategy_id, session_date)
+    engine = get_engine(resolved_settings)
+    connection = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+    acquired = False
+    try:
+        acquired = bool(
+            connection.execute(
+                text("SELECT pg_try_advisory_lock(:key)"), {"key": key}
+            ).scalar_one()
+        )
+        if not acquired:
+            emit_structured_log(
+                logger,
+                logging.WARNING,
+                "concurrent_run_lock_denied",
+                strategy_id=strategy_id,
+                session_date=session_date.isoformat(),
+            )
+            raise ConcurrentRunLockedError(strategy_id, session_date)
+        yield
+    finally:
+        if acquired:
+            connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+        connection.close()
