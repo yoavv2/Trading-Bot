@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: verifying
-stopped_at: Completed 16-03-PLAN.md
-last_updated: "2026-07-09T17:35:49.625Z"
+stopped_at: Phase 8 context gathered
+last_updated: "2026-07-12T16:04:31.829Z"
 last_activity: "2026-07-09 — Phase 16 plan 16-03 complete: operator live-verified the analytics view against fresh FastAPI + console dev servers and responded "approved". All 6 verify steps passed — (1) analytics section + FetchMeta Refresh advances; (2) real Recharts equity curve renders for a traded run (6aee5ae6, 252 pts); (2b) empty equity_curve → honest "not available" (2bfab8b4); (3) five labeled metrics (Sharpe -0.298 / drawdown -1.27% / win 25% / return -0.28% / trades 4) match the raw RUNS-06 panel; (4) operator_control run (b683ef53) mounts NO analytics section; (5) backend-down → ErrorState naming /api/v1/analytics/strategies/... HTTP 500, recovery on restart. One in-scope step-6 live fix committed by orchestrator (dcd4232: EquityCurveChart YAxis default [0,max] flattened all curves → domain=['auto','auto'] + allowDecimals=false; a real ~1.3% swing is now visible while a no-trade constant curve stays honestly flat). Executor also restarted both stale dev servers (running from before 16-01/16-02 code landed) before presenting the checkpoint. ANLX-01 AND ANLX-02 now Complete."
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
   total_plans: 15
   completed_plans: 15
@@ -99,6 +99,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-09T14:30:00Z
-Stopped at: Completed 16-03-PLAN.md
-Resume file: None
+Last session: 2026-07-12T16:04:31.826Z
+Stopped at: Phase 8 context gathered
+Resume file: .planning/phases/08-concurrency-guard/08-CONTEXT.md
