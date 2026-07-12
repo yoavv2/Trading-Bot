@@ -36,6 +36,7 @@ class StrategyRunStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    STALE = "stale"
 
 
 def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
