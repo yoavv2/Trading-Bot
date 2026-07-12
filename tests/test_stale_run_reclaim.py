@@ -18,10 +18,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import StrategyRun, StrategyRunStatus, StrategyRunType
+from trading_platform.db.models import ExecutionEvent, StrategyRun, StrategyRunStatus, StrategyRunType
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.bootstrap import ensure_strategy_record
-from trading_platform.services.stale_runs import find_stale_runs
+from trading_platform.services.stale_runs import find_stale_runs, reclaim_stale_runs
 from trading_platform.strategies.registry import build_default_registry
 
 _TIMEOUT_MINUTES = 30
@@ -162,3 +162,120 @@ def test_find_stale_runs_detects_only_running_past_timeout(
     assert old_run_id in stale_ids
     assert fresh_run_id not in stale_ids
     assert old_succeeded_run_id not in stale_ids
+
+
+def test_reclaim_stale_runs_marks_all_past_threshold_rows_stale_with_audit(
+    migrated_stale_reclaim_db: str,
+) -> None:
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+
+    now = datetime.now(UTC)
+    reclaiming_run_id = uuid.uuid4()
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        old_run_one = _seed_run(
+            session,
+            strategy_row_id=strategy_record.id,
+            status=StrategyRunStatus.RUNNING,
+            started_at=now - timedelta(minutes=40),
+        )
+        old_run_two = _seed_run(
+            session,
+            strategy_row_id=strategy_record.id,
+            status=StrategyRunStatus.RUNNING,
+            started_at=now - timedelta(minutes=50),
+        )
+        fresh_run = _seed_run(
+            session,
+            strategy_row_id=strategy_record.id,
+            status=StrategyRunStatus.RUNNING,
+            started_at=now,
+        )
+        old_run_one_id = old_run_one.id
+        old_run_two_id = old_run_two.id
+        fresh_run_id = fresh_run.id
+
+    with session_scope(settings) as session:
+        reclaimed_ids = reclaim_stale_runs(
+            session,
+            strategy_public_id=strategy.metadata.strategy_id,
+            session_date=_SESSION_DATE,
+            timeout_minutes=_TIMEOUT_MINUTES,
+            reclaiming_run_id=reclaiming_run_id,
+        )
+        session.commit()
+
+    assert set(reclaimed_ids) == {old_run_one_id, old_run_two_id}
+
+    with session_scope(settings) as session:
+        old_one = session.execute(
+            select(StrategyRun).where(StrategyRun.id == old_run_one_id)
+        ).scalar_one()
+        old_two = session.execute(
+            select(StrategyRun).where(StrategyRun.id == old_run_two_id)
+        ).scalar_one()
+        fresh = session.execute(
+            select(StrategyRun).where(StrategyRun.id == fresh_run_id)
+        ).scalar_one()
+
+        assert old_one.status == StrategyRunStatus.STALE
+        assert old_one.completed_at is not None
+        assert old_two.status == StrategyRunStatus.STALE
+        assert old_two.completed_at is not None
+        assert fresh.status == StrategyRunStatus.RUNNING
+
+        events = session.execute(
+            select(ExecutionEvent).where(
+                ExecutionEvent.strategy_run_id.in_([old_run_one_id, old_run_two_id])
+            )
+        ).scalars().all()
+        assert len(events) == 2
+        for event in events:
+            assert event.event_type == "paper_run_reclaimed_stale"
+            assert event.severity == "warning"
+            assert event.blocks_execution is False
+            assert event.details["reclaiming_run_id"] == str(reclaiming_run_id)
+            assert event.details["session_date"] == _SESSION_DATE.isoformat()
+            assert event.details["timeout_minutes"] == _TIMEOUT_MINUTES
+
+
+def test_reclaim_stale_runs_is_idempotent(migrated_stale_reclaim_db: str) -> None:
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+
+    now = datetime.now(UTC)
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        _seed_run(
+            session,
+            strategy_row_id=strategy_record.id,
+            status=StrategyRunStatus.RUNNING,
+            started_at=now - timedelta(minutes=40),
+        )
+
+    with session_scope(settings) as session:
+        first_pass = reclaim_stale_runs(
+            session,
+            strategy_public_id=strategy.metadata.strategy_id,
+            session_date=_SESSION_DATE,
+            timeout_minutes=_TIMEOUT_MINUTES,
+        )
+        session.commit()
+
+    assert len(first_pass) == 1
+
+    with session_scope(settings) as session:
+        second_pass = reclaim_stale_runs(
+            session,
+            strategy_public_id=strategy.metadata.strategy_id,
+            session_date=_SESSION_DATE,
+            timeout_minutes=_TIMEOUT_MINUTES,
+        )
+        session.commit()
+
+    assert second_pass == []
