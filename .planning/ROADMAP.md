@@ -77,7 +77,14 @@ Full remaining scope, requirements, and phase details: `.planning/milestones/v1.
   2. A run that holds the lock writes `run_status=running` and `run_started_at` as its first persisted action; a single query can identify any run past the declared heartbeat/timeout threshold as stale.
   3. When the lock is free but a stale `running` row exists, the new run marks that row `stale` and continues; it does not silently overwrite or ignore it.
   4. A restart/crash test confirms the session-scoped advisory lock is released automatically on crash, and a subsequent run can acquire it cleanly without manual intervention.
-**Plans**: TBD (run `/gsd:plan-phase 08`)
+**Plans**: 5 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Add STALE to StrategyRunStatus enum (+ migration 0016) and externalize stale_run_timeout_minutes (LOCK-04)
+- [ ] 08-02-PLAN.md — Advisory-lock primitive: ConcurrentRunLockedError, key derivation, non-blocking session_run_lock() with crash-release (LOCK-01, LOCK-06)
+- [ ] 08-03-PLAN.md — Stale-run single-query detection + tuple-scoped STALE reclaim with ExecutionEvent audit (LOCK-04, LOCK-05)
+- [ ] 08-04-PLAN.md — Lock-guard + reorder run_paper_order_submission: lock-before-side-effects, running-row-first, reclaim-on-entry (LOCK-01, LOCK-02, LOCK-03, LOCK-05)
+- [ ] 08-05-PLAN.md — Worker CLI reserved exit code for lock denial + crash/restart e2e proof (LOCK-01, LOCK-06)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -156,7 +163,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 5. Paper Execution | v1.0 | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | v1.0 | 3/3 | Complete | 2026-03-15 |
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
-| 8. Concurrency Guard | v1.1 | 0/TBD | Next (gate green 2026-07-12) | - |
+| 8. Concurrency Guard | v1.1 | 0/5 | Planned (gate green 2026-07-12) | - |
 | 9. Reconciliation Rewrite | v1.1 | 0/TBD | Paused | - |
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
