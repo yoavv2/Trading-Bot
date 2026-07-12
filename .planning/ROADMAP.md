@@ -46,7 +46,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 <summary>⏸️ v1.1 Execution Correctness & Hardening (Phases 7-12) — PAUSED 2026-07-07 at Phase 7/12</summary>
 
 - [x] **Phase 7: Correctness Kernel** - Closed order state machine, deterministic `client_order_id` idempotency, persistent global kill switch with operator CLI. Completed 2026-04-20.
-- [ ] **Phase 8: Concurrency Guard** (paused) - Advisory lock per (strategy_id, session_date), stale-run detection.
+- [ ] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection.
 - [ ] **Phase 9: Reconciliation Rewrite** (paused) - Typed snapshots, O(n) matcher, closed findings enum, materialized report.
 - [ ] **Phase 10: Startup Hardening** (paused) - Fail-fast config validation, log sanitization, DB lifecycle consolidation.
 - [ ] **Phase 11: Query Performance** (paused) - Preflight N+1 fix, reconciliation scaling, covering indices.
@@ -66,6 +66,18 @@ Full remaining scope, requirements, and phase details: `.planning/milestones/v1.
 - [x] **Phase 16: Analytics & Charting** - Equity curve chart and summary statistics for a selected backtest run. (completed 2026-07-09)
 
 ## Phase Details
+
+### Phase 8: Concurrency Guard
+**Milestone**: v1.1 Execution Correctness & Hardening (resumed 2026-07-12 after v1.2 shipped and the `00-VERIFY` gate went green)
+**Goal:** At most one active run per `(strategy_id, session_date)` can execute side effects; the lock is acquired before any broker call or state-affecting write, released on all exit paths including crash, and stale runs are detectable and cleanly handled.
+**Depends on:** Phase 7 (Correctness Kernel — complete)
+**Requirements**: LOCK-01, LOCK-02, LOCK-03, LOCK-04, LOCK-05, LOCK-06
+**Success Criteria** (what must be TRUE):
+  1. A second process attempting to start the same `(strategy_id, session_date)` run while the first holds the advisory lock exits cleanly with a typed message — no broker calls or DB writes occur before the lock is confirmed.
+  2. A run that holds the lock writes `run_status=running` and `run_started_at` as its first persisted action; a single query can identify any run past the declared heartbeat/timeout threshold as stale.
+  3. When the lock is free but a stale `running` row exists, the new run marks that row `stale` and continues; it does not silently overwrite or ignore it.
+  4. A restart/crash test confirms the session-scoped advisory lock is released automatically on crash, and a subsequent run can acquire it cleanly without manual intervention.
+**Plans**: TBD (run `/gsd:plan-phase 08`)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -144,7 +156,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 5. Paper Execution | v1.0 | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | v1.0 | 3/3 | Complete | 2026-03-15 |
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
-| 8. Concurrency Guard | v1.1 | 0/TBD | Paused | - |
+| 8. Concurrency Guard | v1.1 | 0/TBD | Next (gate green 2026-07-12) | - |
 | 9. Reconciliation Rewrite | v1.1 | 0/TBD | Paused | - |
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |

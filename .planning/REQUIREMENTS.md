@@ -51,6 +51,19 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 - [x] **KILL-01**: A tripped kill switch is visibly indicated on every console screen (global banner), not only on the status page
 
+## v1.1 Resumed — Concurrency Guard (Phase 8)
+
+Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-12 after v1.2 shipped and the `00-VERIFY` gate went green. These are the v1.1 Tier-0 concurrency requirements now active for Phase 8 planning. (RECON, CFG, LOG, DB, PERF, STRUCT, TOOL remain paused in the archive until their phases resume.)
+
+### Concurrency (LOCK)
+
+- [ ] **LOCK-01**: At most one active run per `(strategy_id, session_date)` can execute, enforced by a PostgreSQL advisory lock keyed on that tuple
+- [ ] **LOCK-02**: The advisory lock is acquired BEFORE any side effect of the run (no broker calls, no order persistence, no state-affecting DB writes happen without the lock)
+- [ ] **LOCK-03**: Every run writes `run_started_at` and `run_status=running` as its first persisted action after lock acquisition
+- [ ] **LOCK-04**: A run with `status=running` past a declared heartbeat/timeout is detectable via a single query (stale-run detection)
+- [ ] **LOCK-05**: New run attempt — if the advisory lock is held by another session, exit cleanly with a typed message; if the lock is free but a stale `running` row exists, mark that row `stale` and continue
+- [ ] **LOCK-06**: Lock release is guaranteed on normal exit, crash (via session-scoped lock), and kill-switch trigger — verified by a restart/crash test
+
 ## Future Requirements
 
 Deferred. Tracked but not in current roadmap.
@@ -62,7 +75,7 @@ Deferred. Tracked but not in current roadmap.
 
 ### v1.1 Remaining Hardening (paused milestone)
 
-See `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — LOCK, RECON, CFG, LOG, DB, PERF, STRUCT, TOOL requirements resume after v1.2.
+LOCK (Concurrency Guard, Phase 8) resumed 2026-07-12 — now active above under "v1.1 Resumed". The rest remain paused: see `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — RECON, CFG, LOG, DB, PERF, STRUCT, TOOL requirements resume with their respective phases.
 
 ## Out of Scope
 
@@ -108,6 +121,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ANLX-01 | Phase 16 | Complete (16-02 frontend + 16-01 backend equity_curve exposure delivered; 16-03 operator live-verify confirmed the Recharts equity curve renders real data end-to-end, incl. the dcd4232 YAxis auto-scale fix) |
 | ANLX-02 | Phase 16 | Complete |
 | KILL-01 | Phase 13 | Complete |
+| LOCK-01 | Phase 8 | Pending |
+| LOCK-02 | Phase 8 | Pending |
+| LOCK-03 | Phase 8 | Pending |
+| LOCK-04 | Phase 8 | Pending |
+| LOCK-05 | Phase 8 | Pending |
+| LOCK-06 | Phase 8 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 21 total
