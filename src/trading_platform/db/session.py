@@ -1,4 +1,34 @@
-"""Synchronous engine and session helpers for the persistence layer."""
+"""Synchronous engine and session helpers for the persistence layer.
+
+Lifecycle model: EXPLICIT RELOADABLE MANAGER.
+
+This module is the single canonical source of engine and session-factory
+construction for the whole codebase (DB-01). The engine and session
+factory are NOT process-immutable singletons — they are cached in the
+module-level dicts ``_ENGINE_CACHE`` / ``_SESSION_FACTORY_CACHE``, keyed by
+``(database.url, database.echo)``, and can be reset at any time via
+``clear_engine_cache()``. This is a deliberate design choice, not an
+oversight: the test suite (and any future multi-database entrypoint)
+needs to rebind the engine/session factory to a different database (e.g.
+the test database vs. the local development database) within the same
+process, which a true singleton would not allow.
+
+This keyed dict-cache is the SINGLE authorized caching mechanism for the
+engine/session lifecycle (DB-02). Memoizing an engine or session factory
+via ``functools``'s single-value memoizing decorator (or any other
+competing cache) is forbidden anywhere in this codebase — only the
+reloadable dict-cache defined here may hold a live
+``Engine``/``sessionmaker`` instance. (The codebase's only use of that
+decorator is on ``load_settings`` in ``core/settings.py``, which caches
+parsed configuration, not database engine/session objects — that is a
+distinct, intentionally-singleton concern and does not compete with this
+lifecycle model.)
+
+All engine/session access must go through this module
+(``trading_platform.db.session``) — it is the one canonical import path
+(DB-03). ``trading_platform.db`` (the package ``__init__``) does not
+re-export engine/session symbols.
+"""
 
 from __future__ import annotations
 

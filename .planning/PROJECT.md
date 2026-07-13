@@ -562,6 +562,7 @@ The future API should expose platform data cleanly to the dashboard without dire
 | Treat broker state as the source of truth | Reconciliation must override optimistic internal assumptions | — Pending |
 | Keep the first implementation local-first and Dockerized | Simplicity, repeatability, and low cost matter more than cloud sophistication | — Pending |
 | Defer dashboard work until the engine is trustworthy | The engine, analytics, and paper workflow must be credible before UI investment | — Pending |
+| DB connection lifecycle is an explicit reloadable manager (`db/session.py`), not a process-immutable singleton (DB-01) | The 215-test suite must be able to point the engine/session factory at the test database vs. the local database within one process; a hard singleton would break that. Engine/session memoization uses the keyed `(url, echo)` dict-cache exclusively — no `functools`-decorator-based memoization of engines/sessions anywhere (DB-02) | 10-03: session.py docstring declares the model; import-boundary test pins it |
 
 ---
 *Last updated: 2026-07-07 after starting milestone v1.2 (Operator Console v0); v1.1 paused at Phase 7/12*
