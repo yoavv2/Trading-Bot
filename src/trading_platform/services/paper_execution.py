@@ -38,6 +38,7 @@ from trading_platform.services.alpaca import (
     BrokerPositionSnapshot,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.concurrency_guard import ConcurrentRunLockedError, session_run_lock
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.operator_controls import (
@@ -61,6 +62,7 @@ from trading_platform.services.reconciliation import (
     reconcile_paper_execution,
     recover_inflight_paper_orders,
 )
+from trading_platform.services.stale_runs import reclaim_stale_runs
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
 
@@ -213,11 +215,93 @@ def run_paper_order_submission(
     registry: StrategyRegistry | None = None,
     execution_service: ExecutionService | None = None,
 ) -> PaperExecutionRunReport:
+    """Lock-guarded entrypoint (LOCK-01/02/03/05): resolve pure state, then
+    acquire the (strategy_id, session_date) advisory lock BEFORE any write or
+    broker call. All side effects happen inside `_run_paper_order_submission_guarded`,
+    which runs entirely within the lock's `with` block below.
+    """
     logger = logging.getLogger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
     strategy = resolved_registry.resolve(strategy_id)
     metadata = strategy.metadata
+
+    try:
+        with session_run_lock(
+            strategy_id=strategy_id,
+            session_date=as_of_session,
+            settings=resolved_settings,
+        ):
+            return _run_paper_order_submission_guarded(
+                logger,
+                strategy_id=strategy_id,
+                metadata=metadata,
+                as_of_session=as_of_session,
+                risk_run_id=risk_run_id,
+                trigger_source=trigger_source,
+                resolved_settings=resolved_settings,
+                resolved_registry=resolved_registry,
+                execution_service=execution_service,
+            )
+    except ConcurrentRunLockedError:
+        # The context manager raises before its body ever runs -- this
+        # attempt made zero writes and zero broker calls (LOCK-01). The
+        # caller/CLI maps this to CONCURRENT_RUN_LOCK_EXIT_CODE.
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_execution_lock_denied",
+            strategy_id=strategy_id,
+            session_date=as_of_session.isoformat(),
+            trigger_source=trigger_source,
+        )
+        raise
+
+
+def _run_paper_order_submission_guarded(
+    logger: logging.Logger,
+    *,
+    strategy_id: str,
+    metadata,
+    as_of_session: date,
+    risk_run_id: str | None,
+    trigger_source: str,
+    resolved_settings: Settings,
+    resolved_registry: StrategyRegistry,
+    execution_service: ExecutionService | None,
+) -> PaperExecutionRunReport:
+    """Guarded body -- only ever called from inside `session_run_lock`.
+
+    Ordering is load-bearing (LOCK-03/LOCK-05): the running row below is the
+    literal first persisted write for this run; stale reclaim runs
+    immediately after that row exists (so it can never self-reclaim, since
+    its own started_at is inside the timeout window); kill-switch/control
+    state is read only after that, so those checks are provably post-lock.
+    """
+    run_id = _create_paper_execution_run(
+        resolved_settings,
+        metadata,
+        trigger_source=trigger_source,
+        as_of_session=as_of_session,
+        requested_risk_run_id=risk_run_id,
+    )
+
+    # DURABILITY: this reclaim -- like every write below -- commits on its
+    # own short-lived session_scope connection, never on session_run_lock's
+    # dedicated connection. A mid-run crash still leaves whatever was
+    # already committed (the running row, reclaimed predecessors, per-order
+    # writes) durable on disk for a later run's stale-reclaim pass to find;
+    # only the advisory lock itself is released immediately on connection
+    # drop.
+    with session_scope(resolved_settings) as session:
+        reclaim_stale_runs(
+            session,
+            strategy_public_id=strategy_id,
+            session_date=as_of_session,
+            timeout_minutes=resolved_settings.execution.safety.stale_run_timeout_minutes,
+            reclaiming_run_id=run_id,
+        )
+
     control_state = load_strategy_control_state(
         strategy_id,
         settings=resolved_settings,
@@ -226,15 +310,6 @@ def run_paper_order_submission(
     kill_switch_state = load_kill_switch_state(
         settings=resolved_settings,
         registry=resolved_registry,
-    )
-
-    run_id = _create_paper_execution_run(
-        resolved_settings,
-        metadata,
-        trigger_source=trigger_source,
-        as_of_session=as_of_session,
-        requested_risk_run_id=risk_run_id,
-        strategy_status=control_state.status,
     )
     if kill_switch_state.is_tripped:
         report = _finalize_blocked_paper_execution_run(
@@ -1212,29 +1287,32 @@ def _create_paper_execution_run(
     trigger_source: str,
     as_of_session: date,
     requested_risk_run_id: str | None,
-    strategy_status: str,
 ) -> uuid.UUID:
+    """Insert the run row at status=RUNNING -- the literal first persisted
+    write for this run (LOCK-03), acquired before kill-switch/control state
+    is even read. strategy_status is genuinely unknown at this point (it is
+    loaded moments later, after stale reclaim runs against this row); the
+    accurate value is written into result_summary by the very next update.
+    """
     with session_scope(settings) as session:
         strategy_record = ensure_strategy_record(session, metadata)
         strategy_run = StrategyRun(
             strategy_id=strategy_record.id,
             run_type=StrategyRunType.PAPER_EXECUTION,
-            status=StrategyRunStatus.PENDING,
+            status=StrategyRunStatus.RUNNING,
             trigger_source=trigger_source,
             parameters_snapshot={
                 "strategy": metadata.to_public_dict(),
                 "as_of_session": as_of_session.isoformat(),
                 "requested_risk_run_id": requested_risk_run_id,
-                "strategy_status": strategy_status,
                 "broker": settings.broker.model_dump(mode="json"),
                 "execution": settings.execution.model_dump(mode="json"),
             },
             result_summary={
-                "stage": "pending",
+                "stage": "running",
                 "strategy_id": metadata.strategy_id,
                 "as_of_session": as_of_session.isoformat(),
                 "requested_risk_run_id": requested_risk_run_id,
-                "strategy_status": strategy_status,
             },
         )
         session.add(strategy_run)
