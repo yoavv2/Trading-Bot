@@ -58,6 +58,7 @@ from trading_platform.services.order_state_machine import (
     resolve_transition_target,
 )
 from trading_platform.services.reconciliation import (
+    apply_reconciliation_corrections,
     load_broker_state,
     reconcile_paper_execution,
     recover_inflight_paper_orders,
@@ -838,6 +839,14 @@ def run_paper_session(
             trigger_source=f"{resolved_trigger_source}_reconciliation",
         )
         base_summary["reconciliation"] = reconciliation_report.to_dict()
+        # Explicit corrective step (RECON-04), invoked as its own call AFTER the
+        # read-only report is produced -- never inside reconcile_paper_execution itself.
+        apply_reconciliation_corrections(
+            resolved_strategy_id,
+            report=reconciliation_report,
+            settings=resolved_settings,
+            registry=registry,
+        )
 
     if (
         reconciliation_report is not None
