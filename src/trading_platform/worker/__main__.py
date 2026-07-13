@@ -5,15 +5,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 import time
 from datetime import UTC, date, datetime, timedelta
 
-from trading_platform.core.logging import build_log_context, configure_logging
+from trading_platform.core.logging import build_log_context, configure_logging, emit_structured_log
 from trading_platform.core.settings import get_strategy_config, load_settings
 from trading_platform.services.analytics import build_strategy_analytics_report, render_strategy_analytics_report
 from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
+from trading_platform.services.concurrency_guard import CONCURRENT_RUN_LOCK_EXIT_CODE, ConcurrentRunLockedError
 from trading_platform.services.operator_controls import (
     OperatorControlService,
     render_kill_switch_report,
@@ -347,6 +349,37 @@ def run_evaluate_risk_command(args: argparse.Namespace) -> None:
     print(json.dumps(report.to_dict(), indent=indent, default=str))
 
 
+def _handle_concurrent_run_lock_denied(
+    logger: logging.Logger,
+    exc: ConcurrentRunLockedError,
+    *,
+    command: str,
+) -> None:
+    """Map a lock-denial to the reserved exit code, no traceback.
+
+    Emits a CLI-level WARNING naming the tuple and the command (distinct
+    from the service-layer WARNING already logged by `session_run_lock`),
+    prints one concise human line to stderr, then raises `SystemExit` so
+    the process exits with `CONCURRENT_RUN_LOCK_EXIT_CODE` and no traceback
+    reaches the operator/scheduler.
+    """
+    emit_structured_log(
+        logger,
+        logging.WARNING,
+        "paper_command_lock_denied",
+        strategy_id=exc.strategy_id,
+        session_date=exc.session_date.isoformat(),
+        command=command,
+        exit_code=CONCURRENT_RUN_LOCK_EXIT_CODE,
+    )
+    print(
+        f"Another session already holds the run lock for strategy '{exc.strategy_id}' "
+        f"session {exc.session_date}; exiting without retrying.",
+        file=sys.stderr,
+    )
+    raise SystemExit(CONCURRENT_RUN_LOCK_EXIT_CODE)
+
+
 def run_submit_paper_orders_command(args: argparse.Namespace) -> None:
     settings = load_settings()
     configure_logging(settings.logging)
@@ -355,13 +388,16 @@ def run_submit_paper_orders_command(args: argparse.Namespace) -> None:
         settings=settings,
         as_of_arg=args.as_of,
     )
-    report = run_paper_order_submission(
-        args.strategy,
-        as_of_session=as_of_session,
-        risk_run_id=args.risk_run_id,
-        trigger_source=args.trigger_source,
-        settings=settings,
-    )
+    try:
+        report = run_paper_order_submission(
+            args.strategy,
+            as_of_session=as_of_session,
+            risk_run_id=args.risk_run_id,
+            trigger_source=args.trigger_source,
+            settings=settings,
+        )
+    except ConcurrentRunLockedError as exc:
+        _handle_concurrent_run_lock_denied(logger, exc, command="submit-paper-orders")
     logger.info(
         "worker_paper_order_submission_completed",
         extra={
@@ -387,13 +423,16 @@ def run_paper_session_command(args: argparse.Namespace) -> None:
     )
     strategy_id = args.strategy or settings.execution.paper_session_runner.default_strategy_id
     trigger_source = args.trigger_source or settings.execution.paper_session_runner.trigger_source
-    report = run_paper_session(
-        strategy_id,
-        as_of_session=as_of_session,
-        risk_run_id=args.risk_run_id,
-        trigger_source=trigger_source,
-        settings=settings,
-    )
+    try:
+        report = run_paper_session(
+            strategy_id,
+            as_of_session=as_of_session,
+            risk_run_id=args.risk_run_id,
+            trigger_source=trigger_source,
+            settings=settings,
+        )
+    except ConcurrentRunLockedError as exc:
+        _handle_concurrent_run_lock_denied(logger, exc, command="run-paper-session")
     logger.info(
         "worker_paper_session_completed",
         extra={
