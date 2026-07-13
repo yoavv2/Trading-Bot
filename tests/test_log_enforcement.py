@@ -7,16 +7,24 @@ static AST scan of the enumerated in-scope module files.
 
 LOG-06: under default config, no emitted log line may leak a credential
 (password/api_key/Authorization) or a full broker order ID -- only the
-last-6 masked form is permitted. (Emitted-line enforcement tests land in a
-follow-up commit within this plan.)
+last-6 masked form is permitted. Enforced below by driving a real emission
+through the production formatter/handler wiring (`configure_logging`) and
+inspecting the captured, serialized JSON lines.
 """
 
 from __future__ import annotations
 
 import ast
+import io
+import json
+import logging
 from pathlib import Path
 
 import pytest
+
+from trading_platform.core import logging as core_logging
+from trading_platform.core.logging import emit_structured_log, get_logger
+from trading_platform.core.settings import LoggingSettings
 
 # ---------------------------------------------------------------------------
 # LOG-01: import-boundary test
@@ -89,3 +97,118 @@ def test_import_boundary_module_list_is_not_empty() -> None:
     # Guards against a typo'd/emptied IN_SCOPE_MODULES silently making the
     # parametrized test above a no-op.
     assert len(IN_SCOPE_MODULES) == 12
+
+
+# ---------------------------------------------------------------------------
+# LOG-06: emitted-line enforcement (no leaked credentials / full order ID
+# under default config)
+# ---------------------------------------------------------------------------
+
+FULL_BROKER_ORDER_ID = "PAPER-ORDER-1234567890ABCDEF"
+RAW_PASSWORD = "hunter2-super-secret"
+RAW_API_KEY = "sk-live-abcdefghijklmno"
+RAW_AUTH_HEADER = "Bearer eyJhbGciOiJIUzI1NiJ9.secret-payload"
+
+
+@pytest.fixture
+def _isolated_root_logger():
+    """Snapshot/restore root-logger handlers, level, and the debug-unmask
+    global so this test's `configure_logging()` calls don't leak state into
+    other tests in the suite."""
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    original_level = root_logger.level
+    original_unmask = core_logging._DEBUG_UNMASK_IDS
+    try:
+        yield
+    finally:
+        root_logger.handlers.clear()
+        for handler in original_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(original_level)
+        core_logging._DEBUG_UNMASK_IDS = original_unmask
+
+
+def _capture_json_lines(*, debug_unmask_ids: bool) -> list[str]:
+    """Drive a representative execution emission through the exact
+    production formatter/handler wiring (`configure_logging`) and return
+    the captured, serialized JSON lines.
+
+    Exercises two emission paths:
+    - `emit_structured_log`, the standard chokepoint (10-02's context
+      sanitization contract).
+    - a direct `logger.warning(..., extra={"context": {...}})` call that
+      bypasses `emit_structured_log` entirely -- this is what actually
+      proves the formatter-level backstop (10-06 Task 2), not just
+      chokepoint discipline by well-behaved callers.
+    """
+    settings = LoggingSettings(debug_unmask_ids=debug_unmask_ids)
+    core_logging.configure_logging(settings)
+    root_logger = logging.getLogger()
+
+    stream = io.StringIO()
+    handler = root_logger.handlers[0]
+    handler.stream = stream
+
+    logger = get_logger("trading_platform.test_log_enforcement")
+
+    emit_structured_log(
+        logger,
+        logging.INFO,
+        "paper order submitted successfully",
+        strategy_id="trend_following_daily",
+        broker_order_id=FULL_BROKER_ORDER_ID,
+        password=RAW_PASSWORD,
+        api_key=RAW_API_KEY,
+        headers={"Authorization": RAW_AUTH_HEADER},
+    )
+
+    logger.warning(
+        "direct emission bypassing emit_structured_log",
+        extra={
+            "context": {
+                "broker_order_id": FULL_BROKER_ORDER_ID,
+                "password": RAW_PASSWORD,
+                "api_key": RAW_API_KEY,
+                "headers": {"Authorization": RAW_AUTH_HEADER},
+            }
+        },
+    )
+
+    return [line for line in stream.getvalue().splitlines() if line.strip()]
+
+
+def test_default_config_emitted_lines_never_leak_secrets_or_full_order_id(
+    _isolated_root_logger,
+) -> None:
+    lines = _capture_json_lines(debug_unmask_ids=False)
+    assert len(lines) == 2
+
+    for line in lines:
+        # Every emitted line must remain valid JSON per JsonLogFormatter's
+        # own contract -- sanitization must not corrupt the payload shape.
+        json.loads(line)
+
+        assert "password=" not in line
+        assert "api_key=" not in line
+        assert RAW_PASSWORD not in line
+        assert RAW_API_KEY not in line
+        assert RAW_AUTH_HEADER not in line
+        assert FULL_BROKER_ORDER_ID not in line
+
+    # The masked last-6 form must still be present -- proves the ID was
+    # masked, not silently dropped.
+    masked_suffix = FULL_BROKER_ORDER_ID[-6:]
+    assert any(masked_suffix in line for line in lines)
+
+
+def test_debug_unmask_flag_reveals_full_broker_order_id(_isolated_root_logger) -> None:
+    lines = _capture_json_lines(debug_unmask_ids=True)
+    assert any(FULL_BROKER_ORDER_ID in line for line in lines)
+
+    # Credentials remain fully redacted regardless of the unmask flag --
+    # `debug_unmask_ids` only ever affects broker-order-id masking.
+    for line in lines:
+        assert RAW_PASSWORD not in line
+        assert RAW_API_KEY not in line
+        assert RAW_AUTH_HEADER not in line
