@@ -116,7 +116,15 @@ Plans:
   3. One connection-lifecycle model is in code (the competing `@lru_cache` / `_ENGINE_CACHE` duality is removed); all execution flows use the single canonical session import path.
   4. Every execution flow runs within an explicit transaction boundary; a commit occurs only after both the broker call and the state transition persist successfully.
   5. When a rollback occurs after a broker side effect has already happened, a reconciliation task is scheduled — rollback alone is never the complete response.
-**Plans**: TBD (run `/gsd:plan-phase 10`)
+**Plans**: 6 plans
+
+Plans:
+- [ ] 10-01-PLAN.md — Config validation core: ExecutionMode enum + typed ConfigValidationError + validate_config (CFG-01, CFG-02, CFG-03, CFG-05, CFG-07)
+- [ ] 10-02-PLAN.md — Log sanitization core: sanitize() redaction + broker-id last-6 masking + get_logger wrapper (LOG-02, LOG-03, LOG-04, LOG-05)
+- [ ] 10-03-PLAN.md — DB lifecycle: formalize the one reloadable manager, resolve caching duality, single canonical import path (DB-01, DB-02, DB-03)
+- [ ] 10-04-PLAN.md — Paper-execution transaction integrity: explicit boundary, commit-after-both, rollback schedules reconciliation (DB-04, DB-05, DB-06)
+- [ ] 10-05-PLAN.md — Startup gate wired into every entrypoint: DB preflight + non-zero exit before service init (CFG-04, CFG-06)
+- [ ] 10-06-PLAN.md — Logger migration + formatter backstop + import-boundary & emitted-line enforcement tests (LOG-01, LOG-06)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -197,7 +205,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
-| 10. Startup Hardening | v1.1 | 0/TBD | Next (Phase 9 complete 2026-07-13) | - |
+| 10. Startup Hardening | v1.1 | 0/6 | Planned (2026-07-13) | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
