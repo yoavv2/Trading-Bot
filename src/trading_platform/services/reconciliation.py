@@ -35,11 +35,19 @@ from trading_platform.services.alpaca import (
     BrokerPositionSnapshot,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
-from trading_platform.services.execution import ExecutionOrderStatus
+from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
 from trading_platform.services.order_state_machine import (
     OrderTransitionRequest,
     apply_order_transition,
     resolve_transition_target,
+)
+from trading_platform.services.reconciliation_matcher import match_snapshots
+from trading_platform.services.reconciliation_types import (
+    Finding,
+    LocalAccountSnapshot,
+    LocalFillSnapshot,
+    LocalOrderSnapshot,
+    LocalPositionSnapshot,
 )
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
@@ -49,7 +57,6 @@ _ACTIVE_LOCAL_ORDER_STATUSES = {
     OrderLifecycleState.PARTIALLY_FILLED,
 }
 _MONEY_TOLERANCE = Decimal("0.01")
-_QUANTITY_TOLERANCE = Decimal("0.000001")
 
 
 @dataclass(frozen=True)
@@ -234,50 +241,59 @@ def reconcile_paper_execution(
                 .order_by(AccountSnapshot.snapshot_at.desc())
             ).scalars().first()
 
-            findings = _build_findings(
-                local_orders=local_orders,
-                local_fills=local_fills,
-                local_positions=local_positions,
-                latest_snapshot=latest_snapshot,
-                broker_state=effective_broker_state,
-                failure_threshold=safety_settings.repeated_failure_threshold,
-            )
-            _apply_sync_failure_state(
-                local_orders=local_orders,
-                findings=findings,
-                checked_at=checked_at,
+            # READ-ONLY projection boundary (RECON-03/05): ORM rows are projected into
+            # the typed 09-01 snapshots here; no ORM instance crosses this boundary into
+            # the pure matcher or the account/threshold evaluations below.
+            local_order_snapshots = [_project_local_order(order) for order in local_orders]
+            local_fill_snapshots = [_project_local_fill(fill) for fill in local_fills]
+            local_position_snapshots = [_project_local_position(position) for position in local_positions]
+            local_account_snapshot = (
+                _project_local_account(latest_snapshot) if latest_snapshot is not None else None
             )
 
-            persisted_findings = tuple(findings) if findings else (
-                ReconciliationFinding(
-                    event_type="reconciliation_clean",
-                    severity="info",
-                    blocks_execution=False,
-                    message="Broker and local paper-execution state are aligned.",
-                    details={
-                        "order_count": len(effective_broker_state.orders),
-                        "fill_count": len(effective_broker_state.fills),
-                        "position_count": len(effective_broker_state.positions),
-                    },
-                ),
+            findings = match_snapshots(
+                local_orders=local_order_snapshots,
+                local_fills=local_fill_snapshots,
+                local_positions=local_position_snapshots,
+                broker_orders=list(effective_broker_state.orders),
+                broker_fills=list(effective_broker_state.fills),
+                broker_positions=list(effective_broker_state.positions),
             )
+            # increment moved to corrective path (09-04): reconcile no longer writes
+            # PaperOrder.sync_failure_count / last_sync_error / last_sync_failure_at.
+
+            account_divergence = _evaluate_account_divergence(
+                latest_snapshot=local_account_snapshot,
+                broker_account=effective_broker_state.account,
+                broker_positions=effective_broker_state.positions,
+                local_positions_present=bool(local_positions),
+            )
+            threshold_breach = _evaluate_threshold_breach(
+                local_orders=local_orders,
+                findings=findings,
+                failure_threshold=safety_settings.repeated_failure_threshold,
+            )
+
             session.add_all(
                 [
                     ExecutionEvent(
                         strategy_run_id=run_id,
-                        paper_order_id=uuid.UUID(finding.paper_order_id) if finding.paper_order_id else None,
-                        event_type=finding.event_type,
-                        severity=finding.severity,
-                        blocks_execution=finding.blocks_execution,
+                        paper_order_id=(
+                            uuid.UUID(event_dict["paper_order_id"]) if event_dict["paper_order_id"] else None
+                        ),
+                        event_type=event_dict["event_type"],
+                        severity=event_dict["severity"],
+                        blocks_execution=event_dict["blocks_execution"],
                         event_at=checked_at,
-                        message=finding.message,
-                        details=finding.details,
+                        message=event_dict["message"],
+                        details=event_dict["details"],
                     )
-                    for finding in persisted_findings
+                    for event_dict in (_finding_event_dict(finding) for finding in findings)
                 ]
             )
 
-        blocking_count = sum(1 for finding in persisted_findings if finding.blocks_execution)
+        blocking_count = sum(1 for finding in findings if finding.blocks_execution)
+        blocks_execution = bool(findings) or bool(account_divergence) or bool(threshold_breach)
         report = _update_reconciliation_run(
             resolved_settings,
             run_id,
@@ -288,10 +304,12 @@ def reconcile_paper_execution(
                 "strategy_id": resolved_strategy_id,
                 "as_of_session": as_of_session.isoformat(),
                 "recovered_order_count": recovered_order_count,
-                "finding_count": len(persisted_findings),
+                "finding_count": len(findings),
                 "blocking_count": blocking_count,
-                "blocks_execution": blocking_count > 0,
-                "findings": [finding.to_dict() for finding in persisted_findings],
+                "blocks_execution": blocks_execution,
+                "account_divergence": account_divergence,
+                "threshold_breach": threshold_breach,
+                "findings": [_finding_event_dict(finding) for finding in findings],
             },
         )
     except Exception as exc:
@@ -355,333 +373,180 @@ def reconcile_paper_execution(
     return reconciliation_report
 
 
-def _build_findings(
+def _project_local_order(order: PaperOrder) -> LocalOrderSnapshot:
+    """Project a ``PaperOrder`` ORM row into the typed 09-01 snapshot (read-only)."""
+    return LocalOrderSnapshot(
+        paper_order_id=str(order.id),
+        strategy_run_id=str(order.strategy_run_id),
+        symbol=order.symbol_ref.ticker,
+        side=OrderSide(order.side),
+        quantity=order.quantity,
+        client_order_id=order.client_order_id,
+        broker_order_id=order.broker_order_id,
+        status=order.status.value,
+        broker_status=order.broker_status,
+        submission_attempt_count=order.submission_attempt_count,
+        sync_failure_count=order.sync_failure_count,
+    )
+
+
+def _project_local_fill(fill: PaperFill) -> LocalFillSnapshot:
+    """Project a ``PaperFill`` ORM row into the typed 09-01 snapshot (read-only)."""
+    return LocalFillSnapshot(
+        broker_fill_id=fill.broker_fill_id,
+        broker_order_id=fill.broker_order_id,
+        symbol=fill.symbol_ref.ticker,
+        side=OrderSide(fill.side),
+        quantity=fill.quantity,
+        price=fill.price,
+        filled_at=fill.filled_at,
+    )
+
+
+def _project_local_position(position: Position) -> LocalPositionSnapshot:
+    """Project a ``Position`` ORM row into the typed 09-01 snapshot (read-only)."""
+    return LocalPositionSnapshot(
+        symbol=position.symbol_ref.ticker,
+        quantity=position.quantity,
+        average_entry_price=position.average_entry_price,
+        cost_basis=position.cost_basis,
+        status=position.status,
+    )
+
+
+def _project_local_account(snapshot: AccountSnapshot) -> LocalAccountSnapshot:
+    """Project the latest ``AccountSnapshot`` ORM row into the typed 09-01 snapshot."""
+    return LocalAccountSnapshot(
+        cash=snapshot.cash,
+        gross_exposure=snapshot.gross_exposure,
+        total_equity=snapshot.total_equity,
+        buying_power=snapshot.buying_power,
+        open_positions=snapshot.open_positions,
+    )
+
+
+def _evaluate_account_divergence(
+    *,
+    latest_snapshot: LocalAccountSnapshot | None,
+    broker_account: BrokerAccountSnapshot,
+    broker_positions: tuple[BrokerPositionSnapshot, ...],
+    local_positions_present: bool,
+) -> dict[str, Any]:
+    """Read-only account-divergence evaluation (decision D1). Preserves all three
+    pre-rewrite account branches exactly, with NO row writes:
+
+    - (B1) no AccountSnapshot has ever been persisted AND positions exist (broker or
+      local) -> truthy ``account_snapshot_missing_locally`` sub-flag (BLOCKS).
+    - (B2) no AccountSnapshot has ever been persisted AND the book is flat -> empty
+      dict (NON-blocking).
+    - (B3) an AccountSnapshot exists AND cash/buying_power/equity/gross_exposure/
+      open_positions deltas exceed tolerance -> populated deltas (BLOCKS).
+    """
+    if latest_snapshot is None:
+        if broker_positions or local_positions_present:
+            return {
+                "account_snapshot_missing_locally": True,
+                "broker_position_count": len(broker_positions),
+            }
+        return {}
+
+    broker_gross_exposure = sum(
+        (abs(position.market_value) for position in broker_positions),
+        start=Decimal("0"),
+    )
+    divergence: dict[str, dict[str, str | int]] = {}
+    if _decimal_differs(latest_snapshot.cash, broker_account.cash, tolerance=_MONEY_TOLERANCE):
+        divergence["cash"] = {"local": str(latest_snapshot.cash), "broker": str(broker_account.cash)}
+    if _decimal_differs(latest_snapshot.buying_power, broker_account.buying_power, tolerance=_MONEY_TOLERANCE):
+        divergence["buying_power"] = {
+            "local": str(latest_snapshot.buying_power),
+            "broker": str(broker_account.buying_power),
+        }
+    if _decimal_differs(latest_snapshot.total_equity, broker_account.equity, tolerance=_MONEY_TOLERANCE):
+        divergence["total_equity"] = {
+            "local": str(latest_snapshot.total_equity),
+            "broker": str(broker_account.equity),
+        }
+    if _decimal_differs(latest_snapshot.gross_exposure, broker_gross_exposure, tolerance=_MONEY_TOLERANCE):
+        divergence["gross_exposure"] = {
+            "local": str(latest_snapshot.gross_exposure),
+            "broker": str(broker_gross_exposure),
+        }
+    if latest_snapshot.open_positions != len(broker_positions):
+        divergence["open_positions"] = {
+            "local": latest_snapshot.open_positions,
+            "broker": len(broker_positions),
+        }
+    return divergence
+
+
+def _evaluate_threshold_breach(
     *,
     local_orders: list[PaperOrder],
-    local_fills: list[PaperFill],
-    local_positions: list[Position],
-    latest_snapshot: AccountSnapshot | None,
-    broker_state: BrokerStateSnapshot,
+    findings: tuple[Finding, ...],
     failure_threshold: int,
-) -> list[ReconciliationFinding]:
-    findings: list[ReconciliationFinding] = []
-    local_orders_by_broker_id = {
-        order.broker_order_id: order for order in local_orders if order.broker_order_id
-    }
-    local_orders_by_client_id = {
-        order.client_order_id: order for order in local_orders if order.client_order_id
-    }
-    matched_order_ids: set[uuid.UUID] = set()
+) -> list[dict[str, Any]]:
+    """Read-only repeated-failure-threshold evaluation (decision D2, READ half only).
 
-    for broker_order in broker_state.orders:
-        local_order = local_orders_by_client_id.get(broker_order.client_order_id)
-        if local_order is None:
-            local_order = local_orders_by_broker_id.get(broker_order.broker_order_id)
-        if local_order is None:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="order_missing_locally",
-                    severity="error",
-                    blocks_execution=True,
-                    message=(
-                        f"Broker order '{broker_order.broker_order_id}' for {broker_order.symbol} "
-                        "has no persisted local paper_order record."
-                    ),
-                    details={
-                        "broker_order_id": broker_order.broker_order_id,
-                        "client_order_id": broker_order.client_order_id,
-                        "symbol": broker_order.symbol,
-                        "broker_status": broker_order.broker_status,
-                    },
-                )
-            )
-            continue
+    Evaluates the SAME two predicates the pre-rewrite code used
+    (submission_attempt_count >= failure_threshold for SUBMISSION_FAILED orders;
+    sync_failure_count + 1 >= failure_threshold for orders with a sync error this run,
+    derived from the matcher's findings) as a pure read. Performs NO increment and NO
+    row write — the WRITE half moves to the corrective path in 09-04.
+    """
+    finding_messages_by_order_id: dict[str, str] = {}
+    for finding in findings:
+        if finding.paper_order_id is not None:
+            finding_messages_by_order_id.setdefault(finding.paper_order_id, finding.message)
 
-        matched_order_ids.add(local_order.id)
-        expected_local_status = _local_state_from_broker_status(broker_order.status)
-        if local_order.status != expected_local_status or local_order.broker_status != broker_order.broker_status:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="order_status_mismatch",
-                    severity="error",
-                    blocks_execution=True,
-                    message=(
-                        f"Local order '{local_order.client_order_id}' has status '{local_order.status}' "
-                        f"but broker reports '{expected_local_status}'."
-                    ),
-                    details={
-                        "paper_order_id": str(local_order.id),
-                        "client_order_id": local_order.client_order_id,
-                        "broker_order_id": broker_order.broker_order_id,
-                        "local_status": local_order.status,
-                        "local_broker_status": local_order.broker_status,
-                        "broker_status": broker_order.broker_status,
-                    },
-                    paper_order_id=str(local_order.id),
-                )
-            )
-
-    for local_order in local_orders:
-        if local_order.id in matched_order_ids:
-            continue
-        if local_order.status == OrderLifecycleState.SUBMISSION_FAILED:
-            continue
-        if (
-            local_order.status == OrderLifecycleState.PENDING_SUBMISSION
-            and local_order.submission_attempt_count == 0
-        ):
-            continue
-        if local_order.status not in _ACTIVE_LOCAL_ORDER_STATUSES:
-            continue
-
-        findings.append(
-            ReconciliationFinding(
-                event_type="order_missing_from_broker",
-                severity="error",
-                blocks_execution=True,
-                message=(
-                    f"Local order '{local_order.client_order_id}' is still '{local_order.status}' "
-                    "but the broker no longer reports it."
-                ),
-                details={
-                    "paper_order_id": str(local_order.id),
-                    "client_order_id": local_order.client_order_id,
-                    "broker_order_id": local_order.broker_order_id,
-                    "local_status": local_order.status,
-                    "submission_attempt_count": local_order.submission_attempt_count,
-                },
-                paper_order_id=str(local_order.id),
-            )
-        )
-
-    local_fill_ids = {paper_fill.broker_fill_id for paper_fill in local_fills}
-    for broker_fill in broker_state.fills:
-        if broker_fill.broker_fill_id in local_fill_ids:
-            continue
-        paper_order = local_orders_by_broker_id.get(broker_fill.broker_order_id)
-        findings.append(
-            ReconciliationFinding(
-                event_type="fill_missing_locally",
-                severity="error",
-                blocks_execution=True,
-                message=(
-                    f"Broker fill '{broker_fill.broker_fill_id}' for order '{broker_fill.broker_order_id}' "
-                    "has not been persisted locally."
-                ),
-                details={
-                    "broker_fill_id": broker_fill.broker_fill_id,
-                    "broker_order_id": broker_fill.broker_order_id,
-                    "symbol": broker_fill.symbol,
-                    "quantity": str(broker_fill.quantity),
-                    "price": str(broker_fill.price),
-                },
-                paper_order_id=str(paper_order.id) if paper_order is not None else None,
-            )
-        )
-
-    local_positions_by_symbol = {position.symbol_ref.ticker: position for position in local_positions}
-    broker_positions_by_symbol = {position.symbol: position for position in broker_state.positions}
-    for symbol in sorted(set(local_positions_by_symbol) | set(broker_positions_by_symbol)):
-        local_position = local_positions_by_symbol.get(symbol)
-        broker_position = broker_positions_by_symbol.get(symbol)
-        if local_position is None and broker_position is not None:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="position_missing_locally",
-                    severity="error",
-                    blocks_execution=True,
-                    message=f"Broker reports an open {symbol} position that local storage does not track.",
-                    details={
-                        "symbol": symbol,
-                        "broker_quantity": str(broker_position.quantity),
-                        "broker_cost_basis": str(broker_position.cost_basis),
-                    },
-                )
-            )
-            continue
-        if local_position is not None and broker_position is None:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="position_missing_from_broker",
-                    severity="error",
-                    blocks_execution=True,
-                    message=f"Local storage reports an open {symbol} position that the broker does not show.",
-                    details={
-                        "symbol": symbol,
-                        "local_quantity": str(local_position.quantity),
-                        "local_cost_basis": str(local_position.cost_basis),
-                    },
-                )
-            )
-            continue
-        if local_position is None or broker_position is None:
-            continue
-        if (
-            _decimal_differs(local_position.quantity, broker_position.quantity, tolerance=_QUANTITY_TOLERANCE)
-            or _decimal_differs(
-                local_position.average_entry_price,
-                broker_position.average_entry_price,
-                tolerance=_MONEY_TOLERANCE,
-            )
-        ):
-            findings.append(
-                ReconciliationFinding(
-                    event_type="position_mismatch",
-                    severity="error",
-                    blocks_execution=True,
-                    message=f"Local {symbol} position sizing diverges from the broker position.",
-                    details={
-                        "symbol": symbol,
-                        "local_quantity": str(local_position.quantity),
-                        "broker_quantity": str(broker_position.quantity),
-                        "local_average_entry_price": str(local_position.average_entry_price),
-                        "broker_average_entry_price": str(broker_position.average_entry_price),
-                    },
-                )
-            )
-
-    if latest_snapshot is None:
-        if broker_state.positions or local_positions:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="account_snapshot_missing_locally",
-                    severity="error",
-                    blocks_execution=True,
-                    message="Broker positions exist but local account state has never been synced.",
-                    details={"position_count": len(broker_state.positions)},
-                )
-            )
-        else:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="account_snapshot_not_yet_synced",
-                    severity="info",
-                    blocks_execution=False,
-                    message="No local broker account snapshot exists yet; reconciliation treated the flat account as safe.",
-                    details={},
-                )
-            )
-    else:
-        broker_gross_exposure = sum(
-            (abs(position.market_value) for position in broker_state.positions),
-            start=Decimal("0"),
-        )
-        account_differences: dict[str, dict[str, str | int]] = {}
-        if _decimal_differs(latest_snapshot.cash, broker_state.account.cash, tolerance=_MONEY_TOLERANCE):
-            account_differences["cash"] = {
-                "local": str(latest_snapshot.cash),
-                "broker": str(broker_state.account.cash),
-            }
-        if _decimal_differs(
-            latest_snapshot.buying_power,
-            broker_state.account.buying_power,
-            tolerance=_MONEY_TOLERANCE,
-        ):
-            account_differences["buying_power"] = {
-                "local": str(latest_snapshot.buying_power),
-                "broker": str(broker_state.account.buying_power),
-            }
-        if _decimal_differs(latest_snapshot.total_equity, broker_state.account.equity, tolerance=_MONEY_TOLERANCE):
-            account_differences["total_equity"] = {
-                "local": str(latest_snapshot.total_equity),
-                "broker": str(broker_state.account.equity),
-            }
-        if _decimal_differs(latest_snapshot.gross_exposure, broker_gross_exposure, tolerance=_MONEY_TOLERANCE):
-            account_differences["gross_exposure"] = {
-                "local": str(latest_snapshot.gross_exposure),
-                "broker": str(broker_gross_exposure),
-            }
-        if latest_snapshot.open_positions != len(broker_state.positions):
-            account_differences["open_positions"] = {
-                "local": latest_snapshot.open_positions,
-                "broker": len(broker_state.positions),
-            }
-        if account_differences:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="account_snapshot_mismatch",
-                    severity="error",
-                    blocks_execution=True,
-                    message="Latest local account snapshot diverges from the broker account state.",
-                    details=account_differences,
-                )
-            )
-
-    order_error_messages = _order_error_messages(findings)
+    breaches: list[dict[str, Any]] = []
     for local_order in local_orders:
         if (
             local_order.status == OrderLifecycleState.SUBMISSION_FAILED
             and local_order.submission_attempt_count >= failure_threshold
         ):
-            findings.append(
-                ReconciliationFinding(
-                    event_type="submission_failure_threshold_exceeded",
-                    severity="error",
-                    blocks_execution=True,
-                    message=(
-                        f"Local order '{local_order.client_order_id}' hit the submission failure threshold "
-                        f"({local_order.submission_attempt_count} attempts)."
-                    ),
-                    details={
-                        "paper_order_id": str(local_order.id),
-                        "client_order_id": local_order.client_order_id,
-                        "submission_attempt_count": local_order.submission_attempt_count,
-                        "last_submission_error": local_order.last_submission_error,
-                    },
-                    paper_order_id=str(local_order.id),
-                )
-            )
-        if local_order.id in order_error_messages and local_order.sync_failure_count + 1 >= failure_threshold:
-            findings.append(
-                ReconciliationFinding(
-                    event_type="sync_failure_threshold_exceeded",
-                    severity="error",
-                    blocks_execution=True,
-                    message=(
-                        f"Local order '{local_order.client_order_id}' hit the broker-sync failure threshold "
-                        f"({local_order.sync_failure_count + 1} failed reconciliations)."
-                    ),
-                    details={
-                        "paper_order_id": str(local_order.id),
-                        "client_order_id": local_order.client_order_id,
-                        "sync_failure_count": local_order.sync_failure_count + 1,
-                        "last_sync_error": order_error_messages[local_order.id],
-                    },
-                    paper_order_id=str(local_order.id),
-                )
+            breaches.append(
+                {
+                    "reason": "submission_failure_threshold_exceeded",
+                    "paper_order_id": str(local_order.id),
+                    "client_order_id": local_order.client_order_id,
+                    "submission_attempt_count": local_order.submission_attempt_count,
+                }
             )
 
-    return findings
+        error_message = finding_messages_by_order_id.get(str(local_order.id))
+        if error_message is not None and local_order.sync_failure_count + 1 >= failure_threshold:
+            breaches.append(
+                {
+                    "reason": "sync_failure_threshold_exceeded",
+                    "paper_order_id": str(local_order.id),
+                    "client_order_id": local_order.client_order_id,
+                    "sync_failure_count": local_order.sync_failure_count + 1,
+                    "last_sync_error": error_message,
+                }
+            )
+
+    return breaches
 
 
-def _order_error_messages(findings: list[ReconciliationFinding]) -> dict[uuid.UUID, str]:
-    messages: dict[uuid.UUID, str] = {}
-    for finding in findings:
-        if finding.paper_order_id is None:
-            continue
-        paper_order_id = uuid.UUID(finding.paper_order_id)
-        messages.setdefault(paper_order_id, finding.message)
-    return messages
-
-
-def _apply_sync_failure_state(
-    *,
-    local_orders: list[PaperOrder],
-    findings: list[ReconciliationFinding],
-    checked_at: datetime,
-) -> None:
-    order_error_messages = _order_error_messages(findings)
-    for local_order in local_orders:
-        error_message = order_error_messages.get(local_order.id)
-        if error_message is None:
-            local_order.sync_failure_count = 0
-            local_order.last_sync_error = None
-            local_order.last_sync_failure_at = None
-            continue
-
-        local_order.sync_failure_count += 1
-        local_order.last_sync_error = error_message
-        local_order.last_sync_failure_at = checked_at
+def _finding_event_dict(finding: Finding) -> dict[str, Any]:
+    """Serialize a matcher ``Finding`` into the ExecutionEvent persistence shape,
+    tying it back to its source snapshot (RECON-09): the identity (symbol, account,
+    side) and source ids (paper_order_id / broker_order_id) are folded into
+    ``details`` alongside whatever the matcher's finding builder already populated.
+    """
+    event_dict = finding.to_event_dict()
+    details = dict(event_dict["details"])
+    if finding.identity is not None:
+        details.setdefault("symbol", finding.identity.symbol)
+        details.setdefault("account", finding.identity.account)
+        details.setdefault("side", finding.identity.side.value)
+    if finding.paper_order_id is not None:
+        details.setdefault("paper_order_id", finding.paper_order_id)
+    if finding.broker_order_id is not None:
+        details.setdefault("broker_order_id", finding.broker_order_id)
+    event_dict["details"] = details
+    return event_dict
 
 
 def _apply_broker_order_snapshot(
@@ -754,20 +619,6 @@ def _broker_transition_event(status: ExecutionOrderStatus) -> OrderTransitionEve
     if status == ExecutionOrderStatus.EXPIRED:
         return OrderTransitionEventType.BROKER_EXPIRED
     return OrderTransitionEventType.BROKER_STATUS_UNKNOWN
-
-
-def _local_state_from_broker_status(status: ExecutionOrderStatus) -> OrderLifecycleState:
-    event_type = _broker_transition_event(status)
-    mapping = {
-        OrderTransitionEventType.BROKER_ACKNOWLEDGED: OrderLifecycleState.SUBMITTED,
-        OrderTransitionEventType.BROKER_PARTIALLY_FILLED: OrderLifecycleState.PARTIALLY_FILLED,
-        OrderTransitionEventType.BROKER_FILLED: OrderLifecycleState.FILLED,
-        OrderTransitionEventType.BROKER_CANCELED: OrderLifecycleState.CANCELED,
-        OrderTransitionEventType.BROKER_REJECTED: OrderLifecycleState.REJECTED,
-        OrderTransitionEventType.BROKER_EXPIRED: OrderLifecycleState.EXPIRED,
-        OrderTransitionEventType.BROKER_STATUS_UNKNOWN: OrderLifecycleState.UNKNOWN,
-    }
-    return mapping[event_type]
 
 
 def _create_reconciliation_run(
