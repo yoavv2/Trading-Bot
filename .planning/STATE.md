@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Execution Correctness & Hardening
-status: executing
+milestone: v1.2
+milestone_name: Operator Console v0
+status: completed
 stopped_at: Completed 09-04-PLAN.md (Phase 9 COMPLETE, 4/4 plans)
-last_updated: "2026-07-13T15:17:00.000Z"
-last_activity: 2026-07-13 — Phase 9 (Reconciliation Rewrite) COMPLETE. Plan 09-04 (final plan) done: apply_reconciliation_corrections() extracted as the sole entrypoint mutating PaperOrder.sync_failure_count/last_sync_error/last_sync_failure_at (RECON-04) — reconcile_paper_execution never calls it, pinned by a static source-inspection test. The paper-session runner now calls recover_inflight_paper_orders -> reconcile_paper_execution (read-only) -> apply_reconciliation_corrections as three distinct steps; the blocks_execution/block_on_unresolved_reconciliation gate is unchanged. Downstream consumers (analytics/operator_reads) already treated event_type as opaque strings; operator_status's synthesized "reconciliation_clean" label was tied explicitly to finding_count==0 for RECON-09 traceability (no output value change). Full repo suite (215 tests) has no regressions. Two known gaps documented (not fixed, out of this plan's declared scope): worker/__main__.py's standalone reconcile-paper-execution CLI command still never invokes the corrective entrypoint; REQUIREMENTS.md under-reports RECON-05/RECON-07 as Pending despite both being implemented in 09-01.
+last_updated: "2026-07-13T15:30:00.258Z"
+last_activity: "2026-07-13 — Phase 9 (Reconciliation Rewrite) plan 09-04 COMPLETE, closing out Phase 9. RECON-04 satisfied: corrective action is a separate explicit entrypoint reconcile never calls, invoked as its own step by the session runner after the read-only report is produced. Full repo suite (215 tests, Postgres-backed included) has no regressions. One Rule-1 auto-fix (operator_status.py clean-label tied to finding_count==0, no output value change) plus two documented-not-fixed gaps (worker CLI correction wiring; REQUIREMENTS.md RECON-05/07 under-marking) — see 09-04-SUMMARY.md and deferred-items.md."
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 20
-  completed_plans: 20
+  total_phases: 6
+  completed_phases: 6
+  total_plans: 24
+  completed_plans: 24
 ---
 
 # Project State
