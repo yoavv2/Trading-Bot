@@ -638,10 +638,28 @@ def test_reconciliation_does_not_mutate_execution_state(
     assert after_position_state == before_position_state
     assert after_snapshot_state == before_snapshot_state
 
-    # But the materialized report itself WAS written.
+    # But the materialized report itself WAS written, with closed-enum event_types
+    # (RECON-09) tied back to their source snapshot identity/ids in `details`.
     assert len(events) > 0
+    assert {event.event_type for event in events} == {"MISSING_BROKER"}
     assert len(reconciliation_runs) == 1
     assert reconciliation_runs[0].status == StrategyRunStatus.SUCCEEDED
+
+    order_events = [event for event in events if event.paper_order_id is not None]
+    position_events = [event for event in events if event.paper_order_id is None]
+    assert len(order_events) == 1
+    assert len(position_events) == 1
+
+    # Order finding ties back to its source PaperOrder id.
+    assert order_events[0].paper_order_id == paper_order_id
+    assert order_events[0].details["paper_order_id"] == str(paper_order_id)
+
+    # Position finding ties back to its source identity (symbol, account, side) --
+    # "account" only appears here via _finding_event_dict's identity augmentation,
+    # since the matcher's own position-finding builders never set it.
+    assert position_events[0].details["symbol"] == "AAPL"
+    assert position_events[0].details["account"] == "paper"
+    assert position_events[0].details["side"] == "LONG"
 
 
 def test_reconciliation_clean_run_emits_empty_report(
