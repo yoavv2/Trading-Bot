@@ -5,7 +5,7 @@ import re
 import sys
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -45,6 +45,7 @@ from trading_platform.services.alpaca import (
     BrokerPositionSnapshot,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.concurrency_guard import ConcurrentRunLockedError, session_run_lock
 from trading_platform.services.execution import (
     ExecutionOrderStatus,
     ExecutionService,
@@ -1535,3 +1536,162 @@ def test_sync_paper_state_continues_reading_broker_state_while_kill_switch_is_tr
 
     assert paper_order.status == "filled"
     assert snapshot.snapshot_source == "broker_sync"
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 (Concurrency Guard) — 08-04: lock-guarded run_paper_order_submission
+# ---------------------------------------------------------------------------
+
+
+def test_run_paper_order_submission_loser_writes_nothing_and_makes_no_broker_calls(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    strategy_id = "trend_following_daily"
+    session_date = date(2024, 1, 5)
+    execution_service = FakeExecutionService()
+
+    with session_scope(settings) as session:
+        pre_run_ids = {
+            run.id
+            for run in session.execute(
+                select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
+            ).scalars()
+        }
+
+    # Hold the tuple's advisory lock from the test itself, then attempt a
+    # second, concurrent submission for the SAME (strategy_id, session_date).
+    with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
+        with pytest.raises(ConcurrentRunLockedError) as exc_info:
+            run_paper_order_submission(
+                strategy_id,
+                as_of_session=session_date,
+                settings=settings,
+                execution_service=execution_service,
+                trigger_source="pytest_loser",
+            )
+
+    assert exc_info.value.strategy_id == strategy_id
+    assert exc_info.value.session_date == session_date
+    assert execution_service.submitted_intents == []
+
+    with session_scope(settings) as session:
+        post_run_ids = {
+            run.id
+            for run in session.execute(
+                select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
+            ).scalars()
+        }
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+
+    assert post_run_ids == pre_run_ids
+    assert paper_orders == []
+
+
+def test_run_paper_order_submission_running_row_first_and_reclaims_stale_predecessor(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    strategy = registry.resolve("trend_following_daily")
+    session_date = date(2024, 1, 5)
+
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        stale_predecessor = StrategyRun(
+            strategy_id=strategy_record.id,
+            run_type=StrategyRunType.PAPER_EXECUTION,
+            status=StrategyRunStatus.RUNNING,
+            trigger_source="crashed_predecessor",
+            started_at=datetime.now(UTC) - timedelta(minutes=40),
+            parameters_snapshot={"as_of_session": session_date.isoformat()},
+            result_summary={"stage": "running", "as_of_session": session_date.isoformat()},
+        )
+        session.add(stale_predecessor)
+        session.flush()
+        stale_run_id = stale_predecessor.id
+
+    execution_service = FakeExecutionService()
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=session_date,
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="pytest_reclaim",
+    )
+
+    # Fresh run completed normally -- reclaim of the predecessor did not
+    # interfere with the new run's own progress.
+    assert report.status == StrategyRunStatus.SUCCEEDED.value
+    fresh_run_id = uuid.UUID(report.run_id)
+
+    with session_scope(settings) as session:
+        stale_after = session.get(StrategyRun, stale_run_id)
+        fresh_after = session.get(StrategyRun, fresh_run_id)
+        reclaim_events = session.execute(
+            select(ExecutionEvent).where(ExecutionEvent.strategy_run_id == stale_run_id)
+        ).scalars().all()
+
+    # The pre-existing 40-minute-old running row was reclaimed to STALE...
+    assert stale_after.status == StrategyRunStatus.STALE
+    assert len(reclaim_events) == 1
+    assert reclaim_events[0].event_type == "paper_run_reclaimed_stale"
+    assert reclaim_events[0].details["reclaiming_run_id"] == str(fresh_run_id)
+    # ...while the fresh run's own row -- created inside the timeout window
+    # moments earlier -- was never a reclaim candidate and reached succeeded.
+    assert fresh_after.status == StrategyRunStatus.SUCCEEDED
+
+
+def test_run_paper_order_submission_kill_switch_blocks_after_lock_and_releases_lock_on_exit(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    strategy_id = "trend_following_daily"
+    session_date = date(2024, 1, 5)
+    control_service = OperatorControlService(settings=settings)
+    control_service.trip_kill_switch(
+        reason="post-lock check test",
+        actor="pytest",
+        trigger_source="pytest",
+    )
+    execution_service = ExplodingExecutionService()
+
+    report = run_paper_order_submission(
+        strategy_id,
+        as_of_session=session_date,
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="pytest_kill_switch_lock",
+    )
+
+    # The run row was created (RUNNING-first, per LOCK-03) and only THEN
+    # finalized blocked/FAILED -- proving the kill-switch check ran after
+    # lock acquisition and after the row existed, not before either.
+    assert report.status == StrategyRunStatus.FAILED.value
+    assert report.result_summary["action"] == "blocked_global_kill_switch"
+    assert report.result_summary["blocked_reason"] == "global_kill_switch_tripped"
+    assert execution_service.submitted_intents == []
+
+    with session_scope(settings) as session:
+        blocked_run = session.get(StrategyRun, uuid.UUID(report.run_id))
+        blocked_events = session.execute(
+            select(ExecutionEvent).where(ExecutionEvent.strategy_run_id == uuid.UUID(report.run_id))
+        ).scalars().all()
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+
+    assert blocked_run is not None
+    assert blocked_run.run_type == StrategyRunType.PAPER_EXECUTION
+    assert blocked_run.status == StrategyRunStatus.FAILED
+    assert len(blocked_events) == 1
+    assert blocked_events[0].event_type == "paper_execution_blocked"
+    assert paper_orders == []
+
+    # LOCK-06: the lock must be free for a subsequent acquisition on the
+    # SAME tuple now that the kill-switch-blocked run has finalized and
+    # exited its guarded `with session_run_lock(...)` region.
+    with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
+        pass
