@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Execution Correctness & Hardening
-status: executing
-stopped_at: Completed 08-05-PLAN.md
-last_updated: "2026-07-13T10:24:00.000Z"
-last_activity: "2026-07-13 — Phase 8 (Concurrency Guard) COMPLETE. Wave 4 (08-05) closed out the phase: the worker CLI now catches ConcurrentRunLockedError in both submit-paper-orders and run-paper-session and maps it to CONCURRENT_RUN_LOCK_EXIT_CODE (3) via a shared handler — WARNING logged naming the tuple/command, concise stderr line, no traceback; successful runs still exit 0. A new end-to-end test (tests/test_concurrency_guard_e2e.py) proves LOCK-06 against a real migrated Postgres DB: a lock-holder's connection force-closed without unlocking (simulated crash) auto-releases the advisory lock, and a subsequent run_paper_order_submission() call for the same tuple acquires cleanly, reclaims the leftover 40-minute-old running row to STALE with an audited ExecutionEvent, and reaches SUCCEEDED. Full repo suite (169 tests) has no regressions. Two atomic commits (e6f7acb, 907bd65); no deviations. With 08-01..08-05, Phase 8's full goal is satisfied: at most one side-effecting run per (strategy_id, session_date), lock before side effects, released on all exit paths including crash, stale runs detectable and cleanly reclaimed. Next: Phase 9 (Reconciliation Rewrite, currently paused in v1.1 scope)."
+status: verifying
+stopped_at: Completed 08-05-PLAN.md (Phase 8 complete)
+last_updated: "2026-07-13T07:39:06.074Z"
+last_activity: 2026-07-13 — Phase 8 (Concurrency Guard) COMPLETE with plan 08-05. The worker CLI now maps ConcurrentRunLockedError to the reserved exit code (3) for both paper commands via a shared handler, and a new e2e test proves the crash-release + clean-reacquire + stale-reclaim guarantee (LOCK-06) against a real migrated Postgres DB. Full repo suite (169 tests) has no regressions. No deviations — plan executed exactly as written.
 progress:
   total_phases: 5
   completed_phases: 5

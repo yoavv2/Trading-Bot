@@ -84,7 +84,7 @@ Plans:
 - [x] 08-02-PLAN.md — Advisory-lock primitive: ConcurrentRunLockedError, key derivation, non-blocking session_run_lock() with crash-release (LOCK-01, LOCK-06)
 - [x] 08-03-PLAN.md — Stale-run single-query detection + tuple-scoped STALE reclaim with ExecutionEvent audit (LOCK-04, LOCK-05)
 - [x] 08-04-PLAN.md — Lock-guard + reorder run_paper_order_submission: lock-before-side-effects, running-row-first, reclaim-on-entry (LOCK-01, LOCK-02, LOCK-03, LOCK-05)
-- [ ] 08-05-PLAN.md — Worker CLI reserved exit code for lock denial + crash/restart e2e proof (LOCK-01, LOCK-06)
+- [x] 08-05-PLAN.md — Worker CLI reserved exit code for lock denial + crash/restart e2e proof (LOCK-01, LOCK-06)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
