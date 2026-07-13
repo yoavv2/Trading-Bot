@@ -47,7 +47,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 
 - [x] **Phase 7: Correctness Kernel** - Closed order state machine, deterministic `client_order_id` idempotency, persistent global kill switch with operator CLI. Completed 2026-04-20.
 - [x] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection. (completed 2026-07-13)
-- [ ] **Phase 9: Reconciliation Rewrite** (paused) - Typed snapshots, O(n) matcher, closed findings enum, materialized report.
+- [ ] **Phase 9: Reconciliation Rewrite** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Typed snapshots, O(n) matcher, closed findings enum, materialized report.
 - [ ] **Phase 10: Startup Hardening** (paused) - Fail-fast config validation, log sanitization, DB lifecycle consolidation.
 - [ ] **Phase 11: Query Performance** (paused) - Preflight N+1 fix, reconciliation scaling, covering indices.
 - [ ] **Phase 12: Structural Refactor and Tooling** (paused) - Worker split, service reorganization, lint/type-check gates.
@@ -85,6 +85,19 @@ Plans:
 - [x] 08-03-PLAN.md — Stale-run single-query detection + tuple-scoped STALE reclaim with ExecutionEvent audit (LOCK-04, LOCK-05)
 - [x] 08-04-PLAN.md — Lock-guard + reorder run_paper_order_submission: lock-before-side-effects, running-row-first, reclaim-on-entry (LOCK-01, LOCK-02, LOCK-03, LOCK-05)
 - [x] 08-05-PLAN.md — Worker CLI reserved exit code for lock denial + crash/restart e2e proof (LOCK-01, LOCK-06)
+
+### Phase 9: Reconciliation Rewrite
+**Milestone**: v1.1 Execution Correctness & Hardening (resumed 2026-07-13 after Phase 8 completed)
+**Goal:** Reconciliation produces typed findings from normalized snapshots via an O(n) indexed matcher, is strictly read-only, and emits one materialized report tied to the source snapshots — string-classified findings and nested-scan matching are eliminated.
+**Depends on:** Phase 7 (Correctness Kernel — complete)
+**Requirements**: RECON-01, RECON-02, RECON-03, RECON-04, RECON-05, RECON-06, RECON-07, RECON-08, RECON-09
+**Success Criteria** (what must be TRUE):
+  1. Broker and local snapshots cross the reconciliation boundary as typed dataclasses — no `dict[str, Any]` or raw string field passes the snapshot boundary.
+  2. The matcher resolves positions by a keyed map on `(symbol, account, side)`; a benchmark test asserts linear (not quadratic) scaling as entity count grows.
+  3. Every finding is a value from the closed `ReconciliationFinding` enum: `MISSING_LOCAL`, `MISSING_BROKER`, `QUANTITY_MISMATCH`, `PRICE_MISMATCH`, `STATE_MISMATCH` — no string-classified finding reaches the report.
+  4. Running reconciliation produces zero DB writes to execution state (order rows, positions, account snapshots); corrective action is a separate explicit step on a different code path.
+  5. Flat positions (zero quantity on both sides) produce zero findings; a materialized report is always emitted with findings tied to their source snapshots.
+**Plans**: TBD (run `/gsd:plan-phase 09`)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -164,7 +177,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 6. Analytics and APIs | v1.0 | 3/3 | Complete | 2026-03-15 |
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
-| 9. Reconciliation Rewrite | v1.1 | 0/TBD | Paused | - |
+| 9. Reconciliation Rewrite | v1.1 | 0/TBD | Next (Phase 8 complete 2026-07-13) | - |
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |

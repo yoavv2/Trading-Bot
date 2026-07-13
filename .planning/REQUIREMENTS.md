@@ -64,6 +64,22 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-12 a
 - [x] **LOCK-05**: New run attempt — if the advisory lock is held by another session, exit cleanly with a typed message; if the lock is free but a stale `running` row exists, mark that row `stale` and continue
 - [x] **LOCK-06**: Lock release is guaranteed on normal exit, crash (via session-scoped lock), and kill-switch trigger — verified by a restart/crash test
 
+## v1.1 Resumed — Reconciliation Rewrite (Phase 9)
+
+Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 after Phase 8 (Concurrency Guard) completed. These are the v1.1 reconciliation requirements now active for Phase 9 planning. (CFG, LOG, DB, PERF, STRUCT, TOOL remain paused in the archive until their phases resume.)
+
+### Reconciliation (RECON)
+
+- [ ] **RECON-01**: The broker snapshot is source of truth for current quantities, positions, and fills
+- [ ] **RECON-02**: Local DB is source of truth for intent and history (signals, orders, state events)
+- [ ] **RECON-03**: Reconciliation is read-only — it emits findings and never mutates execution state (order rows, positions, account snapshots)
+- [ ] **RECON-04**: Corrective action is a separate explicit step invoked after findings are reviewed; reconciliation and correction never share a code path
+- [ ] **RECON-05**: Broker and local snapshots are loaded as typed values (dataclass/typed dict) — no dict-of-strings passes the snapshot boundary
+- [ ] **RECON-06**: Matcher uses an indexed map keyed by typed identity `(symbol, account, side)`; runtime is O(n) over entity count (no nested scans)
+- [ ] **RECON-07**: Findings are typed enum values from a closed set: `MISSING_LOCAL`, `MISSING_BROKER`, `QUANTITY_MISMATCH`, `PRICE_MISMATCH`, `STATE_MISMATCH`
+- [ ] **RECON-08**: Flat positions (zero quantity on both sides) produce zero findings
+- [ ] **RECON-09**: Reconciliation emits one materialized report; every finding is tied to its category and the source snapshots that produced it
+
 ## Future Requirements
 
 Deferred. Tracked but not in current roadmap.
@@ -75,7 +91,7 @@ Deferred. Tracked but not in current roadmap.
 
 ### v1.1 Remaining Hardening (paused milestone)
 
-LOCK (Concurrency Guard, Phase 8) resumed 2026-07-12 — now active above under "v1.1 Resumed". The rest remain paused: see `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — RECON, CFG, LOG, DB, PERF, STRUCT, TOOL requirements resume with their respective phases.
+LOCK (Concurrency Guard, Phase 8) resumed 2026-07-12 and RECON (Reconciliation Rewrite, Phase 9) resumed 2026-07-13 — both now active above under "v1.1 Resumed". The rest remain paused: see `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — CFG, LOG, DB, PERF, STRUCT, TOOL requirements resume with their respective phases.
 
 ## Out of Scope
 
@@ -127,6 +143,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LOCK-04 | Phase 8 | Complete |
 | LOCK-05 | Phase 8 | Complete |
 | LOCK-06 | Phase 8 | Complete |
+| RECON-01 | Phase 9 | Pending |
+| RECON-02 | Phase 9 | Pending |
+| RECON-03 | Phase 9 | Pending |
+| RECON-04 | Phase 9 | Pending |
+| RECON-05 | Phase 9 | Pending |
+| RECON-06 | Phase 9 | Pending |
+| RECON-07 | Phase 9 | Pending |
+| RECON-08 | Phase 9 | Pending |
+| RECON-09 | Phase 9 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 21 total
