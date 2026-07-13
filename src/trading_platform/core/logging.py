@@ -33,6 +33,15 @@ class JsonLogFormatter(logging.Formatter):
             payload["context"] = context
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
+        # Defense-in-depth backstop (LOG-06): `emit_structured_log` already
+        # routes its `context` dict through `sanitize()`, but a stray direct
+        # `logger.info(...)`/`logger.warning(...)` call (bypassing
+        # `emit_structured_log`) would otherwise reach the handler
+        # unsanitized. Sanitizing the whole assembled payload here — not
+        # just `context` — also scrubs embedded secrets in the `message`
+        # string itself, which `emit_structured_log`'s chokepoint does not
+        # cover (see deferred-items.md).
+        payload = sanitize(payload, unmask_ids=_DEBUG_UNMASK_IDS)
         return json.dumps(payload, default=str)
 
 

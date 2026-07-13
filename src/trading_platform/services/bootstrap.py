@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 
 from trading_platform.core.config_validation import ExecutionMode
+from trading_platform.core.logging import get_logger
 from trading_platform.core.settings import Settings
 from trading_platform.core.startup import enforce_startup_config
 from trading_platform.db.models import Strategy, StrategyRun, StrategyRunStatus, StrategyRunType, StrategyStatus
@@ -183,7 +183,7 @@ def run_dry_bootstrap(
     strategy = resolved_registry.resolve(strategy_id)
     metadata = strategy.metadata
     services = build_placeholder_services()
-    logger = logging.getLogger("trading_platform.dry_run")
+    logger = get_logger("trading_platform.dry_run")
 
     run_id = create_strategy_run(
         resolved_settings,

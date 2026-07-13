@@ -10,7 +10,7 @@ import time
 from datetime import UTC, date, datetime, timedelta
 
 from trading_platform.core.config_validation import ExecutionMode
-from trading_platform.core.logging import build_log_context, configure_logging, emit_structured_log
+from trading_platform.core.logging import build_log_context, configure_logging, emit_structured_log, get_logger
 from trading_platform.core.settings import get_strategy_config
 from trading_platform.core.startup import enforce_startup_config
 from trading_platform.services.analytics import build_strategy_analytics_report, render_strategy_analytics_report
@@ -212,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run_placeholder_worker(interval_seconds: int) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     logger.info(
         "worker_started",
         extra={
@@ -237,7 +237,7 @@ def run_placeholder_worker(interval_seconds: int) -> None:
 def run_dry_bootstrap(strategy_id: str) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     strategy = get_strategy_config(settings, strategy_id)
     report = run_persisted_dry_bootstrap(
         strategy.strategy_id,
@@ -254,7 +254,7 @@ def run_dry_bootstrap(strategy_id: str) -> None:
 def run_backtest_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     from_date, to_date = resolve_backtest_window(
         settings=settings,
         from_date_arg=args.from_date,
@@ -299,7 +299,7 @@ def run_report_backtest_command(args: argparse.Namespace) -> None:
 def run_report_strategy_analytics_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.analytics.report.worker")
+    logger = get_logger("trading_platform.analytics.report.worker")
     report = build_strategy_analytics_report(
         strategy_id=args.strategy,
         backtest_run_id=args.backtest_run_id,
@@ -325,7 +325,7 @@ def run_report_strategy_analytics_command(args: argparse.Namespace) -> None:
 def run_evaluate_risk_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     as_of_session = resolve_evaluation_session(
         settings=settings,
         as_of_arg=args.as_of,
@@ -385,7 +385,7 @@ def _handle_concurrent_run_lock_denied(
 def run_submit_paper_orders_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.PAPER)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     as_of_session = resolve_submission_session(
         settings=settings,
         as_of_arg=args.as_of,
@@ -418,7 +418,7 @@ def run_submit_paper_orders_command(args: argparse.Namespace) -> None:
 def run_paper_session_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.PAPER)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     as_of_session = resolve_submission_session(
         settings=settings,
         as_of_arg=args.as_of,
@@ -453,7 +453,7 @@ def run_paper_session_command(args: argparse.Namespace) -> None:
 def run_sync_paper_state_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.PAPER)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     as_of_session = resolve_submission_session(
         settings=settings,
         as_of_arg=args.as_of,
@@ -482,7 +482,7 @@ def run_sync_paper_state_command(args: argparse.Namespace) -> None:
 def run_reconcile_paper_execution_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.PAPER)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     as_of_session = resolve_submission_session(
         settings=settings,
         as_of_arg=args.as_of,
@@ -512,7 +512,7 @@ def run_reconcile_paper_execution_command(args: argparse.Namespace) -> None:
 def run_operator_control_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     service = OperatorControlService(settings=settings)
 
     if args.action in {"trip-kill-switch", "reset-kill-switch", "show-kill-switch"}:
@@ -600,7 +600,7 @@ def _run_kill_switch_action(
 def run_operator_status_command(args: argparse.Namespace) -> None:
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
     report = build_operator_status_report(
         strategy_id=args.strategy,
         inspection_limit=args.inspection_limit,
@@ -624,7 +624,7 @@ def run_ingest_bars(args: argparse.Namespace) -> None:
 
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
 
     yesterday = date.today() - timedelta(days=1)
     to_date = date.fromisoformat(args.to_date) if args.to_date else yesterday
@@ -667,7 +667,7 @@ def run_sync_metadata(args: argparse.Namespace) -> None:
     # for a dry-run invocation.
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST, require_database=not args.dry_run)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
 
     # Import the standalone sync logic from the scripts module
     import sys
@@ -714,7 +714,7 @@ def run_sync_sessions(args: argparse.Namespace) -> None:
 
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.worker")
+    logger = get_logger("trading_platform.worker")
 
     exchange = settings.market_data.calendar.exchange
     yesterday = date.today() - timedelta(days=1)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -15,7 +14,7 @@ from trading_platform.api.routes.runs import router as runs_router
 from trading_platform.api.routes.strategies import router as strategies_router
 from trading_platform.api.routes.system import router as system_router
 from trading_platform.core.config_validation import ExecutionMode
-from trading_platform.core.logging import configure_logging
+from trading_platform.core.logging import configure_logging, get_logger
 from trading_platform.core.settings import load_settings
 from trading_platform.core.startup import enforce_startup_config
 
@@ -32,7 +31,7 @@ async def lifespan(app: FastAPI):
     # database connection to do anything.
     settings = enforce_startup_config(mode=ExecutionMode.BACKTEST, require_database=False)
     configure_logging(settings.logging)
-    logger = logging.getLogger("trading_platform.bootstrap")
+    logger = get_logger("trading_platform.bootstrap")
 
     app.state.settings = settings
     app.state.started_at = datetime.now(UTC).isoformat()
