@@ -70,15 +70,15 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 
 ### Reconciliation (RECON)
 
-- [ ] **RECON-01**: The broker snapshot is source of truth for current quantities, positions, and fills
-- [ ] **RECON-02**: Local DB is source of truth for intent and history (signals, orders, state events)
-- [ ] **RECON-03**: Reconciliation is read-only — it emits findings and never mutates execution state (order rows, positions, account snapshots)
+- [x] **RECON-01**: The broker snapshot is source of truth for current quantities, positions, and fills
+- [x] **RECON-02**: Local DB is source of truth for intent and history (signals, orders, state events)
+- [x] **RECON-03**: Reconciliation is read-only — it emits findings and never mutates execution state (order rows, positions, account snapshots)
 - [ ] **RECON-04**: Corrective action is a separate explicit step invoked after findings are reviewed; reconciliation and correction never share a code path
 - [ ] **RECON-05**: Broker and local snapshots are loaded as typed values (dataclass/typed dict) — no dict-of-strings passes the snapshot boundary
 - [x] **RECON-06**: Matcher uses an indexed map keyed by typed identity `(symbol, account, side)`; runtime is O(n) over entity count (no nested scans)
 - [ ] **RECON-07**: Findings are typed enum values from a closed set: `MISSING_LOCAL`, `MISSING_BROKER`, `QUANTITY_MISMATCH`, `PRICE_MISMATCH`, `STATE_MISMATCH`
 - [x] **RECON-08**: Flat positions (zero quantity on both sides) produce zero findings
-- [ ] **RECON-09**: Reconciliation emits one materialized report; every finding is tied to its category and the source snapshots that produced it
+- [x] **RECON-09**: Reconciliation emits one materialized report; every finding is tied to its category and the source snapshots that produced it
 
 ## Future Requirements
 
@@ -143,15 +143,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LOCK-04 | Phase 8 | Complete |
 | LOCK-05 | Phase 8 | Complete |
 | LOCK-06 | Phase 8 | Complete |
-| RECON-01 | Phase 9 | Pending |
-| RECON-02 | Phase 9 | Pending |
-| RECON-03 | Phase 9 | Pending |
+| RECON-01 | Phase 9 | Complete |
+| RECON-02 | Phase 9 | Complete |
+| RECON-03 | Phase 9 | Complete |
 | RECON-04 | Phase 9 | Pending |
 | RECON-05 | Phase 9 | Pending |
 | RECON-06 | Phase 9 | Complete |
 | RECON-07 | Phase 9 | Pending |
 | RECON-08 | Phase 9 | Complete |
-| RECON-09 | Phase 9 | Pending |
+| RECON-09 | Phase 9 | Complete |
 
 **Coverage:**
 - v1.2 requirements: 21 total
