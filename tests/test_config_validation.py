@@ -98,3 +98,90 @@ def test_valid_payload_returns_settings() -> None:
     settings = validate_config(payload, mode=ExecutionMode.BACKTEST)
 
     assert isinstance(settings, Settings)
+
+
+# --- CFG-01: required secrets per active mode -------------------------------
+
+
+def test_paper_mode_with_empty_alpaca_keys_raises_naming_api_key() -> None:
+    payload = _raw_payload()
+    payload["broker"]["alpaca"]["api_key"] = ""
+    payload["broker"]["alpaca"]["api_secret"] = ""
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        validate_config(payload, mode=ExecutionMode.PAPER)
+
+    fields = [field for field, _ in exc_info.value.failures]
+    assert "broker.alpaca.api_key" in fields
+
+
+def test_backtest_mode_with_empty_alpaca_keys_returns_settings() -> None:
+    """Empty broker keys must not block a backtest boot."""
+    payload = _raw_payload()
+    payload["broker"]["alpaca"]["api_key"] = ""
+    payload["broker"]["alpaca"]["api_secret"] = ""
+
+    settings = validate_config(payload, mode=ExecutionMode.BACKTEST)
+
+    assert isinstance(settings, Settings)
+    assert settings.broker.alpaca.api_key == ""
+
+
+def test_live_mode_with_empty_alpaca_keys_raises_naming_api_key() -> None:
+    payload = _raw_payload()
+    payload["broker"]["alpaca"]["api_key"] = ""
+    payload["broker"]["alpaca"]["api_secret"] = ""
+    payload["broker"]["alpaca"]["base_url"] = "https://api.alpaca.markets"
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        validate_config(payload, mode=ExecutionMode.LIVE)
+
+    fields = [field for field, _ in exc_info.value.failures]
+    assert "broker.alpaca.api_key" in fields
+
+
+# --- CFG-02: cross-field — mode=paper forbids a configured live endpoint ----
+
+
+def test_live_endpoint_configured_while_mode_paper_raises_naming_base_url() -> None:
+    payload = _raw_payload()
+    payload["broker"]["alpaca"]["api_key"] = "key"
+    payload["broker"]["alpaca"]["api_secret"] = "secret"
+    payload["broker"]["alpaca"]["base_url"] = "https://api.alpaca.markets"
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        validate_config(payload, mode=ExecutionMode.PAPER)
+
+    fields = [field for field, _ in exc_info.value.failures]
+    assert "broker.alpaca.base_url" in fields
+
+
+# --- CFG-03: mutual exclusion — paper vs live endpoint cannot both hold -----
+
+
+def test_paper_endpoint_configured_while_mode_live_raises_naming_base_url() -> None:
+    payload = _raw_payload()
+    payload["broker"]["alpaca"]["api_key"] = "key"
+    payload["broker"]["alpaca"]["api_secret"] = "secret"
+    # base_url defaults to the paper endpoint; mode=LIVE conflicts with it.
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        validate_config(payload, mode=ExecutionMode.LIVE)
+
+    fields = [field for field, _ in exc_info.value.failures]
+    assert "broker.alpaca.base_url" in fields
+
+
+# --- Fully-valid paper payload returns Settings with no error --------------
+
+
+def test_fully_valid_paper_payload_returns_settings() -> None:
+    payload = _raw_payload()
+    payload["broker"]["alpaca"]["api_key"] = "key"
+    payload["broker"]["alpaca"]["api_secret"] = "secret"
+    # base_url already defaults to the paper endpoint; tolerances already in range.
+
+    settings = validate_config(payload, mode=ExecutionMode.PAPER)
+
+    assert isinstance(settings, Settings)
+    assert settings.broker.alpaca.api_key == "key"
