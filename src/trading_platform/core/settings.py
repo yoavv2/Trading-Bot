@@ -35,6 +35,7 @@ class LoggingSettings(BaseModel):
     level: str = "INFO"
     format: Literal["json"] = "json"
     service: str = "trading-platform-api"
+    debug_unmask_ids: bool = False
 
 
 class DatabaseSettings(BaseModel):
