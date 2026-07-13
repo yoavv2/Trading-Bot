@@ -212,3 +212,45 @@ def test_debug_unmask_flag_reveals_full_broker_order_id(_isolated_root_logger) -
         assert RAW_PASSWORD not in line
         assert RAW_API_KEY not in line
         assert RAW_AUTH_HEADER not in line
+
+
+def test_default_config_scrubs_secret_embedded_in_message_string(_isolated_root_logger) -> None:
+    """Dedicated regression test for the gap deferred-items.md flagged from
+    10-02: `emit_structured_log`'s own chokepoint sanitizes the `context`
+    dict but NEVER the `message` positional argument -- only the Task 2
+    formatter backstop closes that gap. The other tests in this module seed
+    secrets exclusively via `context`/`extra` fields, so they would still
+    pass even if the message string were left completely unsanitized; this
+    test is the one that actually exercises and proves the message-string
+    path.
+
+    Uses VALUE-based assertions only (not `"password=" not in line`):
+    `_scrub_string`'s embedded-secret pattern preserves the `key=` prefix
+    and redacts only the value (`password=hunter2` -> `password=[REDACTED]`),
+    so the substring `"password="` legitimately survives in this line -- the
+    other tests instead seed credentials via dict keys, which serialize as
+    JSON `"password": "[REDACTED]"` (no `=`) and can use the substring form.
+    """
+    settings = LoggingSettings(debug_unmask_ids=False)
+    core_logging.configure_logging(settings)
+    root_logger = logging.getLogger()
+
+    stream = io.StringIO()
+    handler = root_logger.handlers[0]
+    handler.stream = stream
+
+    logger = get_logger("trading_platform.test_log_enforcement")
+    emit_structured_log(
+        logger,
+        logging.INFO,
+        f"connecting with password={RAW_PASSWORD} api_key={RAW_API_KEY}",
+        strategy_id="trend_following_daily",
+    )
+
+    lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+
+    assert RAW_PASSWORD not in lines[0]
+    assert RAW_API_KEY not in lines[0]
+    assert "[REDACTED]" in payload["message"]
