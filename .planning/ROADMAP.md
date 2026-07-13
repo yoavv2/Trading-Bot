@@ -47,7 +47,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 
 - [x] **Phase 7: Correctness Kernel** - Closed order state machine, deterministic `client_order_id` idempotency, persistent global kill switch with operator CLI. Completed 2026-04-20.
 - [x] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection. (completed 2026-07-13)
-- [ ] **Phase 9: Reconciliation Rewrite** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Typed snapshots, O(n) matcher, closed findings enum, materialized report.
+- [x] **Phase 9: Reconciliation Rewrite** - Typed snapshots, O(n) matcher, closed findings enum, materialized report, explicit corrective entrypoint. Completed 2026-07-13.
 - [ ] **Phase 10: Startup Hardening** (paused) - Fail-fast config validation, log sanitization, DB lifecycle consolidation.
 - [ ] **Phase 11: Query Performance** (paused) - Preflight N+1 fix, reconciliation scaling, covering indices.
 - [ ] **Phase 12: Structural Refactor and Tooling** (paused) - Worker split, service reorganization, lint/type-check gates.
@@ -103,7 +103,7 @@ Plans:
 - [x] 09-01-PLAN.md — Typed reconciliation contracts: closed ReconciliationFinding enum + typed local snapshots + (symbol, account, side) identity key (RECON-05, RECON-07)
 - [x] 09-02-PLAN.md — Pure O(n) indexed matcher (flat positions -> zero findings) + count-based linear-scaling benchmark (RECON-06, RECON-08)
 - [x] 09-03-PLAN.md — Read-only reconcile orchestrator over typed snapshots + one materialized report tied to source snapshots (RECON-01, RECON-02, RECON-03, RECON-09)
-- [ ] 09-04-PLAN.md — Explicit corrective entrypoint separated from reconcile + session-runner rewire + closed-enum consumer migration (RECON-04)
+- [x] 09-04-PLAN.md — Explicit corrective entrypoint separated from reconcile + session-runner rewire + closed-enum consumer migration (RECON-04)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -183,7 +183,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 6. Analytics and APIs | v1.0 | 3/3 | Complete | 2026-03-15 |
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
-| 9. Reconciliation Rewrite | v1.1 | 3/4 | In Progress | - |
+| 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
