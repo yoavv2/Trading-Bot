@@ -121,6 +121,13 @@ def migrated_paper_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         )
 
     _set_database_env(monkeypatch, database_name)
+    # 10-05's startup gate validates mode=PAPER for submit-paper-orders before
+    # this fixture's caller ever reaches the lock/service-init logic under
+    # test; the test env's broker keys are empty by default (conftest.py
+    # disables .env loading), so Test A needs real-looking paper creds to
+    # pass config validation and reach the lock contention it's testing.
+    monkeypatch.setenv("TRADING_PLATFORM_BROKER__ALPACA__API_KEY", "test-key")
+    monkeypatch.setenv("TRADING_PLATFORM_BROKER__ALPACA__API_SECRET", "test-secret")
     clear_settings_cache()
     clear_engine_cache()
     command.upgrade(build_alembic_config(), "head")
