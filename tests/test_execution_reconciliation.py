@@ -40,7 +40,10 @@ from trading_platform.services.alpaca import (
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
 from trading_platform.services.order_identity import build_intent_hash
 from trading_platform.services.paper_execution import build_client_order_id
-from trading_platform.services.reconciliation import reconcile_paper_execution
+from trading_platform.services.reconciliation import (
+    apply_reconciliation_corrections,
+    reconcile_paper_execution,
+)
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.strategies.registry import build_default_registry
 
@@ -324,13 +327,14 @@ def _seed_local_fill(*, paper_order_id: uuid.UUID) -> None:
         paper_order.last_sync_error = "stale mismatch"
 
 
-@pytest.mark.skip(
-    reason="sync-failure increment relocates to corrective path in 09-04; "
-    "see test_reconciliation_does_not_mutate_execution_state for the read-only replacement"
-)
 def test_reconciliation_persists_blocking_findings_and_updates_sync_failure_state(
     migrated_reconciliation_db: str,
 ) -> None:
+    """Re-homed for RECON-04: reconcile is read-only (asserted first); the
+    sync-failure-count mutation this test used to pin inside reconcile now happens only
+    when ``apply_reconciliation_corrections`` is explicitly invoked afterward, proving
+    the behavior moved rather than vanished.
+    """
     paper_order_id, _ = _seed_existing_execution_state()
     _seed_open_position()
     _seed_account_snapshot(
@@ -362,11 +366,7 @@ def test_reconciliation_persists_blocking_findings_and_updates_sync_failure_stat
     )
 
     assert report.blocks_execution is True
-    assert {finding.event_type for finding in report.findings} >= {
-        "order_missing_from_broker",
-        "position_missing_from_broker",
-        "account_snapshot_mismatch",
-    }
+    assert {finding.event_type for finding in report.findings} >= {"MISSING_BROKER"}
 
     with session_scope(settings) as session:
         paper_order = session.get(PaperOrder, paper_order_id)
@@ -376,20 +376,36 @@ def test_reconciliation_persists_blocking_findings_and_updates_sync_failure_stat
             select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.RECONCILIATION)
         ).scalars().all()
 
-    assert paper_order.sync_failure_count == 1
-    assert paper_order.last_sync_error is not None
-    assert len(events) >= 3
+    # Read-only reconcile alone leaves sync-failure state untouched (RECON-04 separation).
+    assert paper_order.sync_failure_count == 0
+    assert paper_order.last_sync_error is None
+    assert len(events) >= 1
     assert len(reconciliation_runs) == 1
     assert reconciliation_runs[0].status == StrategyRunStatus.SUCCEEDED
 
+    mutated_count = apply_reconciliation_corrections(
+        "trend_following_daily",
+        report=report,
+        settings=settings,
+    )
 
-@pytest.mark.skip(
-    reason="sync-failure increment relocates to corrective path in 09-04; "
-    "see test_reconciliation_clean_run_emits_empty_report for the read-only clean-report replacement"
-)
+    with session_scope(settings) as session:
+        corrected_order = session.get(PaperOrder, paper_order_id)
+        assert corrected_order is not None
+
+    # The mutation now happens only via the explicit corrective entrypoint.
+    assert mutated_count >= 1
+    assert corrected_order.sync_failure_count == 1
+    assert corrected_order.last_sync_error is not None
+
+
 def test_reconciliation_persists_clean_event_and_resets_sync_failures(
     migrated_reconciliation_db: str,
 ) -> None:
+    """Re-homed for RECON-04: a clean reconcile (zero findings) leaves sync-failure
+    state untouched by reconcile itself; calling ``apply_reconciliation_corrections``
+    afterward is what resets any prior sync-failure count/error back to zero/None.
+    """
     paper_order_id, client_order_id = _seed_existing_execution_state()
     _seed_local_fill(paper_order_id=paper_order_id)
     _seed_open_position()
@@ -458,17 +474,36 @@ def test_reconciliation_persists_clean_event_and_resets_sync_failures(
     )
 
     assert report.blocks_execution is False
-    assert [finding.event_type for finding in report.findings] == ["reconciliation_clean"]
+    assert report.finding_count == 0
+    assert report.findings == ()
 
     with session_scope(settings) as session:
         paper_order = session.get(PaperOrder, paper_order_id)
         assert paper_order is not None
         events = session.execute(select(ExecutionEvent).order_by(ExecutionEvent.event_at.asc())).scalars().all()
 
-    assert paper_order.sync_failure_count == 0
-    assert paper_order.last_sync_error is None
-    assert len(events) == 1
-    assert events[0].event_type == "reconciliation_clean"
+    # Reconcile alone (RECON-04) does NOT reset the pre-existing sync-failure state
+    # seeded by _seed_local_fill -- no synthetic "reconciliation_clean" event either.
+    assert paper_order.sync_failure_count == 3
+    assert paper_order.last_sync_error == "stale mismatch"
+    assert len(events) == 0
+
+    mutated_count = apply_reconciliation_corrections(
+        "trend_following_daily",
+        report=report,
+        settings=settings,
+    )
+
+    with session_scope(settings) as session:
+        corrected_order = session.get(PaperOrder, paper_order_id)
+        assert corrected_order is not None
+
+    # The explicit corrective step resets the stale sync-failure state to zero/None
+    # since no finding names this order this run.
+    assert mutated_count == 1
+    assert corrected_order.sync_failure_count == 0
+    assert corrected_order.last_sync_error is None
+    assert corrected_order.last_sync_failure_at is None
 
 
 def test_reconciliation_blocks_after_repeated_submission_failures(
@@ -1017,3 +1052,17 @@ def test_reconciliation_module_routes_lifecycle_through_order_state_machine() ->
 
     assert "apply_order_transition" in source
     assert re.search(r"\b(?:pending_order|persisted_order|existing_order|local_order|paper_order)\.status\s*=(?!=)", source) is None
+
+
+def test_reconcile_paper_execution_never_calls_apply_reconciliation_corrections() -> None:
+    """RECON-04 static invariant: reconcile_paper_execution's own body never references
+    apply_reconciliation_corrections -- the two functions share no call path.
+    """
+    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/reconciliation.py").read_text()
+
+    reconcile_start = source.index("def reconcile_paper_execution(")
+    next_def_start = source.index("\ndef ", reconcile_start + 1)
+    reconcile_body = source[reconcile_start:next_def_start]
+
+    assert "def apply_reconciliation_corrections" in source
+    assert "apply_reconciliation_corrections" not in reconcile_body

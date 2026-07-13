@@ -182,6 +182,84 @@ def recover_inflight_paper_orders(
     return recovered
 
 
+def apply_reconciliation_corrections(
+    strategy_id: str,
+    *,
+    report: ReconciliationReport | None = None,
+    findings: tuple[ReconciliationFinding, ...] | None = None,
+    settings: Settings | None = None,
+    registry: StrategyRegistry | None = None,
+    checked_at: datetime | None = None,
+) -> int:
+    """Explicit, separately-invoked corrective entrypoint (RECON-04).
+
+    This is the ONLY path that mutates ``PaperOrder.sync_failure_count`` /
+    ``last_sync_error`` / ``last_sync_failure_at``. ``reconcile_paper_execution`` is a
+    strictly read-only orchestrator and never calls this function; callers (e.g. the
+    paper-session runner) must invoke reconcile first to obtain a report, then call this
+    function as its own distinct, explicitly-invoked step.
+
+    Accepts either a full ``report`` (its ``.findings`` are used) or a bare ``findings``
+    tuple directly -- exactly one should be supplied; if both are omitted, an empty
+    findings set is treated as "no errors this run" (every order's sync-failure state is
+    reset to zero, mirroring a clean run).
+
+    Mirrors the pre-09-03 ``_apply_sync_failure_state`` write behavior exactly: for every
+    local order, if a finding's message names that order, increment
+    ``sync_failure_count`` and stamp ``last_sync_error``/``last_sync_failure_at``;
+    otherwise reset all three fields to their zero/None state. This function owns ONLY
+    the WRITE/increment -- the repeated-failure THRESHOLD *evaluation* that feeds
+    ``blocks_execution`` stays read-only in ``reconcile_paper_execution``
+    (``_evaluate_threshold_breach``, decision D2) and is not reintroduced here.
+
+    Returns the number of ``PaperOrder`` rows whose sync-failure state changed.
+    """
+    resolved_settings = settings or load_settings()
+    resolved_registry = registry or build_default_registry(resolved_settings)
+    strategy = resolved_registry.resolve(strategy_id)
+    resolved_checked_at = checked_at or datetime.now(UTC)
+    resolved_findings: tuple[ReconciliationFinding, ...] = (
+        findings if findings is not None else (report.findings if report is not None else ())
+    )
+
+    order_error_messages: dict[uuid.UUID, str] = {}
+    for finding in resolved_findings:
+        if finding.paper_order_id is None:
+            continue
+        order_error_messages.setdefault(uuid.UUID(finding.paper_order_id), finding.message)
+
+    mutated_count = 0
+    with session_scope(resolved_settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        local_orders = session.execute(
+            select(PaperOrder)
+            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+            .where(StrategyRun.strategy_id == strategy_record.id)
+            .order_by(PaperOrder.created_at.asc())
+        ).scalars().all()
+
+        for local_order in local_orders:
+            error_message = order_error_messages.get(local_order.id)
+            if error_message is None:
+                if (
+                    local_order.sync_failure_count != 0
+                    or local_order.last_sync_error is not None
+                    or local_order.last_sync_failure_at is not None
+                ):
+                    mutated_count += 1
+                local_order.sync_failure_count = 0
+                local_order.last_sync_error = None
+                local_order.last_sync_failure_at = None
+                continue
+
+            local_order.sync_failure_count += 1
+            local_order.last_sync_error = error_message
+            local_order.last_sync_failure_at = resolved_checked_at
+            mutated_count += 1
+
+    return mutated_count
+
+
 def reconcile_paper_execution(
     strategy_id: str | None = None,
     *,
