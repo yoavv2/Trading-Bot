@@ -105,9 +105,9 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 
 ### DB Lifecycle (DB)
 
-- [ ] **DB-01**: One documented model governs engine and session lifecycle — process-level immutable OR explicit reloadable manager; the choice is recorded in a Key Decision entry
-- [ ] **DB-02**: The `@lru_cache` vs `_ENGINE_CACHE` / `_SESSION_FACTORY_CACHE` duality is resolved — only the chosen mechanism remains in code
-- [ ] **DB-03**: Engine and session access goes through one canonical import path; other paths are removed
+- [x] **DB-01**: One documented model governs engine and session lifecycle — process-level immutable OR explicit reloadable manager; the choice is recorded in a Key Decision entry
+- [x] **DB-02**: The `@lru_cache` vs `_ENGINE_CACHE` / `_SESSION_FACTORY_CACHE` duality is resolved — only the chosen mechanism remains in code
+- [x] **DB-03**: Engine and session access goes through one canonical import path; other paths are removed
 - [ ] **DB-04**: Every execution flow runs within an explicit transaction boundary (`with session.begin():` or equivalent)
 - [ ] **DB-05**: A transaction commits only after BOTH the broker call succeeds AND the state transition is persisted — partial success does not commit
 - [ ] **DB-06**: When rollback occurs after a broker side effect has already happened, a reconciliation task is scheduled/enqueued (rollback cannot undo broker effect; reconciliation must follow)
@@ -197,9 +197,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LOG-04 | Phase 10 | Pending |
 | LOG-05 | Phase 10 | Pending |
 | LOG-06 | Phase 10 | Pending |
-| DB-01 | Phase 10 | Pending |
-| DB-02 | Phase 10 | Pending |
-| DB-03 | Phase 10 | Pending |
+| DB-01 | Phase 10 | Complete |
+| DB-02 | Phase 10 | Complete |
+| DB-03 | Phase 10 | Complete |
 | DB-04 | Phase 10 | Pending |
 | DB-05 | Phase 10 | Pending |
 | DB-06 | Phase 10 | Pending |
