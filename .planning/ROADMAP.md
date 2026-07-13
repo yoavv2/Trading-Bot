@@ -205,7 +205,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
-| 10. Startup Hardening | v1.1 | 4/6 | In Progress | - |
+| 10. Startup Hardening | v1.1 | 5/6 | In Progress | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
