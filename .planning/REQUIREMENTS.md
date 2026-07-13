@@ -58,8 +58,8 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-12 a
 ### Concurrency (LOCK)
 
 - [x] **LOCK-01**: At most one active run per `(strategy_id, session_date)` can execute, enforced by a PostgreSQL advisory lock keyed on that tuple
-- [ ] **LOCK-02**: The advisory lock is acquired BEFORE any side effect of the run (no broker calls, no order persistence, no state-affecting DB writes happen without the lock)
-- [ ] **LOCK-03**: Every run writes `run_started_at` and `run_status=running` as its first persisted action after lock acquisition
+- [x] **LOCK-02**: The advisory lock is acquired BEFORE any side effect of the run (no broker calls, no order persistence, no state-affecting DB writes happen without the lock)
+- [x] **LOCK-03**: Every run writes `run_started_at` and `run_status=running` as its first persisted action after lock acquisition
 - [x] **LOCK-04**: A run with `status=running` past a declared heartbeat/timeout is detectable via a single query (stale-run detection)
 - [x] **LOCK-05**: New run attempt — if the advisory lock is held by another session, exit cleanly with a typed message; if the lock is free but a stale `running` row exists, mark that row `stale` and continue
 - [x] **LOCK-06**: Lock release is guaranteed on normal exit, crash (via session-scoped lock), and kill-switch trigger — verified by a restart/crash test
@@ -122,8 +122,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ANLX-02 | Phase 16 | Complete |
 | KILL-01 | Phase 13 | Complete |
 | LOCK-01 | Phase 8 | Complete |
-| LOCK-02 | Phase 8 | Pending |
-| LOCK-03 | Phase 8 | Pending |
+| LOCK-02 | Phase 8 | Complete |
+| LOCK-03 | Phase 8 | Complete |
 | LOCK-04 | Phase 8 | Complete |
 | LOCK-05 | Phase 8 | Complete |
 | LOCK-06 | Phase 8 | Complete |
