@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from trading_platform.core.logging import build_log_context, emit_structured_log
+from trading_platform.core.logging import build_log_context, emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
@@ -271,7 +271,7 @@ def reconcile_paper_execution(
     recovered_order_count: int = 0,
     trigger_source: str = "paper_reconciliation",
 ) -> ReconciliationReport:
-    logger = logging.getLogger("trading_platform.reconciliation")
+    logger = get_logger("trading_platform.reconciliation")
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
     resolved_strategy_id = strategy_id or resolved_settings.execution.paper_session_runner.default_strategy_id

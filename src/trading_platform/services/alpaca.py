@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,6 +10,7 @@ from typing import Any, TypeVar
 
 import httpx
 
+from trading_platform.core.logging import get_logger
 from trading_platform.core.settings import AlpacaBrokerSettings
 from trading_platform.services.execution import (
     ExecutionOrderStatus,
@@ -22,7 +22,7 @@ from trading_platform.services.execution import (
     OrderType,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 _PENDING_BROKER_STATUSES = {

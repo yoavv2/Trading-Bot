@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import case, select
 
-from trading_platform.core.logging import build_log_context, emit_structured_log
+from trading_platform.core.logging import build_log_context, emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
@@ -221,7 +221,7 @@ def run_paper_order_submission(
     broker call. All side effects happen inside `_run_paper_order_submission_guarded`,
     which runs entirely within the lock's `with` block below.
     """
-    logger = logging.getLogger("trading_platform.paper_execution")
+    logger = get_logger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
     strategy = resolved_registry.resolve(strategy_id)
@@ -785,7 +785,7 @@ def run_paper_session(
     execution_service: ExecutionService | None = None,
     broker_client: AlpacaClient | None = None,
 ) -> PaperSessionRunReport:
-    logger = logging.getLogger("trading_platform.paper_execution")
+    logger = get_logger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
     runner_settings = resolved_settings.execution.paper_session_runner
     resolved_strategy_id = strategy_id or runner_settings.default_strategy_id

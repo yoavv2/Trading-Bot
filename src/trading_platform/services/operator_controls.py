@@ -10,7 +10,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from trading_platform.core.logging import emit_structured_log
+from trading_platform.core.logging import emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     GLOBAL_KILL_SWITCH_NAME,
@@ -149,7 +149,7 @@ class OperatorControlService:
     ) -> None:
         self._settings = settings
         self._registry = registry
-        self._logger = logging.getLogger("trading_platform.operator_controls")
+        self._logger = get_logger("trading_platform.operator_controls")
 
     @property
     def settings(self) -> Settings:

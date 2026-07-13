@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from trading_platform.core.logging import emit_structured_log
+from trading_platform.core.logging import emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.services.operator_controls import (
     load_kill_switch_state,
@@ -56,7 +56,7 @@ class OperatorStatusService:
     ) -> None:
         self._settings = settings
         self._registry = registry
-        self._logger = logging.getLogger("trading_platform.operator_status")
+        self._logger = get_logger("trading_platform.operator_status")
 
     @property
     def settings(self) -> Settings:

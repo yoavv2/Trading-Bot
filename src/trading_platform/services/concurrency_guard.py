@@ -22,11 +22,11 @@ from datetime import date
 
 from sqlalchemy import text
 
-from trading_platform.core.logging import emit_structured_log
+from trading_platform.core.logging import emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.session import get_engine
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Distinct from argparse's usage exit code (2); signals "another run holds
 # the lock" to a scheduler/operator, as opposed to a generic crash/failure.
