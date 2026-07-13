@@ -28,10 +28,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from trading_platform.core.config_validation import ExecutionMode
 from trading_platform.core.settings import Settings, build_settings_payload
 from trading_platform.core.startup import CONFIG_VALIDATION_EXIT_CODE, enforce_startup_config
 from trading_platform.services.concurrency_guard import CONCURRENT_RUN_LOCK_EXIT_CODE
-from trading_platform.core.config_validation import ExecutionMode
 
 
 def _raw_payload() -> dict[str, Any]:
@@ -149,3 +149,103 @@ def test_valid_passes_config_and_reachable_db_returns_settings() -> None:
 
     assert isinstance(settings, Settings)
     assert settings.database.host == "localhost"
+
+
+# --- CFG-06: ordering — the gate runs before any domain service is constructed --
+
+
+def test_submit_paper_orders_command_exits_before_domain_service_constructed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid paper config (missing broker secrets — the default test-env
+    state) must SystemExit at the gate before `run_paper_order_submission`
+    (the domain service that would construct a broker client) is ever
+    called."""
+    import trading_platform.worker.__main__ as worker_main
+
+    called = {"value": False}
+
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        called["value"] = True
+        raise AssertionError("run_paper_order_submission must not be called")
+
+    monkeypatch.setattr(worker_main, "run_paper_order_submission", _fail_if_called)
+
+    parser = worker_main.build_parser()
+    args = parser.parse_args(
+        [
+            "submit-paper-orders",
+            "--strategy",
+            "trend_following_daily",
+            "--as-of",
+            "2024-01-05",
+            "--compact",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        worker_main.run_submit_paper_orders_command(args)
+
+    assert exc_info.value.code == CONFIG_VALIDATION_EXIT_CODE
+    assert called["value"] is False
+
+
+# --- Backtest/API boot with empty Alpaca keys still succeeds -----------------
+
+
+def test_api_lifespan_boots_with_empty_alpaca_keys_and_no_reachable_db() -> None:
+    """mode=BACKTEST requires no broker secret, and the API gate does not
+    require DB reachability (see api/app.py's lifespan comment) — an
+    API-only boot with empty broker keys and no live DB must still succeed."""
+    payload = _refused_port_db_payload()
+    payload["broker"]["alpaca"]["api_key"] = ""
+    payload["broker"]["alpaca"]["api_secret"] = ""
+
+    settings = enforce_startup_config(
+        mode=ExecutionMode.BACKTEST,
+        require_database=False,
+        payload=payload,
+    )
+
+    assert isinstance(settings, Settings)
+    assert settings.broker.alpaca.api_key == ""
+
+
+def test_gate_is_wired_into_api_worker_and_bootstrap_entrypoints() -> None:
+    """Static proof the gate is invoked at every named entrypoint (not hooked
+    into `load_settings`, which stays untouched — see 10-01/10-05 key
+    facts)."""
+    import inspect
+
+    import trading_platform.api.app as api_app
+    import trading_platform.services.bootstrap as bootstrap
+    import trading_platform.worker.__main__ as worker_main
+
+    assert "enforce_startup_config" in inspect.getsource(api_app.lifespan)
+    assert "enforce_startup_config" in inspect.getsource(bootstrap.run_dry_bootstrap)
+
+    gated_worker_functions = [
+        worker_main.run_placeholder_worker,
+        worker_main.run_dry_bootstrap,
+        worker_main.run_backtest_command,
+        worker_main.run_report_backtest_command,
+        worker_main.run_report_strategy_analytics_command,
+        worker_main.run_evaluate_risk_command,
+        worker_main.run_submit_paper_orders_command,
+        worker_main.run_paper_session_command,
+        worker_main.run_sync_paper_state_command,
+        worker_main.run_reconcile_paper_execution_command,
+        worker_main.run_operator_control_command,
+        worker_main.run_operator_status_command,
+        worker_main.run_ingest_bars,
+        worker_main.run_sync_metadata,
+        worker_main.run_sync_sessions,
+    ]
+    for func in gated_worker_functions:
+        assert "enforce_startup_config" in inspect.getsource(func), (
+            f"{func.__name__} does not call enforce_startup_config"
+        )
+
+    import trading_platform.core.settings as settings_module
+
+    assert "enforce_startup_config" not in inspect.getsource(settings_module)

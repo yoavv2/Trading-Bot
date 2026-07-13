@@ -14,13 +14,23 @@ from trading_platform.api.routes.operations import router as operations_router
 from trading_platform.api.routes.runs import router as runs_router
 from trading_platform.api.routes.strategies import router as strategies_router
 from trading_platform.api.routes.system import router as system_router
+from trading_platform.core.config_validation import ExecutionMode
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import load_settings
+from trading_platform.core.startup import enforce_startup_config
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = load_settings()
+    # The API is a read-only surface (mode=BACKTEST — no broker secret is
+    # required) with its own configurable DB-readiness reporting at
+    # GET /ready (readiness.require_database); require_database=False here
+    # so an API-only boot without a live DB (a supported deployment mode,
+    # exercised by test_app_boot.py) still succeeds. CFG-04's unreachable-DB
+    # preflight is enforced at the write-side entrypoints (worker
+    # subcommands, dry-bootstrap) where domain services actually need a
+    # database connection to do anything.
+    settings = enforce_startup_config(mode=ExecutionMode.BACKTEST, require_database=False)
     configure_logging(settings.logging)
     logger = logging.getLogger("trading_platform.bootstrap")
 

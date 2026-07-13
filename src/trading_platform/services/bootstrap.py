@@ -10,7 +10,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from trading_platform.core.settings import Settings, load_settings
+from trading_platform.core.config_validation import ExecutionMode
+from trading_platform.core.settings import Settings
+from trading_platform.core.startup import enforce_startup_config
 from trading_platform.db.models import Strategy, StrategyRun, StrategyRunStatus, StrategyRunType, StrategyStatus
 from trading_platform.db.session import session_scope
 from trading_platform.services.analytics import AnalyticsService, StrategyAnalyticsService
@@ -172,7 +174,11 @@ def run_dry_bootstrap(
     settings: Settings | None = None,
     registry: StrategyRegistry | None = None,
 ) -> DryRunReport:
-    resolved_settings = settings or load_settings()
+    # Gate before any service init (CFG-06) only when this call owns settings
+    # construction itself; a caller-supplied `settings` has already passed
+    # through its own entrypoint-level gate (e.g. the worker CLI's dry-run
+    # subcommand), so re-validating here would be redundant, not defensive.
+    resolved_settings = settings or enforce_startup_config(mode=ExecutionMode.BACKTEST)
     resolved_registry = registry or build_default_registry(resolved_settings)
     strategy = resolved_registry.resolve(strategy_id)
     metadata = strategy.metadata
