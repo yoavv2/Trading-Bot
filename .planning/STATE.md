@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Execution Correctness & Hardening
 status: executing
-stopped_at: Completed 08-04-PLAN.md
-last_updated: "2026-07-13T06:37:00.000Z"
-last_activity: "2026-07-13 — Phase 8 Wave 3 (08-04) complete. run_paper_order_submission is now lock-guarded end-to-end: session_run_lock() (08-02) wraps the whole side-effecting region, the StrategyRun row is created at status=RUNNING as the literal first persisted write (removed the pre-lock PENDING insert), and reclaim_stale_runs() (08-03) runs immediately after that row exists, before kill-switch/control-state checks. 3 new integration tests prove lock-loser-writes-nothing, running-row-first-with-stale-reclaim, and lock-released-after-kill-switch-block. Two atomic commits (13a6025, bd973a7); no deviations. Next: 08-05 (CLI exit-code mapping + crash/restart end-to-end proof)."
+stopped_at: Completed 08-05-PLAN.md
+last_updated: "2026-07-13T10:24:00.000Z"
+last_activity: "2026-07-13 — Phase 8 (Concurrency Guard) COMPLETE. Wave 4 (08-05) closed out the phase: the worker CLI now catches ConcurrentRunLockedError in both submit-paper-orders and run-paper-session and maps it to CONCURRENT_RUN_LOCK_EXIT_CODE (3) via a shared handler — WARNING logged naming the tuple/command, concise stderr line, no traceback; successful runs still exit 0. A new end-to-end test (tests/test_concurrency_guard_e2e.py) proves LOCK-06 against a real migrated Postgres DB: a lock-holder's connection force-closed without unlocking (simulated crash) auto-releases the advisory lock, and a subsequent run_paper_order_submission() call for the same tuple acquires cleanly, reclaims the leftover 40-minute-old running row to STALE with an audited ExecutionEvent, and reaches SUCCEEDED. Full repo suite (169 tests) has no regressions. Two atomic commits (e6f7acb, 907bd65); no deviations. With 08-01..08-05, Phase 8's full goal is satisfied: at most one side-effecting run per (strategy_id, session_date), lock before side effects, released on all exit paths including crash, stale runs detectable and cleanly reclaimed. Next: Phase 9 (Reconciliation Rewrite, currently paused in v1.1 scope)."
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 20
-  completed_plans: 19
+  completed_plans: 20
 ---
 
 # Project State
@@ -20,33 +20,33 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-07)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 Execution Correctness & Hardening resumed — Phase 8 (Concurrency Guard) in progress, Wave 1 (08-01, 08-02) + Wave 2 (08-03) + Wave 3 (08-04) complete, 08-05 next
+**Current focus:** Milestone v1.1 Execution Correctness & Hardening resumed — Phase 8 (Concurrency Guard) COMPLETE (all 5 plans); Phase 9 (Reconciliation Rewrite) next, currently paused
 
 ## Current Position
 
-Phase: 8 of 12 in v1.1 (Concurrency Guard) — resumed after v1.2 completion; Wave 1 (plans 01 and 02) + Wave 2 (plan 03) + Wave 3 (plan 04) complete
-Plan: 08-04 complete (lock-guard + reorder run_paper_order_submission: session_run_lock() wraps the whole side-effecting region LOCK-02, running-row-first as the literal first persisted write LOCK-03, clean typed denial for the lock loser with zero writes LOCK-01, stale reclaim wired in immediately after the running row exists LOCK-05; commits 13a6025, bd973a7). Next: 08-05 (depends on 08-04 — CLI exit-code mapping to CONCURRENT_RUN_LOCK_EXIT_CODE + crash/restart end-to-end proof).
-Status: Ready to execute 08-05
-Last activity: 2026-07-13 — Phase 8 Wave 3 (08-04) complete. run_paper_order_submission is now lock-guarded end-to-end: session_run_lock() (08-02) wraps the whole side-effecting region, the StrategyRun row is created at status=RUNNING as the literal first persisted write (removed the pre-lock PENDING insert), and reclaim_stale_runs() (08-03) runs immediately after that row exists, before kill-switch/control-state checks. 3 new integration tests prove lock-loser-writes-nothing, running-row-first-with-stale-reclaim, and lock-released-after-kill-switch-block. Full repo suite (167 tests) has no regressions. No deviations — plan executed exactly as written.
+Phase: 8 of 12 in v1.1 (Concurrency Guard) — COMPLETE; resumed after v1.2 completion, all 5 plans (01-05) done
+Plan: 08-05 complete (CLI exit-code mapping: submit-paper-orders + run-paper-session catch ConcurrentRunLockedError and exit CONCURRENT_RUN_LOCK_EXIT_CODE with a WARNING and no traceback; crash/restart end-to-end proof in tests/test_concurrency_guard_e2e.py showing a crashed lock-holder auto-releases and a subsequent run acquires cleanly + reclaims the leftover running row STALE, proving LOCK-06; commits e6f7acb, 907bd65). Phase 8 is now fully done. Next: Phase 9 (Reconciliation Rewrite) is paused per the v1.1 roadmap and not yet planned in this resumption.
+Status: Phase 8 complete — ready for verification / next-phase decision
+Last activity: 2026-07-13 — Phase 8 (Concurrency Guard) COMPLETE with plan 08-05. The worker CLI now maps ConcurrentRunLockedError to the reserved exit code (3) for both paper commands via a shared handler, and a new e2e test proves the crash-release + clean-reacquire + stale-reclaim guarantee (LOCK-06) against a real migrated Postgres DB. Full repo suite (169 tests) has no regressions. No deviations — plan executed exactly as written.
 
-Progress (phases across all milestones, v1.1 Phases 9-12 counted as paused/not-yet-executing): [██████░░░░] 11/16 phases complete (v1.0: 6, v1.1: 1 of 6 complete + Phase 8 now in progress (4/5 plans, Wave 1 + Wave 2 + Wave 3 done), v1.2: 4 of 4 complete)
+Progress (phases across all milestones, v1.1 Phases 9-12 counted as paused/not-yet-executing): [███████░░░] 12/16 phases complete (v1.0: 6, v1.1: 2 of 6 complete — Phase 7 + Phase 8 (all 5 plans) — Phases 9-12 paused, v1.2: 4 of 4 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 30 (v1.0: 16, v1.1: 7, v1.2: 10)
-- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min, 08-03: ~10 min, 08-04: ~25 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
+- Total plans completed: 31 (v1.0: 16, v1.1: 8, v1.2: 10)
+- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min, 08-03: ~10 min, 08-04: ~25 min, 08-05: ~20 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
 - Total execution time: -
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
-**v1.1 By Phase:** 7: 3/3 complete; 8: 4/5, Wave 1 + Wave 2 + Wave 3 complete (08-01: STALE enum + stale_run_timeout_minutes config foundation, LOCK-04; 08-02: advisory-lock primitive session_run_lock()/ConcurrentRunLockedError, LOCK-01/LOCK-06, concurrent Wave-1 executor; 08-03: find_stale_runs() single-query detector LOCK-04 + reclaim_stale_runs() tuple-scoped STALE marking with ExecutionEvent audit LOCK-05; 08-04: run_paper_order_submission reordered to lock-before-writes + running-row-first + reclaim-after-running-write, LOCK-01/02/03/05); 9-12: 0/TBD (paused, resume after Phase 8)
+**v1.1 By Phase:** 7: 3/3 complete; 8: 5/5 COMPLETE (08-01: STALE enum + stale_run_timeout_minutes config foundation, LOCK-04; 08-02: advisory-lock primitive session_run_lock()/ConcurrentRunLockedError, LOCK-01/LOCK-06, concurrent Wave-1 executor; 08-03: find_stale_runs() single-query detector LOCK-04 + reclaim_stale_runs() tuple-scoped STALE marking with ExecutionEvent audit LOCK-05; 08-04: run_paper_order_submission reordered to lock-before-writes + running-row-first + reclaim-after-running-write, LOCK-01/02/03/05; 08-05: worker CLI maps ConcurrentRunLockedError to CONCURRENT_RUN_LOCK_EXIT_CODE for both paper commands + crash/restart end-to-end proof, LOCK-01/LOCK-06); 9-12: 0/TBD (paused, resume after Phase 8)
 
 **v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 3/3 complete (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper; 15-03: operator live-verify checkpoint — approved, all four PAPR surfaces honest-empty with Alpaca creds unconfigured), 16: 3/3 complete (16-02: EquityCurveChart (ANLX-01 frontend) + SummaryMetricsPanel (ANLX-02) + BacktestAnalyticsSection single-fetch owner, mounted on run-detail for backtest runs only, executed ahead of 16-01 per explicit human override; 16-01: backend equity_curve passthrough — single-line addition to StrategyAnalyticsService._summarize_backtest exposing the already-computed field, service-level pytest extended; 16-03: operator live-verify checkpoint — approved, all 6 steps passed against fresh servers, one in-scope YAxis auto-scale live-fix (dcd4232), ANLX-01 AND ANLX-02 confirmed Complete). Awaiting orchestrator phase-complete.
 
 **Recent Trend:**
-- Last activity: v1.2 Operator Console v0 shipped complete (Phases 13-16, 4/4); v1.1 resumed 2026-07-12 with Phase 8 (Concurrency Guard). Wave 1 (08-01, 08-02) + Wave 2 (08-03) + Wave 3 (08-04) complete — STALE enum + stale_run_timeout_minutes config foundation (LOCK-04), the advisory-lock primitive session_run_lock()/ConcurrentRunLockedError (LOCK-01, LOCK-06), stale-run detection/reclaim find_stale_runs()/reclaim_stale_runs() (LOCK-04, LOCK-05), and run_paper_order_submission wired to lock-before-writes + running-row-first + reclaim-after-running-write (LOCK-01/02/03/05); 08-05 (CLI exit-code mapping + crash/restart end-to-end proof) next.
-- Trend: v1.1 resumed at Phase 8/12 after prioritizing and shipping the read-only operator console (v1.2)
+- Last activity: v1.2 Operator Console v0 shipped complete (Phases 13-16, 4/4); v1.1 resumed 2026-07-12 with Phase 8 (Concurrency Guard), now COMPLETE (5/5 plans) as of 08-05 — STALE enum + stale_run_timeout_minutes config foundation (LOCK-04), the advisory-lock primitive session_run_lock()/ConcurrentRunLockedError (LOCK-01, LOCK-06), stale-run detection/reclaim find_stale_runs()/reclaim_stale_runs() (LOCK-04, LOCK-05), run_paper_order_submission wired to lock-before-writes + running-row-first + reclaim-after-running-write (LOCK-01/02/03/05), and the worker CLI exit-code mapping + crash/restart end-to-end proof (LOCK-01, LOCK-06). Phase 9 (Reconciliation Rewrite) is next but remains paused per the v1.1 roadmap.
+- Trend: v1.1 resumed at Phase 8/12 after prioritizing and shipping the read-only operator console (v1.2); Phase 8 now fully closed out.
 
 *Updated after each plan completion*
 
@@ -86,6 +86,7 @@ Recent decisions affecting current work:
 - [Phase 08-02]: session_run_lock() uses an AUTOCOMMIT dedicated connection (no idle transaction) so crash-release depends purely on connection drop, not transaction rollback; the crash-release test uses a raw psycopg connection outside the SQLAlchemy pool to guarantee the backend session actually terminates.
 - [08-03]: reclaim_stale_runs() flushes but never commits — caller (08-04's lock-guarded entrypoint) owns the transaction boundary. session_date tuple-scoping is done in Python against parameters_snapshot/result_summary's as_of_session JSON field rather than in SQL, since strategy_runs has no session_date column (only the STALE enum migration was authorized this phase). Implementation and tests were found already fully written but uncommitted at session start; correctness was independently re-verified against the plan's own task-level verify commands before splitting into two atomic task commits (9ae052d, 1a806c0).
 - [08-04]: Extracted `_run_paper_order_submission_guarded()` as a separate module-level helper containing the whole lock-body rather than nesting ~350 lines under one `with session_run_lock(...)` block, to avoid a large re-indentation diff while preserving the same hard invariants (lock-before-writes, running-row-first, reclaim-after-running-write, durable independent commits, broker I/O outside any open transaction). `_create_paper_execution_run()` dropped its `strategy_status` parameter entirely, since strategy_status is genuinely unknown until after the lock+running-row-write+reclaim sequence completes (per the plan's explicit "do not load kill-switch/control state before the lock" ordering); no test or downstream consumer read `parameters_snapshot.strategy_status`, so this is a clean removal. `run_paper_session` and the `submit-paper-orders`/worker CLI entrypoints inherit the guard automatically (they call `run_paper_order_submission`) but do not yet catch `ConcurrentRunLockedError` — CLI exit-code mapping is explicitly deferred to 08-05, not a gap in this plan.
+- [08-05]: Added one shared `_handle_concurrent_run_lock_denied()` helper in `worker/__main__.py`, used by both `submit-paper-orders` and `run-paper-session`, rather than duplicating the WARNING-log + stderr-print + `SystemExit(CONCURRENT_RUN_LOCK_EXIT_CODE)` sequence per command. The e2e Test A (CLI exit-code) exercises only `submit-paper-orders` directly per the plan's own Task 2 action text; `run-paper-session`'s exit-code behavior is covered by sharing the identical wrapper/helper and constant rather than a duplicate integration test. Test B's crash simulation reuses 08-02's exact non-pooled-raw-connection pattern (acquire the advisory lock on a raw psycopg connection, force-close it without `pg_advisory_unlock`) but adds a real, durable pre-existing `running` `StrategyRun` row and a real `run_paper_order_submission()` call afterward, proving LOCK-06 end-to-end (not just at the lock-primitive level). Phase 8 (Concurrency Guard) is now fully complete — all LOCK-01 through LOCK-06 requirements satisfied.
 
 ### Pending Todos
 
@@ -103,6 +104,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-13T06:37:00.000Z
-Stopped at: Completed 08-04-PLAN.md
+Last session: 2026-07-13T10:24:00.000Z
+Stopped at: Completed 08-05-PLAN.md (Phase 8 complete)
 Resume file: None

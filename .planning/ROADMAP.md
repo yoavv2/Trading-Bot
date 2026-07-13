@@ -46,7 +46,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 <summary>⏸️ v1.1 Execution Correctness & Hardening (Phases 7-12) — PAUSED 2026-07-07 at Phase 7/12</summary>
 
 - [x] **Phase 7: Correctness Kernel** - Closed order state machine, deterministic `client_order_id` idempotency, persistent global kill switch with operator CLI. Completed 2026-04-20.
-- [ ] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection.
+- [x] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection. (completed 2026-07-13)
 - [ ] **Phase 9: Reconciliation Rewrite** (paused) - Typed snapshots, O(n) matcher, closed findings enum, materialized report.
 - [ ] **Phase 10: Startup Hardening** (paused) - Fail-fast config validation, log sanitization, DB lifecycle consolidation.
 - [ ] **Phase 11: Query Performance** (paused) - Preflight N+1 fix, reconciliation scaling, covering indices.
@@ -163,7 +163,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 5. Paper Execution | v1.0 | 3/3 | Complete | 2026-03-14 |
 | 6. Analytics and APIs | v1.0 | 3/3 | Complete | 2026-03-15 |
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
-| 8. Concurrency Guard | v1.1 | 4/5 | In Progress | - |
+| 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 0/TBD | Paused | - |
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
