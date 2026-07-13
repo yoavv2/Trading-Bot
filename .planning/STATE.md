@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: completed
-stopped_at: Completed 10-01-PLAN.md (Config Validation Core)
-last_updated: "2026-07-13T19:18:18.399Z"
-last_activity: "2026-07-13 — Phase 9 (Reconciliation Rewrite) plan 09-04 COMPLETE, closing out Phase 9. RECON-04 satisfied: corrective action is a separate explicit entrypoint reconcile never calls, invoked as its own step by the session runner after the read-only report is produced. Full repo suite (215 tests, Postgres-backed included) has no regressions. One Rule-1 auto-fix (operator_status.py clean-label tied to finding_count==0, no output value change) plus two documented-not-fixed gaps (worker CLI correction wiring; REQUIREMENTS.md RECON-05/07 under-marking) — see 09-04-SUMMARY.md and deferred-items.md."
+stopped_at: Completed 10-02-PLAN.md (Log Sanitization Core)
+last_updated: "2026-07-13T19:26:26.270Z"
+last_activity: "2026-07-13 — Phase 10 (Startup Hardening) plan 10-02 COMPLETE: log-sanitization core (sanitize()/mask_order_id()) wired as the single chokepoint inside emit_structured_log, plus the get_logger() API contract and debug_unmask_ids config surface that 10-06 will build on. Full repo suite (262 tests) green, no regressions — see 10-02-SUMMARY.md."
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 30
-  completed_plans: 26
+  completed_plans: 27
 ---
 
 # Project State
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-07)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 Execution Correctness & Hardening — Phase 8 (Concurrency Guard) COMPLETE; Phase 9 (Reconciliation Rewrite) COMPLETE (4/4 plans); Phases 10-12 remain paused
+**Current focus:** Milestone v1.1 Execution Correctness & Hardening — Phase 8 (Concurrency Guard) COMPLETE; Phase 9 (Reconciliation Rewrite) COMPLETE (4/4 plans); Phase 10 (Startup Hardening) IN PROGRESS (3/6 plans, wave 1 complete); Phases 11-12 remain paused
 
 ## Current Position
 
-Phase: 9 of 12 in v1.1 (Reconciliation Rewrite) — COMPLETE, 4/4 plans
-Plan: 09-04 complete (final plan of Phase 9): apply_reconciliation_corrections() extracted as the sole mutating corrective entrypoint for PaperOrder.sync_failure_count/last_sync_error/last_sync_failure_at (RECON-04) — reconcile_paper_execution never calls it (static test pins this). Paper-session runner rewired to call recover -> reconcile (read-only) -> correction as three distinct calls, blocking gate unchanged. Two 09-03-skipped mutation tests re-homed onto the new entrypoint (call reconcile first, assert no mutation, then call correction, assert mutation happens there). Downstream consumers (analytics/operator_reads) confirmed already opaque-string-safe; operator_status's clean-label derivation tied explicitly to finding_count==0. Full repo suite (215 tests) green; commits 48c2ef4, 67ca1a6, abbe8cc. Two known gaps documented but not fixed (out of this plan's declared scope): worker CLI's standalone reconcile-paper-execution command doesn't invoke correction; REQUIREMENTS.md under-reports RECON-05/07. Next: Phase 9 fully closed; Phases 10-12 remain paused per the v1.1 roadmap (resume decision is the orchestrator's).
-Status: Phase 9 COMPLETE (4/4 plans) — awaiting orchestrator phase-complete / next-phase decision
-Last activity: 2026-07-13 — Phase 9 (Reconciliation Rewrite) plan 09-04 COMPLETE, closing out Phase 9. RECON-04 satisfied: corrective action is a separate explicit entrypoint reconcile never calls, invoked as its own step by the session runner after the read-only report is produced. Full repo suite (215 tests, Postgres-backed included) has no regressions. One Rule-1 auto-fix (operator_status.py clean-label tied to finding_count==0, no output value change) plus two documented-not-fixed gaps (worker CLI correction wiring; REQUIREMENTS.md RECON-05/07 under-marking) — see 09-04-SUMMARY.md and deferred-items.md.
+Phase: 10 of 12 in v1.1 (Startup Hardening) — IN PROGRESS, wave 1 (10-01 + 10-03 complete; 10-02 now complete, 3/6 plans)
+Plan: 10-02 complete (Log Sanitization Core, wave 1): core/log_sanitizer.py ships a pure, stdlib-only sanitize() that recursively redacts credential/token dict keys, password-bearing connection URLs, embedded key=value secrets, and Bearer/Token/Basic auth headers at any nesting depth without mutating input; mask_order_id() masks broker order IDs to last-6 by default, full value only when unmask=True. emit_structured_log now routes its assembled context dict through sanitize() before logger.log — the single sanitization chokepoint (LOG-02) — verified end-to-end via a handler-capture test. LoggingSettings.debug_unmask_ids (default False) added to settings.py so the debug-unmask flag flows through existing YAML/env config; configure_logging() sets a module-level _DEBUG_UNMASK_IDS flag from it (safe-by-default before configure_logging runs, not a per-call settings lookup). get_logger(name) exported as the documented approved logger factory 10-06 will migrate execution/reconciliation/config callers onto. 32 new unit tests; full repo suite (262 tests) green, no regressions. Requirements LOG-02/LOG-03/LOG-04/LOG-05 marked Complete; LOG-01 (caller migration) and LOG-06 (emitted-line enforcement) remain explicitly out of scope, deferred to 10-06. Commits 79b021a, 9907aac.
+Status: Phase 10 IN PROGRESS — wave 1 plans 10-01/10-02/10-03 all complete; awaiting orchestrator wave-2 kickoff
+Last activity: 2026-07-13 — Phase 10 (Startup Hardening) plan 10-02 COMPLETE: log-sanitization core (sanitize()/mask_order_id()) wired as the single chokepoint inside emit_structured_log, plus the get_logger() API contract and debug_unmask_ids config surface that 10-06 will build on. Full repo suite (262 tests) green.
 
-Progress (phases across all milestones, v1.1 Phases 10-12 counted as paused/not-yet-executing): [████████░░] 13/16 phases complete (v1.0: 6, v1.1: 3 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) — Phases 10-12 paused, v1.2: 4 of 4 complete)
+Progress (phases across all milestones, v1.1 Phases 11-12 counted as paused/not-yet-executing): [████████░░] 13/16 phases complete (v1.0: 6, v1.1: 3 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) — Phase 10 in progress (3/6 plans), Phases 11-12 paused, v1.2: 4 of 4 complete)
 
 ## Performance Metrics
 
@@ -93,6 +93,7 @@ Recent decisions affecting current work:
 - [09-04]: RECON-04 minimal reading (per plan): `apply_reconciliation_corrections()` owns ONLY the sync-failure-state WRITE/increment (mirroring pre-09-03 `_apply_sync_failure_state` exactly); the D2 threshold *evaluation* stays read-only in reconcile per 09-03. No human-review gate was introduced between reconcile and correction — the session runner calls both unconditionally as sequential steps. `worker/__main__.py`'s standalone `reconcile-paper-execution` CLI command was deliberately left NOT calling the corrective entrypoint: it is outside this plan's declared `files_modified` scope, and before 09-03 this CLI path's mutation was a side effect of calling `reconcile_paper_execution` itself — now that reconcile is read-only, wiring a CLI-invoked correction is new capability, not a regression to patch silently; logged in `deferred-items.md` for a follow-up CLI subcommand. `operator_status.py`'s synthesized "reconciliation_clean" action label was tied explicitly to the report's `finding_count == 0` signal (RECON-09) rather than solely inverting `blocks_execution`, with no output-value change for any report the read-only orchestrator can produce. `REQUIREMENTS.md` marking RECON-05/RECON-07 `Pending` despite both being implemented in 09-01 was flagged rather than silently corrected, since this plan's frontmatter declares only `requirements: [RECON-04]` and `requirements mark-complete` extracts IDs strictly from the current plan's own frontmatter.
 - [Phase 10-03]: DB lifecycle model formalized as explicit reloadable manager (db/session.py); trading_platform.db.session is the single canonical engine/session import path; db/__init__.py re-exports only Base
 - [Phase 10-01]: config_validation.py: pure validate_config(payload, *, mode) owns Settings.model_validate() and translates raw pydantic ValidationError into a field-named ConfigValidationError (CFG-05, CFG-07); CFG-02/CFG-03 both key off broker.alpaca.base_url matching the active mode (no separate live-broker config block exists); mode is an explicit ExecutionMode(str, Enum) parameter, never a Settings field. Requirements CFG-01/02/03/05/07 marked Complete on this plan (sole Phase-10 owner per frontmatter); CFG-06 (wiring + non-zero exit) remains Pending for 10-05.
+- [Phase 10-startup-hardening]: [10-02]: debug_unmask_ids reaches emit_structured_log via a module-level global set by configure_logging() (not a per-call settings lookup) to keep the hot log path safe-by-default before configure_logging runs; LoggingSettings.debug_unmask_ids added to settings.py despite not being listed in this plan's files_modified frontmatter, since the plan body's key_facts explicitly required it (Rule 3, no architectural change). Requirements LOG-02/LOG-03/LOG-04/LOG-05 satisfied: single sanitization chokepoint inside emit_structured_log, credential/token/conn-URL/auth-header redaction, and last-6 broker-order-id masking with explicit debug-unmask reveal. LOG-01 (caller migration) and LOG-06 (emitted-line enforcement) remain explicitly out of scope for 10-06.
 
 ### Pending Todos
 
@@ -112,6 +113,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-13T19:18:18.396Z
-Stopped at: Completed 10-01-PLAN.md (Config Validation Core)
+Last session: 2026-07-13T19:26:26.267Z
+Stopped at: Completed 10-02-PLAN.md (Log Sanitization Core)
 Resume file: None

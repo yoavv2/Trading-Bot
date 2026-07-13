@@ -119,9 +119,9 @@ Plans:
 **Plans**: 6 plans
 
 Plans:
-- [ ] 10-01-PLAN.md — Config validation core: ExecutionMode enum + typed ConfigValidationError + validate_config (CFG-01, CFG-02, CFG-03, CFG-05, CFG-07)
-- [ ] 10-02-PLAN.md — Log sanitization core: sanitize() redaction + broker-id last-6 masking + get_logger wrapper (LOG-02, LOG-03, LOG-04, LOG-05)
-- [ ] 10-03-PLAN.md — DB lifecycle: formalize the one reloadable manager, resolve caching duality, single canonical import path (DB-01, DB-02, DB-03)
+- [x] 10-01-PLAN.md — Config validation core: ExecutionMode enum + typed ConfigValidationError + validate_config (CFG-01, CFG-02, CFG-03, CFG-05, CFG-07)
+- [x] 10-02-PLAN.md — Log sanitization core: sanitize() redaction + broker-id last-6 masking + get_logger wrapper (LOG-02, LOG-03, LOG-04, LOG-05)
+- [x] 10-03-PLAN.md — DB lifecycle: formalize the one reloadable manager, resolve caching duality, single canonical import path (DB-01, DB-02, DB-03)
 - [ ] 10-04-PLAN.md — Paper-execution transaction integrity: explicit boundary, commit-after-both, rollback schedules reconciliation (DB-04, DB-05, DB-06)
 - [ ] 10-05-PLAN.md — Startup gate wired into every entrypoint: DB preflight + non-zero exit before service init (CFG-04, CFG-06)
 - [ ] 10-06-PLAN.md — Logger migration + formatter backstop + import-boundary & emitted-line enforcement tests (LOG-01, LOG-06)
@@ -205,7 +205,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
-| 10. Startup Hardening | v1.1 | 2/6 | In Progress | - |
+| 10. Startup Hardening | v1.1 | 3/6 | In Progress | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |

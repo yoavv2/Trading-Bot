@@ -97,10 +97,10 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 ### Log Sanitization (LOG)
 
 - [ ] **LOG-01**: Application code uses one logger wrapper only; direct `logging.getLogger` use is forbidden in execution, reconciliation, and config paths (enforced by a lint rule / import boundary)
-- [ ] **LOG-02**: Every logged payload passes through the sanitizer before reaching the logger
-- [ ] **LOG-03**: The sanitizer redacts credentials, API keys, tokens, and connection URLs containing passwords
-- [ ] **LOG-04**: The sanitizer redacts `Authorization` and equivalent auth headers from request/response logs
-- [ ] **LOG-05**: Broker order IDs are hashed or truncated to last-6 by default; full ID appears only when an explicit debug flag is set
+- [x] **LOG-02**: Every logged payload passes through the sanitizer before reaching the logger
+- [x] **LOG-03**: The sanitizer redacts credentials, API keys, tokens, and connection URLs containing passwords
+- [x] **LOG-04**: The sanitizer redacts `Authorization` and equivalent auth headers from request/response logs
+- [x] **LOG-05**: Broker order IDs are hashed or truncated to last-6 by default; full ID appears only when an explicit debug flag is set
 - [ ] **LOG-06**: Enforcement tests assert no emitted log line contains `password=`, `api_key=`, `Authorization:` header values, or a full broker order ID under default config
 
 ### DB Lifecycle (DB)
@@ -192,10 +192,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CFG-06 | Phase 10 | Pending |
 | CFG-07 | Phase 10 | Complete |
 | LOG-01 | Phase 10 | Pending |
-| LOG-02 | Phase 10 | Pending |
-| LOG-03 | Phase 10 | Pending |
-| LOG-04 | Phase 10 | Pending |
-| LOG-05 | Phase 10 | Pending |
+| LOG-02 | Phase 10 | Complete |
+| LOG-03 | Phase 10 | Complete |
+| LOG-04 | Phase 10 | Complete |
+| LOG-05 | Phase 10 | Complete |
 | LOG-06 | Phase 10 | Pending |
 | DB-01 | Phase 10 | Complete |
 | DB-02 | Phase 10 | Complete |
