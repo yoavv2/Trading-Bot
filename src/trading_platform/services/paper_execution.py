@@ -557,6 +557,18 @@ def _run_paper_order_submission_guarded(
                 },
             )
 
+            # DB-04/DB-05 invariant (explicit transaction boundary + commit-
+            # after-both): the broker call below sits OUTSIDE any open
+            # session/transaction -- the pre-broker `session_scope` above
+            # already committed the PENDING_SUBMISSION intent (durable
+            # idempotency), and the two branches below each open their OWN
+            # fresh `session_scope`. The success branch's commit is
+            # contingent on BOTH (a) the broker call having already
+            # returned successfully (we are past `submit_order` without an
+            # exception) AND (b) the state-transition write below flushing
+            # cleanly -- if either is false, that success is never
+            # committed as success. A broker exception never enters the
+            # success-persist session at all (see the `except` branch).
             try:
                 result = broker_execution.submit_order(intent)
             except Exception as exc:
@@ -578,46 +590,75 @@ def _run_paper_order_submission_guarded(
                             session=session,
                             settings=resolved_settings,
                         )
+                # No broker side effect occurred (submit_order raised before
+                # returning) -- this is a clean failure, not a divergence
+                # between broker and local state. Reconciliation is
+                # deliberately NOT scheduled on this path (DB-06 scope).
                 raise
 
-            with session_scope(resolved_settings) as session:
-                persisted_order = session.get(PaperOrder, pending_order_id)
-                if persisted_order is None:
-                    raise LookupError(f"Missing pending paper_order '{pending_order_id}'.")
+            try:
+                with session_scope(resolved_settings) as session:
+                    persisted_order = session.get(PaperOrder, pending_order_id)
+                    if persisted_order is None:
+                        raise LookupError(f"Missing pending paper_order '{pending_order_id}'.")
 
-                transition_recorded_at = datetime.now(UTC)
-                persisted_order.broker_order_id = result.broker_order_id or None
-                persisted_order.broker_status = result.broker_status
-                persisted_order.submitted_at = result.submitted_at
-                persisted_order.last_submission_error = None
-                persisted_order.broker_payload = result.raw_payload
-                apply_order_transition(
-                    persisted_order.id,
-                    OrderTransitionRequest(
-                        strategy_run_id=run_id,
-                        event_type=_broker_transition_event(result.status),
-                        details={
-                            "broker_order_id": result.broker_order_id,
-                            "broker_status": result.broker_status,
-                            "trigger_source": trigger_source,
-                        },
-                        event_at=transition_recorded_at,
-                    ),
-                    session=session,
-                    settings=resolved_settings,
+                    transition_recorded_at = datetime.now(UTC)
+                    persisted_order.broker_order_id = result.broker_order_id or None
+                    persisted_order.broker_status = result.broker_status
+                    persisted_order.submitted_at = result.submitted_at
+                    persisted_order.last_submission_error = None
+                    persisted_order.broker_payload = result.raw_payload
+                    apply_order_transition(
+                        persisted_order.id,
+                        OrderTransitionRequest(
+                            strategy_run_id=run_id,
+                            event_type=_broker_transition_event(result.status),
+                            details={
+                                "broker_order_id": result.broker_order_id,
+                                "broker_status": result.broker_status,
+                                "trigger_source": trigger_source,
+                            },
+                            event_at=transition_recorded_at,
+                        ),
+                        session=session,
+                        settings=resolved_settings,
+                    )
+                    session.flush()
+                    session.refresh(persisted_order)
+                    payload = _paper_order_payload(
+                        persisted_order,
+                        intent_decision=intent_decision.summary,
+                        supersedes_client_order_id=intent_decision.supersedes_client_order_id,
+                    )
+                    submitted_orders.append(payload)
+                    if intent_decision.action == "retry_existing":
+                        reused_orders.append(payload)
+                    if intent_decision.action == "create_new_version":
+                        versioned_orders.append(payload)
+            except Exception as exc:
+                # DB-06: the broker has ALREADY accepted this order (we are
+                # past `submit_order` without an exception) but the local
+                # write that would record that acceptance just rolled back
+                # (`session_scope` rolls back on any exception). The broker
+                # and the local DB are now divergent for this order --
+                # rolling back the local write is necessary but not
+                # sufficient: a reconciliation pass must be scheduled so the
+                # divergence is discovered and corrected rather than
+                # silently swallowed. The original exception always
+                # propagates after scheduling.
+                schedule_reconciliation_after_partial_failure(
+                    resolved_settings,
+                    logger=logger,
+                    strategy_id=strategy_id,
+                    run_id=run_id,
+                    paper_order_id=pending_order_id,
+                    session_date=candidate.session_date,
+                    client_order_id=pending_order.client_order_id,
+                    broker_order_id=result.broker_order_id,
+                    trigger_source=trigger_source,
+                    error=exc,
                 )
-                session.flush()
-                session.refresh(persisted_order)
-                payload = _paper_order_payload(
-                    persisted_order,
-                    intent_decision=intent_decision.summary,
-                    supersedes_client_order_id=intent_decision.supersedes_client_order_id,
-                )
-                submitted_orders.append(payload)
-                if intent_decision.action == "retry_existing":
-                    reused_orders.append(payload)
-                if intent_decision.action == "create_new_version":
-                    versioned_orders.append(payload)
+                raise
 
         halted_mid_run = bool(skipped_by_kill_switch) and (
             mid_run_kill_switch is not None and mid_run_kill_switch.is_tripped
@@ -1538,6 +1579,73 @@ def _broker_has_touched_order(paper_order: PaperOrder) -> bool:
         OrderLifecycleState.EXPIRED,
         OrderLifecycleState.UNKNOWN,
     }
+
+
+def schedule_reconciliation_after_partial_failure(
+    resolved_settings: Settings,
+    *,
+    logger: logging.Logger,
+    strategy_id: str,
+    run_id: uuid.UUID,
+    paper_order_id: uuid.UUID,
+    session_date: date,
+    client_order_id: str,
+    broker_order_id: str | None,
+    trigger_source: str,
+    error: Exception,
+) -> None:
+    """DB-06: durable reconciliation hand-off for a broker/DB divergence.
+
+    Call this ONLY when the broker call already succeeded (`submit_order`
+    returned) but the subsequent local state-transition persist rolled
+    back. The broker-side effect already happened and nothing else will
+    ever revisit it, so rolling back the local write is a necessary but not
+    sufficient response -- this records a durable `ExecutionEvent` marker
+    (on its own independent `session_scope`, so it lands even though the
+    triggering transaction rolled back) and emits a structured WARNING log,
+    so the next reconciliation pass (`reconcile_paper_execution`, Phase 9)
+    discovers and corrects the divergence. The caller is responsible for
+    re-raising the original exception after this returns -- scheduling
+    reconciliation never masks the underlying failure.
+    """
+    emit_structured_log(
+        logger,
+        logging.WARNING,
+        "paper_execution_reconciliation_scheduled",
+        strategy_id=strategy_id,
+        run_id=str(run_id),
+        paper_order_id=str(paper_order_id),
+        session_date=session_date.isoformat(),
+        client_order_id=client_order_id,
+        broker_order_id=broker_order_id,
+        trigger_source=trigger_source,
+        error=str(error),
+    )
+    with session_scope(resolved_settings) as session:
+        session.add(
+            ExecutionEvent(
+                strategy_run_id=run_id,
+                paper_order_id=paper_order_id,
+                event_type="reconciliation_scheduled",
+                severity="warning",
+                blocks_execution=False,
+                event_at=datetime.now(UTC),
+                message=(
+                    f"Broker accepted order '{client_order_id}' "
+                    f"(broker_order_id={broker_order_id!r}) but the local "
+                    f"state-transition persist rolled back: {error}. "
+                    "Reconciliation scheduled to resolve the divergence."
+                ),
+                details={
+                    "strategy_id": strategy_id,
+                    "session_date": session_date.isoformat(),
+                    "client_order_id": client_order_id,
+                    "broker_order_id": broker_order_id,
+                    "trigger_source": trigger_source,
+                    "error": str(error),
+                },
+            )
+        )
 
 
 def _record_intent_decision_event(

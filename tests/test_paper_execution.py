@@ -25,6 +25,7 @@ from trading_platform.db.models import (
     KillSwitchState,
     MarketSession,
     OrderEvent,
+    OrderLifecycleState,
     OrderTransitionEventType,
     PaperFill,
     PaperOrder,
@@ -56,6 +57,7 @@ from trading_platform.services.execution import (
 from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.services.order_identity import build_intent_hash
+import trading_platform.services.paper_execution as paper_execution_module
 from trading_platform.services.paper_execution import (
     build_client_order_id,
     resolve_submission_session,
@@ -1695,3 +1697,252 @@ def test_run_paper_order_submission_kill_switch_blocks_after_lock_and_releases_l
     # exited its guarded `with session_run_lock(...)` region.
     with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
         pass
+
+
+class _BrokerFailsOnSubmitExecutionService(ExecutionService):
+    """Broker call always raises before producing any side effect."""
+
+    def describe(self) -> dict[str, object]:
+        return {"service": "execution", "status": "available", "provider": "broker_fails_on_submit"}
+
+    def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        raise RuntimeError("broker unavailable")
+
+
+def test_run_paper_order_submission_commits_broker_result_only_after_success(
+    migrated_paper_db: str,
+) -> None:
+    """DB-05: the broker-success state transition commits only after BOTH
+    the broker call succeeded AND the state-transition persist flushed."""
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="commit_after_both_test",
+    )
+
+    assert report.result_summary["submitted_count"] == 2
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+        assert len(paper_orders) == 2
+        for order in paper_orders:
+            assert order.broker_order_id is not None
+            assert order.broker_status == "new"
+            events = session.execute(
+                select(OrderEvent)
+                .where(OrderEvent.paper_order_id == order.id)
+                .order_by(OrderEvent.event_at.asc())
+            ).scalars().all()
+            assert events[-1].event_type == OrderTransitionEventType.BROKER_ACKNOWLEDGED
+
+
+def test_run_paper_order_submission_broker_raise_leaves_no_success_commit(
+    migrated_paper_db: str,
+) -> None:
+    """DB-05: when the broker call raises, the success-persist session is
+    never entered -- no success transition is committed (partial success is
+    never treated as success)."""
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = _BrokerFailsOnSubmitExecutionService()
+
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            settings=settings,
+            execution_service=execution_service,
+            trigger_source="broker_raise_test",
+        )
+
+    with session_scope(settings) as session:
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+        # Only the first candidate reaches the broker before the exception
+        # propagates out of the loop; the second candidate's PaperOrder row
+        # is never created.
+        assert len(paper_orders) == 1
+        failed_order = paper_orders[0]
+        assert failed_order.broker_order_id is None
+        assert failed_order.status == OrderLifecycleState.SUBMISSION_FAILED
+        assert failed_order.last_submission_error == "broker unavailable"
+        events = session.execute(
+            select(OrderEvent)
+            .where(OrderEvent.paper_order_id == failed_order.id)
+            .order_by(OrderEvent.event_at.asc())
+        ).scalars().all()
+
+    assert [event.event_type for event in events] == [
+        OrderTransitionEventType.INTENT_REGISTERED,
+        OrderTransitionEventType.SUBMISSION_FAILED,
+    ]
+
+
+def test_broker_submit_call_runs_outside_open_transaction_boundary(
+    migrated_paper_db: str,
+) -> None:
+    """DB-04: the broker call is made with no open session/transaction
+    holding the order it is submitting -- an independent connection can
+    already see the pre-broker intent write as committed."""
+
+    class _VisibilityProbeExecutionService(ExecutionService):
+        def __init__(self, *, settings) -> None:
+            self._settings = settings
+            self.observed_statuses: list[OrderLifecycleState] = []
+
+        def describe(self) -> dict[str, object]:
+            return {"service": "execution", "status": "available", "provider": "visibility_probe"}
+
+        def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+            # A fresh, independent session/connection must already see the
+            # pending order as committed -- proving no open transaction from
+            # the calling code is holding it uncommitted right now.
+            with session_scope(self._settings) as probe_session:
+                order = probe_session.execute(
+                    select(PaperOrder).where(PaperOrder.client_order_id == intent.client_order_id)
+                ).scalar_one()
+                self.observed_statuses.append(order.status)
+            return OrderSubmissionResult(
+                client_order_id=intent.client_order_id,
+                broker_order_id=f"probe-{intent.symbol.lower()}-001",
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=intent.quantity,
+                order_type=intent.order_type,
+                time_in_force=intent.time_in_force,
+                status=ExecutionOrderStatus.PENDING,
+                broker_status="new",
+                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                raw_payload={"id": f"probe-{intent.symbol.lower()}-001"},
+            )
+
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = _VisibilityProbeExecutionService(settings=settings)
+
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        trigger_source="broker_outside_transaction_test",
+    )
+
+    assert report.result_summary["submitted_count"] == 2
+    assert len(execution_service.observed_statuses) == 2
+    assert all(
+        status == OrderLifecycleState.PENDING_SUBMISSION
+        for status in execution_service.observed_statuses
+    )
+
+
+def test_partial_failure_after_broker_success_schedules_reconciliation(
+    migrated_paper_db: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB-06: when the broker already succeeded but the post-broker persist
+    rolls back, `schedule_reconciliation_after_partial_failure` is invoked
+    with correct attribution and the original exception still propagates."""
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = FakeExecutionService()
+
+    broker_success_event_types = {
+        OrderTransitionEventType.BROKER_ACKNOWLEDGED,
+        OrderTransitionEventType.BROKER_PARTIALLY_FILLED,
+        OrderTransitionEventType.BROKER_FILLED,
+        OrderTransitionEventType.BROKER_CANCELED,
+        OrderTransitionEventType.BROKER_REJECTED,
+        OrderTransitionEventType.BROKER_EXPIRED,
+        OrderTransitionEventType.BROKER_STATUS_UNKNOWN,
+    }
+    original_apply_order_transition = paper_execution_module.apply_order_transition
+
+    def _raising_apply_order_transition(order_id, request, *, session=None, settings=None):
+        if request.event_type in broker_success_event_types:
+            raise RuntimeError("simulated post-broker persist failure")
+        return original_apply_order_transition(order_id, request, session=session, settings=settings)
+
+    monkeypatch.setattr(paper_execution_module, "apply_order_transition", _raising_apply_order_transition)
+
+    scheduled_calls: list[dict[str, object]] = []
+    original_schedule = paper_execution_module.schedule_reconciliation_after_partial_failure
+
+    def _spy_schedule(*args, **kwargs):
+        scheduled_calls.append(kwargs)
+        return original_schedule(*args, **kwargs)
+
+    monkeypatch.setattr(
+        paper_execution_module, "schedule_reconciliation_after_partial_failure", _spy_schedule
+    )
+
+    with pytest.raises(RuntimeError, match="simulated post-broker persist failure"):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            settings=settings,
+            execution_service=execution_service,
+            trigger_source="partial_failure_test",
+        )
+
+    assert len(execution_service.submitted_intents) == 1
+    submitted_intent = execution_service.submitted_intents[0]
+
+    assert len(scheduled_calls) == 1
+    call = scheduled_calls[0]
+    assert call["strategy_id"] == "trend_following_daily"
+    assert call["client_order_id"] == submitted_intent.client_order_id
+    assert call["broker_order_id"] == f"fake-{submitted_intent.symbol.lower()}-001"
+    assert call["trigger_source"] == "partial_failure_test"
+    assert isinstance(call["error"], RuntimeError)
+
+    # The helper's own durable hand-off (independent session_scope) landed
+    # even though the triggering transaction rolled back.
+    with session_scope(settings) as session:
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+        scheduled_events = session.execute(
+            select(ExecutionEvent).where(ExecutionEvent.event_type == "reconciliation_scheduled")
+        ).scalars().all()
+
+    assert len(paper_orders) == 1
+    # The rolled-back write never landed: broker_order_id stays unset even
+    # though the broker itself already accepted the order.
+    assert paper_orders[0].broker_order_id is None
+    assert len(scheduled_events) == 1
+    assert scheduled_events[0].details["client_order_id"] == submitted_intent.client_order_id
+    assert scheduled_events[0].details["broker_order_id"] == f"fake-{submitted_intent.symbol.lower()}-001"
+
+
+def test_broker_call_failure_has_no_rollback_divergence_and_skips_reconciliation_scheduling(
+    migrated_paper_db: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB-06: if the broker call itself failed (no side effect), this is a
+    clean failure, not a broker/local divergence -- reconciliation must NOT
+    be scheduled on that path."""
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    execution_service = _BrokerFailsOnSubmitExecutionService()
+
+    scheduled_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        paper_execution_module,
+        "schedule_reconciliation_after_partial_failure",
+        lambda *args, **kwargs: scheduled_calls.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            settings=settings,
+            execution_service=execution_service,
+            trigger_source="broker_failure_no_reconciliation_test",
+        )
+
+    assert scheduled_calls == []
