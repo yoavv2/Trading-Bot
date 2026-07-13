@@ -97,7 +97,13 @@ Plans:
   3. Every finding is a value from the closed `ReconciliationFinding` enum: `MISSING_LOCAL`, `MISSING_BROKER`, `QUANTITY_MISMATCH`, `PRICE_MISMATCH`, `STATE_MISMATCH` — no string-classified finding reaches the report.
   4. Running reconciliation produces zero DB writes to execution state (order rows, positions, account snapshots); corrective action is a separate explicit step on a different code path.
   5. Flat positions (zero quantity on both sides) produce zero findings; a materialized report is always emitted with findings tied to their source snapshots.
-**Plans**: TBD (run `/gsd:plan-phase 09`)
+**Plans**: 4 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — Typed reconciliation contracts: closed ReconciliationFinding enum + typed local snapshots + (symbol, account, side) identity key (RECON-05, RECON-07)
+- [ ] 09-02-PLAN.md — Pure O(n) indexed matcher (flat positions -> zero findings) + count-based linear-scaling benchmark (RECON-06, RECON-08)
+- [ ] 09-03-PLAN.md — Read-only reconcile orchestrator over typed snapshots + one materialized report tied to source snapshots (RECON-01, RECON-02, RECON-03, RECON-09)
+- [ ] 09-04-PLAN.md — Explicit corrective entrypoint separated from reconcile + session-runner rewire + closed-enum consumer migration (RECON-04)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -177,7 +183,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 6. Analytics and APIs | v1.0 | 3/3 | Complete | 2026-03-15 |
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
-| 9. Reconciliation Rewrite | v1.1 | 0/TBD | Next (Phase 8 complete 2026-07-13) | - |
+| 9. Reconciliation Rewrite | v1.1 | 0/4 | Planned (Phase 8 complete 2026-07-13) | - |
 | 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
