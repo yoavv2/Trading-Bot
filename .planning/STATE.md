@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
-status: completed
-stopped_at: Completed 10-02-PLAN.md (Log Sanitization Core)
-last_updated: "2026-07-13T19:26:26.270Z"
-last_activity: "2026-07-13 — Phase 10 (Startup Hardening) plan 10-02 COMPLETE: log-sanitization core (sanitize()/mask_order_id()) wired as the single chokepoint inside emit_structured_log, plus the get_logger() API contract and debug_unmask_ids config surface that 10-06 will build on. Full repo suite (262 tests) green, no regressions — see 10-02-SUMMARY.md."
+status: executing
+stopped_at: Completed 10-04-PLAN.md (Paper-Execution Transaction Integrity)
+last_updated: "2026-07-13T19:51:47.073Z"
+last_activity: "2026-07-13 — Phase 10 (Startup Hardening) plan 10-04 COMPLETE: explicit DB-04/DB-05 transaction-boundary documentation + new DB-06 reconciliation-scheduling hand-off in paper_execution.py. test_paper_execution.py 25/25 green (full-repo-suite verification confounded by concurrent parallel-plan execution — see 10-04-SUMMARY.md)."
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 30
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-07)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Milestone v1.1 Execution Correctness & Hardening — Phase 8 (Concurrency Guard) COMPLETE; Phase 9 (Reconciliation Rewrite) COMPLETE (4/4 plans); Phase 10 (Startup Hardening) IN PROGRESS (3/6 plans, wave 1 complete); Phases 11-12 remain paused
+**Current focus:** Milestone v1.1 Execution Correctness & Hardening — Phase 8 (Concurrency Guard) COMPLETE; Phase 9 (Reconciliation Rewrite) COMPLETE (4/4 plans); Phase 10 (Startup Hardening) IN PROGRESS (4/6 plans, wave 1 complete, wave 2: 10-04 complete, 10-05 in progress); Phases 11-12 remain paused
 
 ## Current Position
 
-Phase: 10 of 12 in v1.1 (Startup Hardening) — IN PROGRESS, wave 1 (10-01 + 10-03 complete; 10-02 now complete, 3/6 plans)
-Plan: 10-02 complete (Log Sanitization Core, wave 1): core/log_sanitizer.py ships a pure, stdlib-only sanitize() that recursively redacts credential/token dict keys, password-bearing connection URLs, embedded key=value secrets, and Bearer/Token/Basic auth headers at any nesting depth without mutating input; mask_order_id() masks broker order IDs to last-6 by default, full value only when unmask=True. emit_structured_log now routes its assembled context dict through sanitize() before logger.log — the single sanitization chokepoint (LOG-02) — verified end-to-end via a handler-capture test. LoggingSettings.debug_unmask_ids (default False) added to settings.py so the debug-unmask flag flows through existing YAML/env config; configure_logging() sets a module-level _DEBUG_UNMASK_IDS flag from it (safe-by-default before configure_logging runs, not a per-call settings lookup). get_logger(name) exported as the documented approved logger factory 10-06 will migrate execution/reconciliation/config callers onto. 32 new unit tests; full repo suite (262 tests) green, no regressions. Requirements LOG-02/LOG-03/LOG-04/LOG-05 marked Complete; LOG-01 (caller migration) and LOG-06 (emitted-line enforcement) remain explicitly out of scope, deferred to 10-06. Commits 79b021a, 9907aac.
-Status: Phase 10 IN PROGRESS — wave 1 plans 10-01/10-02/10-03 all complete; awaiting orchestrator wave-2 kickoff
-Last activity: 2026-07-13 — Phase 10 (Startup Hardening) plan 10-02 COMPLETE: log-sanitization core (sanitize()/mask_order_id()) wired as the single chokepoint inside emit_structured_log, plus the get_logger() API contract and debug_unmask_ids config surface that 10-06 will build on. Full repo suite (262 tests) green.
+Phase: 10 of 12 in v1.1 (Startup Hardening) — IN PROGRESS, wave 2 (10-04 complete; 10-05 in progress in parallel; wave 1 (10-01/10-02/10-03) complete — 4/6 plans)
+Plan: 10-04 complete (Paper-Execution Transaction Integrity, wave 2): paper_execution.py's broker-call/success-persist boundary now carries an explicit DB-04/DB-05 comment documenting that the broker call sits outside any open session and the success commit is contingent on both the broker call succeeding and the state-transition persist flushing (mostly already structurally true; this plan made it explicit and test-pinned). New `schedule_reconciliation_after_partial_failure()` helper (DB-06): when the post-broker success-persist session_scope rolls back AFTER a successful broker call, it persists a durable `reconciliation_scheduled` ExecutionEvent + WARNING log with strategy/run/paper-order/broker-order attribution before the original exception re-raises unmodified; never invoked on the broker-call-failed path (clean failure, no divergence). 5 new tests (commit-after-both, no-commit-on-broker-raise, broker-call-runs-outside-open-transaction via an independent-connection visibility probe, partial-failure-schedules-reconciliation-with-attribution, broker-failure-skips-reconciliation) — full test_paper_execution.py suite 25/25 green. Requirements DB-04/DB-05/DB-06 marked Complete. Commit 8d3f416. See 10-04-SUMMARY.md for a concurrent-parallel-execution incident (stash collision with sibling plan 10-05, recovered cleanly) documented under Issues Encountered.
+Status: Phase 10 IN PROGRESS — wave 1 (10-01/10-02/10-03) and 10-04 (wave 2) complete; 10-05 (wave 2) in progress in parallel; wave 3 (10-06) awaits all of wave 2
+Last activity: 2026-07-13 — Phase 10 (Startup Hardening) plan 10-04 COMPLETE: explicit DB-04/DB-05 transaction-boundary documentation + new DB-06 reconciliation-scheduling hand-off in paper_execution.py. test_paper_execution.py 25/25 green (full-repo-suite verification confounded by concurrent parallel-plan execution — see 10-04-SUMMARY.md).
 
-Progress (phases across all milestones, v1.1 Phases 11-12 counted as paused/not-yet-executing): [████████░░] 13/16 phases complete (v1.0: 6, v1.1: 3 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) — Phase 10 in progress (3/6 plans), Phases 11-12 paused, v1.2: 4 of 4 complete)
+Progress (phases across all milestones, v1.1 Phases 11-12 counted as paused/not-yet-executing): [████████░░] 13/16 phases complete (v1.0: 6, v1.1: 3 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) — Phase 10 in progress (4/6 plans), Phases 11-12 paused, v1.2: 4 of 4 complete)
 
 ## Performance Metrics
 
@@ -94,6 +94,7 @@ Recent decisions affecting current work:
 - [Phase 10-03]: DB lifecycle model formalized as explicit reloadable manager (db/session.py); trading_platform.db.session is the single canonical engine/session import path; db/__init__.py re-exports only Base
 - [Phase 10-01]: config_validation.py: pure validate_config(payload, *, mode) owns Settings.model_validate() and translates raw pydantic ValidationError into a field-named ConfigValidationError (CFG-05, CFG-07); CFG-02/CFG-03 both key off broker.alpaca.base_url matching the active mode (no separate live-broker config block exists); mode is an explicit ExecutionMode(str, Enum) parameter, never a Settings field. Requirements CFG-01/02/03/05/07 marked Complete on this plan (sole Phase-10 owner per frontmatter); CFG-06 (wiring + non-zero exit) remains Pending for 10-05.
 - [Phase 10-startup-hardening]: [10-02]: debug_unmask_ids reaches emit_structured_log via a module-level global set by configure_logging() (not a per-call settings lookup) to keep the hot log path safe-by-default before configure_logging runs; LoggingSettings.debug_unmask_ids added to settings.py despite not being listed in this plan's files_modified frontmatter, since the plan body's key_facts explicitly required it (Rule 3, no architectural change). Requirements LOG-02/LOG-03/LOG-04/LOG-05 satisfied: single sanitization chokepoint inside emit_structured_log, credential/token/conn-URL/auth-header redaction, and last-6 broker-order-id masking with explicit debug-unmask reveal. LOG-01 (caller migration) and LOG-06 (emitted-line enforcement) remain explicitly out of scope for 10-06.
+- [Phase 10-startup-hardening]: [10-04]: paper_execution.py's post-broker success-persist `session_scope` now wraps in a try/except: `schedule_reconciliation_after_partial_failure()` (new, module-level) is invoked only when a rollback occurs AFTER a successful broker call (never on the broker-call-failed path), persisting a durable `reconciliation_scheduled` ExecutionEvent + structured WARNING log with strategy/run/paper-order/broker-order attribution, then re-raising the original exception unmodified. DB-04/DB-05 were mostly already structurally true (broker call outside any session, success commit already gated on broker result) so this plan's DB-04/05 work is an explicit inline comment block plus 3 test-pinning tests (commit-after-both, no-commit-on-broker-raise, independent-connection visibility probe proving the broker call runs outside any open transaction); DB-06 is the new capability (2 tests: schedules-with-attribution, broker-failure-skips). Both tasks landed in a single commit (8d3f416) rather than two, since Task 2's wrap is structurally interleaved with Task 1's re-indentation of the identical `session_scope` block — advisor-reviewed given a concurrent sibling plan (10-05) was editing the same working tree at the time. Requirements DB-04/DB-05/DB-06 marked Complete.
 
 ### Pending Todos
 
@@ -101,6 +102,7 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
+- (found 2026-07-13 during 10-04, non-blocking, environmental) Under parallel-plan/full-suite load, a throwaway test database's `pg_terminate_backend` teardown intermittently raises `psycopg.errors.InsufficientPrivilege` ("must be a superuser to terminate superuser process"), non-deterministically failing one unrelated test per full-suite run (observed in `test_market_data_access.py` and `test_market_data_ingestion.py`). Reproduced on a clean tree with 10-04's own changes fully removed (via `git stash`), confirming it predates and is unrelated to this plan — likely an autovacuum/background-worker connection racing test-DB teardown, worsened by concurrent parallel-plan execution contending for the same Postgres instance. Root cause not investigated. `tests/test_paper_execution.py` alone (this plan's scope) is reliably 25/25 green.
 - (found 2026-07-13 during 09-04, non-blocking) `worker/__main__.py`'s standalone `reconcile-paper-execution` CLI command calls only the now-read-only `reconcile_paper_execution` and never invokes the new `apply_reconciliation_corrections`. Before 09-03, this CLI path's single reconcile call also mutated `PaperOrder.sync_failure_count` as a side effect; that capability disappeared silently when 09-03 made reconcile read-only, and is out of 09-04's declared `files_modified` scope. No test pins the old behavior. A follow-up plan should add a CLI subcommand that explicitly invokes the corrective entrypoint if standalone (non-session-runner) auto-healing is still needed operationally.
 - (found 2026-07-13 during 09-04, non-blocking) `REQUIREMENTS.md` marks RECON-05 and RECON-07 `Pending` even though both are already implemented in `reconciliation_types.py` (09-01: typed `Local*Snapshot` dataclasses for RECON-05; the closed 5-member `ReconciliationFinding` enum for RECON-07). 09-04's frontmatter declares only `requirements: [RECON-04]`, so this plan's `requirements mark-complete` step correctly did not touch RECON-05/07. Likely a 09-01 execution oversight; a follow-up should verify and mark both complete.
 - BACKEND DATA-INTEGRITY (found 2026-07-09 during 14-05 live verification, deferred to a future backend phase): an `operator_control` `strategy_run` had `completed_at` (2026-07-08T17:47:49.391645+03:00) earlier than `started_at` (2026-07-08T17:47:49.468307+03:00). Not a console bug — `RunHeaderPanel` maps/renders both fields correctly; the read-only console honestly surfaces the backend's inverted timestamps. v1.2 authorizes no backend writes, so correcting the timestamp-generation ordering for `operator_control` runs is out of scope here. No blocker to Phase 14/15/16.
@@ -113,6 +115,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-13T19:26:26.267Z
-Stopped at: Completed 10-02-PLAN.md (Log Sanitization Core)
+Last session: 2026-07-13T19:51:47.069Z
+Stopped at: Completed 10-04-PLAN.md (Paper-Execution Transaction Integrity)
 Resume file: None
