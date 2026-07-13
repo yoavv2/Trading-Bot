@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: completed
-stopped_at: Completed 10-03-PLAN.md (DB Connection Lifecycle Consolidation)
-last_updated: "2026-07-13T19:16:27.362Z"
+stopped_at: Completed 10-01-PLAN.md (Config Validation Core)
+last_updated: "2026-07-13T19:18:18.399Z"
 last_activity: "2026-07-13 — Phase 9 (Reconciliation Rewrite) plan 09-04 COMPLETE, closing out Phase 9. RECON-04 satisfied: corrective action is a separate explicit entrypoint reconcile never calls, invoked as its own step by the session runner after the read-only report is produced. Full repo suite (215 tests, Postgres-backed included) has no regressions. One Rule-1 auto-fix (operator_status.py clean-label tied to finding_count==0, no output value change) plus two documented-not-fixed gaps (worker CLI correction wiring; REQUIREMENTS.md RECON-05/07 under-marking) — see 09-04-SUMMARY.md and deferred-items.md."
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 30
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -92,6 +92,7 @@ Recent decisions affecting current work:
 - [09-03]: D1 (account divergence) is preserved as a read-only `account_divergence` report-summary flag, not a matcher finding — all three pre-rewrite branches kept exactly, with the never-synced-with-positions branch (B1, `account_snapshot_missing_locally`) and never-synced-flat branch (B2) both pinned by dedicated tests since a literal "D1 = not a finding" reading would silently drop B1's blocking behavior. D2 (repeated-failure threshold) is split cleanly: the READ half (`_evaluate_threshold_breach`, both the submission-failure and sync-failure-this-run predicates) stays in reconcile with zero row writes; the WRITE half (the increment) is deleted entirely and relocates to 09-04. D3: no synthetic `reconciliation_clean` finding — a clean run persists one StrategyRun + zero ExecutionEvent rows, with `result_summary.finding_count == 0` as the clean signal. Both tasks' code changes to `reconciliation.py` landed in the Task 1 commit (structural deviation, not scope change) because the old persistence loop reads `finding.event_type` directly while `match_snapshots()` returns `Finding` objects with `.category` — the function isn't import/runnable, let alone test-green, until the persistence loop is switched to `Finding.to_event_dict()`, which is Task 2's named scope. `_local_state_from_broker_status` and the `_QUANTITY_TOLERANCE` constant were deleted alongside the plan's named deletions since both became dead code coupled 1:1 to `_build_findings`'s removal.
 - [09-04]: RECON-04 minimal reading (per plan): `apply_reconciliation_corrections()` owns ONLY the sync-failure-state WRITE/increment (mirroring pre-09-03 `_apply_sync_failure_state` exactly); the D2 threshold *evaluation* stays read-only in reconcile per 09-03. No human-review gate was introduced between reconcile and correction — the session runner calls both unconditionally as sequential steps. `worker/__main__.py`'s standalone `reconcile-paper-execution` CLI command was deliberately left NOT calling the corrective entrypoint: it is outside this plan's declared `files_modified` scope, and before 09-03 this CLI path's mutation was a side effect of calling `reconcile_paper_execution` itself — now that reconcile is read-only, wiring a CLI-invoked correction is new capability, not a regression to patch silently; logged in `deferred-items.md` for a follow-up CLI subcommand. `operator_status.py`'s synthesized "reconciliation_clean" action label was tied explicitly to the report's `finding_count == 0` signal (RECON-09) rather than solely inverting `blocks_execution`, with no output-value change for any report the read-only orchestrator can produce. `REQUIREMENTS.md` marking RECON-05/RECON-07 `Pending` despite both being implemented in 09-01 was flagged rather than silently corrected, since this plan's frontmatter declares only `requirements: [RECON-04]` and `requirements mark-complete` extracts IDs strictly from the current plan's own frontmatter.
 - [Phase 10-03]: DB lifecycle model formalized as explicit reloadable manager (db/session.py); trading_platform.db.session is the single canonical engine/session import path; db/__init__.py re-exports only Base
+- [Phase 10-01]: config_validation.py: pure validate_config(payload, *, mode) owns Settings.model_validate() and translates raw pydantic ValidationError into a field-named ConfigValidationError (CFG-05, CFG-07); CFG-02/CFG-03 both key off broker.alpaca.base_url matching the active mode (no separate live-broker config block exists); mode is an explicit ExecutionMode(str, Enum) parameter, never a Settings field. Requirements CFG-01/02/03/05/07 marked Complete on this plan (sole Phase-10 owner per frontmatter); CFG-06 (wiring + non-zero exit) remains Pending for 10-05.
 
 ### Pending Todos
 
@@ -111,6 +112,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-13T19:16:27.359Z
-Stopped at: Completed 10-03-PLAN.md (DB Connection Lifecycle Consolidation)
+Last session: 2026-07-13T19:18:18.396Z
+Stopped at: Completed 10-01-PLAN.md (Config Validation Core)
 Resume file: None

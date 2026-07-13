@@ -86,13 +86,13 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 
 ### Config Validation (CFG)
 
-- [ ] **CFG-01**: Startup validates that all required secrets for the active execution mode (backtest / paper / live) are present; missing secret = process exit with non-zero code
-- [ ] **CFG-02**: Startup validates cross-field constraints — e.g., `broker=alpaca` requires `alpaca_api_key` + `alpaca_secret`; `mode=paper` forbids configuring live endpoints
-- [ ] **CFG-03**: Startup validates mutually exclusive config flags (paper vs live, broker mode combinations) — conflict = process exit
+- [x] **CFG-01**: Startup validates that all required secrets for the active execution mode (backtest / paper / live) are present; missing secret = process exit with non-zero code
+- [x] **CFG-02**: Startup validates cross-field constraints — e.g., `broker=alpaca` requires `alpaca_api_key` + `alpaca_secret`; `mode=paper` forbids configuring live endpoints
+- [x] **CFG-03**: Startup validates mutually exclusive config flags (paper vs live, broker mode combinations) — conflict = process exit
 - [ ] **CFG-04**: Startup validates DB connection settings — unreachable DB = process exit before any domain code runs
-- [ ] **CFG-05**: Startup validates tolerance ranges against declared typed bounds (type + min/max) — out-of-range = process exit
+- [x] **CFG-05**: Startup validates tolerance ranges against declared typed bounds (type + min/max) — out-of-range = process exit
 - [ ] **CFG-06**: All config validation runs BEFORE any service init; a single failure prevents service init entirely
-- [ ] **CFG-07**: Validation failure produces a single, actionable error message naming the failed field and the expected shape — no generic "config invalid"
+- [x] **CFG-07**: Validation failure produces a single, actionable error message naming the failed field and the expected shape — no generic "config invalid"
 
 ### Log Sanitization (LOG)
 
@@ -184,13 +184,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RECON-07 | Phase 9 | Pending |
 | RECON-08 | Phase 9 | Complete |
 | RECON-09 | Phase 9 | Complete |
-| CFG-01 | Phase 10 | Pending |
-| CFG-02 | Phase 10 | Pending |
-| CFG-03 | Phase 10 | Pending |
+| CFG-01 | Phase 10 | Complete |
+| CFG-02 | Phase 10 | Complete |
+| CFG-03 | Phase 10 | Complete |
 | CFG-04 | Phase 10 | Pending |
-| CFG-05 | Phase 10 | Pending |
+| CFG-05 | Phase 10 | Complete |
 | CFG-06 | Phase 10 | Pending |
-| CFG-07 | Phase 10 | Pending |
+| CFG-07 | Phase 10 | Complete |
 | LOG-01 | Phase 10 | Pending |
 | LOG-02 | Phase 10 | Pending |
 | LOG-03 | Phase 10 | Pending |
