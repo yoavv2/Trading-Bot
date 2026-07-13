@@ -281,11 +281,16 @@ def _resolve_latest_paper_session(
         }
 
     result_summary = latest_reconciliation["result_summary"]
+    # RECON-09: since the read-only orchestrator (09-03) no longer emits a synthetic
+    # "reconciliation_clean" ExecutionEvent, derive the "clean" label directly from the
+    # materialized report's finding_count == 0 signal (rather than an old event_type
+    # string), alongside the existing blocks_execution check.
+    is_clean = not result_summary.get("blocks_execution") and result_summary.get("finding_count", 0) == 0
     return {
         "source": "reconciliation",
         "run_id": latest_reconciliation["run_id"],
         "status": latest_reconciliation["status"],
-        "action": "blocked_reconciliation" if result_summary.get("blocks_execution") else "reconciliation_clean",
+        "action": "reconciliation_clean" if is_clean else "blocked_reconciliation",
         "blocked_reason": "reconciliation_blocks_execution" if result_summary.get("blocks_execution") else None,
         "started_at": latest_reconciliation["started_at"],
         "completed_at": latest_reconciliation["completed_at"],
