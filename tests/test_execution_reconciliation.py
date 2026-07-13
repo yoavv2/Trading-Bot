@@ -324,6 +324,10 @@ def _seed_local_fill(*, paper_order_id: uuid.UUID) -> None:
         paper_order.last_sync_error = "stale mismatch"
 
 
+@pytest.mark.skip(
+    reason="sync-failure increment relocates to corrective path in 09-04; "
+    "see test_reconciliation_does_not_mutate_execution_state for the read-only replacement"
+)
 def test_reconciliation_persists_blocking_findings_and_updates_sync_failure_state(
     migrated_reconciliation_db: str,
 ) -> None:
@@ -379,6 +383,10 @@ def test_reconciliation_persists_blocking_findings_and_updates_sync_failure_stat
     assert reconciliation_runs[0].status == StrategyRunStatus.SUCCEEDED
 
 
+@pytest.mark.skip(
+    reason="sync-failure increment relocates to corrective path in 09-04; "
+    "see test_reconciliation_clean_run_emits_empty_report for the read-only clean-report replacement"
+)
 def test_reconciliation_persists_clean_event_and_resets_sync_failures(
     migrated_reconciliation_db: str,
 ) -> None:
@@ -466,7 +474,12 @@ def test_reconciliation_persists_clean_event_and_resets_sync_failures(
 def test_reconciliation_blocks_after_repeated_submission_failures(
     migrated_reconciliation_db: str,
 ) -> None:
-    _paper_order_id, _client_order_id = _seed_existing_execution_state(
+    """Threshold-still-blocks test (D2): a SUBMISSION_FAILED order past
+    ``repeated_failure_threshold`` still trips ``blocks_execution`` via the read-only
+    ``threshold_breach`` evaluation -- WITHOUT any sync_failure_count mutation (the
+    increment relocates to the 09-04 corrective path).
+    """
+    paper_order_id, _client_order_id = _seed_existing_execution_state(
         status="submission_failed",
         broker_order_id=None,
         broker_status=None,
@@ -474,6 +487,12 @@ def test_reconciliation_blocks_after_repeated_submission_failures(
         last_submission_error="timed out",
     )
     settings = load_settings()
+
+    with session_scope(settings) as session:
+        before_order = session.get(PaperOrder, paper_order_id)
+        assert before_order is not None
+        before_sync_failure_count = before_order.sync_failure_count
+        before_last_sync_error = before_order.last_sync_error
 
     report = reconcile_paper_execution(
         "trend_following_daily",
@@ -495,9 +514,358 @@ def test_reconciliation_blocks_after_repeated_submission_failures(
     )
 
     assert report.blocks_execution is True
-    assert {finding.event_type for finding in report.findings} >= {
-        "submission_failure_threshold_exceeded",
-    }
+
+    with session_scope(settings) as session:
+        after_order = session.get(PaperOrder, paper_order_id)
+        assert after_order is not None
+        reconciliation_run = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.RECONCILIATION)
+        ).scalars().one()
+
+    # No execution-state write: the submission-failure count/error are untouched by
+    # reconcile (RECON-03) -- the block comes purely from the read-only evaluation.
+    assert after_order.sync_failure_count == before_sync_failure_count
+    assert after_order.last_sync_error == before_last_sync_error
+
+    threshold_breach = reconciliation_run.result_summary["threshold_breach"]
+    assert any(entry["reason"] == "submission_failure_threshold_exceeded" for entry in threshold_breach)
+
+
+def test_reconciliation_does_not_mutate_execution_state(
+    migrated_reconciliation_db: str,
+) -> None:
+    """No-mutation invariant test (RECON-03): reconcile is read-only over execution
+    state. Runs against a DIVERGENT broker fixture (empty broker orders/fills/
+    positions and a divergent account) so findings AND account_divergence both fire,
+    then asserts PaperOrder/Position/AccountSnapshot rows are byte-for-byte unchanged
+    while the StrategyRun report + ExecutionEvent findings WERE written.
+    """
+    paper_order_id, _client_order_id = _seed_existing_execution_state()
+    _seed_open_position()
+    _seed_account_snapshot(
+        cash="98797.500000",
+        buying_power="98797.500000",
+        total_equity="100012.500000",
+        gross_exposure="1215.000000",
+        open_positions=1,
+    )
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        before_order = session.get(PaperOrder, paper_order_id)
+        assert before_order is not None
+        before_order_state = (
+            before_order.sync_failure_count,
+            before_order.last_sync_error,
+            before_order.last_sync_failure_at,
+            before_order.status,
+            before_order.broker_status,
+        )
+        before_positions = session.execute(select(Position)).scalars().all()
+        before_position_state = [
+            (position.id, position.quantity, position.average_entry_price, position.cost_basis, position.status)
+            for position in before_positions
+        ]
+        before_snapshots = session.execute(select(AccountSnapshot)).scalars().all()
+        before_snapshot_state = [
+            (
+                snapshot.id,
+                snapshot.cash,
+                snapshot.buying_power,
+                snapshot.total_equity,
+                snapshot.gross_exposure,
+                snapshot.open_positions,
+            )
+            for snapshot in before_snapshots
+        ]
+
+    report = reconcile_paper_execution(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[],
+            fills=[],
+            positions=[],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("100000.000000"),
+                buying_power=Decimal("100000.000000"),
+                equity=Decimal("100000.000000"),
+                long_market_value=Decimal("0"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100000.000000"},
+            ),
+        ),
+    )
+
+    # Divergence WAS detected and the report blocks -- this is not a vacuous no-op run.
+    assert report.blocks_execution is True
+    assert report.finding_count > 0
+
+    with session_scope(settings) as session:
+        after_order = session.get(PaperOrder, paper_order_id)
+        assert after_order is not None
+        after_order_state = (
+            after_order.sync_failure_count,
+            after_order.last_sync_error,
+            after_order.last_sync_failure_at,
+            after_order.status,
+            after_order.broker_status,
+        )
+        after_positions = session.execute(select(Position)).scalars().all()
+        after_position_state = [
+            (position.id, position.quantity, position.average_entry_price, position.cost_basis, position.status)
+            for position in after_positions
+        ]
+        after_snapshots = session.execute(select(AccountSnapshot)).scalars().all()
+        after_snapshot_state = [
+            (
+                snapshot.id,
+                snapshot.cash,
+                snapshot.buying_power,
+                snapshot.total_equity,
+                snapshot.gross_exposure,
+                snapshot.open_positions,
+            )
+            for snapshot in after_snapshots
+        ]
+        events = session.execute(select(ExecutionEvent)).scalars().all()
+        reconciliation_runs = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.RECONCILIATION)
+        ).scalars().all()
+
+    assert after_order_state == before_order_state
+    assert after_position_state == before_position_state
+    assert after_snapshot_state == before_snapshot_state
+
+    # But the materialized report itself WAS written.
+    assert len(events) > 0
+    assert len(reconciliation_runs) == 1
+    assert reconciliation_runs[0].status == StrategyRunStatus.SUCCEEDED
+
+
+def test_reconciliation_clean_run_emits_empty_report(
+    migrated_reconciliation_db: str,
+) -> None:
+    """Clean-run test (RECON-09/D3): a clean/flat reconcile still emits the
+    materialized StrategyRun report with result_summary.finding_count == 0, ZERO
+    ExecutionEvent findings, and blocks_execution == False -- no synthetic
+    'reconciliation_clean' finding.
+    """
+    paper_order_id, client_order_id = _seed_existing_execution_state()
+    _seed_local_fill(paper_order_id=paper_order_id)
+    _seed_open_position()
+    _seed_account_snapshot(
+        cash="98797.500000",
+        buying_power="98797.500000",
+        total_equity="100012.500000",
+        gross_exposure="1215.000000",
+        open_positions=1,
+    )
+    settings = load_settings()
+
+    report = reconcile_paper_execution(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[
+                BrokerOrderSnapshot(
+                    broker_order_id="existing-aapl-001",
+                    client_order_id=client_order_id,
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                    status=ExecutionOrderStatus.FILLED,
+                    broker_status="filled",
+                    submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                    canceled_at=None,
+                    updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                    raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                )
+            ],
+            fills=[
+                BrokerFillSnapshot(
+                    broker_fill_id="fill-aapl-001",
+                    broker_order_id="existing-aapl-001",
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                    price=Decimal("120.250000"),
+                    filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                    raw_payload={"id": "fill-aapl-001", "order_id": "existing-aapl-001"},
+                )
+            ],
+            positions=[
+                BrokerPositionSnapshot(
+                    symbol="AAPL",
+                    quantity=Decimal("10.000000"),
+                    average_entry_price=Decimal("120.250000"),
+                    cost_basis=Decimal("1202.500000"),
+                    market_value=Decimal("1215.000000"),
+                    current_price=Decimal("121.500000"),
+                    raw_payload={"symbol": "AAPL"},
+                )
+            ],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("98797.500000"),
+                buying_power=Decimal("98797.500000"),
+                equity=Decimal("100012.500000"),
+                long_market_value=Decimal("1215.000000"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100012.500000"},
+            ),
+        ),
+    )
+
+    assert report.blocks_execution is False
+    assert report.finding_count == 0
+    assert report.findings == ()
+
+    with session_scope(settings) as session:
+        events = session.execute(select(ExecutionEvent)).scalars().all()
+        reconciliation_run = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.RECONCILIATION)
+        ).scalars().one()
+
+    assert len(events) == 0
+    assert reconciliation_run.result_summary["finding_count"] == 0
+    assert reconciliation_run.result_summary["account_divergence"] == {}
+    assert reconciliation_run.result_summary["threshold_breach"] == []
+
+
+def test_reconciliation_blocks_when_account_snapshot_missing_with_positions(
+    migrated_reconciliation_db: str,
+) -> None:
+    """Account-missing-blocks test (D1/B1): local and broker positions/orders/fills
+    match cleanly (the matcher emits NO findings) but NO AccountSnapshot row has ever
+    been persisted for the strategy. reconcile_paper_execution must still return
+    blocks_execution=True via the account_snapshot_missing_locally sub-flag, with
+    zero execution-state writes -- this is the branch a literal reading of D1 would
+    silently drop.
+    """
+    paper_order_id, client_order_id = _seed_existing_execution_state()
+    _seed_local_fill(paper_order_id=paper_order_id)
+    _seed_open_position()
+    # Deliberately NOT calling _seed_account_snapshot: no AccountSnapshot row exists.
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        before_order = session.get(PaperOrder, paper_order_id)
+        assert before_order is not None
+        before_order_state = (before_order.sync_failure_count, before_order.last_sync_error)
+
+    report = reconcile_paper_execution(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[
+                BrokerOrderSnapshot(
+                    broker_order_id="existing-aapl-001",
+                    client_order_id=client_order_id,
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                    status=ExecutionOrderStatus.FILLED,
+                    broker_status="filled",
+                    submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                    canceled_at=None,
+                    updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                    raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                )
+            ],
+            fills=[
+                BrokerFillSnapshot(
+                    broker_fill_id="fill-aapl-001",
+                    broker_order_id="existing-aapl-001",
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("10.000000"),
+                    price=Decimal("120.250000"),
+                    filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                    raw_payload={"id": "fill-aapl-001", "order_id": "existing-aapl-001"},
+                )
+            ],
+            positions=[
+                BrokerPositionSnapshot(
+                    symbol="AAPL",
+                    quantity=Decimal("10.000000"),
+                    average_entry_price=Decimal("120.250000"),
+                    cost_basis=Decimal("1202.500000"),
+                    market_value=Decimal("1215.000000"),
+                    current_price=Decimal("121.500000"),
+                    raw_payload={"symbol": "AAPL"},
+                )
+            ],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("98797.500000"),
+                buying_power=Decimal("98797.500000"),
+                equity=Decimal("100012.500000"),
+                long_market_value=Decimal("1215.000000"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100012.500000"},
+            ),
+        ),
+    )
+
+    # The matcher itself finds nothing to report -- positions/orders/fills all match.
+    assert report.finding_count == 0
+    # But the account has never been synced locally, and positions exist -- blocks.
+    assert report.blocks_execution is True
+
+    with session_scope(settings) as session:
+        after_order = session.get(PaperOrder, paper_order_id)
+        assert after_order is not None
+        after_order_state = (after_order.sync_failure_count, after_order.last_sync_error)
+        reconciliation_run = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.RECONCILIATION)
+        ).scalars().one()
+
+    assert after_order_state == before_order_state
+    assert reconciliation_run.result_summary["account_divergence"]["account_snapshot_missing_locally"] is True
+
+
+def test_reconciliation_does_not_block_when_never_synced_and_flat(
+    migrated_reconciliation_db: str,
+) -> None:
+    """Complementary non-blocking case (D1/B2): the account has never been synced
+    locally, but the book is flat (no broker or local positions) -- reconcile must
+    NOT block. This pins the branch alongside B1 so a literal D1 reading cannot
+    silently drop either half of the contract.
+    """
+    settings = load_settings()
+
+    report = reconcile_paper_execution(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[],
+            fills=[],
+            positions=[],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("100000.000000"),
+                buying_power=Decimal("100000.000000"),
+                equity=Decimal("100000.000000"),
+                long_market_value=Decimal("0"),
+                short_market_value=Decimal("0"),
+                raw_payload={"equity": "100000.000000"},
+            ),
+        ),
+    )
+
+    assert report.blocks_execution is False
+    assert report.finding_count == 0
+
+    with session_scope(settings) as session:
+        reconciliation_run = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.RECONCILIATION)
+        ).scalars().one()
+
+    assert reconciliation_run.result_summary["account_divergence"] == {}
 
 
 def test_reconciliation_prefers_client_order_id_when_version_chain_exists(
@@ -623,7 +991,7 @@ def test_reconciliation_prefers_client_order_id_when_version_chain_exists(
     )
 
     assert report.blocks_execution is False
-    assert "order_status_mismatch" not in {finding.event_type for finding in report.findings}
+    assert "STATE_MISMATCH" not in {finding.event_type for finding in report.findings}
 
 
 def test_reconciliation_module_routes_lifecycle_through_order_state_machine() -> None:
