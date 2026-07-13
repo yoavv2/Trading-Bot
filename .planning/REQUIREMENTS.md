@@ -80,6 +80,38 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 - [x] **RECON-08**: Flat positions (zero quantity on both sides) produce zero findings
 - [x] **RECON-09**: Reconciliation emits one materialized report; every finding is tied to its category and the source snapshots that produced it
 
+## v1.1 Resumed — Startup Hardening (Phase 10)
+
+Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 after Phase 9 (Reconciliation Rewrite) completed. These are the v1.1 startup-hardening requirements now active for Phase 10 planning. (PERF, STRUCT, TOOL remain paused in the archive until their phases resume.)
+
+### Config Validation (CFG)
+
+- [ ] **CFG-01**: Startup validates that all required secrets for the active execution mode (backtest / paper / live) are present; missing secret = process exit with non-zero code
+- [ ] **CFG-02**: Startup validates cross-field constraints — e.g., `broker=alpaca` requires `alpaca_api_key` + `alpaca_secret`; `mode=paper` forbids configuring live endpoints
+- [ ] **CFG-03**: Startup validates mutually exclusive config flags (paper vs live, broker mode combinations) — conflict = process exit
+- [ ] **CFG-04**: Startup validates DB connection settings — unreachable DB = process exit before any domain code runs
+- [ ] **CFG-05**: Startup validates tolerance ranges against declared typed bounds (type + min/max) — out-of-range = process exit
+- [ ] **CFG-06**: All config validation runs BEFORE any service init; a single failure prevents service init entirely
+- [ ] **CFG-07**: Validation failure produces a single, actionable error message naming the failed field and the expected shape — no generic "config invalid"
+
+### Log Sanitization (LOG)
+
+- [ ] **LOG-01**: Application code uses one logger wrapper only; direct `logging.getLogger` use is forbidden in execution, reconciliation, and config paths (enforced by a lint rule / import boundary)
+- [ ] **LOG-02**: Every logged payload passes through the sanitizer before reaching the logger
+- [ ] **LOG-03**: The sanitizer redacts credentials, API keys, tokens, and connection URLs containing passwords
+- [ ] **LOG-04**: The sanitizer redacts `Authorization` and equivalent auth headers from request/response logs
+- [ ] **LOG-05**: Broker order IDs are hashed or truncated to last-6 by default; full ID appears only when an explicit debug flag is set
+- [ ] **LOG-06**: Enforcement tests assert no emitted log line contains `password=`, `api_key=`, `Authorization:` header values, or a full broker order ID under default config
+
+### DB Lifecycle (DB)
+
+- [ ] **DB-01**: One documented model governs engine and session lifecycle — process-level immutable OR explicit reloadable manager; the choice is recorded in a Key Decision entry
+- [ ] **DB-02**: The `@lru_cache` vs `_ENGINE_CACHE` / `_SESSION_FACTORY_CACHE` duality is resolved — only the chosen mechanism remains in code
+- [ ] **DB-03**: Engine and session access goes through one canonical import path; other paths are removed
+- [ ] **DB-04**: Every execution flow runs within an explicit transaction boundary (`with session.begin():` or equivalent)
+- [ ] **DB-05**: A transaction commits only after BOTH the broker call succeeds AND the state transition is persisted — partial success does not commit
+- [ ] **DB-06**: When rollback occurs after a broker side effect has already happened, a reconciliation task is scheduled/enqueued (rollback cannot undo broker effect; reconciliation must follow)
+
 ## Future Requirements
 
 Deferred. Tracked but not in current roadmap.
@@ -91,7 +123,7 @@ Deferred. Tracked but not in current roadmap.
 
 ### v1.1 Remaining Hardening (paused milestone)
 
-LOCK (Concurrency Guard, Phase 8) resumed 2026-07-12 and RECON (Reconciliation Rewrite, Phase 9) resumed 2026-07-13 — both now active above under "v1.1 Resumed". The rest remain paused: see `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — CFG, LOG, DB, PERF, STRUCT, TOOL requirements resume with their respective phases.
+LOCK (Concurrency Guard, Phase 8) resumed 2026-07-12, RECON (Reconciliation Rewrite, Phase 9) resumed 2026-07-13, and CFG/LOG/DB (Startup Hardening, Phase 10) resumed 2026-07-13 — all now active above under "v1.1 Resumed". The rest remain paused: see `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — PERF, STRUCT, TOOL requirements resume with their respective phases.
 
 ## Out of Scope
 
@@ -152,6 +184,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RECON-07 | Phase 9 | Pending |
 | RECON-08 | Phase 9 | Complete |
 | RECON-09 | Phase 9 | Complete |
+| CFG-01 | Phase 10 | Pending |
+| CFG-02 | Phase 10 | Pending |
+| CFG-03 | Phase 10 | Pending |
+| CFG-04 | Phase 10 | Pending |
+| CFG-05 | Phase 10 | Pending |
+| CFG-06 | Phase 10 | Pending |
+| CFG-07 | Phase 10 | Pending |
+| LOG-01 | Phase 10 | Pending |
+| LOG-02 | Phase 10 | Pending |
+| LOG-03 | Phase 10 | Pending |
+| LOG-04 | Phase 10 | Pending |
+| LOG-05 | Phase 10 | Pending |
+| LOG-06 | Phase 10 | Pending |
+| DB-01 | Phase 10 | Pending |
+| DB-02 | Phase 10 | Pending |
+| DB-03 | Phase 10 | Pending |
+| DB-04 | Phase 10 | Pending |
+| DB-05 | Phase 10 | Pending |
+| DB-06 | Phase 10 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 21 total

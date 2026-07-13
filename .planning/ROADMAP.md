@@ -48,7 +48,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 - [x] **Phase 7: Correctness Kernel** - Closed order state machine, deterministic `client_order_id` idempotency, persistent global kill switch with operator CLI. Completed 2026-04-20.
 - [x] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection. (completed 2026-07-13)
 - [x] **Phase 9: Reconciliation Rewrite** - Typed snapshots, O(n) matcher, closed findings enum, materialized report, explicit corrective entrypoint. Completed 2026-07-13.
-- [ ] **Phase 10: Startup Hardening** (paused) - Fail-fast config validation, log sanitization, DB lifecycle consolidation.
+- [ ] **Phase 10: Startup Hardening** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Fail-fast config validation, log sanitization, DB lifecycle consolidation.
 - [ ] **Phase 11: Query Performance** (paused) - Preflight N+1 fix, reconciliation scaling, covering indices.
 - [ ] **Phase 12: Structural Refactor and Tooling** (paused) - Worker split, service reorganization, lint/type-check gates.
 
@@ -104,6 +104,19 @@ Plans:
 - [x] 09-02-PLAN.md — Pure O(n) indexed matcher (flat positions -> zero findings) + count-based linear-scaling benchmark (RECON-06, RECON-08)
 - [x] 09-03-PLAN.md — Read-only reconcile orchestrator over typed snapshots + one materialized report tied to source snapshots (RECON-01, RECON-02, RECON-03, RECON-09)
 - [x] 09-04-PLAN.md — Explicit corrective entrypoint separated from reconcile + session-runner rewire + closed-enum consumer migration (RECON-04)
+
+### Phase 10: Startup Hardening
+**Milestone**: v1.1 Execution Correctness & Hardening (resumed 2026-07-13 after Phase 9 completed)
+**Goal:** The process refuses to boot on invalid config, logs never emit credentials or unmasked broker order IDs under default config, and one canonical DB connection lifecycle governs all execution flows.
+**Depends on:** Phases 7-9 (Tier 0 complete — Correctness Kernel, Concurrency Guard, Reconciliation Rewrite all done)
+**Requirements**: CFG-01, CFG-02, CFG-03, CFG-04, CFG-05, CFG-06, CFG-07, LOG-01, LOG-02, LOG-03, LOG-04, LOG-05, LOG-06, DB-01, DB-02, DB-03, DB-04, DB-05, DB-06
+**Success Criteria** (what must be TRUE):
+  1. Starting the process with a missing required secret, an unreachable DB, an out-of-range tolerance value, or a conflicting mode combination exits with a non-zero code and a single actionable error message naming the failed field — no domain service initializes before all validations pass.
+  2. An enforcement test asserts that no emitted log line under default config contains `password=`, `api_key=`, `Authorization:` header values, or a full broker order ID.
+  3. One connection-lifecycle model is in code (the competing `@lru_cache` / `_ENGINE_CACHE` duality is removed); all execution flows use the single canonical session import path.
+  4. Every execution flow runs within an explicit transaction boundary; a commit occurs only after both the broker call and the state transition persist successfully.
+  5. When a rollback occurs after a broker side effect has already happened, a reconciliation task is scheduled — rollback alone is never the complete response.
+**Plans**: TBD (run `/gsd:plan-phase 10`)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -184,7 +197,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 7. Correctness Kernel | v1.1 | 3/3 | Complete | 2026-04-20 |
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
-| 10. Startup Hardening | v1.1 | 0/TBD | Paused | - |
+| 10. Startup Hardening | v1.1 | 0/TBD | Next (Phase 9 complete 2026-07-13) | - |
 | 11. Query Performance | v1.1 | 0/TBD | Paused | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
