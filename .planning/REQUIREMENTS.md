@@ -112,6 +112,16 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 - [x] **DB-05**: A transaction commits only after BOTH the broker call succeeds AND the state transition is persisted — partial success does not commit
 - [x] **DB-06**: When rollback occurs after a broker side effect has already happened, a reconciliation task is scheduled/enqueued (rollback cannot undo broker effect; reconciliation must follow)
 
+## v1.1 Resumed — Query Performance (Phase 11)
+
+Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 after Phase 10 (Startup Hardening) completed. These are the v1.1 query-performance requirements now active for Phase 11 planning. (STRUCT, TOOL remain paused in the archive until Phase 12 resumes.)
+
+### Query Performance (PERF)
+
+- [ ] **PERF-01**: Paper-preflight issues at most 2 queries total, regardless of the number of positions or approved candidates (measured by query-count assertion in an integration test)
+- [ ] **PERF-02**: Reconciliation runtime is O(n) over entity count — asserted by a benchmark test that scales linearly (not quadratically) with input size
+- [ ] **PERF-03**: Every critical query (operator reads, reconciliation, order lifecycle sync) has an explicit named index; `EXPLAIN` output shows the index is used
+
 ## Future Requirements
 
 Deferred. Tracked but not in current roadmap.
@@ -123,7 +133,7 @@ Deferred. Tracked but not in current roadmap.
 
 ### v1.1 Remaining Hardening (paused milestone)
 
-LOCK (Concurrency Guard, Phase 8) resumed 2026-07-12, RECON (Reconciliation Rewrite, Phase 9) resumed 2026-07-13, and CFG/LOG/DB (Startup Hardening, Phase 10) resumed 2026-07-13 — all now active above under "v1.1 Resumed". The rest remain paused: see `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — PERF, STRUCT, TOOL requirements resume with their respective phases.
+LOCK (Concurrency Guard, Phase 8) resumed 2026-07-12, RECON (Reconciliation Rewrite, Phase 9) resumed 2026-07-13, CFG/LOG/DB (Startup Hardening, Phase 10) resumed 2026-07-13, and PERF (Query Performance, Phase 11) resumed 2026-07-13 — all now active above under "v1.1 Resumed". The rest remain paused: see `.planning/milestones/v1.1-paused/REQUIREMENTS.md` — STRUCT, TOOL requirements resume with Phase 12.
 
 ## Out of Scope
 
@@ -203,6 +213,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DB-04 | Phase 10 | Complete |
 | DB-05 | Phase 10 | Complete |
 | DB-06 | Phase 10 | Complete |
+| PERF-01 | Phase 11 | Pending |
+| PERF-02 | Phase 11 | Pending |
+| PERF-03 | Phase 11 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 21 total

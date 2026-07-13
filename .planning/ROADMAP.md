@@ -49,7 +49,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 - [x] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection. (completed 2026-07-13)
 - [x] **Phase 9: Reconciliation Rewrite** - Typed snapshots, O(n) matcher, closed findings enum, materialized report, explicit corrective entrypoint. Completed 2026-07-13.
 - [x] **Phase 10: Startup Hardening** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Fail-fast config validation, log sanitization, DB lifecycle consolidation. (completed 2026-07-13)
-- [ ] **Phase 11: Query Performance** (paused) - Preflight N+1 fix, reconciliation scaling, covering indices.
+- [ ] **Phase 11: Query Performance** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Preflight N+1 fix, reconciliation scaling, covering indices.
 - [ ] **Phase 12: Structural Refactor and Tooling** (paused) - Worker split, service reorganization, lint/type-check gates.
 
 Full remaining scope, requirements, and phase details: `.planning/milestones/v1.1-paused/ROADMAP.md` and `.planning/milestones/v1.1-paused/REQUIREMENTS.md`. Standing gate: `.planning/00-VERIFY.md` must be green before Phase 8+ resumes.
@@ -125,6 +125,17 @@ Plans:
 - [x] 10-04-PLAN.md — Paper-execution transaction integrity: explicit boundary, commit-after-both, rollback schedules reconciliation (DB-04, DB-05, DB-06)
 - [ ] 10-05-PLAN.md — Startup gate wired into every entrypoint: DB preflight + non-zero exit before service init (CFG-04, CFG-06)
 - [ ] 10-06-PLAN.md — Logger migration + formatter backstop + import-boundary & emitted-line enforcement tests (LOG-01, LOG-06)
+
+### Phase 11: Query Performance
+**Milestone**: v1.1 Execution Correctness & Hardening (resumed 2026-07-13 after Phase 10 completed)
+**Goal:** Paper preflight issues at most 2 queries regardless of portfolio size, reconciliation scales linearly with entity count, and every critical query path has a named covering index confirmed by EXPLAIN.
+**Depends on:** Phase 10 (Startup Hardening — complete)
+**Requirements**: PERF-01, PERF-02, PERF-03
+**Success Criteria** (what must be TRUE):
+  1. An integration test asserts that paper preflight issues at most 2 queries total regardless of the number of positions or approved candidates — the N+1 pattern does not reappear.
+  2. A benchmark test confirms reconciliation runtime scales linearly (not quadratically) with input size; the test fails if O(n²) behavior is detected.
+  3. `EXPLAIN` output for operator reads, reconciliation queries, and order lifecycle sync queries shows the named covering index is used — full sequential scans on large tables are absent.
+**Plans**: TBD
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -206,7 +217,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
 | 10. Startup Hardening | v1.1 | 6/6 | Complete | 2026-07-13 |
-| 11. Query Performance | v1.1 | 0/TBD | Paused | - |
+| 11. Query Performance | v1.1 | 0/TBD | Planning | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
