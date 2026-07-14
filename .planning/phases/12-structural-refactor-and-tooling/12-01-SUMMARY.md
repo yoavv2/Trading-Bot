@@ -83,7 +83,7 @@ Each task was committed atomically:
 ## Verification
 
 - **STRUCT-01:** `00-VERIFY.md` Status `✅ GREEN` confirmed by read; full suite `306 passed, 0 failed`; baseline captured.
-- **STRUCT-07:** `grep -rn "_MONEY_TOLERANCE\|_QUANTITY_TOLERANCE" src/` returns only the docstring reference in `tolerances.py` (no live definitions/usages remain); both consumers import from `services/config/tolerances.py`.
+- **STRUCT-07:** `grep -rn "_MONEY_TOLERANCE\|_QUANTITY_TOLERANCE" src/` returns nothing (grep clean); both consumers import from `services/config/tolerances.py`.
 - **Zero-behavior-change (STRUCT-02 property):** full-suite pass count equals the captured baseline (306 passed / 0 failed) after the move; reconciliation tests 54/54 green; no assertions changed.
 
 ## Deviations from Plan
