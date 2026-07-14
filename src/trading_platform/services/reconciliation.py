@@ -35,6 +35,7 @@ from trading_platform.services.alpaca import (
     BrokerPositionSnapshot,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.config.tolerances import MONEY_TOLERANCE
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
 from trading_platform.services.order_state_machine import (
     OrderTransitionRequest,
@@ -56,7 +57,6 @@ _ACTIVE_LOCAL_ORDER_STATUSES = {
     OrderLifecycleState.SUBMITTED,
     OrderLifecycleState.PARTIALLY_FILLED,
 }
-_MONEY_TOLERANCE = Decimal("0.01")
 
 
 @dataclass(frozen=True)
@@ -533,19 +533,19 @@ def _evaluate_account_divergence(
         start=Decimal("0"),
     )
     divergence: dict[str, dict[str, str | int]] = {}
-    if _decimal_differs(latest_snapshot.cash, broker_account.cash, tolerance=_MONEY_TOLERANCE):
+    if _decimal_differs(latest_snapshot.cash, broker_account.cash, tolerance=MONEY_TOLERANCE):
         divergence["cash"] = {"local": str(latest_snapshot.cash), "broker": str(broker_account.cash)}
-    if _decimal_differs(latest_snapshot.buying_power, broker_account.buying_power, tolerance=_MONEY_TOLERANCE):
+    if _decimal_differs(latest_snapshot.buying_power, broker_account.buying_power, tolerance=MONEY_TOLERANCE):
         divergence["buying_power"] = {
             "local": str(latest_snapshot.buying_power),
             "broker": str(broker_account.buying_power),
         }
-    if _decimal_differs(latest_snapshot.total_equity, broker_account.equity, tolerance=_MONEY_TOLERANCE):
+    if _decimal_differs(latest_snapshot.total_equity, broker_account.equity, tolerance=MONEY_TOLERANCE):
         divergence["total_equity"] = {
             "local": str(latest_snapshot.total_equity),
             "broker": str(broker_account.equity),
         }
-    if _decimal_differs(latest_snapshot.gross_exposure, broker_gross_exposure, tolerance=_MONEY_TOLERANCE):
+    if _decimal_differs(latest_snapshot.gross_exposure, broker_gross_exposure, tolerance=MONEY_TOLERANCE):
         divergence["gross_exposure"] = {
             "local": str(latest_snapshot.gross_exposure),
             "broker": str(broker_gross_exposure),

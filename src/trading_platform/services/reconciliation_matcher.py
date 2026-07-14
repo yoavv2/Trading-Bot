@@ -34,6 +34,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from trading_platform.services.config.tolerances import MONEY_TOLERANCE, QUANTITY_TOLERANCE
 from trading_platform.services.execution import ExecutionOrderStatus
 from trading_platform.services.reconciliation_types import (
     Finding,
@@ -53,10 +54,6 @@ if TYPE_CHECKING:
         BrokerOrderSnapshot,
         BrokerPositionSnapshot,
     )
-
-# Tolerances carried forward from the pre-rewrite `reconciliation.py` matching logic.
-_MONEY_TOLERANCE = Decimal("0.01")
-_QUANTITY_TOLERANCE = Decimal("0.000001")
 
 # Local order lifecycle strings that count as "still active" from the broker's point of
 # view. Expressed as plain strings (not the ORM `OrderLifecycleState` enum) so this
@@ -169,12 +166,12 @@ def _match_positions(
             findings.append(_missing_broker_position_finding(identity, local_position))
             continue
 
-        if _decimal_differs(local_position.quantity, broker_position.quantity, tolerance=_QUANTITY_TOLERANCE):
+        if _decimal_differs(local_position.quantity, broker_position.quantity, tolerance=QUANTITY_TOLERANCE):
             findings.append(_quantity_mismatch_finding(identity, local_position, broker_position))
         if _decimal_differs(
             local_position.average_entry_price,
             broker_position.average_entry_price,
-            tolerance=_MONEY_TOLERANCE,
+            tolerance=MONEY_TOLERANCE,
         ):
             findings.append(_price_mismatch_finding(identity, local_position, broker_position))
 
