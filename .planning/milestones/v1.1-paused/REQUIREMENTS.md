@@ -111,8 +111,8 @@ Requirements grouped by tier. Each is an enforceable invariant. Each maps to one
 
 #### Tooling (TOOL)
 
-- [ ] **TOOL-01**: Lint and format tooling (ruff or equivalent) is wired with a pre-commit or CI gate that blocks merge on failure
-- [ ] **TOOL-02**: Static type checking (mypy or pyright) is wired for execution, reconciliation, and config modules; CI gate blocks merge on type errors in those modules
+- [x] **TOOL-01**: Lint and format tooling (ruff or equivalent) is wired with a pre-commit or CI gate that blocks merge on failure
+- [x] **TOOL-02**: Static type checking (mypy or pyright) is wired for execution, reconciliation, and config modules; CI gate blocks merge on type errors in those modules
 
 ## Future Requirements
 
@@ -210,8 +210,8 @@ Explicitly excluded from v1.1.
 | STRUCT-06 | Phase 12 | Complete |
 | STRUCT-07 | Phase 12 | Complete |
 | STRUCT-08 | Phase 12 | Complete |
-| TOOL-01 | Phase 12 | Pending |
-| TOOL-02 | Phase 12 | Pending |
+| TOOL-01 | Phase 12 | Complete |
+| TOOL-02 | Phase 12 | Complete |
 
 **Coverage:**
 - v1.1 requirements: 63 total

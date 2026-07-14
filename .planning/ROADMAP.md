@@ -51,7 +51,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 - [x] **Phase 9: Reconciliation Rewrite** - Typed snapshots, O(n) matcher, closed findings enum, materialized report, explicit corrective entrypoint. Completed 2026-07-13.
 - [x] **Phase 10: Startup Hardening** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Fail-fast config validation, log sanitization, DB lifecycle consolidation. (completed 2026-07-13)
 - [x] **Phase 11: Query Performance** (4/4 plans completed 2026-07-14; PERF-01, PERF-02, and PERF-03 complete) - Preflight N+1 fix, reconciliation scaling, covering indices.
-- [ ] **Phase 12: Structural Refactor and Tooling** (paused) - Worker split, service reorganization, lint/type-check gates.
+- [x] **Phase 12: Structural Refactor and Tooling** (7/7 plans complete) - Worker split, service reorganization, lint/type-check gates. (completed 2026-07-15)
 
 Full remaining scope, requirements, and phase details: `.planning/milestones/v1.1-paused/ROADMAP.md` and `.planning/milestones/v1.1-paused/REQUIREMENTS.md`. Standing gate: `.planning/00-VERIFY.md` must be green before Phase 8+ resumes.
 
@@ -184,7 +184,7 @@ Plans:
 - [x] 12-04-PLAN.md — STRUCT-04 (part 2) split paper_execution.py into execution/{submit_orders,sync_orders}
 - [x] 12-05-PLAN.md — STRUCT-05 reconciliation -> services/reconciliation/{snapshot,matcher,findings,report}
 - [x] 12-06-PLAN.md — STRUCT-03 worker split (routing-only __main__ <100 lines); STRUCT-02 zero-behavior-change proof
-- [ ] 12-07-PLAN.md — TOOL-01 ruff + TOOL-02 mypy via blocking pre-commit hook
+- [x] 12-07-PLAN.md — TOOL-01 ruff + TOOL-02 mypy via blocking pre-commit hook
 
 ### Phase 13: Console Foundation & System Status
 
@@ -283,7 +283,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
 | 10. Startup Hardening | v1.1 | 6/6 | Complete | 2026-07-13 |
 | 11. Query Performance | v1.1 | 4/4 | Complete    | 2026-07-14 |
-| 12. Structural Refactor and Tooling | v1.1 | 6/7 | In Progress|  |
+| 12. Structural Refactor and Tooling | v1.1 | 7/7 | Complete | 2026-07-15 |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |

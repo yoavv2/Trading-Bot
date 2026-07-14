@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 12-06-PLAN.md
-last_updated: "2026-07-14T21:43:43.334Z"
+stopped_at: Completed 12-07-PLAN.md
+last_updated: "2026-07-14T22:47:18.904Z"
 last_activity: 2026-07-14
 progress:
   total_phases: 9
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 41
-  completed_plans: 40
-  percent: 89
+  completed_plans: 41
+  percent: 100
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 ## Current Position
 
 Phase: 12 (structural-refactor-and-tooling) — EXECUTING
-Plan: 6 of 7 complete; 12-07 next
-Status: Ready to execute 12-07
-Last activity: 2026-07-15
+Plan: 7 of 7 complete; 12-07 next
+Status: Ready to execute
+Last activity: 2026-07-14
 
 Progress (phases across all milestones, v1.1 Phase 12 counted as paused/not-yet-executing): [██████████] 15/16 phases complete (v1.0: 6, v1.1: 5 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) + Phase 10 (all 6 plans) + Phase 11 (all 4 plans) — Phase 12 paused, v1.2: 4 of 4 complete)
 
@@ -109,6 +109,7 @@ Recent decisions affecting current work:
 - [Phase 12-02]: STRUCT-08 confirmed via grep: core/settings.py is the sole BaseSettings/Settings surface; no code change needed
 - [Phase 12-03]: 12-03: STRUCT-04 part 1 — services/execution package created (contracts.py/transition.py/idempotency.py); all consumers repointed; order_state_machine.py/order_identity.py deleted; test_log_enforcement.py LOG-01 path list repointed 1:1 (frozen length 12), same pattern 12-02 established. Full suite 306 passed / 0 failed.
 - [Phase 12]: [12-06]: worker/__main__.py split into worker/parser.py + worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile,operator}.py; entrypoint reduced to 32-line routing dispatcher (DISPATCH map); full suite holds at 306/0, closing STRUCT-02 (phase-wide zero-behavior-change proof) and STRUCT-03. operator.py added as a documented seventh sibling module for the two operator-* subcommands. Discovered but deliberately preserved (not fixed) a pre-existing run_sync_metadata scripts-path off-by-one bug (deferred-items.md).
+- [Phase 12]: [12-07]: E501 excluded from the blocking ruff lint rule set (repo predates the tooling, ~200+ pre-existing long lines out of scope); ruff-format hook explicitly scoped via a files: regex to the Phase-12 structural surface after the un-scoped hook was proven (first commit attempt) to reformat any staged out-of-scope file — restored and re-committed clean. Task 1/Task 2 code changes to submit_orders.py/matcher.py/report.py landed together in the Task 2 commit since ruff-format and the mypy annotation-only fixes touch overlapping lines. Phase 12 (Structural Refactor and Tooling) is now fully complete: TOOL-01/TOOL-02 Complete, closing STRUCT-01..08 and TOOL-01/02 all Complete in v1.1-paused REQUIREMENTS.md.
 
 ### Pending Todos
 
@@ -131,6 +132,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-14T21:43:43.325Z
-Stopped at: Completed 12-06-PLAN.md
+Last session: 2026-07-14T22:47:18.895Z
+Stopped at: Completed 12-07-PLAN.md
 Resume file: None
