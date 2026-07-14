@@ -44,7 +44,7 @@ from trading_platform.services.analytics import (
 from trading_platform.services.backtesting import run_backtest
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import OrderSide
-from trading_platform.services.order_identity import build_intent_hash
+from trading_platform.services.execution.idempotency import build_intent_hash
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.services.paper_execution import build_client_order_id
 from trading_platform.strategies.registry import build_default_registry

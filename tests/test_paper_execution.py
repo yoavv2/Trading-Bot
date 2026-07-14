@@ -55,9 +55,9 @@ from trading_platform.services.execution import (
     OrderSide,
     OrderSubmissionResult,
 )
+from trading_platform.services.execution.idempotency import build_intent_hash
 from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
-from trading_platform.services.order_identity import build_intent_hash
 import trading_platform.services.paper_execution as paper_execution_module
 from trading_platform.services.paper_execution import (
     build_client_order_id,

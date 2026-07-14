@@ -35,7 +35,7 @@ from trading_platform.db.models import (
     Symbol,
 )
 from trading_platform.db.session import clear_engine_cache, get_engine, session_scope
-from trading_platform.services.order_identity import build_intent_hash
+from trading_platform.services.execution.idempotency import build_intent_hash
 
 
 def _admin_connection_settings() -> dict[str, str]:

@@ -41,22 +41,22 @@ from trading_platform.services.alpaca import (
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError, session_run_lock
 from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide
+from trading_platform.services.execution.idempotency import (
+    DerivedOrderIdentity,
+    build_client_order_id as _build_client_order_id,
+    derive_order_identity,
+)
+from trading_platform.services.execution.transition import (
+    OrderTransitionRequest,
+    apply_order_transition,
+    resolve_transition_target,
+)
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.operator_controls import (
     BLOCKED_REASON_GLOBAL_KILL_SWITCH,
     KillSwitchStateSnapshot,
     load_kill_switch_state,
     load_strategy_control_state,
-)
-from trading_platform.services.order_identity import (
-    DerivedOrderIdentity,
-    build_client_order_id as _build_client_order_id,
-    derive_order_identity,
-)
-from trading_platform.services.order_state_machine import (
-    OrderTransitionRequest,
-    apply_order_transition,
-    resolve_transition_target,
 )
 from trading_platform.services.reconciliation import (
     apply_reconciliation_corrections,

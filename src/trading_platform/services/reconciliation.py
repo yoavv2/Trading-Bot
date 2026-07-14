@@ -37,7 +37,7 @@ from trading_platform.services.alpaca import (
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.config.tolerances import MONEY_TOLERANCE
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
-from trading_platform.services.order_state_machine import (
+from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
     apply_order_transition,
     resolve_transition_target,

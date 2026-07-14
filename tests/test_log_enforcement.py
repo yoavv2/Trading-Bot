@@ -40,7 +40,11 @@ _SRC = _ROOT / "src" / "trading_platform"
 IN_SCOPE_MODULES: list[Path] = [
     _SRC / "services" / "paper_execution.py",
     _SRC / "services" / "alpaca.py",
-    _SRC / "services" / "order_state_machine.py",
+    # Relocated from services/order_state_machine.py to
+    # services/execution/transition.py in 12-03 (STRUCT-04 part 1) -- same
+    # single-entry 1:1 path swap pattern as the 12-02 config_validation.py
+    # move; list length unchanged (12).
+    _SRC / "services" / "execution" / "transition.py",
     _SRC / "services" / "concurrency_guard.py",
     _SRC / "services" / "operator_status.py",
     _SRC / "services" / "operator_controls.py",

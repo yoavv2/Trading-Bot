@@ -32,8 +32,8 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.bootstrap import ensure_strategy_record
-from trading_platform.services.order_identity import build_intent_hash
-from trading_platform.services.order_state_machine import (
+from trading_platform.services.execution.idempotency import build_intent_hash
+from trading_platform.services.execution.transition import (
     IllegalOrderTransition,
     OrderTransitionRequest,
     apply_order_transition,
