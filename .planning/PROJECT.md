@@ -35,9 +35,9 @@ Build a trustworthy, auditable trading platform that can reproducibly validate a
 - Live trading controls
 - UI that hides backend uncertainty behind polished visuals
 
-## Paused Milestone: v1.1 Execution Correctness & Hardening (Phase 7/12 complete)
+## Paused Milestone: v1.1 Execution Correctness & Hardening (Phase 11/12 complete)
 
-Phase 7 (Correctness Kernel: order state machine, deterministic `client_order_id` idempotency, persistent kill switch) shipped 2026-04-20. Phases 8–12 (concurrency guard, reconciliation rewrite, startup hardening, query performance, structural refactor) are paused, to resume after v1.2. Full remaining scope archived in `.planning/milestones/v1.1-paused/` and recorded in MILESTONES.md. The `.planning/00-VERIFY.md` gate remains binding for resuming Phase 8+ backend work.
+Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and completed on 2026-07-13 through 2026-07-14, delivering concurrency guards, the reconciliation rewrite, startup hardening, and verified query-performance invariants. Phase 11 closed with paper preflight bounded to two queries, linear reconciliation benchmarks, and named-index EXPLAIN proof for every critical query path. Phase 12 (structural refactor and tooling) remains the only paused v1.1 phase. Full scope is recorded in `.planning/milestones/v1.1-paused/` and MILESTONES.md.
 
 ## Requirements
 
@@ -565,4 +565,4 @@ The future API should expose platform data cleanly to the dashboard without dire
 | DB connection lifecycle is an explicit reloadable manager (`db/session.py`), not a process-immutable singleton (DB-01) | The 215-test suite must be able to point the engine/session factory at the test database vs. the local database within one process; a hard singleton would break that. Engine/session memoization uses the keyed `(url, echo)` dict-cache exclusively — no `functools`-decorator-based memoization of engines/sessions anywhere (DB-02) | 10-03: session.py docstring declares the model; import-boundary test pins it |
 
 ---
-*Last updated: 2026-07-07 after starting milestone v1.2 (Operator Console v0); v1.1 paused at Phase 7/12*
+*Last updated: 2026-07-14 after completing v1.1 Phase 11 (Query Performance); Phase 12 remains paused*
