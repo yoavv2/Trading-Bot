@@ -138,9 +138,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 11-01-PLAN.md — Eliminate paper-preflight N+1: query-count harness + batched intent resolution + query-count invariant test (PERF-01)
+- [x] 11-01-PLAN.md — Eliminate paper-preflight N+1: query-count harness + batched intent resolution + query-count invariant test (PERF-01)
 - [x] 11-02-PLAN.md — Verify/extend the O(n) reconciliation matcher benchmark to positions+orders+fills and the public entry point (PERF-02)
-- [ ] 11-03-PLAN.md — EXPLAIN-confirmed named covering indices for operator-read/reconciliation/order-sync paths + migration 0017 (PERF-03)
+- [x] 11-03-PLAN.md — EXPLAIN-confirmed named covering indices for operator-read/reconciliation/order-sync paths + migration 0017 (PERF-03) — 4/5 critical paths verified as index scans; PERF-03 left Pending in REQUIREMENTS.md (broker-fill dedup query is a genuine, out-of-scope, non-index-fixable gap, see deferred-items.md)
 
 ### Phase 12: Structural Refactor and Tooling
 **Milestone**: v1.1 Execution Correctness & Hardening (resumed 2026-07-14 after Phase 11 completed)
