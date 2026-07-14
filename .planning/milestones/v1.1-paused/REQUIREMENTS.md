@@ -105,9 +105,9 @@ Requirements grouped by tier. Each is an enforceable invariant. Each maps to one
 - [ ] **STRUCT-03**: `worker/__main__.py` is split into `worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile}.py`; the entrypoint contains only routing (< ~100 lines)
 - [ ] **STRUCT-04**: Execution logic is reorganized under `services/execution/{submit_orders,sync_orders,transition,idempotency}.py`
 - [ ] **STRUCT-05**: Reconciliation logic is reorganized under `services/reconciliation/{snapshot,matcher,findings,report}.py`
-- [ ] **STRUCT-06**: Config logic is reorganized under `services/config/{validation,secrets}.py`
+- [x] **STRUCT-06**: Config logic is reorganized under `services/config/{validation,secrets}.py`
 - [x] **STRUCT-07**: Scattered tolerance constants are extracted into a single typed config module; old scattered definitions are deleted
-- [ ] **STRUCT-08**: Settings are consolidated to one canonical settings surface; duplicate or competing settings modules are removed
+- [x] **STRUCT-08**: Settings are consolidated to one canonical settings surface; duplicate or competing settings modules are removed
 
 #### Tooling (TOOL)
 
@@ -207,9 +207,9 @@ Explicitly excluded from v1.1.
 | STRUCT-03 | Phase 12 | Pending |
 | STRUCT-04 | Phase 12 | Pending |
 | STRUCT-05 | Phase 12 | Pending |
-| STRUCT-06 | Phase 12 | Pending |
+| STRUCT-06 | Phase 12 | Complete |
 | STRUCT-07 | Phase 12 | Complete |
-| STRUCT-08 | Phase 12 | Pending |
+| STRUCT-08 | Phase 12 | Complete |
 | TOOL-01 | Phase 12 | Pending |
 | TOOL-02 | Phase 12 | Pending |
 

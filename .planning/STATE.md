@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-07-14T14:20:52.314Z"
+stopped_at: Completed 12-02-PLAN.md
+last_updated: "2026-07-14T16:31:11.657Z"
 last_activity: 2026-07-14
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 41
-  completed_plans: 35
-  percent: 85
+  completed_plans: 36
+  percent: 88
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 ## Current Position
 
 Phase: 12 (structural-refactor-and-tooling) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Also complete this wave (concurrent sibling plans, each independently verified via their own SUMMARY.md): 11-01 (Paper Preflight N+1 Elimination, PERF-01 — batched the auto-resolve preflight path down to a flat 2 queries regardless of candidate count) and 11-02 (Reconciliation Matcher Full-Surface Linear-Scaling Benchmark, PERF-02 — extended the existing positions-only O(n) benchmark to orders, fills, and the public `match_snapshots` entry point).
 Status: Ready to execute
 Last activity: 2026-07-14
@@ -106,6 +106,8 @@ Recent decisions affecting current work:
 - [Phase 11]: [11-01]: Extracted a pure `_build_intent_decision` decision core shared by the original query-based `_resolve_paper_intent_decision` (execution submission loop, left unchanged since it relies on mid-loop visibility of orders committed by earlier candidates in the same run) and a new in-memory `_resolve_paper_intent_decision_from_index` (preflight only) — kept PERF-01 scoped strictly to `_build_paper_session_plan` rather than batching the submission loop. Folded source-run resolution into the candidate load via a LIMIT-1 subquery LEFT JOINed to RiskEvent+Symbol with the approved/decision_code predicates in the JOIN's ON clause (not WHERE), so a run with zero approved candidates still returns one row and `PaperSessionPlan.source_risk_run_id` is never lost — an inner join was considered and rejected during design review (advisor-caught) since it would silently collapse both "no run exists" and "run exists, zero candidates" into the same empty-result case. Used `joinedload` (not `selectinload`) for `supersedes_paper_order` eager-loading to keep the batched PaperOrder load inside one statement. Verified the exact 2-query bound by dumping real SQL statements against a seeded Postgres test DB, not just via the `<= 2` test assertion. PERF-01 marked Complete. A concurrent parallel-plan-executor git collision (documented in 11-01-SUMMARY.md) briefly swept this plan's uncommitted Task 2 diff into an unrelated 11-03 commit; resolved without any git history rewriting once the other agent independently amended its own commit — no code or test content was lost. Commits 6685daf, 82bf9de, be1c366.
 - [Phase 11]: [11-04]: Broker-fill dedup uses distinct, sorted current-batch IDs in fixed 1,000-ID SQLAlchemy IN-predicate chunks; empty batches issue zero dedup SELECTs. Existing `uq_paper_fills_broker_fill_id` is sufficient and EXPLAIN-selected at realistic history size, so no model or migration change was needed. PERF-03 Complete.
 - [Phase 12]: [12-01]: Phase-12 zero-behavior-change baseline pinned at 306 passed / 0 failed (12-BASELINE.md); reconciliation MONEY_TOLERANCE/QUANTITY_TOLERANCE centralized into services/config/tolerances.py, duplicated constants deleted (STRUCT-01, STRUCT-07)
+- [Phase 12-02]: STRUCT-06: config validation split into services/config/{validation,secrets}.py; validate_config's import of secrets.py deferred to call-time to break a circular import — secrets.py needs ExecutionMode from validation.py at runtime; validation.py needs semantic_failures from secrets.py; a two-way top-level import would fail on first module load
+- [Phase 12-02]: STRUCT-08 confirmed via grep: core/settings.py is the sole BaseSettings/Settings surface; no code change needed
 
 ### Pending Todos
 
@@ -128,6 +130,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-14T14:20:28.949Z
-Stopped at: Completed 12-01-PLAN.md
+Last session: 2026-07-14T16:31:11.648Z
+Stopped at: Completed 12-02-PLAN.md
 Resume file: None
