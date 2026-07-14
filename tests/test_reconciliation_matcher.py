@@ -21,6 +21,7 @@ from trading_platform.services.reconciliation_matcher import (
     _match_orders,
     _match_positions,
     match_snapshots,
+    match_snapshots_with_comparisons,
 )
 from trading_platform.services.reconciliation_types import (
     Finding,
@@ -393,4 +394,125 @@ def test_matcher_comparison_count_scales_linearly_not_quadratically():
 
     # Fixed-multiple-of-total-entities bound, documenting the linear contract directly.
     total_entities_kn = len(local_kn) + len(broker_kn)
+    assert comparisons_kn <= 2 * total_entities_kn
+
+
+def _synthetic_matched_orders(count: int) -> tuple[list[LocalOrderSnapshot], list[BrokerOrderSnapshot]]:
+    # Aligned statuses (local "submitted"/"new" <-> broker ACCEPTED/"new") so every pair
+    # matches with zero findings, mirroring test_matched_order_with_aligned_status_is_not_a_finding.
+    local_orders = [
+        _local_order(
+            paper_order_id=f"order-{i}",
+            symbol=f"SYM{i}",
+            client_order_id=f"client-{i}",
+            broker_order_id=f"broker-{i}",
+            status="submitted",
+            broker_status="new",
+        )
+        for i in range(count)
+    ]
+    broker_orders = [
+        _broker_order(
+            broker_order_id=f"broker-{i}",
+            client_order_id=f"client-{i}",
+            symbol=f"SYM{i}",
+            status=ExecutionOrderStatus.ACCEPTED,
+            broker_status="new",
+        )
+        for i in range(count)
+    ]
+    return local_orders, broker_orders
+
+
+def _synthetic_matched_fills(count: int) -> tuple[list[LocalFillSnapshot], list[BrokerFillSnapshot]]:
+    local_fills = [
+        _local_fill(broker_fill_id=f"fill-{i}", broker_order_id=f"broker-{i}", symbol=f"SYM{i}")
+        for i in range(count)
+    ]
+    broker_fills = [
+        _broker_fill(broker_fill_id=f"fill-{i}", broker_order_id=f"broker-{i}", symbol=f"SYM{i}")
+        for i in range(count)
+    ]
+    return local_fills, broker_fills
+
+
+def test_order_matcher_comparison_count_scales_linearly_not_quadratically():
+    # Success-Criterion-2 guard: do not relax this to wall-clock timing or remove it.
+    # A nested-scan (O(n^2)) matcher would make comparisons(k*n) ~= k^2 * comparisons(n),
+    # blowing past the linear bound asserted below.
+    n = 200
+    k = 10
+
+    local_n, broker_n = _synthetic_matched_orders(n)
+    _, comparisons_n = _match_orders(local_n, broker_n)
+
+    local_kn, broker_kn = _synthetic_matched_orders(k * n)
+    _, comparisons_kn = _match_orders(local_kn, broker_kn)
+
+    assert comparisons_kn <= 1.5 * k * comparisons_n
+
+    total_entities_kn = len(local_kn) + len(broker_kn)
+    assert comparisons_kn <= 2 * total_entities_kn
+
+
+def test_fill_matcher_comparison_count_scales_linearly_not_quadratically():
+    # Success-Criterion-2 guard: do not relax this to wall-clock timing or remove it.
+    # A nested-scan (O(n^2)) matcher would make comparisons(k*n) ~= k^2 * comparisons(n),
+    # blowing past the linear bound asserted below.
+    n = 200
+    k = 10
+
+    local_n, broker_n = _synthetic_matched_fills(n)
+    _, comparisons_n = _match_fills(local_n, broker_n, local_orders=[])
+
+    local_kn, broker_kn = _synthetic_matched_fills(k * n)
+    _, comparisons_kn = _match_fills(local_kn, broker_kn, local_orders=[])
+
+    assert comparisons_kn <= 1.5 * k * comparisons_n
+
+    total_entities_kn = len(local_kn) + len(broker_kn)
+    assert comparisons_kn <= 2 * total_entities_kn
+
+
+def test_match_snapshots_comparison_count_scales_linearly_not_quadratically():
+    # Success-Criterion-2 guard: do not relax this to wall-clock timing or remove it.
+    # Proves the linear invariant on the public entry point reconcile actually calls,
+    # across a mixed positions+orders+fills workload — not just a single private matcher.
+    n = 200
+    k = 10
+
+    local_positions_n, broker_positions_n = _synthetic_matched_positions(n)
+    local_orders_n, broker_orders_n = _synthetic_matched_orders(n)
+    local_fills_n, broker_fills_n = _synthetic_matched_fills(n)
+    _, comparisons_n = match_snapshots_with_comparisons(
+        local_orders=local_orders_n,
+        local_fills=local_fills_n,
+        local_positions=local_positions_n,
+        broker_orders=broker_orders_n,
+        broker_fills=broker_fills_n,
+        broker_positions=broker_positions_n,
+    )
+
+    local_positions_kn, broker_positions_kn = _synthetic_matched_positions(k * n)
+    local_orders_kn, broker_orders_kn = _synthetic_matched_orders(k * n)
+    local_fills_kn, broker_fills_kn = _synthetic_matched_fills(k * n)
+    _, comparisons_kn = match_snapshots_with_comparisons(
+        local_orders=local_orders_kn,
+        local_fills=local_fills_kn,
+        local_positions=local_positions_kn,
+        broker_orders=broker_orders_kn,
+        broker_fills=broker_fills_kn,
+        broker_positions=broker_positions_kn,
+    )
+
+    assert comparisons_kn <= 1.5 * k * comparisons_n
+
+    total_entities_kn = (
+        len(local_positions_kn)
+        + len(broker_positions_kn)
+        + len(local_orders_kn)
+        + len(broker_orders_kn)
+        + len(local_fills_kn)
+        + len(broker_fills_kn)
+    )
     assert comparisons_kn <= 2 * total_entities_kn
