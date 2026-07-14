@@ -93,11 +93,42 @@ def match_snapshots(
     Pure function: no DB, no I/O, no mutation of any input. Positions, orders, and
     fills are each resolved through a single keyed dict-lookup pass (RECON-06); flat
     positions never produce a finding (RECON-08).
+
+    Delegates to ``match_snapshots_with_comparisons`` and returns only its findings, so
+    there is a single code path for the actual matching logic (PERF-02).
     """
-    position_findings, _ = _match_positions(local_positions, broker_positions)
-    order_findings, _ = _match_orders(local_orders, broker_orders)
-    fill_findings, _ = _match_fills(local_fills, broker_fills, local_orders=local_orders)
-    return position_findings + order_findings + fill_findings
+    findings, _ = match_snapshots_with_comparisons(
+        local_orders=local_orders,
+        local_fills=local_fills,
+        local_positions=local_positions,
+        broker_orders=broker_orders,
+        broker_fills=broker_fills,
+        broker_positions=broker_positions,
+    )
+    return findings
+
+
+def match_snapshots_with_comparisons(
+    *,
+    local_orders: list[LocalOrderSnapshot],
+    local_fills: list[LocalFillSnapshot],
+    local_positions: list[LocalPositionSnapshot],
+    broker_orders: list[BrokerOrderSnapshot],
+    broker_fills: list[BrokerFillSnapshot],
+    broker_positions: list[BrokerPositionSnapshot],
+) -> tuple[tuple[Finding, ...], int]:
+    """Match snapshots and also return the total comparison count (PERF-02).
+
+    Same parameters and matching behavior as ``match_snapshots``, but additionally
+    returns the summed comparison count across positions, orders, and fills, so a
+    linear-scaling benchmark can assert on the actual public entry point rather than
+    only on the private per-component matchers.
+    """
+    position_findings, position_comparisons = _match_positions(local_positions, broker_positions)
+    order_findings, order_comparisons = _match_orders(local_orders, broker_orders)
+    fill_findings, fill_comparisons = _match_fills(local_fills, broker_fills, local_orders=local_orders)
+    total_comparisons = position_comparisons + order_comparisons + fill_comparisons
+    return position_findings + order_findings + fill_findings, total_comparisons
 
 
 def _match_positions(
