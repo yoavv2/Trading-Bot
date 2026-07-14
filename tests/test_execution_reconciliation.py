@@ -1047,7 +1047,7 @@ def test_reconciliation_prefers_client_order_id_when_version_chain_exists(
 
 
 def test_reconciliation_module_routes_lifecycle_through_order_state_machine() -> None:
-    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/reconciliation.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/reconciliation/report.py").read_text()
 
     assert "apply_order_transition" in source
     assert re.search(r"\b(?:pending_order|persisted_order|existing_order|local_order|paper_order)\.status\s*=(?!=)", source) is None
@@ -1057,7 +1057,7 @@ def test_reconcile_paper_execution_never_calls_apply_reconciliation_corrections(
     """RECON-04 static invariant: reconcile_paper_execution's own body never references
     apply_reconciliation_corrections -- the two functions share no call path.
     """
-    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/reconciliation.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/reconciliation/report.py").read_text()
 
     reconcile_start = source.index("def reconcile_paper_execution(")
     next_def_start = source.index("\ndef ", reconcile_start + 1)

@@ -13,15 +13,17 @@ from decimal import Decimal
 import pytest
 
 from trading_platform.services.execution import OrderSide
-from trading_platform.services.reconciliation_types import (
-    DEFAULT_ACCOUNT,
+from trading_platform.services.reconciliation.findings import (
     Finding,
+    ReconciliationFinding,
+)
+from trading_platform.services.reconciliation.snapshot import (
+    DEFAULT_ACCOUNT,
     LocalAccountSnapshot,
     LocalFillSnapshot,
     LocalOrderSnapshot,
     LocalPositionSnapshot,
     PositionSide,
-    ReconciliationFinding,
     ReconciliationIdentity,
     identity_for_broker_position,
     side_from_quantity,

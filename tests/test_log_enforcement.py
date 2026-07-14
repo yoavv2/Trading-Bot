@@ -57,7 +57,14 @@ IN_SCOPE_MODULES: list[Path] = [
     _SRC / "services" / "concurrency_guard.py",
     _SRC / "services" / "operator_status.py",
     _SRC / "services" / "operator_controls.py",
-    _SRC / "services" / "reconciliation.py",
+    # Relocated from services/reconciliation.py to
+    # services/reconciliation/report.py in 12-05 (STRUCT-05) -- same single-entry
+    # 1:1 path swap pattern as the 12-02/12-03/12-04 moves; list length unchanged
+    # (12). reconciliation.py also split off services/reconciliation/matcher.py,
+    # snapshot.py, and findings.py in the same move, but none has any logging calls
+    # (verified by grep), so report.py -- the only split-off module that actually
+    # calls get_logger -- is the honest 1:1 heir for this enforcement list.
+    _SRC / "services" / "reconciliation" / "report.py",
     _SRC / "worker" / "__main__.py",
     _SRC / "services" / "bootstrap.py",
     _SRC / "api" / "app.py",
