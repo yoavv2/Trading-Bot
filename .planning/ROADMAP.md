@@ -50,7 +50,7 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 - [x] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection. (completed 2026-07-13)
 - [x] **Phase 9: Reconciliation Rewrite** - Typed snapshots, O(n) matcher, closed findings enum, materialized report, explicit corrective entrypoint. Completed 2026-07-13.
 - [x] **Phase 10: Startup Hardening** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Fail-fast config validation, log sanitization, DB lifecycle consolidation. (completed 2026-07-13)
-- [~] **Phase 11: Query Performance** (3/4 plans executed 2026-07-14; 11-04 gap closure planned for the PERF-03 broker-fill dedup query, see 11-VERIFICATION.md) - Preflight N+1 fix, reconciliation scaling, covering indices.
+- [x] **Phase 11: Query Performance** (4/4 plans completed 2026-07-14; PERF-01, PERF-02, and PERF-03 complete) - Preflight N+1 fix, reconciliation scaling, covering indices.
 - [ ] **Phase 12: Structural Refactor and Tooling** (paused) - Worker split, service reorganization, lint/type-check gates.
 
 Full remaining scope, requirements, and phase details: `.planning/milestones/v1.1-paused/ROADMAP.md` and `.planning/milestones/v1.1-paused/REQUIREMENTS.md`. Standing gate: `.planning/00-VERIFY.md` must be green before Phase 8+ resumes.
