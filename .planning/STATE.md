@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
-status: ready_to_plan
-stopped_at: Phase 11 complete (4/4) — ready to discuss Phase 12
-last_updated: 2026-07-14T12:30:27.131Z
-last_activity: 2026-07-14 -- Phase 11 complete; Phase 12 remains paused
+status: executing
+stopped_at: Completed 12-01-PLAN.md
+last_updated: "2026-07-14T14:20:52.314Z"
+last_activity: 2026-07-14
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 41
-  completed_plans: 54
-  percent: 89
+  completed_plans: 35
+  percent: 85
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-07)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 12 — structural refactor and tooling
+**Current focus:** Phase 12 — structural-refactor-and-tooling
 
 ## Current Position
 
-Phase: 12 of 12 (structural refactor and tooling)
-Plan: Not started
+Phase: 12 (structural-refactor-and-tooling) — EXECUTING
+Plan: 2 of 7
 Also complete this wave (concurrent sibling plans, each independently verified via their own SUMMARY.md): 11-01 (Paper Preflight N+1 Elimination, PERF-01 — batched the auto-resolve preflight path down to a flat 2 queries regardless of candidate count) and 11-02 (Reconciliation Matcher Full-Surface Linear-Scaling Benchmark, PERF-02 — extended the existing positions-only O(n) benchmark to orders, fills, and the public `match_snapshots` entry point).
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-07-14
 
 Progress (phases across all milestones, v1.1 Phase 12 counted as paused/not-yet-executing): [██████████] 15/16 phases complete (v1.0: 6, v1.1: 5 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) + Phase 10 (all 6 plans) + Phase 11 (all 4 plans) — Phase 12 paused, v1.2: 4 of 4 complete)
@@ -37,13 +37,13 @@ Progress (phases across all milestones, v1.1 Phase 12 counted as paused/not-yet-
 
 **Velocity:**
 
-- Total plans completed: 40 (v1.0: 16, v1.1: 13, v1.2: 10)
-- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min, 08-03: ~10 min, 08-04: ~25 min, 08-05: ~20 min, 09-01: ~30 min, 09-02: ~20 min, 09-03: ~35 min, 09-04: ~25 min, 10-05: ~35 min, 10-06: ~20 min, 11-01: ~10 min, 11-02: ~15 min, 11-03: single session; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
+- Total plans completed: 41 (v1.0: 16, v1.1: 14, v1.2: 10)
+- Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min, 08-03: ~10 min, 08-04: ~25 min, 08-05: ~20 min, 09-01: ~30 min, 09-02: ~20 min, 09-03: ~35 min, 09-04: ~25 min, 10-05: ~35 min, 10-06: ~20 min, 11-01: ~10 min, 11-02: ~15 min, 11-03: single session, 12-01: ~15 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
 - Total execution time: -
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
-**v1.1 By Phase:** 7: 3/3 complete; 8: 5/5 COMPLETE; 9: 4/4 COMPLETE; 10: 6/6 COMPLETE; 11: 4/4 COMPLETE (11-01 PERF-01 two-query preflight; 11-02 PERF-02 linear matcher benchmark; 11-03 index audit; 11-04 batch-scoped broker-fill dedup + named-index EXPLAIN proof, PERF-03); 12: 0/TBD (paused, resume decision pending)
+**v1.1 By Phase:** 7: 3/3 complete; 8: 5/5 COMPLETE; 9: 4/4 COMPLETE; 10: 6/6 COMPLETE; 11: 4/4 COMPLETE (11-01 PERF-01 two-query preflight; 11-02 PERF-02 linear matcher benchmark; 11-03 index audit; 11-04 batch-scoped broker-fill dedup + named-index EXPLAIN proof, PERF-03); 12: 1/7 IN PROGRESS (12-01: STRUCT-01 baseline gate + STRUCT-07 tolerance consolidation)
 
 **v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 3/3 complete (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper; 15-03: operator live-verify checkpoint — approved, all four PAPR surfaces honest-empty with Alpaca creds unconfigured), 16: 3/3 complete (16-02: EquityCurveChart (ANLX-01 frontend) + SummaryMetricsPanel (ANLX-02) + BacktestAnalyticsSection single-fetch owner, mounted on run-detail for backtest runs only, executed ahead of 16-01 per explicit human override; 16-01: backend equity_curve passthrough — single-line addition to StrategyAnalyticsService._summarize_backtest exposing the already-computed field, service-level pytest extended; 16-03: operator live-verify checkpoint — approved, all 6 steps passed against fresh servers, one in-scope YAxis auto-scale live-fix (dcd4232), ANLX-01 AND ANLX-02 confirmed Complete). Awaiting orchestrator phase-complete.
 
@@ -105,6 +105,7 @@ Recent decisions affecting current work:
 - [Phase 11]: [11-03]: EXPLAIN-verified 4/5 critical query paths (operator reads, reconciliation, order-lifecycle sync) already use an existing named index at realistic scale; migration 0017 ships as a documented no-op (verified upgrade + downgrade -1 + re-upgrade, all clean). The 5th, the broker-fill dedup query, already has a named unique index but Postgres correctly Seq Scans it anyway (proven via forced-plan cost comparison that no index fixes this unconditional full-table read) — logged as an out-of-scope architectural finding in `deferred-items.md`, and PERF-03 is deliberately left Pending in REQUIREMENTS.md (not marked Complete) rather than overclaiming against its literal "every critical query" wording.
 - [Phase 11]: [11-01]: Extracted a pure `_build_intent_decision` decision core shared by the original query-based `_resolve_paper_intent_decision` (execution submission loop, left unchanged since it relies on mid-loop visibility of orders committed by earlier candidates in the same run) and a new in-memory `_resolve_paper_intent_decision_from_index` (preflight only) — kept PERF-01 scoped strictly to `_build_paper_session_plan` rather than batching the submission loop. Folded source-run resolution into the candidate load via a LIMIT-1 subquery LEFT JOINed to RiskEvent+Symbol with the approved/decision_code predicates in the JOIN's ON clause (not WHERE), so a run with zero approved candidates still returns one row and `PaperSessionPlan.source_risk_run_id` is never lost — an inner join was considered and rejected during design review (advisor-caught) since it would silently collapse both "no run exists" and "run exists, zero candidates" into the same empty-result case. Used `joinedload` (not `selectinload`) for `supersedes_paper_order` eager-loading to keep the batched PaperOrder load inside one statement. Verified the exact 2-query bound by dumping real SQL statements against a seeded Postgres test DB, not just via the `<= 2` test assertion. PERF-01 marked Complete. A concurrent parallel-plan-executor git collision (documented in 11-01-SUMMARY.md) briefly swept this plan's uncommitted Task 2 diff into an unrelated 11-03 commit; resolved without any git history rewriting once the other agent independently amended its own commit — no code or test content was lost. Commits 6685daf, 82bf9de, be1c366.
 - [Phase 11]: [11-04]: Broker-fill dedup uses distinct, sorted current-batch IDs in fixed 1,000-ID SQLAlchemy IN-predicate chunks; empty batches issue zero dedup SELECTs. Existing `uq_paper_fills_broker_fill_id` is sufficient and EXPLAIN-selected at realistic history size, so no model or migration change was needed. PERF-03 Complete.
+- [Phase 12]: [12-01]: Phase-12 zero-behavior-change baseline pinned at 306 passed / 0 failed (12-BASELINE.md); reconciliation MONEY_TOLERANCE/QUANTITY_TOLERANCE centralized into services/config/tolerances.py, duplicated constants deleted (STRUCT-01, STRUCT-07)
 
 ### Pending Todos
 
@@ -127,6 +128,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-14T12:02:33.259Z
-Stopped at: Completed 11-04-PLAN.md
+Last session: 2026-07-14T14:20:28.949Z
+Stopped at: Completed 12-01-PLAN.md
 Resume file: None
