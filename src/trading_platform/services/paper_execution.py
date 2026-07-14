@@ -68,6 +68,9 @@ from trading_platform.services.stale_runs import reclaim_stale_runs
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
 
+_PAPER_FILL_DEDUP_CHUNK_SIZE = 1_000
+
+
 @dataclass(frozen=True)
 class PaperExecutionCandidate:
     risk_event_id: uuid.UUID
@@ -1995,7 +1998,7 @@ def _ingest_paper_fills(
     *,
     local_orders_by_broker_id: dict[str, PaperOrder],
 ) -> int:
-    existing_fill_ids = set(session.execute(select(PaperFill.broker_fill_id)).scalars().all())
+    existing_fill_ids = _load_existing_paper_fill_ids(session, broker_fills)
     ingested = 0
 
     for broker_fill in broker_fills:
@@ -2024,6 +2027,27 @@ def _ingest_paper_fills(
         ingested += 1
 
     return ingested
+
+
+def _load_existing_paper_fill_ids(
+    session,
+    broker_fills: list[BrokerFillSnapshot],
+) -> set[str]:
+    """Load only fill IDs relevant to this broker response, in bounded statements."""
+    broker_fill_ids = sorted({broker_fill.broker_fill_id for broker_fill in broker_fills})
+    existing_fill_ids: set[str] = set()
+    for offset in range(0, len(broker_fill_ids), _PAPER_FILL_DEDUP_CHUNK_SIZE):
+        chunk_ids = broker_fill_ids[offset : offset + _PAPER_FILL_DEDUP_CHUNK_SIZE]
+        existing_fill_ids.update(
+            session.execute(
+                select(PaperFill.broker_fill_id).where(
+                    PaperFill.broker_fill_id.in_(chunk_ids)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return existing_fill_ids
 
 
 def _sync_positions_from_broker(
