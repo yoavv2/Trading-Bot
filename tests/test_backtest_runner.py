@@ -18,8 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alembic import command
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import BacktestEquitySnapshot, BacktestSignal, BacktestTrade, StrategyRun, StrategyRunType
+from trading_platform.db.models import (
+    BacktestEquitySnapshot,
+    BacktestSignal,
+    BacktestTrade,
+    StrategyRun,
+    StrategyRunType,
+)
 from trading_platform.db.models.daily_bar import DailyBar as DailyBarModel
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope

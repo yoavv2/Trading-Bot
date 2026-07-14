@@ -24,7 +24,6 @@ from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.strategies.signals import SignalDirection, SignalReason
 from trading_platform.strategies.trend_following_daily.strategy import TrendFollowingDailyStrategy
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

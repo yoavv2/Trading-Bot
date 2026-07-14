@@ -16,16 +16,16 @@ from trading_platform.services.alpaca import (
     BrokerPositionSnapshot,
 )
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
+from trading_platform.services.reconciliation.findings import (
+    Finding,
+    ReconciliationFinding,
+)
 from trading_platform.services.reconciliation.matcher import (
     _match_fills,
     _match_orders,
     _match_positions,
     match_snapshots,
     match_snapshots_with_comparisons,
-)
-from trading_platform.services.reconciliation.findings import (
-    Finding,
-    ReconciliationFinding,
 )
 from trading_platform.services.reconciliation.snapshot import (
     LocalFillSnapshot,

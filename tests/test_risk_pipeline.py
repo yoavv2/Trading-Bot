@@ -4,7 +4,7 @@ import os
 import sys
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import Settings, clear_settings_cache, load_settings
 from trading_platform.db.models import RiskEvent, StrategyRun, StrategyRunStatus, StrategyRunType
 from trading_platform.db.models.daily_bar import DailyBar

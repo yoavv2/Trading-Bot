@@ -15,15 +15,19 @@ from tests.test_analytics_service import (  # noqa: E402
     _seed_paper_operational_state,
     _seed_strategy_record,
     _trading_fixture,
-    migrated_analytics_db,
-    strategy_config_override,
+    migrated_analytics_db,  # noqa: F401 (reused DB harness fixture)
+    strategy_config_override,  # noqa: F401 (reused DB harness fixture)
 )
+
 from trading_platform.api.app import create_app  # noqa: E402
 from trading_platform.core.settings import clear_settings_cache, load_settings  # noqa: E402
 from trading_platform.services.analytics import StrategyAnalyticsService  # noqa: E402
 from trading_platform.services.backtesting import run_backtest  # noqa: E402
 from trading_platform.services.operator_controls import OperatorControlService  # noqa: E402
-from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService  # noqa: E402
+from trading_platform.services.operator_reads import (  # noqa: E402
+    OperatorReadFilters,
+    OperatorReadService,
+)
 
 
 def _build_client() -> TestClient:

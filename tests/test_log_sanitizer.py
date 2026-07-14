@@ -6,9 +6,8 @@ import logging
 
 import pytest
 
-from trading_platform.core import log_sanitizer, logging as core_logging
+from trading_platform.core import logging as core_logging
 from trading_platform.core.log_sanitizer import REDACTION, mask_order_id, sanitize
-
 
 # ---------------------------------------------------------------------------
 # Task 1: credential/token/conn-URL/auth-header redaction

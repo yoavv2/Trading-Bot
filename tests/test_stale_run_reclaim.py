@@ -17,8 +17,14 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import ExecutionEvent, StrategyRun, StrategyRunStatus, StrategyRunType
+from trading_platform.db.models import (
+    ExecutionEvent,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+)
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.stale_runs import find_stale_runs, reclaim_stale_runs

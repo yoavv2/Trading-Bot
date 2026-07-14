@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_platform.db.base import Base, TimestampedModel

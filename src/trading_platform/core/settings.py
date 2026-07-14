@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from decimal import Decimal
 from typing import Any, Literal
 
 import yaml

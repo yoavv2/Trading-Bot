@@ -31,7 +31,11 @@ import sys
 
 from trading_platform.core.settings import Settings, build_settings_payload
 from trading_platform.db.session import check_database_connection
-from trading_platform.services.config.validation import ConfigValidationError, ExecutionMode, validate_config
+from trading_platform.services.config.validation import (
+    ConfigValidationError,
+    ExecutionMode,
+    validate_config,
+)
 
 # Distinct from CONCURRENT_RUN_LOCK_EXIT_CODE (services/concurrency_guard.py,
 # value 3) so operators/schedulers can tell a config/DB startup refusal apart

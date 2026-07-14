@@ -9,7 +9,10 @@ import sys
 
 from trading_platform.core.logging import configure_logging, emit_structured_log, get_logger
 from trading_platform.core.startup import enforce_startup_config
-from trading_platform.services.concurrency_guard import CONCURRENT_RUN_LOCK_EXIT_CODE, ConcurrentRunLockedError
+from trading_platform.services.concurrency_guard import (
+    CONCURRENT_RUN_LOCK_EXIT_CODE,
+    ConcurrentRunLockedError,
+)
 from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.execution import (
     resolve_submission_session,

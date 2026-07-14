@@ -17,14 +17,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
-from trading_platform.core.settings import clear_settings_cache, load_settings
+
+from trading_platform.core.settings import PortfolioSettings, clear_settings_cache, load_settings
 from trading_platform.db.models import Position, Symbol
 from trading_platform.db.models.account_snapshot import AccountSnapshot
 from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.calendar import upsert_market_sessions
-from trading_platform.core.settings import PortfolioSettings
 from trading_platform.services.portfolio import PortfolioService, PortfolioState
 from trading_platform.strategies.registry import build_default_registry
 

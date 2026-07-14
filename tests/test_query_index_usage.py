@@ -56,8 +56,15 @@ from sqlalchemy import select, text
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import PaperFill, PaperOrder, Position, Strategy, StrategyRun, Symbol
+from trading_platform.db.models import (
+    PaperFill,
+    PaperOrder,
+    Position,
+    Strategy,
+    StrategyRun,
+)
 from trading_platform.db.session import clear_engine_cache, get_engine, session_scope
 
 # Row volumes chosen with empirical margin past the observed Seq-Scan -> Index-Scan

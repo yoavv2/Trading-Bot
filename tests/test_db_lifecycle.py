@@ -22,8 +22,8 @@ for _p in (str(_ROOT), str(_ROOT / "src")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from trading_platform.core.settings import load_settings
-from trading_platform.db.session import clear_engine_cache, get_engine
+from trading_platform.core.settings import load_settings  # noqa: E402
+from trading_platform.db.session import clear_engine_cache, get_engine  # noqa: E402
 
 # The set of engine/session lifecycle symbols that must only ever be
 # imported from `trading_platform.db.session`.

@@ -18,9 +18,15 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
-from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.core.settings import AlpacaBrokerSettings
-from trading_platform.db.models import PaperOrder, RiskEvent, StrategyRun, StrategyRunStatus, StrategyRunType
+
+from trading_platform.core.settings import AlpacaBrokerSettings, clear_settings_cache, load_settings
+from trading_platform.db.models import (
+    PaperOrder,
+    RiskEvent,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+)
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.alpaca import AlpacaAuthError, AlpacaClient, AlpacaExecutionService

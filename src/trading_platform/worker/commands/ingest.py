@@ -48,16 +48,15 @@ def run_ingest_bars(args: argparse.Namespace) -> None:
 
 
 def run_sync_metadata(args: argparse.Namespace) -> None:
-    from trading_platform.db.models.symbol import Symbol as SymbolModel
-    from trading_platform.db.session import session_scope
 
-    import uuid
-    from datetime import UTC, datetime
+    from trading_platform.db.session import session_scope
 
     # sync-metadata's --dry-run flag deliberately never writes to the DB
     # (see the loop below), so the startup gate doesn't require reachability
     # for a dry-run invocation.
-    settings = enforce_startup_config(mode=ExecutionMode.BACKTEST, require_database=not args.dry_run)
+    settings = enforce_startup_config(
+        mode=ExecutionMode.BACKTEST, require_database=not args.dry_run
+    )
     configure_logging(settings.logging)
     logger = get_logger("trading_platform.worker")
 

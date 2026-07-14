@@ -16,6 +16,7 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import StrategyRun, StrategyRunStatus, StrategyRunType
 from trading_platform.db.session import clear_engine_cache, session_scope

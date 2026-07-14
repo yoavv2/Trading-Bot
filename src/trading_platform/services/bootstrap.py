@@ -12,10 +12,16 @@ from sqlalchemy import select
 from trading_platform.core.logging import get_logger
 from trading_platform.core.settings import Settings
 from trading_platform.core.startup import enforce_startup_config
-from trading_platform.services.config.validation import ExecutionMode
-from trading_platform.db.models import Strategy, StrategyRun, StrategyRunStatus, StrategyRunType, StrategyStatus
+from trading_platform.db.models import (
+    Strategy,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+    StrategyStatus,
+)
 from trading_platform.db.session import session_scope
 from trading_platform.services.analytics import AnalyticsService, StrategyAnalyticsService
+from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.data import MarketDataService, PlaceholderMarketDataService
 from trading_platform.services.execution import ExecutionService, PlaceholderExecutionService
 from trading_platform.services.risk import PlaceholderRiskService, RiskService

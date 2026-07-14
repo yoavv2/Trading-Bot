@@ -1,0 +1,16 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        args: [--exit-non-zero-on-fix]
+      - id: ruff-format
+        name: ruff (format)
+        # Scoped to the Phase-12 structural surface only (STRUCT-02/12-07
+        # key_facts): unlike the lint hook, ruff-format is a whole-file
+        # rewrite, so it must never run against files outside the surface
+        # this phase touched -- otherwise ANY commit that happens to stage
+        # an out-of-scope file would trigger a large, unrelated
+        # formatting-only diff on that file.
+        files: ^src/trading_platform/(services/(config|execution|reconciliation)/|worker/)

@@ -13,7 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from trading_platform.core.settings import Settings, get_strategy_config, load_settings
-from trading_platform.db.models import RiskEvent, Strategy, StrategyRun, StrategyRunStatus, StrategyRunType, Symbol
+from trading_platform.db.models import (
+    RiskEvent,
+    StrategyRun,
+    StrategyRunStatus,
+    StrategyRunType,
+    Symbol,
+)
 from trading_platform.db.session import session_scope
 from trading_platform.services.market_data_access import (
     latest_completed_session,
@@ -492,7 +498,7 @@ def run_risk_evaluation(
         with session_scope(resolved_settings) as session:
             from trading_platform.services.bootstrap import ensure_strategy_record
 
-            strategy_record = ensure_strategy_record(session, metadata)
+            ensure_strategy_record(session, metadata)
             symbol_map = _ensure_symbol_rows(session, metadata.universe)
             batch = strategy.generate_signals(session, as_of_session)
             portfolio_service = PortfolioService(resolved_settings)

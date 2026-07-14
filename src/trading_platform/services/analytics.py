@@ -20,10 +20,10 @@ from trading_platform.db.models import (
     PaperOrder,
     Position,
     Strategy,
-    StrategyStatus,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
+    StrategyStatus,
 )
 from trading_platform.db.session import session_scope
 from trading_platform.services.backtest_reporting import materialize_backtest_report

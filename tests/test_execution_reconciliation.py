@@ -17,6 +17,7 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
@@ -37,13 +38,17 @@ from trading_platform.services.alpaca import (
     BrokerOrderSnapshot,
     BrokerPositionSnapshot,
 )
-from trading_platform.services.execution import ExecutionOrderStatus, OrderSide, build_client_order_id
+from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.execution import (
+    ExecutionOrderStatus,
+    OrderSide,
+    build_client_order_id,
+)
 from trading_platform.services.execution.idempotency import build_intent_hash
 from trading_platform.services.reconciliation import (
     apply_reconciliation_corrections,
     reconcile_paper_execution,
 )
-from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.strategies.registry import build_default_registry
 
 

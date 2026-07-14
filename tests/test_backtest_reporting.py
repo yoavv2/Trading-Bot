@@ -18,14 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alembic import command
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import BacktestMetric
-from trading_platform.db.session import clear_engine_cache, session_scope
-from trading_platform.services.backtest_reporting import export_backtest_report, materialize_backtest_report
-from trading_platform.services.backtesting import run_backtest
-from trading_platform.services.calendar import upsert_market_sessions
 from trading_platform.db.models.daily_bar import DailyBar as DailyBarModel
 from trading_platform.db.models.symbol import Symbol
+from trading_platform.db.session import clear_engine_cache, session_scope
+from trading_platform.services.backtest_reporting import (
+    export_backtest_report,
+    materialize_backtest_report,
+)
+from trading_platform.services.backtesting import run_backtest
+from trading_platform.services.calendar import upsert_market_sessions
 
 
 def _admin_connection_settings() -> dict[str, str]:

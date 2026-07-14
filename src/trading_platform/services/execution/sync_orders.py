@@ -11,7 +11,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
 
 from sqlalchemy import select
 
@@ -57,7 +56,9 @@ def sync_paper_state(
 ) -> PaperStateSyncReport:
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
-    resolved_strategy_id = strategy_id or resolved_settings.execution.paper_session_runner.default_strategy_id
+    resolved_strategy_id = (
+        strategy_id or resolved_settings.execution.paper_session_runner.default_strategy_id
+    )
     strategy = resolved_registry.resolve(resolved_strategy_id)
     synced_at = datetime.now(UTC)
 
@@ -72,12 +73,16 @@ def sync_paper_state(
 
         with session_scope(resolved_settings) as session:
             strategy_record = ensure_strategy_record(session, strategy.metadata)
-            local_orders = session.execute(
-                select(PaperOrder)
-                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-                .where(StrategyRun.strategy_id == strategy_record.id)
-                .order_by(PaperOrder.created_at.asc())
-            ).scalars().all()
+            local_orders = (
+                session.execute(
+                    select(PaperOrder)
+                    .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                    .where(StrategyRun.strategy_id == strategy_record.id)
+                    .order_by(PaperOrder.created_at.asc())
+                )
+                .scalars()
+                .all()
+            )
             local_orders_by_broker_id = {
                 order.broker_order_id: order for order in local_orders if order.broker_order_id
             }
@@ -227,9 +232,7 @@ def _load_existing_paper_fill_ids(
         chunk_ids = broker_fill_ids[offset : offset + _PAPER_FILL_DEDUP_CHUNK_SIZE]
         existing_fill_ids.update(
             session.execute(
-                select(PaperFill.broker_fill_id).where(
-                    PaperFill.broker_fill_id.in_(chunk_ids)
-                )
+                select(PaperFill.broker_fill_id).where(PaperFill.broker_fill_id.in_(chunk_ids))
             )
             .scalars()
             .all()
@@ -245,13 +248,19 @@ def _sync_positions_from_broker(
     as_of_session: date,
     synced_at: datetime,
 ) -> tuple[int, int]:
-    existing_open_positions = session.execute(
-        select(Position).where(
-            Position.strategy_id == strategy_row_id,
-            Position.status == "open",
+    existing_open_positions = (
+        session.execute(
+            select(Position).where(
+                Position.strategy_id == strategy_row_id,
+                Position.status == "open",
+            )
         )
-    ).scalars().all()
-    existing_by_symbol = {position.symbol_ref.ticker: position for position in existing_open_positions}
+        .scalars()
+        .all()
+    )
+    existing_by_symbol = {
+        position.symbol_ref.ticker: position for position in existing_open_positions
+    }
     opened = 0
     closed = 0
 
@@ -278,7 +287,9 @@ def _sync_positions_from_broker(
         existing_position.average_entry_price = broker_position.average_entry_price
         existing_position.cost_basis = broker_position.cost_basis
         existing_position.status = "open"
-        existing_position.opened_session_date = existing_position.opened_session_date or as_of_session
+        existing_position.opened_session_date = (
+            existing_position.opened_session_date or as_of_session
+        )
         existing_position.opened_at = existing_position.opened_at or synced_at
         existing_position.closed_session_date = None
         existing_position.closed_at = None
@@ -300,7 +311,9 @@ def _record_broker_account_snapshot(
     *,
     synced_at: datetime,
 ) -> AccountSnapshot:
-    gross_exposure = sum((abs(position.market_value) for position in broker_positions), start=Decimal("0"))
+    gross_exposure = sum(
+        (abs(position.market_value) for position in broker_positions), start=Decimal("0")
+    )
     snapshot = AccountSnapshot(
         strategy_id=strategy_row_id,
         source_run_id=None,

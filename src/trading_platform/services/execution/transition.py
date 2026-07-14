@@ -19,7 +19,6 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.session import session_scope
 
-
 _LEGAL_TRANSITIONS: dict[
     OrderLifecycleState,
     dict[OrderTransitionEventType, OrderLifecycleState],
@@ -125,8 +124,7 @@ class IllegalOrderTransition(RuntimeError):
         self.event_type = event_type
         self.details = details
         super().__init__(
-            f"Illegal order transition for {order_id}: "
-            f"{from_state.value} -> {event_type.value}"
+            f"Illegal order transition for {order_id}: {from_state.value} -> {event_type.value}"
         )
 
 

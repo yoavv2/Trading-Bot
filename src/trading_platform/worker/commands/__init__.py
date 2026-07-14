@@ -22,8 +22,15 @@ from trading_platform.worker.commands.backtest import (
     run_report_strategy_analytics_command,
 )
 from trading_platform.worker.commands.bootstrap import run_dry_bootstrap, run_placeholder_worker
-from trading_platform.worker.commands.ingest import run_ingest_bars, run_sync_metadata, run_sync_sessions
-from trading_platform.worker.commands.operator import run_operator_control_command, run_operator_status_command
+from trading_platform.worker.commands.ingest import (
+    run_ingest_bars,
+    run_sync_metadata,
+    run_sync_sessions,
+)
+from trading_platform.worker.commands.operator import (
+    run_operator_control_command,
+    run_operator_status_command,
+)
 from trading_platform.worker.commands.paper_execute import (
     run_paper_session_command,
     run_submit_paper_orders_command,

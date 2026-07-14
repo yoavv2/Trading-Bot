@@ -7,7 +7,10 @@ import json
 
 from trading_platform.core.logging import configure_logging, get_logger
 from trading_platform.core.startup import enforce_startup_config
-from trading_platform.services.analytics import build_strategy_analytics_report, render_strategy_analytics_report
+from trading_platform.services.analytics import (
+    build_strategy_analytics_report,
+    render_strategy_analytics_report,
+)
 from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.config.validation import ExecutionMode

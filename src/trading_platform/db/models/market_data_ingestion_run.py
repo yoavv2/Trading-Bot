@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Index, Integer, JSON, String, Text, Uuid
+from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trading_platform.db.base import Base, TimestampedModel

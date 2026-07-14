@@ -27,7 +27,6 @@ from trading_platform.services.data import DailyBar, DailyBarRequest
 from trading_platform.services.polygon import (
     PolygonAuthError,
     PolygonClient,
-    PolygonClientError,
     _build_session_date,
     _normalize_timestamp,
     _result_to_bar,
@@ -290,14 +289,18 @@ class TestPolygonClientFetch:
 # Integration-level tests: ingestion pipeline (requires Postgres)
 # ---------------------------------------------------------------------------
 
-import psycopg
+import psycopg  # noqa: E402
+from alembic import command  # noqa: E402
+from scripts.migrate import build_alembic_config  # noqa: E402
 
-from alembic import command
-from scripts.migrate import build_alembic_config
-from trading_platform.db.models import DailyBar as DailyBarModel
-from trading_platform.db.models import MarketDataIngestionRun, Symbol
-from trading_platform.db.session import clear_engine_cache, session_scope
-from trading_platform.services.ingestion import ingest_daily_bars, upsert_daily_bars, upsert_symbol
+from trading_platform.db.models import DailyBar as DailyBarModel  # noqa: E402
+from trading_platform.db.models import MarketDataIngestionRun  # noqa: E402
+from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
+from trading_platform.services.ingestion import (  # noqa: E402
+    ingest_daily_bars,
+    upsert_daily_bars,
+    upsert_symbol,
+)
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -516,10 +519,10 @@ class TestIngestionPipeline:
 
     def test_ingest_records_failed_symbol(self, migrated_ingest_db: str) -> None:
         """Failed symbols are recorded in the run without aborting others."""
+        import httpx
         from sqlalchemy import select
 
         from trading_platform.core.settings import load_settings
-        import httpx
 
         settings = load_settings()
         md_settings = _make_market_data_settings()

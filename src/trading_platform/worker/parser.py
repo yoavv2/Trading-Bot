@@ -12,13 +12,21 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = subparsers.add_parser("serve", help="Run the placeholder worker loop.")
     serve_parser.add_argument("--interval-seconds", type=int, default=30)
 
-    dry_run_parser = subparsers.add_parser("dry-run", help="Exercise config and strategy bootstrap.")
+    dry_run_parser = subparsers.add_parser(
+        "dry-run", help="Exercise config and strategy bootstrap."
+    )
     dry_run_parser.add_argument("--strategy", default="trend_following_daily")
 
-    backtest_parser = subparsers.add_parser("backtest", help="Run a deterministic daily-bar backtest.")
+    backtest_parser = subparsers.add_parser(
+        "backtest", help="Run a deterministic daily-bar backtest."
+    )
     backtest_parser.add_argument("--strategy", default="trend_following_daily")
-    backtest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Backtest window start (inclusive).")
-    backtest_parser.add_argument("--to-date", metavar="YYYY-MM-DD", help="Backtest window end (inclusive).")
+    backtest_parser.add_argument(
+        "--from-date", metavar="YYYY-MM-DD", help="Backtest window start (inclusive)."
+    )
+    backtest_parser.add_argument(
+        "--to-date", metavar="YYYY-MM-DD", help="Backtest window end (inclusive)."
+    )
     backtest_parser.add_argument("--compact", action="store_true", default=False)
     backtest_parser.add_argument("--trigger-source", default="worker_cli")
 
@@ -36,10 +44,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render a strategy analytics summary plus recent operational inspection data.",
     )
     analytics_parser.add_argument("--strategy", default="trend_following_daily")
-    analytics_parser.add_argument("--backtest-run-id", help="Explicit backtest run ID to summarize.")
-    analytics_parser.add_argument("--paper-run-id", help="Explicit paper execution run ID to summarize.")
+    analytics_parser.add_argument(
+        "--backtest-run-id", help="Explicit backtest run ID to summarize."
+    )
+    analytics_parser.add_argument(
+        "--paper-run-id", help="Explicit paper execution run ID to summarize."
+    )
     analytics_parser.add_argument("--inspection-limit", type=int, default=5)
-    analytics_parser.add_argument("--summary-format", choices=("markdown", "json"), default="markdown")
+    analytics_parser.add_argument(
+        "--summary-format", choices=("markdown", "json"), default="markdown"
+    )
 
     risk_parser = subparsers.add_parser(
         "evaluate-risk",
@@ -64,7 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="YYYY-MM-DD",
         help="Session date whose approved risk decisions should be submitted.",
     )
-    submit_parser.add_argument("--risk-run-id", help="Explicit succeeded risk_evaluation run ID to consume.")
+    submit_parser.add_argument(
+        "--risk-run-id", help="Explicit succeeded risk_evaluation run ID to consume."
+    )
     submit_parser.add_argument("--compact", action="store_true", default=False)
     submit_parser.add_argument("--trigger-source", default="worker_cli")
 
@@ -78,7 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="YYYY-MM-DD",
         help="Target session date. Defaults to the latest completed persisted session.",
     )
-    run_session_parser.add_argument("--risk-run-id", help="Explicit succeeded risk_evaluation run ID to consume.")
+    run_session_parser.add_argument(
+        "--risk-run-id", help="Explicit succeeded risk_evaluation run ID to consume."
+    )
     run_session_parser.add_argument("--compact", action="store_true", default=False)
     run_session_parser.add_argument("--trigger-source")
 
@@ -140,7 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
     operator_control_parser.add_argument("--reason")
     operator_control_parser.add_argument("--actor", default="worker_cli")
     operator_control_parser.add_argument("--trigger-source", default="worker_cli")
-    operator_control_parser.add_argument("--summary-format", choices=("markdown", "json"), default="json")
+    operator_control_parser.add_argument(
+        "--summary-format", choices=("markdown", "json"), default="json"
+    )
 
     operator_status_parser = subparsers.add_parser(
         "operator-status",
@@ -148,18 +168,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     operator_status_parser.add_argument("--strategy", default="trend_following_daily")
     operator_status_parser.add_argument("--inspection-limit", type=int, default=5)
-    operator_status_parser.add_argument("--summary-format", choices=("markdown", "json"), default="markdown")
+    operator_status_parser.add_argument(
+        "--summary-format", choices=("markdown", "json"), default="markdown"
+    )
 
-    ingest_parser = subparsers.add_parser("ingest-bars", help="Ingest historical Polygon daily bars.")
-    ingest_parser.add_argument("--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive).")
-    ingest_parser.add_argument("--to-date", metavar="YYYY-MM-DD", help="Ingest window end (inclusive).")
-    ingest_parser.add_argument("--symbols", nargs="+", metavar="TICKER", help="Symbol override list.")
-    ingest_parser.add_argument("--trigger-source", default="worker_cli", help="Trigger label for the run record.")
+    ingest_parser = subparsers.add_parser(
+        "ingest-bars", help="Ingest historical Polygon daily bars."
+    )
+    ingest_parser.add_argument(
+        "--from-date", metavar="YYYY-MM-DD", help="Ingest window start (inclusive)."
+    )
+    ingest_parser.add_argument(
+        "--to-date", metavar="YYYY-MM-DD", help="Ingest window end (inclusive)."
+    )
+    ingest_parser.add_argument(
+        "--symbols", nargs="+", metavar="TICKER", help="Symbol override list."
+    )
+    ingest_parser.add_argument(
+        "--trigger-source", default="worker_cli", help="Trigger label for the run record."
+    )
 
     sync_meta_parser = subparsers.add_parser(
         "sync-metadata", help="Refresh symbol metadata from Polygon ticker overview."
     )
-    sync_meta_parser.add_argument("--symbols", nargs="+", metavar="TICKER", help="Symbol override list.")
+    sync_meta_parser.add_argument(
+        "--symbols", nargs="+", metavar="TICKER", help="Symbol override list."
+    )
     sync_meta_parser.add_argument(
         "--dry-run", action="store_true", default=False, help="Print metadata without persisting."
     )

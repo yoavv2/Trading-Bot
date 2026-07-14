@@ -86,9 +86,13 @@ def build_client_order_id(
         side=side,
         quantity=quantity,
     )
-    symbol_fragment = "".join(char for char in material.symbol.lower() if char.isalnum())[:8] or "order"
+    symbol_fragment = (
+        "".join(char for char in material.symbol.lower() if char.isalnum())[:8] or "order"
+    )
     prefix_fragment = "".join(char for char in prefix.lower() if char.isalnum())[:12] or "tp"
-    return f"{prefix_fragment}-{session_date.strftime('%Y%m%d')}-{symbol_fragment}-{intent_hash[:18]}"
+    return (
+        f"{prefix_fragment}-{session_date.strftime('%Y%m%d')}-{symbol_fragment}-{intent_hash[:18]}"
+    )
 
 
 def derive_order_identity(

@@ -18,9 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import trading_platform.services.execution.submit_orders as paper_execution_module
 from tests.support.query_counter import count_queries
 from tests.test_paper_execution import migrated_paper_db  # noqa: F401 (reused DB harness fixture)
+
+import trading_platform.services.execution.submit_orders as paper_execution_module
 from trading_platform.core.settings import load_settings
 from trading_platform.db.models import RiskEvent, StrategyRun, StrategyRunStatus, StrategyRunType
 from trading_platform.db.models.symbol import Symbol

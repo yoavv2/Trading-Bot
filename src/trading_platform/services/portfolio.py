@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from decimal import ROUND_DOWN, Decimal
 
 from sqlalchemy import select
@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 
 from trading_platform.core.settings import PortfolioSettings, Settings, load_settings
 from trading_platform.db.models import AccountSnapshot, Position, Strategy
-from trading_platform.services.market_data_access import bars_for_session_date, latest_completed_session
+from trading_platform.services.market_data_access import (
+    bars_for_session_date,
+    latest_completed_session,
+)
 
 MONEY_SCALE = Decimal("0.000001")
 

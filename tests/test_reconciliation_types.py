@@ -29,7 +29,6 @@ from trading_platform.services.reconciliation.snapshot import (
     side_from_quantity,
 )
 
-
 # --- Task 1: closed ReconciliationFinding enum + Finding value object -----------------
 
 

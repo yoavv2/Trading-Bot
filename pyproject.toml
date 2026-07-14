@@ -23,6 +23,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.0,<10.0.0",
+  "ruff>=0.8,<1.0",
+  "mypy>=1.13,<2.0",
+  "pre-commit>=4.0,<5.0",
 ]
 
 [project.scripts]
@@ -37,3 +40,27 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src", "tests"]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+# E501 (line-too-long) is intentionally not enforced as a blocking lint error:
+# the codebase predates this tooling and has ~200+ pre-existing long lines
+# (mostly in comments/strings/test assertions) unrelated to Phase-12's scope.
+# `ruff format` still wraps code to `line-length` where it safely can;
+# E501 as a hard gate would force a repo-wide reformatting diff, which
+# Phase-12 explicitly scopes away from (see 12-07-PLAN.md key_facts).
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["trading_platform"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest fixtures are conventionally imported then re-used as test-function
+# parameter names of the same name; ruff's F811 (redefinition) doesn't
+# understand this idiom and false-positives on it.
+"tests/*" = ["F811"]

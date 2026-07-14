@@ -7,18 +7,18 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, JSON, String, Text, Uuid, func
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_platform.db.base import Base, TimestampedModel
 
 if TYPE_CHECKING:
-    from trading_platform.db.models.risk_event import RiskEvent
-    from trading_platform.db.models.execution_event import ExecutionEvent
-    from trading_platform.db.models.paper_order import PaperOrder
     from trading_platform.db.models.backtest_equity_snapshot import BacktestEquitySnapshot
     from trading_platform.db.models.backtest_signal import BacktestSignal
     from trading_platform.db.models.backtest_trade import BacktestTrade
+    from trading_platform.db.models.execution_event import ExecutionEvent
+    from trading_platform.db.models.paper_order import PaperOrder
+    from trading_platform.db.models.risk_event import RiskEvent
     from trading_platform.db.models.strategy import Strategy
 
 

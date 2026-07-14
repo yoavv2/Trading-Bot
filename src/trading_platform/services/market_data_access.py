@@ -16,7 +16,6 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -27,7 +26,6 @@ from trading_platform.db.models.symbol import Symbol
 from trading_platform.services.calendar import (
     _DEFAULT_EXCHANGE,
     get_persisted_sessions,
-    latest_session_before,
 )
 
 logger = logging.getLogger(__name__)

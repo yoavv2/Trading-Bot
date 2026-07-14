@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, Date, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_platform.db.base import Base, TimestampedModel
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from trading_platform.db.models.daily_bar import DailyBar

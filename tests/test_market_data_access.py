@@ -7,7 +7,7 @@ import os
 import sys
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, date, datetime, timezone
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -19,9 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alembic import command
 from scripts.migrate import build_alembic_config
+
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models.daily_bar import DailyBar as DailyBarModel
-from trading_platform.db.models.market_session import MarketSession
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.calendar import (
@@ -36,10 +36,8 @@ from trading_platform.services.market_data_access import (
     SessionBar,
     bars_for_sessions,
     latest_completed_session,
-    latest_persisted_session,
     missing_sessions_for_symbol,
 )
-
 
 # ---------------------------------------------------------------------------
 # Database fixtures (temporary PostgreSQL databases)

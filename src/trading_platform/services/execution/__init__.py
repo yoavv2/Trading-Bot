@@ -6,6 +6,24 @@ for existing consumers after the STRUCT-04 package split.
 
 from __future__ import annotations
 
+# Paper-execution split (STRUCT-04 part 2, 12-04): the report/dataclass
+# surface lives in the lightweight ``_paper_common.py`` and is re-exported
+# eagerly (no heavy or cyclic imports). The submission/session/sync
+# ENTRYPOINTS in ``submit_orders.py``/``sync_orders.py`` pull in the heavy,
+# cyclic dependency graph (bootstrap, alpaca, reconciliation -- all of which
+# import this package back), so they are loaded LAZILY via PEP 562
+# ``__getattr__`` below. This keeps ``import trading_platform.services.execution``
+# cheap and acyclic for the many consumers that only need the pure
+# contracts/transition/idempotency surface, while still resolving
+# ``from trading_platform.services.execution import run_paper_order_submission``.
+from trading_platform.services.execution._paper_common import (
+    PaperExecutionCandidate,
+    PaperExecutionRunReport,
+    PaperIntentDecision,
+    PaperSessionPlan,
+    PaperSessionRunReport,
+    PaperStateSyncReport,
+)
 from trading_platform.services.execution.contracts import (
     ExecutionOrderStatus,
     ExecutionService,
@@ -30,25 +48,6 @@ from trading_platform.services.execution.transition import (
     OrderTransitionResult,
     apply_order_transition,
     resolve_transition_target,
-)
-
-# Paper-execution split (STRUCT-04 part 2, 12-04): the report/dataclass
-# surface lives in the lightweight ``_paper_common.py`` and is re-exported
-# eagerly (no heavy or cyclic imports). The submission/session/sync
-# ENTRYPOINTS in ``submit_orders.py``/``sync_orders.py`` pull in the heavy,
-# cyclic dependency graph (bootstrap, alpaca, reconciliation -- all of which
-# import this package back), so they are loaded LAZILY via PEP 562
-# ``__getattr__`` below. This keeps ``import trading_platform.services.execution``
-# cheap and acyclic for the many consumers that only need the pure
-# contracts/transition/idempotency surface, while still resolving
-# ``from trading_platform.services.execution import run_paper_order_submission``.
-from trading_platform.services.execution._paper_common import (
-    PaperExecutionCandidate,
-    PaperExecutionRunReport,
-    PaperIntentDecision,
-    PaperSessionPlan,
-    PaperSessionRunReport,
-    PaperStateSyncReport,
 )
 
 # name -> (submodule, attribute) for lazily-resolved paper-execution entrypoints.

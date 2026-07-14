@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from alembic import command
 from scripts.migrate import build_alembic_config
 from scripts.seed_phase1 import seed_phase_one
+
 from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (

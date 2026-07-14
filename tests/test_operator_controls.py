@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import sys
-import uuid
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,8 +13,9 @@ from tests.test_paper_execution import (  # noqa: E402
     FakeBrokerClient,
     FakeExecutionService,
     _seed_approved_risk_batch,
-    migrated_paper_db,
+    migrated_paper_db,  # noqa: F401 (reused DB harness fixture)
 )
+
 from trading_platform.core.settings import clear_settings_cache, load_settings  # noqa: E402
 from trading_platform.db.models import (  # noqa: E402
     GLOBAL_KILL_SWITCH_NAME,
@@ -30,7 +30,10 @@ from trading_platform.db.models import (  # noqa: E402
 )
 from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
 from trading_platform.services.alpaca import BrokerAccountSnapshot  # noqa: E402
-from trading_platform.services.execution import run_paper_order_submission, sync_paper_state  # noqa: E402
+from trading_platform.services.execution import (  # noqa: E402
+    run_paper_order_submission,
+    sync_paper_state,
+)
 from trading_platform.services.operator_controls import (  # noqa: E402
     OperatorControlService,
     load_kill_switch_state,

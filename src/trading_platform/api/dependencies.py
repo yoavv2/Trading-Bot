@@ -12,7 +12,11 @@ from trading_platform.db.models import StrategyRunStatus, StrategyRunType
 from trading_platform.services.analytics import StrategyAnalyticsService
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.base import StrategyMetadata
-from trading_platform.strategies.registry import StrategyRegistry, UnknownStrategyError, build_default_registry
+from trading_platform.strategies.registry import (
+    StrategyRegistry,
+    UnknownStrategyError,
+    build_default_registry,
+)
 
 DEFAULT_STRATEGY_ID = "trend_following_daily"
 DEFAULT_LIMIT = 20

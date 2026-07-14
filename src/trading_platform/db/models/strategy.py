@@ -6,7 +6,7 @@ import uuid
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Enum, Index, JSON, String, Text, Uuid
+from sqlalchemy import JSON, Enum, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_platform.db.base import Base, TimestampedModel

@@ -18,6 +18,9 @@ from sqlalchemy import event, select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+
+import trading_platform.services.execution.submit_orders as paper_submit_orders_module
+import trading_platform.services.execution.sync_orders as paper_sync_orders_module
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
@@ -61,8 +64,6 @@ from trading_platform.services.execution import (
     sync_paper_state,
 )
 from trading_platform.services.execution.idempotency import build_intent_hash
-import trading_platform.services.execution.submit_orders as paper_submit_orders_module
-import trading_platform.services.execution.sync_orders as paper_sync_orders_module
 from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.registry import build_default_registry
