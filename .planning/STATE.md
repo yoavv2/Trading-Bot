@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 12-02-PLAN.md
-last_updated: "2026-07-14T16:31:11.657Z"
+stopped_at: Completed 12-03-PLAN.md
+last_updated: "2026-07-14T16:58:04.585Z"
 last_activity: 2026-07-14
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 41
-  completed_plans: 36
-  percent: 88
+  completed_plans: 37
+  percent: 89
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 ## Current Position
 
 Phase: 12 (structural-refactor-and-tooling) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Also complete this wave (concurrent sibling plans, each independently verified via their own SUMMARY.md): 11-01 (Paper Preflight N+1 Elimination, PERF-01 — batched the auto-resolve preflight path down to a flat 2 queries regardless of candidate count) and 11-02 (Reconciliation Matcher Full-Surface Linear-Scaling Benchmark, PERF-02 — extended the existing positions-only O(n) benchmark to orders, fills, and the public `match_snapshots` entry point).
 Status: Ready to execute
 Last activity: 2026-07-14
@@ -108,6 +108,7 @@ Recent decisions affecting current work:
 - [Phase 12]: [12-01]: Phase-12 zero-behavior-change baseline pinned at 306 passed / 0 failed (12-BASELINE.md); reconciliation MONEY_TOLERANCE/QUANTITY_TOLERANCE centralized into services/config/tolerances.py, duplicated constants deleted (STRUCT-01, STRUCT-07)
 - [Phase 12-02]: STRUCT-06: config validation split into services/config/{validation,secrets}.py; validate_config's import of secrets.py deferred to call-time to break a circular import — secrets.py needs ExecutionMode from validation.py at runtime; validation.py needs semantic_failures from secrets.py; a two-way top-level import would fail on first module load
 - [Phase 12-02]: STRUCT-08 confirmed via grep: core/settings.py is the sole BaseSettings/Settings surface; no code change needed
+- [Phase 12-03]: 12-03: STRUCT-04 part 1 — services/execution package created (contracts.py/transition.py/idempotency.py); all consumers repointed; order_state_machine.py/order_identity.py deleted; test_log_enforcement.py LOG-01 path list repointed 1:1 (frozen length 12), same pattern 12-02 established. Full suite 306 passed / 0 failed.
 
 ### Pending Todos
 
@@ -130,6 +131,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-14T16:31:11.648Z
-Stopped at: Completed 12-02-PLAN.md
+Last session: 2026-07-14T16:58:04.576Z
+Stopped at: Completed 12-03-PLAN.md
 Resume file: None
