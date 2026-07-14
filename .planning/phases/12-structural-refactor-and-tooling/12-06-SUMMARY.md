@@ -130,3 +130,11 @@ None - no external service configuration required.
 ---
 *Phase: 12-structural-refactor-and-tooling*
 *Completed: 2026-07-15*
+
+## Self-Check: PASSED
+- FOUND: src/trading_platform/worker/parser.py
+- FOUND: src/trading_platform/worker/commands/__init__.py
+- FOUND: src/trading_platform/worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile,operator}.py
+- FOUND: .planning/phases/12-structural-refactor-and-tooling/12-06-SUMMARY.md
+- FOUND: commit 10f998a (Task 1), commit c53b63f (Task 2), commit 82d7882 (docs)
+- SUITE: 306 passed / 0 failed (baseline held)

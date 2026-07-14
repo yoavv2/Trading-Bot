@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 12-05-PLAN.md
-last_updated: "2026-07-15T00:00:00.000Z"
-last_activity: 2026-07-15
+stopped_at: Completed 12-06-PLAN.md
+last_updated: "2026-07-14T21:43:43.334Z"
+last_activity: 2026-07-14
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 41
   completed_plans: 40
-  percent: 90
+  percent: 89
 ---
 
 # Project State
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 ## Current Position
 
 Phase: 12 (structural-refactor-and-tooling) — EXECUTING
-Plan: 5 of 7 complete; 12-06 next
-Status: Ready to execute 12-06
+Plan: 6 of 7 complete; 12-07 next
+Status: Ready to execute 12-07
 Last activity: 2026-07-15
 
 Progress (phases across all milestones, v1.1 Phase 12 counted as paused/not-yet-executing): [██████████] 15/16 phases complete (v1.0: 6, v1.1: 5 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) + Phase 10 (all 6 plans) + Phase 11 (all 4 plans) — Phase 12 paused, v1.2: 4 of 4 complete)
@@ -42,7 +42,7 @@ Progress (phases across all milestones, v1.1 Phase 12 counted as paused/not-yet-
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
-**v1.1 By Phase:** 7: 3/3 complete; 8: 5/5 COMPLETE; 9: 4/4 COMPLETE; 10: 6/6 COMPLETE; 11: 4/4 COMPLETE (11-01 PERF-01 two-query preflight; 11-02 PERF-02 linear matcher benchmark; 11-03 index audit; 11-04 batch-scoped broker-fill dedup + named-index EXPLAIN proof, PERF-03); 12: 5/7 IN PROGRESS (12-01: STRUCT-01 baseline gate + STRUCT-07 tolerance consolidation; 12-02: config package reorg STRUCT-06; 12-03: execution package — transition + idempotency; 12-04: paper_execution split into submit/sync/_paper_common, STRUCT-04 complete; 12-05: reconciliation package snapshot/findings/matcher/report, STRUCT-05 complete)
+**v1.1 By Phase:** 7: 3/3 complete; 8: 5/5 COMPLETE; 9: 4/4 COMPLETE; 10: 6/6 COMPLETE; 11: 4/4 COMPLETE (11-01 PERF-01 two-query preflight; 11-02 PERF-02 linear matcher benchmark; 11-03 index audit; 11-04 batch-scoped broker-fill dedup + named-index EXPLAIN proof, PERF-03); 12: 6/7 IN PROGRESS (12-01: STRUCT-01 baseline gate + STRUCT-07 tolerance consolidation; 12-02: config package reorg STRUCT-06; 12-03: execution package — transition + idempotency; 12-04: paper_execution split into submit/sync/_paper_common, STRUCT-04 complete; 12-05: reconciliation package snapshot/findings/matcher/report, STRUCT-05 complete; 12-06: worker/__main__.py split into worker/parser.py + worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile,operator}.py, entrypoint reduced to 32-line routing dispatcher, full suite 306/0 — STRUCT-02 (phase-wide zero-behavior-change proof) and STRUCT-03 complete)
 
 **v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 3/3 complete (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper; 15-03: operator live-verify checkpoint — approved, all four PAPR surfaces honest-empty with Alpaca creds unconfigured), 16: 3/3 complete (16-02: EquityCurveChart (ANLX-01 frontend) + SummaryMetricsPanel (ANLX-02) + BacktestAnalyticsSection single-fetch owner, mounted on run-detail for backtest runs only, executed ahead of 16-01 per explicit human override; 16-01: backend equity_curve passthrough — single-line addition to StrategyAnalyticsService._summarize_backtest exposing the already-computed field, service-level pytest extended; 16-03: operator live-verify checkpoint — approved, all 6 steps passed against fresh servers, one in-scope YAxis auto-scale live-fix (dcd4232), ANLX-01 AND ANLX-02 confirmed Complete). Awaiting orchestrator phase-complete.
 
@@ -108,6 +108,7 @@ Recent decisions affecting current work:
 - [Phase 12-02]: STRUCT-06: config validation split into services/config/{validation,secrets}.py; validate_config's import of secrets.py deferred to call-time to break a circular import — secrets.py needs ExecutionMode from validation.py at runtime; validation.py needs semantic_failures from secrets.py; a two-way top-level import would fail on first module load
 - [Phase 12-02]: STRUCT-08 confirmed via grep: core/settings.py is the sole BaseSettings/Settings surface; no code change needed
 - [Phase 12-03]: 12-03: STRUCT-04 part 1 — services/execution package created (contracts.py/transition.py/idempotency.py); all consumers repointed; order_state_machine.py/order_identity.py deleted; test_log_enforcement.py LOG-01 path list repointed 1:1 (frozen length 12), same pattern 12-02 established. Full suite 306 passed / 0 failed.
+- [Phase 12]: [12-06]: worker/__main__.py split into worker/parser.py + worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile,operator}.py; entrypoint reduced to 32-line routing dispatcher (DISPATCH map); full suite holds at 306/0, closing STRUCT-02 (phase-wide zero-behavior-change proof) and STRUCT-03. operator.py added as a documented seventh sibling module for the two operator-* subcommands. Discovered but deliberately preserved (not fixed) a pre-existing run_sync_metadata scripts-path off-by-one bug (deferred-items.md).
 
 ### Pending Todos
 
@@ -130,6 +131,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-14T16:58:04.576Z
-Stopped at: Completed 12-03-PLAN.md
+Last session: 2026-07-14T21:43:43.325Z
+Stopped at: Completed 12-06-PLAN.md
 Resume file: None
