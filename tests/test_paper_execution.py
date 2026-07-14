@@ -54,18 +54,17 @@ from trading_platform.services.execution import (
     OrderIntent,
     OrderSide,
     OrderSubmissionResult,
-)
-from trading_platform.services.execution.idempotency import build_intent_hash
-from trading_platform.services.operator_controls import OperatorControlService
-from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
-import trading_platform.services.paper_execution as paper_execution_module
-from trading_platform.services.paper_execution import (
     build_client_order_id,
     resolve_submission_session,
     run_paper_order_submission,
     run_paper_session,
     sync_paper_state,
 )
+from trading_platform.services.execution.idempotency import build_intent_hash
+import trading_platform.services.execution.submit_orders as paper_submit_orders_module
+import trading_platform.services.execution.sync_orders as paper_sync_orders_module
+from trading_platform.services.operator_controls import OperatorControlService
+from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.registry import build_default_registry
 
 _AUTO_BROKER_ORDER_ID = object()
@@ -1252,7 +1251,7 @@ def test_paper_fill_dedup_empty_batch_executes_no_select(
 
     with session_scope(settings) as session:
         with _capture_paper_fill_dedup_queries(session) as dedup_queries:
-            ingested = paper_execution_module._ingest_paper_fills(
+            ingested = paper_sync_orders_module._ingest_paper_fills(
                 session,
                 [],
                 local_orders_by_broker_id={},
@@ -1296,7 +1295,7 @@ def test_paper_fill_dedup_work_is_independent_of_historical_size(
         session.flush()
 
         with _capture_paper_fill_dedup_queries(session) as small_history_queries:
-            small_history_matches = paper_execution_module._load_existing_paper_fill_ids(
+            small_history_matches = paper_sync_orders_module._load_existing_paper_fill_ids(
                 session, current_batch
             )
 
@@ -1319,7 +1318,7 @@ def test_paper_fill_dedup_work_is_independent_of_historical_size(
         session.flush()
 
         with _capture_paper_fill_dedup_queries(session) as large_history_queries:
-            large_history_matches = paper_execution_module._load_existing_paper_fill_ids(
+            large_history_matches = paper_sync_orders_module._load_existing_paper_fill_ids(
                 session, current_batch
             )
 
@@ -1338,27 +1337,27 @@ def test_paper_fill_dedup_chunks_current_ids_deterministically(
     migrated_paper_db: str,
 ) -> None:
     settings = load_settings()
-    unique_count = paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE + 1
+    unique_count = paper_sync_orders_module._PAPER_FILL_DEDUP_CHUNK_SIZE + 1
     distinct_ids = [f"fill-current-{index:04d}" for index in reversed(range(unique_count))]
     broker_fills = [_broker_fill_snapshot(fill_id) for fill_id in distinct_ids]
     broker_fills.append(_broker_fill_snapshot(distinct_ids[0]))
 
     with session_scope(settings) as session:
         with _capture_paper_fill_dedup_queries(session) as dedup_queries:
-            matches = paper_execution_module._load_existing_paper_fill_ids(session, broker_fills)
+            matches = paper_sync_orders_module._load_existing_paper_fill_ids(session, broker_fills)
 
     assert matches == set()
     assert len(dedup_queries) == 2
     bound_chunks = [_bound_parameter_values(parameters) for _, parameters in dedup_queries]
     assert [len(chunk) for chunk in bound_chunks] == [
-        paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE,
+        paper_sync_orders_module._PAPER_FILL_DEDUP_CHUNK_SIZE,
         1,
     ]
     assert bound_chunks[0] == sorted(distinct_ids)[
-        : paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE
+        : paper_sync_orders_module._PAPER_FILL_DEDUP_CHUNK_SIZE
     ]
     assert bound_chunks[1] == sorted(distinct_ids)[
-        paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE :
+        paper_sync_orders_module._PAPER_FILL_DEDUP_CHUNK_SIZE :
     ]
     assert all(
         re.search(r"\bWHERE\b", statement, re.IGNORECASE)
@@ -1397,7 +1396,7 @@ def test_paper_fill_duplicate_ingestion_preserves_idempotency_and_filled_at(
         )
         session.flush()
 
-        ingested = paper_execution_module._ingest_paper_fills(
+        ingested = paper_sync_orders_module._ingest_paper_fills(
             session,
             [
                 _broker_fill_snapshot("fill-already-stored"),
@@ -1419,7 +1418,12 @@ def test_paper_fill_duplicate_ingestion_preserves_idempotency_and_filled_at(
 
 
 def test_paper_execution_module_routes_lifecycle_through_order_state_machine() -> None:
-    source = (Path(__file__).resolve().parents[1] / "src/trading_platform/services/paper_execution.py").read_text()
+    # STRUCT-04 (12-04): submission and broker-state-sync lifecycle writes now
+    # live in two separate modules (execution package split); check both.
+    execution_dir = Path(__file__).resolve().parents[1] / "src/trading_platform/services/execution"
+    source = "".join(
+        (execution_dir / name).read_text() for name in ("submit_orders.py", "sync_orders.py")
+    )
 
     assert "apply_order_transition" in source
     assert re.search(r"\b(?:pending_order|persisted_order|existing_order|local_order|paper_order)\.status\s*=(?!=)", source) is None
@@ -2076,24 +2080,24 @@ def test_partial_failure_after_broker_success_schedules_reconciliation(
         OrderTransitionEventType.BROKER_EXPIRED,
         OrderTransitionEventType.BROKER_STATUS_UNKNOWN,
     }
-    original_apply_order_transition = paper_execution_module.apply_order_transition
+    original_apply_order_transition = paper_submit_orders_module.apply_order_transition
 
     def _raising_apply_order_transition(order_id, request, *, session=None, settings=None):
         if request.event_type in broker_success_event_types:
             raise RuntimeError("simulated post-broker persist failure")
         return original_apply_order_transition(order_id, request, session=session, settings=settings)
 
-    monkeypatch.setattr(paper_execution_module, "apply_order_transition", _raising_apply_order_transition)
+    monkeypatch.setattr(paper_submit_orders_module, "apply_order_transition", _raising_apply_order_transition)
 
     scheduled_calls: list[dict[str, object]] = []
-    original_schedule = paper_execution_module.schedule_reconciliation_after_partial_failure
+    original_schedule = paper_submit_orders_module.schedule_reconciliation_after_partial_failure
 
     def _spy_schedule(*args, **kwargs):
         scheduled_calls.append(kwargs)
         return original_schedule(*args, **kwargs)
 
     monkeypatch.setattr(
-        paper_execution_module, "schedule_reconciliation_after_partial_failure", _spy_schedule
+        paper_submit_orders_module, "schedule_reconciliation_after_partial_failure", _spy_schedule
     )
 
     with pytest.raises(RuntimeError, match="simulated post-broker persist failure"):
@@ -2146,7 +2150,7 @@ def test_broker_call_failure_has_no_rollback_divergence_and_skips_reconciliation
 
     scheduled_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
-        paper_execution_module,
+        paper_submit_orders_module,
         "schedule_reconciliation_after_partial_failure",
         lambda *args, **kwargs: scheduled_calls.append(kwargs),
     )

@@ -30,6 +30,7 @@ from trading_platform.db.models import (  # noqa: E402
 )
 from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
 from trading_platform.services.alpaca import BrokerAccountSnapshot  # noqa: E402
+from trading_platform.services.execution import run_paper_order_submission, sync_paper_state  # noqa: E402
 from trading_platform.services.operator_controls import (  # noqa: E402
     OperatorControlService,
     load_kill_switch_state,
@@ -39,7 +40,6 @@ from trading_platform.services.operator_reads import (  # noqa: E402
     OperatorReadService,
 )
 from trading_platform.services.operator_status import build_operator_status_report  # noqa: E402
-from trading_platform.services.paper_execution import run_paper_order_submission, sync_paper_state  # noqa: E402
 from trading_platform.worker.__main__ import build_parser, run_operator_control_command  # noqa: E402
 
 

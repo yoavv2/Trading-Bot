@@ -25,8 +25,14 @@ from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.alpaca import AlpacaAuthError, AlpacaClient, AlpacaExecutionService
 from trading_platform.services.bootstrap import ensure_strategy_record
-from trading_platform.services.execution import ExecutionOrderStatus, ExecutionService, OrderIntent, OrderSide, OrderSubmissionResult
-from trading_platform.services.paper_execution import run_paper_order_submission
+from trading_platform.services.execution import (
+    ExecutionOrderStatus,
+    ExecutionService,
+    OrderIntent,
+    OrderSide,
+    OrderSubmissionResult,
+    run_paper_order_submission,
+)
 from trading_platform.strategies.registry import build_default_registry
 
 

@@ -18,6 +18,12 @@ from trading_platform.services.backtesting import resolve_backtest_window, run_b
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
 from trading_platform.services.concurrency_guard import CONCURRENT_RUN_LOCK_EXIT_CODE, ConcurrentRunLockedError
 from trading_platform.services.config.validation import ExecutionMode
+from trading_platform.services.execution import (
+    resolve_submission_session,
+    run_paper_order_submission,
+    run_paper_session,
+    sync_paper_state,
+)
 from trading_platform.services.operator_controls import (
     OperatorControlService,
     render_kill_switch_report,
@@ -26,12 +32,6 @@ from trading_platform.services.operator_controls import (
 from trading_platform.services.operator_status import (
     build_operator_status_report,
     render_operator_status_report,
-)
-from trading_platform.services.paper_execution import (
-    resolve_submission_session,
-    run_paper_order_submission,
-    run_paper_session,
-    sync_paper_state,
 )
 from trading_platform.services.reconciliation import reconcile_paper_execution
 from trading_platform.services.risk import resolve_evaluation_session, run_risk_evaluation

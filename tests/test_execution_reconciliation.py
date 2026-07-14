@@ -37,9 +37,8 @@ from trading_platform.services.alpaca import (
     BrokerOrderSnapshot,
     BrokerPositionSnapshot,
 )
-from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
+from trading_platform.services.execution import ExecutionOrderStatus, OrderSide, build_client_order_id
 from trading_platform.services.execution.idempotency import build_intent_hash
-from trading_platform.services.paper_execution import build_client_order_id
 from trading_platform.services.reconciliation import (
     apply_reconciliation_corrections,
     reconcile_paper_execution,

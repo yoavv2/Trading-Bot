@@ -38,7 +38,16 @@ _SRC = _ROOT / "src" / "trading_platform"
 # reintroduces a raw `logging.getLogger(...)` call in one of these files
 # must fail this test -- that is the whole point of LOG-01 enforcement.
 IN_SCOPE_MODULES: list[Path] = [
-    _SRC / "services" / "paper_execution.py",
+    # Relocated from services/paper_execution.py to
+    # services/execution/submit_orders.py in 12-04 (STRUCT-04 part 2) --
+    # same single-entry 1:1 path swap pattern as the 12-02/12-03 moves; list
+    # length unchanged (12). paper_execution.py also split off
+    # services/execution/sync_orders.py and services/execution/_paper_common.py
+    # in the same move, but neither has any logging calls (verified by grep),
+    # so submit_orders.py -- the only split-off module that actually calls
+    # get_logger -- is the honest 1:1 heir for this enforcement list; the other
+    # two are not yet in scope (see deferred-items.md).
+    _SRC / "services" / "execution" / "submit_orders.py",
     _SRC / "services" / "alpaca.py",
     # Relocated from services/order_state_machine.py to
     # services/execution/transition.py in 12-03 (STRUCT-04 part 1) -- same

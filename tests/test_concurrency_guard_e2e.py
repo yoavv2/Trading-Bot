@@ -53,8 +53,8 @@ from trading_platform.services.execution import (
     ExecutionService,
     OrderIntent,
     OrderSubmissionResult,
+    run_paper_order_submission,
 )
-from trading_platform.services.paper_execution import run_paper_order_submission
 from trading_platform.strategies.registry import build_default_registry
 from trading_platform.worker.__main__ import build_parser, run_submit_paper_orders_command
 
