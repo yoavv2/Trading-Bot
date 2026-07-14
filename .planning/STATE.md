@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: paused
-stopped_at: Completed 11-01-PLAN.md (Paper Preflight N+1 Elimination) — PERF-01 Complete; Phase 11 (Query Performance) COMPLETE (3/3 plans)
+stopped_at: Phase 11 (Query Performance) — all 3 plans executed (PERF-01/PERF-02 Complete); phase verification returned gaps_found — PERF-03 broker-fill dedup query still seq-scans, needs out-of-scope query-scope rewrite. Awaiting /gsd:plan-phase 11 --gaps
 last_updated: "2026-07-14T10:26:00.000Z"
 last_activity: "2026-07-14 — Phase 11 (Query Performance) plans 11-01/11-02/11-03 all executed (concurrent Wave-1). PERF-01 (11-01, preflight N+1 elimination) and PERF-02 (11-02, reconciliation matcher benchmark) marked Complete. PERF-03 (11-03, EXPLAIN index audit) left Pending: 4/5 critical query paths verified as index scans, but the broker-fill dedup query is a genuine, proven-unfixable-by-indexing gap against the requirement's literal wording — see 11-03-SUMMARY.md/deferred-items.md."
 progress:
