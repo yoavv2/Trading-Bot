@@ -139,7 +139,7 @@ Plans:
 
 Plans:
 - [ ] 11-01-PLAN.md — Eliminate paper-preflight N+1: query-count harness + batched intent resolution + query-count invariant test (PERF-01)
-- [ ] 11-02-PLAN.md — Verify/extend the O(n) reconciliation matcher benchmark to positions+orders+fills and the public entry point (PERF-02)
+- [x] 11-02-PLAN.md — Verify/extend the O(n) reconciliation matcher benchmark to positions+orders+fills and the public entry point (PERF-02)
 - [ ] 11-03-PLAN.md — EXPLAIN-confirmed named covering indices for operator-read/reconciliation/order-sync paths + migration 0017 (PERF-03)
 
 ### Phase 13: Console Foundation & System Status
@@ -222,7 +222,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
 | 10. Startup Hardening | v1.1 | 6/6 | Complete | 2026-07-13 |
-| 11. Query Performance | v1.1 | 0/3 | Planning | - |
+| 11. Query Performance | v1.1 | 1/3 | In Progress | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |

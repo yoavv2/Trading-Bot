@@ -119,7 +119,7 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 ### Query Performance (PERF)
 
 - [ ] **PERF-01**: Paper-preflight issues at most 2 queries total, regardless of the number of positions or approved candidates (measured by query-count assertion in an integration test)
-- [ ] **PERF-02**: Reconciliation runtime is O(n) over entity count — asserted by a benchmark test that scales linearly (not quadratically) with input size
+- [x] **PERF-02**: Reconciliation runtime is O(n) over entity count — asserted by a benchmark test that scales linearly (not quadratically) with input size
 - [ ] **PERF-03**: Every critical query (operator reads, reconciliation, order lifecycle sync) has an explicit named index; `EXPLAIN` output shows the index is used
 
 ## Future Requirements
@@ -214,7 +214,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DB-05 | Phase 10 | Complete |
 | DB-06 | Phase 10 | Complete |
 | PERF-01 | Phase 11 | Pending |
-| PERF-02 | Phase 11 | Pending |
+| PERF-02 | Phase 11 | Complete |
 | PERF-03 | Phase 11 | Pending |
 
 **Coverage:**
