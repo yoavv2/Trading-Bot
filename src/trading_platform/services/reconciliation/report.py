@@ -42,9 +42,9 @@ from trading_platform.services.execution.transition import (
     apply_order_transition,
     resolve_transition_target,
 )
-from trading_platform.services.reconciliation_matcher import match_snapshots
-from trading_platform.services.reconciliation_types import (
-    Finding,
+from trading_platform.services.reconciliation.matcher import match_snapshots
+from trading_platform.services.reconciliation.findings import Finding
+from trading_platform.services.reconciliation.snapshot import (
     LocalAccountSnapshot,
     LocalFillSnapshot,
     LocalOrderSnapshot,
