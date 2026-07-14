@@ -135,7 +135,12 @@ Plans:
   1. An integration test asserts that paper preflight issues at most 2 queries total regardless of the number of positions or approved candidates — the N+1 pattern does not reappear.
   2. A benchmark test confirms reconciliation runtime scales linearly (not quadratically) with input size; the test fails if O(n²) behavior is detected.
   3. `EXPLAIN` output for operator reads, reconciliation queries, and order lifecycle sync queries shows the named covering index is used — full sequential scans on large tables are absent.
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 11-01-PLAN.md — Eliminate paper-preflight N+1: query-count harness + batched intent resolution + query-count invariant test (PERF-01)
+- [ ] 11-02-PLAN.md — Verify/extend the O(n) reconciliation matcher benchmark to positions+orders+fills and the public entry point (PERF-02)
+- [ ] 11-03-PLAN.md — EXPLAIN-confirmed named covering indices for operator-read/reconciliation/order-sync paths + migration 0017 (PERF-03)
 
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
@@ -217,7 +222,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
 | 10. Startup Hardening | v1.1 | 6/6 | Complete | 2026-07-13 |
-| 11. Query Performance | v1.1 | 0/TBD | Planning | - |
+| 11. Query Performance | v1.1 | 0/3 | Planning | - |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
