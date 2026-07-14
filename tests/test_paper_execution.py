@@ -5,6 +5,7 @@ import re
 import sys
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from alembic import command
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -68,6 +69,47 @@ from trading_platform.services.paper_execution import (
 from trading_platform.strategies.registry import build_default_registry
 
 _AUTO_BROKER_ORDER_ID = object()
+
+
+@contextmanager
+def _capture_paper_fill_dedup_queries(session):
+    captured: list[tuple[str, object]] = []
+    engine = session.get_bind()
+
+    def _capture(conn, cursor, statement, parameters, context, executemany) -> None:
+        if statement.lstrip().upper().startswith("SELECT") and "paper_fills" in statement:
+            captured.append((statement, parameters))
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    try:
+        yield captured
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+
+
+def _bound_parameter_values(parameters: object) -> list[object]:
+    if isinstance(parameters, dict):
+        return list(parameters.values())
+    if isinstance(parameters, (list, tuple)):
+        return list(parameters)
+    raise TypeError(f"Unsupported SQL parameter container: {type(parameters)!r}")
+
+
+def _broker_fill_snapshot(
+    broker_fill_id: str,
+    *,
+    filled_at: datetime | None = None,
+) -> BrokerFillSnapshot:
+    return BrokerFillSnapshot(
+        broker_fill_id=broker_fill_id,
+        broker_order_id="existing-aapl-001",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        quantity=Decimal("1.000000"),
+        price=Decimal("120.250000"),
+        filled_at=filled_at or datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+        raw_payload={"id": broker_fill_id, "order_id": "existing-aapl-001"},
+    )
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -1201,6 +1243,179 @@ def test_sync_paper_state_advances_partial_lifecycle_without_duplicate_fills(
         OrderTransitionEventType.BROKER_PARTIALLY_FILLED,
         OrderTransitionEventType.BROKER_FILLED,
     ]
+
+
+def test_paper_fill_dedup_empty_batch_executes_no_select(
+    migrated_paper_db: str,
+) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        with _capture_paper_fill_dedup_queries(session) as dedup_queries:
+            ingested = paper_execution_module._ingest_paper_fills(
+                session,
+                [],
+                local_orders_by_broker_id={},
+            )
+
+    assert ingested == 0
+    assert dedup_queries == []
+
+
+def test_paper_fill_dedup_work_is_independent_of_historical_size(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    settings = load_settings()
+    current_batch = [
+        _broker_fill_snapshot("fill-current-existing"),
+        _broker_fill_snapshot("fill-current-new"),
+    ]
+
+    with session_scope(settings) as session:
+        local_order = session.execute(select(PaperOrder)).scalar_one()
+        session.add(
+            PaperFill(
+                paper_order_id=local_order.id,
+                symbol_id=local_order.symbol_id,
+                broker_fill_id="fill-current-existing",
+                broker_order_id=local_order.broker_order_id,
+                side="buy",
+                quantity=Decimal("1.000000"),
+                price=Decimal("120.000000"),
+                filled_at=datetime(2024, 1, 4, 14, 40, tzinfo=UTC),
+                broker_payload={},
+            )
+        )
+        session.flush()
+
+        with _capture_paper_fill_dedup_queries(session) as small_history_queries:
+            small_history_matches = paper_execution_module._load_existing_paper_fill_ids(
+                session, current_batch
+            )
+
+        session.add_all(
+            [
+                PaperFill(
+                    paper_order_id=local_order.id,
+                    symbol_id=local_order.symbol_id,
+                    broker_fill_id=f"fill-history-{index:04d}",
+                    broker_order_id=local_order.broker_order_id,
+                    side="buy",
+                    quantity=Decimal("1.000000"),
+                    price=Decimal("100.000000"),
+                    filled_at=datetime(2023, 1, 1, tzinfo=UTC) + timedelta(minutes=index),
+                    broker_payload={},
+                )
+                for index in range(250)
+            ]
+        )
+        session.flush()
+
+        with _capture_paper_fill_dedup_queries(session) as large_history_queries:
+            large_history_matches = paper_execution_module._load_existing_paper_fill_ids(
+                session, current_batch
+            )
+
+    assert small_history_matches == large_history_matches == {"fill-current-existing"}
+    assert len(small_history_queries) == len(large_history_queries) == 1
+    for statement, parameters in (*small_history_queries, *large_history_queries):
+        assert re.search(r"\bWHERE\b", statement, re.IGNORECASE)
+        assert " IN (" in statement.upper()
+        assert sorted(_bound_parameter_values(parameters)) == [
+            "fill-current-existing",
+            "fill-current-new",
+        ]
+
+
+def test_paper_fill_dedup_chunks_current_ids_deterministically(
+    migrated_paper_db: str,
+) -> None:
+    settings = load_settings()
+    unique_count = paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE + 1
+    distinct_ids = [f"fill-current-{index:04d}" for index in reversed(range(unique_count))]
+    broker_fills = [_broker_fill_snapshot(fill_id) for fill_id in distinct_ids]
+    broker_fills.append(_broker_fill_snapshot(distinct_ids[0]))
+
+    with session_scope(settings) as session:
+        with _capture_paper_fill_dedup_queries(session) as dedup_queries:
+            matches = paper_execution_module._load_existing_paper_fill_ids(session, broker_fills)
+
+    assert matches == set()
+    assert len(dedup_queries) == 2
+    bound_chunks = [_bound_parameter_values(parameters) for _, parameters in dedup_queries]
+    assert [len(chunk) for chunk in bound_chunks] == [
+        paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE,
+        1,
+    ]
+    assert bound_chunks[0] == sorted(distinct_ids)[
+        : paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE
+    ]
+    assert bound_chunks[1] == sorted(distinct_ids)[
+        paper_execution_module._PAPER_FILL_DEDUP_CHUNK_SIZE :
+    ]
+    assert all(
+        re.search(r"\bWHERE\b", statement, re.IGNORECASE)
+        and " IN (" in statement.upper()
+        for statement, _ in dedup_queries
+    )
+
+
+def test_paper_fill_duplicate_ingestion_preserves_idempotency_and_filled_at(
+    migrated_paper_db: str,
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    settings = load_settings()
+    first_new_fill_at = datetime(2024, 1, 5, 14, 42, tzinfo=UTC)
+
+    with session_scope(settings) as session:
+        local_order = session.execute(select(PaperOrder)).scalar_one()
+        session.add(
+            PaperFill(
+                paper_order_id=local_order.id,
+                symbol_id=local_order.symbol_id,
+                broker_fill_id="fill-already-stored",
+                broker_order_id=local_order.broker_order_id,
+                side="buy",
+                quantity=Decimal("1.000000"),
+                price=Decimal("120.000000"),
+                filled_at=datetime(2024, 1, 5, 14, 38, tzinfo=UTC),
+                broker_payload={},
+            )
+        )
+        session.flush()
+
+        ingested = paper_execution_module._ingest_paper_fills(
+            session,
+            [
+                _broker_fill_snapshot("fill-already-stored"),
+                _broker_fill_snapshot("fill-new", filled_at=first_new_fill_at),
+                _broker_fill_snapshot(
+                    "fill-new", filled_at=datetime(2024, 1, 5, 14, 45, tzinfo=UTC)
+                ),
+            ],
+            local_orders_by_broker_id={local_order.broker_order_id: local_order},
+        )
+        session.flush()
+        persisted_ids = session.execute(
+            select(PaperFill.broker_fill_id).order_by(PaperFill.broker_fill_id)
+        ).scalars().all()
+
+    assert ingested == 1
+    assert persisted_ids == ["fill-already-stored", "fill-new"]
+    assert local_order.filled_at == first_new_fill_at
 
 
 def test_paper_execution_module_routes_lifecycle_through_order_state_machine() -> None:
