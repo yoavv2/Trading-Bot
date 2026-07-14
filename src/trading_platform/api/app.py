@@ -13,10 +13,10 @@ from trading_platform.api.routes.operations import router as operations_router
 from trading_platform.api.routes.runs import router as runs_router
 from trading_platform.api.routes.strategies import router as strategies_router
 from trading_platform.api.routes.system import router as system_router
-from trading_platform.core.config_validation import ExecutionMode
 from trading_platform.core.logging import configure_logging, get_logger
 from trading_platform.core.settings import load_settings
 from trading_platform.core.startup import enforce_startup_config
+from trading_platform.services.config.validation import ExecutionMode
 
 
 @asynccontextmanager

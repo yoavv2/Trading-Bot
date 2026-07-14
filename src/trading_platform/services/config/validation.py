@@ -27,6 +27,15 @@ where a process boots.
 This module performs zero I/O — no DB, no filesystem, no logging. Wiring this
 into entrypoints and translating a raised `ConfigValidationError` into
 process-exit behavior is explicitly out of scope here (plan 10-05).
+
+The CFG-01/02/03 semantic per-mode / cross-field / mutual-exclusion checks
+this module's second validation pass delegates to live in
+`services/config/secrets.py` (STRUCT-06 split). `secrets.py` imports
+`ExecutionMode` from this module, so the semantic-check call below is a
+deferred (call-time) import rather than a top-of-file import — importing
+`secrets` eagerly here would create a circular import at module-load time
+(secrets.py -> validation.py -> secrets.py) since `ExecutionMode` must exist
+before `secrets.py` can be imported.
 """
 
 from __future__ import annotations
@@ -106,64 +115,10 @@ def validate_config(
     except ValidationError as exc:
         raise ConfigValidationError(_translate_pydantic_errors(exc)) from exc
 
-    failures = _semantic_failures(settings, mode=mode)
+    from trading_platform.services.config.secrets import semantic_failures
+
+    failures = semantic_failures(settings, mode=mode)
     if failures:
         raise ConfigValidationError(failures)
 
     return settings
-
-
-_PAPER_BASE_URL_MARKER = "paper-api"
-
-
-def _semantic_failures(settings: Settings, *, mode: ExecutionMode) -> list[tuple[str, str]]:
-    """CFG-01/02/03 checks against an already-constructed, shape-valid Settings.
-
-    Backtest mode with empty broker keys is deliberately never a failure here
-    — an empty-keys backtest boot must succeed (see plan `must_haves`).
-
-    There is no separate `mode` field or distinct live-broker settings block
-    in this codebase today (see plan `key_facts`) — `broker.alpaca.base_url`
-    is the only signal of which environment a set of credentials targets.
-    That single field is therefore what both CFG-02 (mode=paper forbids a
-    configured live endpoint) and CFG-03 (paper vs live are mutually
-    exclusive — a paper-mode config can't simultaneously point at a live
-    endpoint, and a live-mode config can't point at the paper endpoint) key
-    off; they are not two independently-checkable conditions in the current
-    config surface.
-    """
-    if mode is ExecutionMode.BACKTEST or settings.broker.provider != "alpaca":
-        return []
-
-    alpaca = settings.broker.alpaca
-    is_paper_endpoint = _PAPER_BASE_URL_MARKER in alpaca.base_url
-    failures: list[tuple[str, str]] = []
-
-    # CFG-01: required secrets for the active mode.
-    if not alpaca.api_key:
-        failures.append(
-            ("broker.alpaca.api_key", f"non-empty string (required for {mode.value} mode)")
-        )
-    if not alpaca.api_secret:
-        failures.append(
-            ("broker.alpaca.api_secret", f"non-empty string (required for {mode.value} mode)")
-        )
-
-    # CFG-02 / CFG-03: the configured endpoint must match the active mode —
-    # a paper-mode config cannot point at a live endpoint and vice versa.
-    if mode is ExecutionMode.PAPER and not is_paper_endpoint:
-        failures.append(
-            (
-                "broker.alpaca.base_url",
-                "the paper trading endpoint (containing 'paper-api') while mode=paper",
-            )
-        )
-    elif mode is ExecutionMode.LIVE and is_paper_endpoint:
-        failures.append(
-            (
-                "broker.alpaca.base_url",
-                "a live trading endpoint (not the paper-api endpoint) while mode=live",
-            )
-        )
-
-    return failures

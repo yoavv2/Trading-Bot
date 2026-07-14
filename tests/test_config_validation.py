@@ -21,12 +21,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from trading_platform.core.config_validation import (
+from trading_platform.core.settings import Settings, build_settings_payload
+from trading_platform.services.config.validation import (
     ConfigValidationError,
     ExecutionMode,
     validate_config,
 )
-from trading_platform.core.settings import Settings, build_settings_payload
 
 
 def _raw_payload() -> dict[str, Any]:

@@ -1,7 +1,8 @@
 """Phase 10 startup hardening: process-entrypoint gate (CFG-04, CFG-06).
 
 `enforce_startup_config` wires the pure config validator (10-01,
-`config_validation.py`) into a process-boot-time gate: validate the raw
+`services/config/validation.py`, relocated from `core/config_validation.py`
+in 12-02) into a process-boot-time gate: validate the raw
 payload, then (by default) preflight DB reachability, and exit non-zero with
 a single actionable message on any failure — BEFORE any domain service
 initializes.
@@ -28,10 +29,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from trading_platform.core.config_validation import ExecutionMode
 from trading_platform.core.settings import Settings, build_settings_payload
 from trading_platform.core.startup import CONFIG_VALIDATION_EXIT_CODE, enforce_startup_config
 from trading_platform.services.concurrency_guard import CONCURRENT_RUN_LOCK_EXIT_CODE
+from trading_platform.services.config.validation import ExecutionMode
 
 
 def _raw_payload() -> dict[str, Any]:

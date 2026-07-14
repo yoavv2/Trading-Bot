@@ -49,7 +49,13 @@ IN_SCOPE_MODULES: list[Path] = [
     _SRC / "services" / "bootstrap.py",
     _SRC / "api" / "app.py",
     _SRC / "core" / "startup.py",
-    _SRC / "core" / "config_validation.py",
+    # Relocated from core/config_validation.py to services/config/validation.py
+    # in 12-02 (STRUCT-06) -- same single-entry 1:1 path swap, list length
+    # unchanged (12) so the length-guard assertion below stays frozen per the
+    # zero-behavior-change contract. services/config/secrets.py is a newly
+    # extracted, zero-I/O pure helper (no logging calls) split out of the same
+    # move; it is not yet in this enforcement list -- see deferred-items.md.
+    _SRC / "services" / "config" / "validation.py",
 ]
 
 

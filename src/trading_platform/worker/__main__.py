@@ -9,7 +9,6 @@ import sys
 import time
 from datetime import UTC, date, datetime, timedelta
 
-from trading_platform.core.config_validation import ExecutionMode
 from trading_platform.core.logging import build_log_context, configure_logging, emit_structured_log, get_logger
 from trading_platform.core.settings import get_strategy_config
 from trading_platform.core.startup import enforce_startup_config
@@ -18,6 +17,7 @@ from trading_platform.services.backtest_reporting import export_backtest_report
 from trading_platform.services.backtesting import resolve_backtest_window, run_backtest
 from trading_platform.services.bootstrap import run_dry_bootstrap as run_persisted_dry_bootstrap
 from trading_platform.services.concurrency_guard import CONCURRENT_RUN_LOCK_EXIT_CODE, ConcurrentRunLockedError
+from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.operator_controls import (
     OperatorControlService,
     render_kill_switch_report,
