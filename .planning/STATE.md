@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Operator Console v0
 status: executing
-stopped_at: Completed 12-03-PLAN.md
-last_updated: "2026-07-14T18:20:48.284Z"
-last_activity: 2026-07-14
+stopped_at: Completed 12-05-PLAN.md
+last_updated: "2026-07-15T00:00:00.000Z"
+last_activity: 2026-07-15
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 41
-  completed_plans: 38
-  percent: 89
+  completed_plans: 40
+  percent: 90
 ---
 
 # Project State
@@ -26,10 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 ## Current Position
 
 Phase: 12 (structural-refactor-and-tooling) — EXECUTING
-Plan: 5 of 7
-Also complete this wave (concurrent sibling plans, each independently verified via their own SUMMARY.md): 11-01 (Paper Preflight N+1 Elimination, PERF-01 — batched the auto-resolve preflight path down to a flat 2 queries regardless of candidate count) and 11-02 (Reconciliation Matcher Full-Surface Linear-Scaling Benchmark, PERF-02 — extended the existing positions-only O(n) benchmark to orders, fills, and the public `match_snapshots` entry point).
-Status: Ready to execute
-Last activity: 2026-07-14
+Plan: 5 of 7 complete; 12-06 next
+Status: Ready to execute 12-06
+Last activity: 2026-07-15
 
 Progress (phases across all milestones, v1.1 Phase 12 counted as paused/not-yet-executing): [██████████] 15/16 phases complete (v1.0: 6, v1.1: 5 of 6 complete — Phase 7 + Phase 8 (all 5 plans) + Phase 9 (all 4 plans) + Phase 10 (all 6 plans) + Phase 11 (all 4 plans) — Phase 12 paused, v1.2: 4 of 4 complete)
 
@@ -43,7 +42,7 @@ Progress (phases across all milestones, v1.1 Phase 12 counted as paused/not-yet-
 
 **v1.0 By Phase:** 1: 3/3, 2: 3/3, 3: 3/3, 4: 2/2, 5: 3/3, 6: 3/3 — all complete
 
-**v1.1 By Phase:** 7: 3/3 complete; 8: 5/5 COMPLETE; 9: 4/4 COMPLETE; 10: 6/6 COMPLETE; 11: 4/4 COMPLETE (11-01 PERF-01 two-query preflight; 11-02 PERF-02 linear matcher benchmark; 11-03 index audit; 11-04 batch-scoped broker-fill dedup + named-index EXPLAIN proof, PERF-03); 12: 1/7 IN PROGRESS (12-01: STRUCT-01 baseline gate + STRUCT-07 tolerance consolidation)
+**v1.1 By Phase:** 7: 3/3 complete; 8: 5/5 COMPLETE; 9: 4/4 COMPLETE; 10: 6/6 COMPLETE; 11: 4/4 COMPLETE (11-01 PERF-01 two-query preflight; 11-02 PERF-02 linear matcher benchmark; 11-03 index audit; 11-04 batch-scoped broker-fill dedup + named-index EXPLAIN proof, PERF-03); 12: 5/7 IN PROGRESS (12-01: STRUCT-01 baseline gate + STRUCT-07 tolerance consolidation; 12-02: config package reorg STRUCT-06; 12-03: execution package — transition + idempotency; 12-04: paper_execution split into submit/sync/_paper_common, STRUCT-04 complete; 12-05: reconciliation package snapshot/findings/matcher/report, STRUCT-05 complete)
 
 **v1.2 By Phase:** 13: 4/4 complete (01: kill-switch route, 02: console scaffold + proxy, 03: shared fetch client + kill-switch banner, 04: system status screen + operator sign-off), 14: 5/5 complete (14-01: Strategy overview screen + nav links; 14-02: Runs screen — filterable table + drill-down links; 14-03: Run detail shell + Signals/Risk Decisions + runScopedFilter/CappedDisclosure primitives; 14-04: OrdersFillsPanel + run-type-aware MetricsPanel; 14-05: operator live-verify checkpoint — approved, vv1 bug fixed live), 15: 3/3 complete (15-01: PaperAccountPanel + PaperReconciliationPanel + PaperAnalyticsSection + /paper route + nav link; 15-02: PositionsPanel (PAPR-01) + OpenOrdersPanel (PAPR-02) composed into /paper; 15-03: operator live-verify checkpoint — approved, all four PAPR surfaces honest-empty with Alpaca creds unconfigured), 16: 3/3 complete (16-02: EquityCurveChart (ANLX-01 frontend) + SummaryMetricsPanel (ANLX-02) + BacktestAnalyticsSection single-fetch owner, mounted on run-detail for backtest runs only, executed ahead of 16-01 per explicit human override; 16-01: backend equity_curve passthrough — single-line addition to StrategyAnalyticsService._summarize_backtest exposing the already-computed field, service-level pytest extended; 16-03: operator live-verify checkpoint — approved, all 6 steps passed against fresh servers, one in-scope YAxis auto-scale live-fix (dcd4232), ANLX-01 AND ANLX-02 confirmed Complete). Awaiting orchestrator phase-complete.
 

@@ -104,7 +104,7 @@ Requirements grouped by tier. Each is an enforceable invariant. Each maps to one
 - [ ] **STRUCT-02**: Every refactor change is no-behavior-change — full existing test suite passes before the change and after with zero new or modified assertions
 - [ ] **STRUCT-03**: `worker/__main__.py` is split into `worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile}.py`; the entrypoint contains only routing (< ~100 lines)
 - [x] **STRUCT-04**: Execution logic is reorganized under `services/execution/{submit_orders,sync_orders,transition,idempotency}.py`
-- [ ] **STRUCT-05**: Reconciliation logic is reorganized under `services/reconciliation/{snapshot,matcher,findings,report}.py`
+- [x] **STRUCT-05**: Reconciliation logic is reorganized under `services/reconciliation/{snapshot,matcher,findings,report}.py`
 - [x] **STRUCT-06**: Config logic is reorganized under `services/config/{validation,secrets}.py`
 - [x] **STRUCT-07**: Scattered tolerance constants are extracted into a single typed config module; old scattered definitions are deleted
 - [x] **STRUCT-08**: Settings are consolidated to one canonical settings surface; duplicate or competing settings modules are removed
@@ -206,7 +206,7 @@ Explicitly excluded from v1.1.
 | STRUCT-02 | Phase 12 | Pending |
 | STRUCT-03 | Phase 12 | Pending |
 | STRUCT-04 | Phase 12 | Complete |
-| STRUCT-05 | Phase 12 | Pending |
+| STRUCT-05 | Phase 12 | Complete |
 | STRUCT-06 | Phase 12 | Complete |
 | STRUCT-07 | Phase 12 | Complete |
 | STRUCT-08 | Phase 12 | Complete |
