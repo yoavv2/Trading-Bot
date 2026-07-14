@@ -14,3 +14,16 @@ repos:
         # an out-of-scope file would trigger a large, unrelated
         # formatting-only diff on that file.
         files: ^src/trading_platform/(services/(config|execution|reconciliation)/|worker/)
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (execution, reconciliation, config)
+        entry: .venv/bin/mypy
+        language: system
+        pass_filenames: false
+        args:
+          - src/trading_platform/services/execution
+          - src/trading_platform/services/reconciliation
+          - src/trading_platform/services/config
+        files: ^src/trading_platform/services/(execution|reconciliation|config)/

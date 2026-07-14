@@ -122,7 +122,9 @@ def match_snapshots_with_comparisons(
     """
     position_findings, position_comparisons = _match_positions(local_positions, broker_positions)
     order_findings, order_comparisons = _match_orders(local_orders, broker_orders)
-    fill_findings, fill_comparisons = _match_fills(local_fills, broker_fills, local_orders=local_orders)
+    fill_findings, fill_comparisons = _match_fills(
+        local_fills, broker_fills, local_orders=local_orders
+    )
     total_comparisons = position_comparisons + order_comparisons + fill_comparisons
     return position_findings + order_findings + fill_findings, total_comparisons
 
@@ -159,13 +161,19 @@ def _match_positions(
         broker_position = broker_by_identity.get(identity)
 
         if local_position is None:
+            # `identity` was drawn from the union of both dicts' keys and is absent
+            # from `local_by_identity`, so it is guaranteed present in
+            # `broker_by_identity` — narrows Optional[BrokerPositionSnapshot] for mypy.
+            assert broker_position is not None
             findings.append(_missing_local_position_finding(identity, broker_position))
             continue
         if broker_position is None:
             findings.append(_missing_broker_position_finding(identity, local_position))
             continue
 
-        if _decimal_differs(local_position.quantity, broker_position.quantity, tolerance=QUANTITY_TOLERANCE):
+        if _decimal_differs(
+            local_position.quantity, broker_position.quantity, tolerance=QUANTITY_TOLERANCE
+        ):
             findings.append(_quantity_mismatch_finding(identity, local_position, broker_position))
         if _decimal_differs(
             local_position.average_entry_price,
@@ -211,7 +219,10 @@ def _match_orders(
         expected_status = _BROKER_STATUS_TO_EXPECTED_LOCAL_STATUS.get(
             broker_order.status, _UNKNOWN_LOCAL_STATUS
         )
-        if local_order.status != expected_status or local_order.broker_status != broker_order.broker_status:
+        if (
+            local_order.status != expected_status
+            or local_order.broker_status != broker_order.broker_status
+        ):
             findings.append(_state_mismatch_finding(local_order, broker_order, expected_status))
 
     for local_order in local_orders:

@@ -64,3 +64,15 @@ known-first-party = ["trading_platform"]
 # parameter names of the same name; ruff's F811 (redefinition) doesn't
 # understand this idiom and false-positives on it.
 "tests/*" = ["F811"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+explicit_package_bases = true
+warn_unused_ignores = true
+no_implicit_optional = true
+files = [
+  "src/trading_platform/services/execution",
+  "src/trading_platform/services/reconciliation",
+  "src/trading_platform/services/config",
+]

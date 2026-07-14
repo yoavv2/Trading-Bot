@@ -47,13 +47,14 @@ from trading_platform.services.execution._paper_common import (
 from trading_platform.services.execution.contracts import ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.execution.idempotency import (
     DerivedOrderIdentity,
-    build_client_order_id as _build_client_order_id,
     derive_order_identity,
+)
+from trading_platform.services.execution.idempotency import (
+    build_client_order_id as _build_client_order_id,
 )
 from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
     apply_order_transition,
-    resolve_transition_target,
 )
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.operator_controls import (
@@ -396,11 +397,12 @@ def _run_paper_order_submission_guarded(
                     pending_order = paper_order
                     transition_event_type = OrderTransitionEventType.INTENT_REGISTERED
                 else:
-                    pending_order = session.get(PaperOrder, intent_decision.existing_order_id)
-                    if pending_order is None:
+                    retrieved_order = session.get(PaperOrder, intent_decision.existing_order_id)
+                    if retrieved_order is None:
                         raise LookupError(
                             f"Missing retryable paper_order '{intent_decision.existing_order_id}'."
                         )
+                    pending_order = retrieved_order
                     transition_event_type = OrderTransitionEventType.RETRY_REQUESTED
 
                 pending_order.strategy_run_id = run_id
@@ -472,12 +474,12 @@ def _run_paper_order_submission_guarded(
                 result = broker_execution.submit_order(intent)
             except Exception as exc:
                 with session_scope(resolved_settings) as session:
-                    pending_order = session.get(PaperOrder, pending_order_id)
-                    if pending_order is not None:
-                        pending_order.last_submission_error = str(exc)
-                        pending_order.broker_payload = {"error": str(exc)}
+                    failed_order = session.get(PaperOrder, pending_order_id)
+                    if failed_order is not None:
+                        failed_order.last_submission_error = str(exc)
+                        failed_order.broker_payload = {"error": str(exc)}
                         apply_order_transition(
-                            pending_order.id,
+                            failed_order.id,
                             OrderTransitionRequest(
                                 strategy_run_id=run_id,
                                 event_type=OrderTransitionEventType.SUBMISSION_FAILED,
@@ -604,7 +606,9 @@ def _run_paper_order_submission_guarded(
                 "strategy_id": strategy_id,
                 "as_of_session": as_of_session.isoformat(),
                 "requested_risk_run_id": risk_run_id,
-                "source_risk_run_id": str(source_risk_run.id) if source_risk_run is not None else None,
+                "source_risk_run_id": str(source_risk_run.id)
+                if source_risk_run is not None
+                else None,
                 "strategy_status": control_state.status,
             },
         )
@@ -988,7 +992,9 @@ def _candidate_from_risk_event(
     )
 
 
-def _load_submission_candidates(session, source_risk_run_id: uuid.UUID) -> list[PaperExecutionCandidate]:
+def _load_submission_candidates(
+    session, source_risk_run_id: uuid.UUID
+) -> list[PaperExecutionCandidate]:
     side_priority = _risk_event_side_priority()
     rows = session.execute(
         select(RiskEvent, Symbol)
@@ -1335,17 +1341,21 @@ def _resolve_paper_intent_decision(
             failure_threshold=failure_threshold,
         )
 
-    predecessor = session.execute(
-        select(PaperOrder)
-        .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-        .where(
-            StrategyRun.strategy_id == strategy_row_id,
-            PaperOrder.symbol_id == candidate.symbol_id,
-            PaperOrder.intended_session_date == candidate.session_date,
-            PaperOrder.side == candidate.side.value,
+    predecessor = (
+        session.execute(
+            select(PaperOrder)
+            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+            .where(
+                StrategyRun.strategy_id == strategy_row_id,
+                PaperOrder.symbol_id == candidate.symbol_id,
+                PaperOrder.intended_session_date == candidate.session_date,
+                PaperOrder.side == candidate.side.value,
+            )
+            .order_by(PaperOrder.intent_version.desc(), PaperOrder.created_at.desc())
         )
-        .order_by(PaperOrder.intent_version.desc(), PaperOrder.created_at.desc())
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     return _build_intent_decision(
         identity=identity,
         existing_order=None,
@@ -1470,7 +1480,9 @@ def _update_paper_execution_run(
             status=strategy_run.status.value,
             trigger_source=strategy_run.trigger_source,
             started_at=strategy_run.started_at.isoformat(),
-            completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+            completed_at=strategy_run.completed_at.isoformat()
+            if strategy_run.completed_at
+            else None,
             result_summary=strategy_run.result_summary,
         )
 
@@ -1575,7 +1587,9 @@ def _finalize_blocked_paper_execution_run(
             status=strategy_run.status.value,
             trigger_source=strategy_run.trigger_source,
             started_at=strategy_run.started_at.isoformat(),
-            completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+            completed_at=strategy_run.completed_at.isoformat()
+            if strategy_run.completed_at
+            else None,
             result_summary=strategy_run.result_summary,
         )
 
@@ -1619,7 +1633,9 @@ def _finalize_mid_run_kill_switch_halt(
             status=strategy_run.status.value,
             trigger_source=strategy_run.trigger_source,
             started_at=strategy_run.started_at.isoformat(),
-            completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+            completed_at=strategy_run.completed_at.isoformat()
+            if strategy_run.completed_at
+            else None,
             result_summary=strategy_run.result_summary,
         )
 

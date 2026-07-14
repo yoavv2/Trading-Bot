@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -21,7 +22,6 @@ from trading_platform.db.models import (
     PaperFill,
     PaperOrder,
     Position,
-    Strategy,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
@@ -42,8 +42,8 @@ from trading_platform.services.execution.transition import (
     apply_order_transition,
     resolve_transition_target,
 )
-from trading_platform.services.reconciliation.matcher import match_snapshots
 from trading_platform.services.reconciliation.findings import Finding
+from trading_platform.services.reconciliation.matcher import match_snapshots
 from trading_platform.services.reconciliation.snapshot import (
     LocalAccountSnapshot,
     LocalFillSnapshot,
@@ -156,15 +156,23 @@ def recover_inflight_paper_orders(
 
     with session_scope(resolved_settings) as session:
         strategy_record = ensure_strategy_record(session, strategy.metadata)
-        local_orders = session.execute(
-            select(PaperOrder)
-            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-            .where(
-                StrategyRun.strategy_id == strategy_record.id,
-                PaperOrder.status.in_(tuple(_ACTIVE_LOCAL_ORDER_STATUSES | {OrderLifecycleState.SUBMISSION_FAILED})),
+        local_orders = (
+            session.execute(
+                select(PaperOrder)
+                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                .where(
+                    StrategyRun.strategy_id == strategy_record.id,
+                    PaperOrder.status.in_(
+                        tuple(
+                            _ACTIVE_LOCAL_ORDER_STATUSES | {OrderLifecycleState.SUBMISSION_FAILED}
+                        )
+                    ),
+                )
+                .order_by(PaperOrder.created_at.asc())
             )
-            .order_by(PaperOrder.created_at.asc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         for local_order in local_orders:
             broker_order = None
@@ -175,7 +183,9 @@ def recover_inflight_paper_orders(
             if broker_order is None:
                 continue
 
-            if _apply_broker_order_snapshot(session, local_order, broker_order, synced_at=synced_at):
+            if _apply_broker_order_snapshot(
+                session, local_order, broker_order, synced_at=synced_at
+            ):
                 local_order.last_submission_error = None
                 recovered += 1
 
@@ -231,12 +241,16 @@ def apply_reconciliation_corrections(
     mutated_count = 0
     with session_scope(resolved_settings) as session:
         strategy_record = ensure_strategy_record(session, strategy.metadata)
-        local_orders = session.execute(
-            select(PaperOrder)
-            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-            .where(StrategyRun.strategy_id == strategy_record.id)
-            .order_by(PaperOrder.created_at.asc())
-        ).scalars().all()
+        local_orders = (
+            session.execute(
+                select(PaperOrder)
+                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                .where(StrategyRun.strategy_id == strategy_record.id)
+                .order_by(PaperOrder.created_at.asc())
+            )
+            .scalars()
+            .all()
+        )
 
         for local_order in local_orders:
             error_message = order_error_messages.get(local_order.id)
@@ -274,7 +288,9 @@ def reconcile_paper_execution(
     logger = get_logger("trading_platform.reconciliation")
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
-    resolved_strategy_id = strategy_id or resolved_settings.execution.paper_session_runner.default_strategy_id
+    resolved_strategy_id = (
+        strategy_id or resolved_settings.execution.paper_session_runner.default_strategy_id
+    )
     strategy = resolved_registry.resolve(resolved_strategy_id)
     checked_at = datetime.now(UTC)
     safety_settings = resolved_settings.execution.safety
@@ -292,39 +308,57 @@ def reconcile_paper_execution(
     try:
         with session_scope(resolved_settings) as session:
             strategy_record = ensure_strategy_record(session, strategy.metadata)
-            local_orders = session.execute(
-                select(PaperOrder)
-                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-                .where(StrategyRun.strategy_id == strategy_record.id)
-                .order_by(PaperOrder.created_at.asc())
-            ).scalars().all()
-            local_fills = session.execute(
-                select(PaperFill)
-                .join(PaperOrder, PaperOrder.id == PaperFill.paper_order_id)
-                .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-                .where(StrategyRun.strategy_id == strategy_record.id)
-                .order_by(PaperFill.filled_at.asc())
-            ).scalars().all()
-            local_positions = session.execute(
-                select(Position)
-                .where(
-                    Position.strategy_id == strategy_record.id,
-                    Position.status == "open",
+            local_orders = (
+                session.execute(
+                    select(PaperOrder)
+                    .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                    .where(StrategyRun.strategy_id == strategy_record.id)
+                    .order_by(PaperOrder.created_at.asc())
                 )
-                .order_by(Position.created_at.asc())
-            ).scalars().all()
-            latest_snapshot = session.execute(
-                select(AccountSnapshot)
-                .where(AccountSnapshot.strategy_id == strategy_record.id)
-                .order_by(AccountSnapshot.snapshot_at.desc())
-            ).scalars().first()
+                .scalars()
+                .all()
+            )
+            local_fills = (
+                session.execute(
+                    select(PaperFill)
+                    .join(PaperOrder, PaperOrder.id == PaperFill.paper_order_id)
+                    .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+                    .where(StrategyRun.strategy_id == strategy_record.id)
+                    .order_by(PaperFill.filled_at.asc())
+                )
+                .scalars()
+                .all()
+            )
+            local_positions = (
+                session.execute(
+                    select(Position)
+                    .where(
+                        Position.strategy_id == strategy_record.id,
+                        Position.status == "open",
+                    )
+                    .order_by(Position.created_at.asc())
+                )
+                .scalars()
+                .all()
+            )
+            latest_snapshot = (
+                session.execute(
+                    select(AccountSnapshot)
+                    .where(AccountSnapshot.strategy_id == strategy_record.id)
+                    .order_by(AccountSnapshot.snapshot_at.desc())
+                )
+                .scalars()
+                .first()
+            )
 
             # READ-ONLY projection boundary (RECON-03/05): ORM rows are projected into
             # the typed 09-01 snapshots here; no ORM instance crosses this boundary into
             # the pure matcher or the account/threshold evaluations below.
             local_order_snapshots = [_project_local_order(order) for order in local_orders]
             local_fill_snapshots = [_project_local_fill(fill) for fill in local_fills]
-            local_position_snapshots = [_project_local_position(position) for position in local_positions]
+            local_position_snapshots = [
+                _project_local_position(position) for position in local_positions
+            ]
             local_account_snapshot = (
                 _project_local_account(latest_snapshot) if latest_snapshot is not None else None
             )
@@ -357,7 +391,9 @@ def reconcile_paper_execution(
                     ExecutionEvent(
                         strategy_run_id=run_id,
                         paper_order_id=(
-                            uuid.UUID(event_dict["paper_order_id"]) if event_dict["paper_order_id"] else None
+                            uuid.UUID(event_dict["paper_order_id"])
+                            if event_dict["paper_order_id"]
+                            else None
                         ),
                         event_type=event_dict["event_type"],
                         severity=event_dict["severity"],
@@ -534,18 +570,27 @@ def _evaluate_account_divergence(
     )
     divergence: dict[str, dict[str, str | int]] = {}
     if _decimal_differs(latest_snapshot.cash, broker_account.cash, tolerance=MONEY_TOLERANCE):
-        divergence["cash"] = {"local": str(latest_snapshot.cash), "broker": str(broker_account.cash)}
-    if _decimal_differs(latest_snapshot.buying_power, broker_account.buying_power, tolerance=MONEY_TOLERANCE):
+        divergence["cash"] = {
+            "local": str(latest_snapshot.cash),
+            "broker": str(broker_account.cash),
+        }
+    if _decimal_differs(
+        latest_snapshot.buying_power, broker_account.buying_power, tolerance=MONEY_TOLERANCE
+    ):
         divergence["buying_power"] = {
             "local": str(latest_snapshot.buying_power),
             "broker": str(broker_account.buying_power),
         }
-    if _decimal_differs(latest_snapshot.total_equity, broker_account.equity, tolerance=MONEY_TOLERANCE):
+    if _decimal_differs(
+        latest_snapshot.total_equity, broker_account.equity, tolerance=MONEY_TOLERANCE
+    ):
         divergence["total_equity"] = {
             "local": str(latest_snapshot.total_equity),
             "broker": str(broker_account.equity),
         }
-    if _decimal_differs(latest_snapshot.gross_exposure, broker_gross_exposure, tolerance=MONEY_TOLERANCE):
+    if _decimal_differs(
+        latest_snapshot.gross_exposure, broker_gross_exposure, tolerance=MONEY_TOLERANCE
+    ):
         divergence["gross_exposure"] = {
             "local": str(latest_snapshot.gross_exposure),
             "broker": str(broker_gross_exposure),
@@ -560,7 +605,7 @@ def _evaluate_account_divergence(
 
 def _evaluate_threshold_breach(
     *,
-    local_orders: list[PaperOrder],
+    local_orders: Sequence[PaperOrder],
     findings: tuple[Finding, ...],
     failure_threshold: int,
 ) -> list[dict[str, Any]]:
