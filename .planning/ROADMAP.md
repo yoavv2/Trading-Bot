@@ -162,7 +162,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 11-04-PLAN.md — Gap closure: batch-scoped broker-fill dedup lookup + regression and named-index EXPLAIN proof (PERF-03)
+- [x] 11-04-PLAN.md — Gap closure: batch-scoped broker-fill dedup lookup + regression and named-index EXPLAIN proof (PERF-03)
 
 ### Phase 12: Structural Refactor and Tooling
 
@@ -177,7 +177,14 @@ Plans:
   3. The full existing test suite passes before and after the refactor with zero new or modified assertions — no behavior change is introduced.
   4. A pre-commit or CI gate blocks merge when ruff (or equivalent) lint/format check fails; mypy or pyright blocks merge on type errors in execution, reconciliation, and config modules.
 
-**Plans**: TBD
+**Plans**: 7 plans (sequential waves 1-7; each depends on the prior to avoid shared-working-tree collisions documented in STATE.md — may be collapsed if run single-threaded)
+- [ ] 12-01-PLAN.md — STRUCT-01 Tier-0 gate + baseline capture; STRUCT-07 tolerance consolidation
+- [ ] 12-02-PLAN.md — STRUCT-06 config -> services/config/{validation,secrets}; STRUCT-08 single settings surface
+- [ ] 12-03-PLAN.md — STRUCT-04 (part 1) execution package: transition + idempotency + contracts
+- [ ] 12-04-PLAN.md — STRUCT-04 (part 2) split paper_execution.py into execution/{submit_orders,sync_orders}
+- [ ] 12-05-PLAN.md — STRUCT-05 reconciliation -> services/reconciliation/{snapshot,matcher,findings,report}
+- [ ] 12-06-PLAN.md — STRUCT-03 worker split (routing-only __main__ <100 lines); STRUCT-02 zero-behavior-change proof
+- [ ] 12-07-PLAN.md — TOOL-01 ruff + TOOL-02 mypy via blocking pre-commit hook
 
 ### Phase 13: Console Foundation & System Status
 
@@ -275,7 +282,7 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 8. Concurrency Guard | v1.1 | 5/5 | Complete | 2026-07-13 |
 | 9. Reconciliation Rewrite | v1.1 | 4/4 | Complete | 2026-07-13 |
 | 10. Startup Hardening | v1.1 | 6/6 | Complete | 2026-07-13 |
-| 11. Query Performance | v1.1 | 3/4 | Gaps Found | - |
+| 11. Query Performance | v1.1 | 4/4 | Complete   | 2026-07-14 |
 | 12. Structural Refactor and Tooling | v1.1 | 0/TBD | Paused | - |
 | 13. Console Foundation & System Status | v1.2 | 4/4 | Complete | 2026-07-08 |
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
