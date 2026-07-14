@@ -45,3 +45,13 @@ make this query-shape change and add a regression test asserting the dedup query
 scales with sync-batch size, not total historical fill count (e.g. a query-count
 or EXPLAIN-selectivity assertion analogous to PERF-01's approach for paper
 preflight).
+
+**Resolved by 11-04 (2026-07-14):** `_ingest_paper_fills` now deduplicates the
+distinct current-batch IDs, returns without a PaperFill SELECT for an empty
+batch, and issues deterministic queries in fixed 1,000-ID chunks. Regression
+tests prove lookup query/bind work is unchanged as unrelated history grows,
+crossing the chunk boundary yields exactly the bounded statement count, and
+historical plus same-response duplicates remain idempotent. The repurposed
+realistic-volume EXPLAIN test now shows an Index/Index Only Scan using
+`uq_paper_fills_broker_fill_id` and no `Seq Scan on paper_fills`; all five
+critical-path EXPLAIN assertions pass. No schema change or new index was needed.

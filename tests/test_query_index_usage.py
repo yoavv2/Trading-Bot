@@ -29,19 +29,10 @@ that turned out not to hold:
   paper_orders) purely because of table-size growth -- no new index was needed,
   the existing composite index already covers it once the planner's own cost
   model prefers it.
-- The order-lifecycle-sync broker-fill dedup query
-  (``select(PaperFill.broker_fill_id)`` with no WHERE clause, paper_execution.py)
-  reads every row unconditionally. ``paper_fills.broker_fill_id`` already has a
-  named unique index (``uq_paper_fills_broker_fill_id``), but forcing an Index
-  Only Scan for this unconditional full-column read costs MORE than a Seq Scan
-  under Postgres's own cost model (measured: ~2365 cost units for a forced Index
-  Only Scan vs. ~1454 for the Seq Scan Postgres picks by default, at ~40k rows).
-  This is not a missing-index gap: no index addition changes that comparison,
-  because the query touches every row regardless of index. This is a real
-  finding, not a workaround -- see ``test_broker_fill_dedup_...`` below and
-  ``.planning/phases/11-query-performance/11-03-SUMMARY.md`` / deferred-items.md
-  for the out-of-scope fix (rewrite the query to filter to the current sync
-  batch), which is outside this plan's file scope.
+- The order-lifecycle-sync broker-fill dedup query is selective to the current
+  broker batch. At the same ~40k-row history volume, its
+  ``WHERE broker_fill_id IN (...)`` predicate uses the existing named unique
+  index ``uq_paper_fills_broker_fill_id`` and never Seq Scans ``paper_fills``.
 
 Net result: every genuine gap this plan set out to find turned out, on actual
 EXPLAIN evidence, to already be covered by an existing named index once seeded
@@ -441,26 +432,10 @@ def test_open_positions_by_strategy_query_uses_index(seeded_index_db: str) -> No
         assert_uses_index(session, stmt, large_tables=("positions",))
 
 
-def test_broker_fill_dedup_query_is_a_correct_seq_scan_not_a_missing_index_gap(
+def test_broker_fill_dedup_selective_query_uses_named_unique_index(
     seeded_index_db: str,
 ) -> None:
-    """paper_execution.py's broker-fill dedup query (line ~1747):
-
-        existing_fill_ids = set(session.execute(select(PaperFill.broker_fill_id)).scalars().all())
-
-    This reads every row of paper_fills unconditionally (no WHERE clause) -- there
-    is no selectivity for an index to exploit. paper_fills.broker_fill_id already
-    has a named unique index (uq_paper_fills_broker_fill_id via the model's
-    UniqueConstraint), confirmed below via the inspector. But EXPLAIN with
-    `SET enable_seqscan = off` shows a forced Index Only Scan over that index costs
-    MORE than Postgres's own chosen Seq Scan at this row volume (~2365 vs ~1454
-    cost units measured during investigation) -- so no index addition would change
-    the planner's (correct) choice for this query shape. This is therefore NOT a
-    PERF-03 index gap; it is documented here as an out-of-scope query-design
-    finding (the real fix is scoping the query to the current sync batch via a
-    WHERE broker_fill_id IN (...) clause in paper_execution.py, which is outside
-    this plan's file scope -- see deferred-items.md).
-    """
+    """The current-batch statement uses the existing named unique index."""
     from sqlalchemy import inspect
 
     settings = load_settings()
@@ -471,9 +446,12 @@ def test_broker_fill_dedup_query_is_a_correct_seq_scan_not_a_missing_index_gap(
             "Expected the existing named unique index on paper_fills.broker_fill_id"
         )
 
-        stmt = select(PaperFill.broker_fill_id)
-        plan = _explain_plan(session, stmt)
-        assert "Seq Scan on paper_fills" in plan, (
-            "Expected Postgres to correctly choose a Seq Scan for this unconditional "
-            f"full-column read (no index addition changes this); got:\n{plan}"
+        existing_fill_id = session.execute(select(PaperFill.broker_fill_id).limit(1)).scalar_one()
+        stmt = select(PaperFill.broker_fill_id).where(
+            PaperFill.broker_fill_id.in_([existing_fill_id, "missing-current-batch-fill"])
+        )
+        plan = assert_uses_index(session, stmt, large_tables=("paper_fills",))
+        assert "uq_paper_fills_broker_fill_id" in plan, (
+            "Expected the selective broker-fill lookup to use the existing named unique "
+            f"index; got:\n{plan}"
         )

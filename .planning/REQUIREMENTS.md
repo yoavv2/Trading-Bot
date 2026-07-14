@@ -120,7 +120,7 @@ Migrated from `.planning/milestones/v1.1-paused/REQUIREMENTS.md` on 2026-07-13 a
 
 - [x] **PERF-01**: Paper-preflight issues at most 2 queries total, regardless of the number of positions or approved candidates (measured by query-count assertion in an integration test)
 - [x] **PERF-02**: Reconciliation runtime is O(n) over entity count — asserted by a benchmark test that scales linearly (not quadratically) with input size
-- [ ] **PERF-03**: Every critical query (operator reads, reconciliation, order lifecycle sync) has an explicit named index; `EXPLAIN` output shows the index is used — 4/5 representative critical-path queries verified via EXPLAIN (operator runs list, operator orders listing, local-orders-by-strategy, open-positions-by-strategy+status all confirmed Index/Index Only Scan at realistic scale, see `tests/test_query_index_usage.py`). The 5th, the order-lifecycle-sync broker-fill dedup query (`select(PaperFill.broker_fill_id)`, unconditional full-table read in `paper_execution.py`), already has a named unique index but EXPLAIN correctly shows Postgres choosing a Seq Scan for this query shape (a forced Index Only Scan measurably costs more — proven, not assumed). No index addition can satisfy "EXPLAIN shows the index is used" here; the real fix is an out-of-scope query rewrite (scope to the current sync batch via `WHERE broker_fill_id IN (...)`), tracked in `.planning/phases/11-query-performance/deferred-items.md`. Left Pending rather than marked Complete to avoid overclaiming against this requirement's literal "every critical query" bar — not a marking oversight.
+- [x] **PERF-03**: Every critical query (operator reads, reconciliation, order lifecycle sync) has an explicit named index and `EXPLAIN` shows it is used. Plan 11-04 made broker-fill dedup selective to the current sync batch; at realistic history volume its EXPLAIN plan uses `uq_paper_fills_broker_fill_id` with no `paper_fills` Seq Scan. All five representative critical-path assertions pass in `tests/test_query_index_usage.py`.
 
 ## Future Requirements
 
@@ -215,7 +215,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DB-06 | Phase 10 | Complete |
 | PERF-01 | Phase 11 | Complete |
 | PERF-02 | Phase 11 | Complete |
-| PERF-03 | Phase 11 | Pending (4/5 critical paths verified; dedup query is an out-of-scope query-rewrite gap, see 11-03-SUMMARY.md/deferred-items.md) |
+| PERF-03 | Phase 11 | Complete (11-04 made broker-fill dedup batch-selective; all 5 EXPLAIN assertions use named indices) |
 
 **Coverage:**
 - v1.2 requirements: 21 total
