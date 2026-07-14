@@ -142,6 +142,18 @@ Plans:
 - [x] 11-02-PLAN.md — Verify/extend the O(n) reconciliation matcher benchmark to positions+orders+fills and the public entry point (PERF-02)
 - [ ] 11-03-PLAN.md — EXPLAIN-confirmed named covering indices for operator-read/reconciliation/order-sync paths + migration 0017 (PERF-03)
 
+### Phase 12: Structural Refactor and Tooling
+**Milestone**: v1.1 Execution Correctness & Hardening (resumed 2026-07-14 after Phase 11 completed)
+**Goal:** Worker orchestration is split into bounded command modules, service logic is reorganized under declared boundaries, settings are consolidated, and lint/type-check gates block merge on failure — all with zero behavior change.
+**Depends on:** Phase 11 (Tier 3 cannot land before Tier 0 is verified complete per STRUCT-01; all prior phases must be done)
+**Requirements**: STRUCT-01, STRUCT-02, STRUCT-03, STRUCT-04, STRUCT-05, STRUCT-06, STRUCT-07, STRUCT-08, TOOL-01, TOOL-02
+**Success Criteria** (what must be TRUE):
+  1. `worker/__main__.py` contains only routing logic (under ~100 lines); domain commands live in `worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile}.py` with no domain semantics in the entrypoint.
+  2. Execution, reconciliation, and config logic each live under their declared service sub-paths; old scattered module definitions are deleted and all imports resolve through the new paths.
+  3. The full existing test suite passes before and after the refactor with zero new or modified assertions — no behavior change is introduced.
+  4. A pre-commit or CI gate blocks merge when ruff (or equivalent) lint/format check fails; mypy or pyright blocks merge on type errors in execution, reconciliation, and config modules.
+**Plans**: TBD
+
 ### Phase 13: Console Foundation & System Status
 **Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
 **Depends on**: Nothing (first phase of v1.2; consumes existing v1.0/v1.1 FastAPI read surface)
