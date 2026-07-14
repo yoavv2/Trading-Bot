@@ -162,7 +162,8 @@ def test_submit_paper_orders_command_exits_before_domain_service_constructed(
     state) must SystemExit at the gate before `run_paper_order_submission`
     (the domain service that would construct a broker client) is ever
     called."""
-    import trading_platform.worker.__main__ as worker_main
+    from trading_platform.worker.commands import paper_execute as paper_execute_commands
+    from trading_platform.worker.parser import build_parser
 
     called = {"value": False}
 
@@ -170,9 +171,9 @@ def test_submit_paper_orders_command_exits_before_domain_service_constructed(
         called["value"] = True
         raise AssertionError("run_paper_order_submission must not be called")
 
-    monkeypatch.setattr(worker_main, "run_paper_order_submission", _fail_if_called)
+    monkeypatch.setattr(paper_execute_commands, "run_paper_order_submission", _fail_if_called)
 
-    parser = worker_main.build_parser()
+    parser = build_parser()
     args = parser.parse_args(
         [
             "submit-paper-orders",
@@ -185,7 +186,7 @@ def test_submit_paper_orders_command_exits_before_domain_service_constructed(
     )
 
     with pytest.raises(SystemExit) as exc_info:
-        worker_main.run_submit_paper_orders_command(args)
+        paper_execute_commands.run_submit_paper_orders_command(args)
 
     assert exc_info.value.code == CONFIG_VALIDATION_EXIT_CODE
     assert called["value"] is False
@@ -220,27 +221,33 @@ def test_gate_is_wired_into_api_worker_and_bootstrap_entrypoints() -> None:
 
     import trading_platform.api.app as api_app
     import trading_platform.services.bootstrap as bootstrap
-    import trading_platform.worker.__main__ as worker_main
+    from trading_platform.worker.commands import backtest as backtest_commands
+    from trading_platform.worker.commands import bootstrap as worker_bootstrap_commands
+    from trading_platform.worker.commands import ingest as ingest_commands
+    from trading_platform.worker.commands import operator as operator_commands
+    from trading_platform.worker.commands import paper_execute as paper_execute_commands
+    from trading_platform.worker.commands import reconcile as reconcile_commands
+    from trading_platform.worker.commands import risk_check as risk_check_commands
 
     assert "enforce_startup_config" in inspect.getsource(api_app.lifespan)
     assert "enforce_startup_config" in inspect.getsource(bootstrap.run_dry_bootstrap)
 
     gated_worker_functions = [
-        worker_main.run_placeholder_worker,
-        worker_main.run_dry_bootstrap,
-        worker_main.run_backtest_command,
-        worker_main.run_report_backtest_command,
-        worker_main.run_report_strategy_analytics_command,
-        worker_main.run_evaluate_risk_command,
-        worker_main.run_submit_paper_orders_command,
-        worker_main.run_paper_session_command,
-        worker_main.run_sync_paper_state_command,
-        worker_main.run_reconcile_paper_execution_command,
-        worker_main.run_operator_control_command,
-        worker_main.run_operator_status_command,
-        worker_main.run_ingest_bars,
-        worker_main.run_sync_metadata,
-        worker_main.run_sync_sessions,
+        worker_bootstrap_commands.run_placeholder_worker,
+        worker_bootstrap_commands.run_dry_bootstrap,
+        backtest_commands.run_backtest_command,
+        backtest_commands.run_report_backtest_command,
+        backtest_commands.run_report_strategy_analytics_command,
+        risk_check_commands.run_evaluate_risk_command,
+        paper_execute_commands.run_submit_paper_orders_command,
+        paper_execute_commands.run_paper_session_command,
+        paper_execute_commands.run_sync_paper_state_command,
+        reconcile_commands.run_reconcile_paper_execution_command,
+        operator_commands.run_operator_control_command,
+        operator_commands.run_operator_status_command,
+        ingest_commands.run_ingest_bars,
+        ingest_commands.run_sync_metadata,
+        ingest_commands.run_sync_sessions,
     ]
     for func in gated_worker_functions:
         assert "enforce_startup_config" in inspect.getsource(func), (

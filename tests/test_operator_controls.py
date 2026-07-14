@@ -40,7 +40,8 @@ from trading_platform.services.operator_reads import (  # noqa: E402
     OperatorReadService,
 )
 from trading_platform.services.operator_status import build_operator_status_report  # noqa: E402
-from trading_platform.worker.__main__ import build_parser, run_operator_control_command  # noqa: E402
+from trading_platform.worker.commands.operator import run_operator_control_command  # noqa: E402
+from trading_platform.worker.parser import build_parser  # noqa: E402
 
 
 def test_operator_control_service_persists_status_transitions_and_audit_events(
