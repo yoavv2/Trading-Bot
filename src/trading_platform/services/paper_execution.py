@@ -9,7 +9,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, select
+from sqlalchemy import and_, case, or_, select
+from sqlalchemy.orm import joinedload
 
 from trading_platform.core.logging import build_log_context, emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
@@ -1146,8 +1147,32 @@ def _resolve_source_risk_run(
     )
 
 
+def _risk_event_side_priority():
+    return case((RiskEvent.signal_direction == "exit", 0), else_=1)
+
+
+def _candidate_from_risk_event(
+    risk_event: RiskEvent, symbol: Symbol
+) -> PaperExecutionCandidate | None:
+    if risk_event.proposed_quantity is None or risk_event.proposed_quantity <= 0:
+        return None
+    return PaperExecutionCandidate(
+        risk_event_id=risk_event.id,
+        source_risk_run_id=risk_event.strategy_run_id,
+        symbol_id=symbol.id,
+        symbol=symbol.ticker,
+        session_date=risk_event.session_date,
+        side=OrderSide.SELL if risk_event.signal_direction == "exit" else OrderSide.BUY,
+        quantity=risk_event.proposed_quantity,
+        reference_price=risk_event.reference_price,
+        signal_reason=risk_event.signal_reason,
+        decision_reason=risk_event.decision_reason,
+        risk_metadata=risk_event.risk_metadata,
+    )
+
+
 def _load_submission_candidates(session, source_risk_run_id: uuid.UUID) -> list[PaperExecutionCandidate]:
-    side_priority = case((RiskEvent.signal_direction == "exit", 0), else_=1)
+    side_priority = _risk_event_side_priority()
     rows = session.execute(
         select(RiskEvent, Symbol)
         .join(Symbol, Symbol.id == RiskEvent.symbol_id)
@@ -1161,24 +1186,125 @@ def _load_submission_candidates(session, source_risk_run_id: uuid.UUID) -> list[
 
     candidates: list[PaperExecutionCandidate] = []
     for risk_event, symbol in rows:
-        if risk_event.proposed_quantity is None or risk_event.proposed_quantity <= 0:
-            continue
-        candidates.append(
-            PaperExecutionCandidate(
-                risk_event_id=risk_event.id,
-                source_risk_run_id=risk_event.strategy_run_id,
-                symbol_id=symbol.id,
-                symbol=symbol.ticker,
-                session_date=risk_event.session_date,
-                side=OrderSide.SELL if risk_event.signal_direction == "exit" else OrderSide.BUY,
-                quantity=risk_event.proposed_quantity,
-                reference_price=risk_event.reference_price,
-                signal_reason=risk_event.signal_reason,
-                decision_reason=risk_event.decision_reason,
-                risk_metadata=risk_event.risk_metadata,
-            )
-        )
+        candidate = _candidate_from_risk_event(risk_event, symbol)
+        if candidate is not None:
+            candidates.append(candidate)
     return candidates
+
+
+def _load_auto_resolve_candidates(
+    session,
+    *,
+    strategy_id: str,
+    as_of_session: date,
+) -> tuple[uuid.UUID, uuid.UUID, list[PaperExecutionCandidate]]:
+    """Q1 (auto-resolve path only, PERF-01): fold source-run resolution INTO
+    the candidate load. One statement resolves the latest SUCCEEDED
+    risk_evaluation StrategyRun for (strategy_id, as_of_session) as a
+    LIMIT-1 subquery, then LEFT JOINs the approved RiskEvents (+ Symbol) for
+    that run -- the approved/decision_code predicates live in the JOIN's ON
+    clause (not WHERE) so a run with zero approved candidates still returns
+    exactly one row (RiskEvent/Symbol columns NULL), preserving the
+    'run resolved, candidates=[]' outcome. Zero rows overall means no
+    matching run exists at all, matching `_resolve_source_risk_run`'s
+    LookupError contract exactly.
+
+    Returns (source_risk_run_id, strategy_row_id, candidates).
+    """
+    target_session = as_of_session.isoformat()
+    resolved_run = (
+        select(StrategyRun.id, StrategyRun.strategy_id)
+        .select_from(StrategyRun)
+        .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+        .where(
+            Strategy.strategy_id == strategy_id,
+            StrategyRun.run_type == StrategyRunType.RISK_EVALUATION,
+            StrategyRun.status == StrategyRunStatus.SUCCEEDED,
+            or_(
+                StrategyRun.parameters_snapshot["as_of_session"].as_string() == target_session,
+                StrategyRun.result_summary["as_of_session"].as_string() == target_session,
+            ),
+        )
+        .order_by(StrategyRun.started_at.desc())
+        .limit(1)
+        .subquery("resolved_run")
+    )
+
+    side_priority = _risk_event_side_priority()
+    rows = session.execute(
+        select(resolved_run.c.id, resolved_run.c.strategy_id, RiskEvent, Symbol)
+        .select_from(resolved_run)
+        .join(
+            RiskEvent,
+            and_(
+                RiskEvent.strategy_run_id == resolved_run.c.id,
+                RiskEvent.outcome == "approved",
+                RiskEvent.decision_code == "approved",
+            ),
+            isouter=True,
+        )
+        .join(Symbol, Symbol.id == RiskEvent.symbol_id, isouter=True)
+        .order_by(side_priority, Symbol.ticker.asc())
+    ).all()
+
+    if not rows:
+        raise LookupError(
+            f"No succeeded risk_evaluation run exists for strategy '{strategy_id}' and session {target_session}."
+        )
+
+    source_risk_run_id, strategy_row_id = rows[0][0], rows[0][1]
+    candidates: list[PaperExecutionCandidate] = []
+    for _, _, risk_event, symbol in rows:
+        if risk_event is None or symbol is None:
+            continue
+        candidate = _candidate_from_risk_event(risk_event, symbol)
+        if candidate is not None:
+            candidates.append(candidate)
+    return source_risk_run_id, strategy_row_id, candidates
+
+
+def _load_paper_order_index(
+    session,
+    *,
+    strategy_row_id: uuid.UUID,
+    candidates: list[PaperExecutionCandidate],
+) -> tuple[dict[str, PaperOrder], dict[tuple[uuid.UUID, date, str], list[PaperOrder]]]:
+    """Q2 (auto-resolve path only, PERF-01): ONE batched PaperOrder load
+    covering every candidate's exact intent-hash match AND predecessor
+    lineage match, instead of 2-3 queries per candidate. `supersedes_paper_order`
+    is eager-loaded via `joinedload` (a many-to-one hop -- no row multiplication,
+    stays inside this single statement) since its `client_order_id` is read in
+    summaries; `selectinload` would fire a second statement and break the
+    2-query bound.
+    """
+    if not candidates:
+        return {}, {}
+
+    session_dates = {candidate.session_date for candidate in candidates}
+    rows = (
+        session.execute(
+            select(PaperOrder)
+            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+            .options(joinedload(PaperOrder.supersedes_paper_order))
+            .where(
+                StrategyRun.strategy_id == strategy_row_id,
+                PaperOrder.intended_session_date.in_(session_dates),
+            )
+            .order_by(PaperOrder.intent_version.desc(), PaperOrder.created_at.desc())
+        )
+        .unique()
+        .scalars()
+        .all()
+    )
+
+    by_intent_hash: dict[str, PaperOrder] = {}
+    predecessors_by_key: dict[tuple[uuid.UUID, date, str], list[PaperOrder]] = {}
+    for order in rows:
+        # UniqueConstraint("intent_hash") guarantees at most one row per hash.
+        by_intent_hash[order.intent_hash] = order
+        key = (order.symbol_id, order.intended_session_date, order.side)
+        predecessors_by_key.setdefault(key, []).append(order)
+    return by_intent_hash, predecessors_by_key
 
 
 def _build_paper_session_plan(
@@ -1190,67 +1316,105 @@ def _build_paper_session_plan(
     failure_threshold: int,
     client_order_id_prefix: str,
 ) -> PaperSessionPlan:
-    source_risk_run = _resolve_source_risk_run(
-        session,
-        strategy_id=strategy_id,
-        as_of_session=as_of_session,
-        requested_risk_run_id=requested_risk_run_id,
-    )
-    candidates = _load_submission_candidates(session, source_risk_run.id)
+    """PERF-01: the auto-resolve path (`requested_risk_run_id is None`) issues
+    exactly 2 SQL queries total regardless of candidate count -- Q1
+    (`_load_auto_resolve_candidates`, folds source-run resolution into the
+    candidate load) and Q2 (`_load_paper_order_index`, one batched PaperOrder
+    load), with every intent decision then resolved in-memory
+    (`_resolve_paper_intent_decision_from_index`). The `requested_risk_run_id`
+    -PROVIDED branch is unchanged (out of PERF-01's scope; its per-candidate
+    queries are not counted toward the 2-query bound).
+    """
     existing_orders: list[dict[str, Any]] = []
     missing_candidates: list[PaperExecutionCandidate] = []
 
-    for candidate in candidates:
-        intent_decision = _resolve_paper_intent_decision(
+    if requested_risk_run_id is None:
+        source_risk_run_id, strategy_row_id, candidates = _load_auto_resolve_candidates(
             session,
-            strategy_row_id=source_risk_run.strategy_id,
             strategy_id=strategy_id,
-            prefix=client_order_id_prefix,
-            candidate=candidate,
-            failure_threshold=failure_threshold,
+            as_of_session=as_of_session,
         )
-        if intent_decision.action == "reuse_existing":
-            existing_order = session.get(PaperOrder, intent_decision.existing_order_id)
-            if existing_order is None:
-                raise LookupError(f"Missing reusable paper_order '{intent_decision.existing_order_id}'.")
-            existing_orders.append(
-                _paper_order_payload(
-                    existing_order,
-                    intent_decision=intent_decision.summary,
-                    supersedes_client_order_id=intent_decision.supersedes_client_order_id,
-                )
+        by_intent_hash, predecessors_by_key = _load_paper_order_index(
+            session,
+            strategy_row_id=strategy_row_id,
+            candidates=candidates,
+        )
+        for candidate in candidates:
+            intent_decision = _resolve_paper_intent_decision_from_index(
+                strategy_id=strategy_id,
+                prefix=client_order_id_prefix,
+                candidate=candidate,
+                failure_threshold=failure_threshold,
+                by_intent_hash=by_intent_hash,
+                predecessors_by_key=predecessors_by_key,
             )
-            continue
-        missing_candidates.append(candidate)
+            if intent_decision.action == "reuse_existing":
+                existing_order = by_intent_hash[intent_decision.identity.intent_hash]
+                existing_orders.append(
+                    _paper_order_payload(
+                        existing_order,
+                        intent_decision=intent_decision.summary,
+                        supersedes_client_order_id=intent_decision.supersedes_client_order_id,
+                    )
+                )
+                continue
+            missing_candidates.append(candidate)
+    else:
+        source_risk_run = _resolve_source_risk_run(
+            session,
+            strategy_id=strategy_id,
+            as_of_session=as_of_session,
+            requested_risk_run_id=requested_risk_run_id,
+        )
+        source_risk_run_id = source_risk_run.id
+        candidates = _load_submission_candidates(session, source_risk_run.id)
+
+        for candidate in candidates:
+            intent_decision = _resolve_paper_intent_decision(
+                session,
+                strategy_row_id=source_risk_run.strategy_id,
+                strategy_id=strategy_id,
+                prefix=client_order_id_prefix,
+                candidate=candidate,
+                failure_threshold=failure_threshold,
+            )
+            if intent_decision.action == "reuse_existing":
+                existing_order = session.get(PaperOrder, intent_decision.existing_order_id)
+                if existing_order is None:
+                    raise LookupError(
+                        f"Missing reusable paper_order '{intent_decision.existing_order_id}'."
+                    )
+                existing_orders.append(
+                    _paper_order_payload(
+                        existing_order,
+                        intent_decision=intent_decision.summary,
+                        supersedes_client_order_id=intent_decision.supersedes_client_order_id,
+                    )
+                )
+                continue
+            missing_candidates.append(candidate)
 
     return PaperSessionPlan(
-        source_risk_run_id=source_risk_run.id,
+        source_risk_run_id=source_risk_run_id,
         candidates=tuple(candidates),
         existing_orders=tuple(existing_orders),
         missing_candidates=tuple(missing_candidates),
     )
 
 
-def _resolve_paper_intent_decision(
-    session,
+def _build_intent_decision(
     *,
-    strategy_row_id: uuid.UUID,
-    strategy_id: str,
-    prefix: str,
+    identity: DerivedOrderIdentity,
+    existing_order: PaperOrder | None,
+    predecessor: PaperOrder | None,
     candidate: PaperExecutionCandidate,
     failure_threshold: int,
 ) -> PaperIntentDecision:
-    identity = derive_order_identity(
-        prefix=prefix,
-        strategy_id=strategy_id,
-        session_date=candidate.session_date,
-        symbol=candidate.symbol,
-        side=candidate.side,
-        quantity=candidate.quantity,
-    )
-    existing_order = session.execute(
-        select(PaperOrder).where(PaperOrder.intent_hash == identity.intent_hash)
-    ).scalar_one_or_none()
+    """Pure decision core shared by both the query-based resolver (execution
+    submission loop) and the in-memory-index resolver (preflight, PERF-01).
+    Given an already-resolved exact `intent_hash` match and/or predecessor
+    lineage row, decide reuse/retry/version/create -- no DB access here.
+    """
     if existing_order is not None:
         action = (
             "retry_existing"
@@ -1280,17 +1444,6 @@ def _resolve_paper_intent_decision(
             },
         )
 
-    predecessor = session.execute(
-        select(PaperOrder)
-        .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-        .where(
-            StrategyRun.strategy_id == strategy_row_id,
-            PaperOrder.symbol_id == candidate.symbol_id,
-            PaperOrder.intended_session_date == candidate.session_date,
-            PaperOrder.side == candidate.side.value,
-        )
-        .order_by(PaperOrder.intent_version.desc(), PaperOrder.created_at.desc())
-    ).scalars().first()
     if predecessor is not None and _broker_has_touched_order(predecessor):
         next_version = predecessor.intent_version + 1
         return PaperIntentDecision(
@@ -1327,6 +1480,104 @@ def _resolve_paper_intent_decision(
             "intent_version": 1,
             "source_risk_event_id": str(candidate.risk_event_id),
         },
+    )
+
+
+def _resolve_paper_intent_decision(
+    session,
+    *,
+    strategy_row_id: uuid.UUID,
+    strategy_id: str,
+    prefix: str,
+    candidate: PaperExecutionCandidate,
+    failure_threshold: int,
+) -> PaperIntentDecision:
+    """Query-based resolver used ONLY by the execution submission loop
+    (`_run_paper_order_submission_guarded`), which relies on mid-loop
+    visibility of orders committed by earlier candidates in the same run --
+    intentionally NOT batched (out of PERF-01's scope, which targets the
+    preflight path only).
+    """
+    identity = derive_order_identity(
+        prefix=prefix,
+        strategy_id=strategy_id,
+        session_date=candidate.session_date,
+        symbol=candidate.symbol,
+        side=candidate.side,
+        quantity=candidate.quantity,
+    )
+    existing_order = session.execute(
+        select(PaperOrder).where(PaperOrder.intent_hash == identity.intent_hash)
+    ).scalar_one_or_none()
+    if existing_order is not None:
+        return _build_intent_decision(
+            identity=identity,
+            existing_order=existing_order,
+            predecessor=None,
+            candidate=candidate,
+            failure_threshold=failure_threshold,
+        )
+
+    predecessor = session.execute(
+        select(PaperOrder)
+        .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+        .where(
+            StrategyRun.strategy_id == strategy_row_id,
+            PaperOrder.symbol_id == candidate.symbol_id,
+            PaperOrder.intended_session_date == candidate.session_date,
+            PaperOrder.side == candidate.side.value,
+        )
+        .order_by(PaperOrder.intent_version.desc(), PaperOrder.created_at.desc())
+    ).scalars().first()
+    return _build_intent_decision(
+        identity=identity,
+        existing_order=None,
+        predecessor=predecessor,
+        candidate=candidate,
+        failure_threshold=failure_threshold,
+    )
+
+
+def _resolve_paper_intent_decision_from_index(
+    *,
+    strategy_id: str,
+    prefix: str,
+    candidate: PaperExecutionCandidate,
+    failure_threshold: int,
+    by_intent_hash: dict[str, PaperOrder],
+    predecessors_by_key: dict[tuple[uuid.UUID, date, str], list[PaperOrder]],
+) -> PaperIntentDecision:
+    """In-memory resolver used ONLY by the preflight (`_build_paper_session_plan`,
+    PERF-01): resolves every candidate's decision purely from the two indexes
+    built by one batched `_load_paper_order_index` load -- no DB access here.
+    """
+    identity = derive_order_identity(
+        prefix=prefix,
+        strategy_id=strategy_id,
+        session_date=candidate.session_date,
+        symbol=candidate.symbol,
+        side=candidate.side,
+        quantity=candidate.quantity,
+    )
+    existing_order = by_intent_hash.get(identity.intent_hash)
+    if existing_order is not None:
+        return _build_intent_decision(
+            identity=identity,
+            existing_order=existing_order,
+            predecessor=None,
+            candidate=candidate,
+            failure_threshold=failure_threshold,
+        )
+
+    predecessor_key = (candidate.symbol_id, candidate.session_date, candidate.side.value)
+    predecessor_list = predecessors_by_key.get(predecessor_key)
+    predecessor = predecessor_list[0] if predecessor_list else None
+    return _build_intent_decision(
+        identity=identity,
+        existing_order=None,
+        predecessor=predecessor,
+        candidate=candidate,
+        failure_threshold=failure_threshold,
     )
 
 
