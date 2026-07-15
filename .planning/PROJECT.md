@@ -10,32 +10,44 @@ The initial product focus is a Daily Trend Following workflow for U.S. equities 
 
 Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
 
-## Current Milestone: v1.2 Operator Console v0
+## Current Milestone: v1.3 Operator Platform
 
-**Goal:** Give the single operator a read-only Next.js console over the existing FastAPI read endpoints so every backtest/risk/paper run is inspectable — signals, blocked trades, orders, fills, positions, statistics, kill-switch state — without reading raw logs.
+**Goal:** Console evolves from read-only monitor to operations control center. The Operator API becomes the single orchestration surface: every manual operation executes through HTTP, backed by a generic, extensible, restart-safe DB job framework with full lifecycle, progress, logs, and audit.
 
-**Scope rule:** Every screen that increases inspectability — yes. Every screen that adds a new capability — no. This is a debugging instrument, not a marketing product. Working name is Operator Console v0, explicitly not "Trading Dashboard v1" — a full dashboard now would create an illusion of maturity while backend blockers remain (Polygon production-path read unverified, Alpaca unconfigured, test gaps around retry/reconciliation/risk edges). A narrow UI instead exposes system state and makes runs checkable.
+**Architecture invariants:**
 
-**Target features (read-only inspection):**
-- System status — health, environment, DB connection, latest run, kill-switch state
-- Strategy overview — `TrendFollowingDailyV1`, enabled/disabled, config summary
-- Runs table — backtest/risk/paper runs, status, session date, created_at, errors
-- Run detail page — signals, risk decisions, blocked reasons, orders, fills, metrics
-- Paper trading status — current positions, open orders, latest reconciliation result, account snapshot
-- Analytics view — equity curve, Sharpe, drawdown, win rate, P&L, trade count
-- Kill-switch display — current state shown clearly; changing it deferred or behind a very explicit local-only action
+1. **Single orchestration surface** — all manual operations execute through the HTTP API. The UI never invokes business logic directly and never depends on CLI implementations. API routes submit Jobs, Jobs invoke services, CLI commands become thin wrappers around the same services — one business-logic implementation regardless of entry point.
+2. **Jobs are orchestration-only** — Jobs orchestrate work rather than implement business logic. All domain behavior remains inside the existing service layer. A Job carries lifecycle, progress, logs, and audit linkage — never domain semantics.
+3. **Generic, extensible Job abstraction** — one operation-agnostic Job model with closed lifecycle enum `QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED`, progress reporting, structured logs, and audit history. New Job types are registerable without modifying queue infrastructure — future Experiment Runner, Portfolio Optimization, AI Research, and Live Deployment workflows plug into the same framework.
+4. **Transport-agnostic observation** — the console submits jobs and observes job state. The architecture assumes no transport; polling, SSE, WebSockets, or another mechanism can be chosen or changed at implementation time without architectural change.
+5. **Idempotent operations** — every operator action is safely retryable. Duplicate submissions from browser refreshes, retries, network failures, or repeated requests never execute the same operation twice unless explicitly requested by the operator.
+6. **Scheduling is a Job producer, not part of the Job framework** — scheduled executions create Jobs through the same public API used by manual operator actions. Manual and scheduled execution always follow the identical execution path. The scheduler supports any registered Job type; the initial UI exposes only Daily Paper Trading and Daily Market Data Synchronization.
+7. **Job dependency support** — the Job framework supports explicit job dependencies so larger workflows compose from independent Jobs (e.g., Market Data Sync → Risk Evaluation → Paper Session → Reconciliation) rather than embedding sequencing inside individual implementations.
+8. **Domain services remain infrastructure-independent** — business services must not depend on Jobs, HTTP, scheduling, or UI concerns. They remain directly callable by tests, CLI, API, future AI agents, and future workflow engines. Jobs orchestrate services; services never depend on Jobs.
+9. **Forward-compatible audit model** — every operator action records: initiating operator (currently always the local operator), timestamp, operation type, request parameters, resulting Job, and final outcome. Persistence is designed so multi-user support can be added later without redesign.
 
-**Explicit non-goals for v1.2:**
-- Real-time websocket dashboard
-- Mobile app
-- Multi-user auth/RBAC
-- SaaS-style onboarding
-- Strategy builder
-- Multi-strategy comparison beyond what already exists
-- Live trading controls
-- UI that hides backend uncertainty behind polished visuals
+**Target features:**
+- Job framework — DB-backed generic queue: jobs table + worker execution loop, registerable job types, dependencies, cancellation, progress, structured logs; no Redis/Celery
+- Operation triggers from UI — backtest, risk evaluation, paper session, reconciliation, market-data sync, broker sync — all as Jobs through the API
+- Strategy control — enable/disable strategy from UI via API
+- Kill switch — toggle from UI (explicit, guarded action)
+- Retry failed run/job — explicit re-trigger from detail view (the one sanctioned "run it again" path)
+- Scheduling — scheduler-as-Job-producer over registered Job types; UI manages the two initial schedules
+- Audit history — full operator-action audit trail per invariant 9, inspectable in console
+- Operational status — in-console status feed (failures, kill-switch trips, job completions); no external channels
 
-## Paused Milestone: v1.1 Execution Correctness & Hardening (Phase 11/12 complete)
+**Explicit non-goals for v1.3:**
+- Live trading or live-trading controls
+- Multi-user auth/RBAC (audit model is multi-user-shaped, but no auth surface ships)
+- External notification channels (email/Telegram/Slack)
+- Redis/Celery or any new queue infrastructure — DB-backed only
+- Experiment domain (Stage 2) — the Job framework must be able to carry it later, but it does not ship now
+
+## Shipped Milestone: v1.2 Operator Console v0 (Completed 2026-07-09)
+
+Read-only Next.js console over the FastAPI read surface, shipped as phases 13–16: app shell with env-driven API client and honest fetch/error/as-of pattern, kill-switch banner, system status, strategy overview, filterable runs table with full run-detail audit trail, paper-trading status, and equity-curve analytics. Two narrow backend exceptions were approved (thin kill-switch GET route; `equity_curve` serialization). v1.3 builds its operations surface on this console.
+
+## Completed Milestone: v1.1 Execution Correctness & Hardening (Completed 2026-07-15)
 
 Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and completed on 2026-07-13 through 2026-07-14, delivering concurrency guards, the reconciliation rewrite, startup hardening, and verified query-performance invariants. Phase 11 closed with paper preflight bounded to two queries, linear reconciliation benchmarks, and named-index EXPLAIN proof for every critical query path. Phase 12 (structural refactor and tooling) completed 2026-07-15 — the final v1.1 phase — splitting worker orchestration into bounded `worker/commands/*` modules (`__main__.py` reduced to 32 routing-only lines), reorganizing execution/reconciliation/config into declared service packages, confirming the single canonical settings surface, and wiring ruff + mypy as merge-blocking local pre-commit gates. The whole refactor landed with zero behavior change: the full suite held at its 306-pass baseline with no assertion changes, independently verified. All ten STRUCT/TOOL requirements are Complete; every v1.1 phase (7–12) is now executed. Full scope is recorded in `.planning/milestones/v1.1-paused/` and MILESTONES.md.
 
@@ -105,6 +117,22 @@ Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and compl
 - Complex walk-forward optimization UI — not needed before the core backtest and paper workflow is stable.
 
 ## Context
+
+### Long-Term Direction — Autonomous Trading Operating System (adopted 2026-07-15)
+
+The platform's end state is not a trading bot but an Autonomous Trading Operating System that manages the complete lifecycle of quantitative strategies, from research through live deployment. Development follows staged milestones; each stage is a candidate milestone, not current scope:
+
+1. **Operator Platform** (= v1.3, current) — console becomes a full operational control center; every manual CLI operation executable from the UI through a single API orchestration surface.
+2. **Strategy Laboratory** — Experiment domain (Strategy → Experiment → Run → Metrics → Comparison) with complete reproducibility: parameters, dataset, date range, commit hash, config snapshot, environment, metrics persisted per experiment.
+3. **Portfolio Management** — multiple concurrent strategies evaluated collectively: capital allocation, risk budgets, strategy weighting, exposure, correlation matrix as first-class metric, portfolio optimization.
+4. **Research Platform** — structured research lifecycle (Idea → Hypothesis → Implementation → Experiment → Evaluation → Decision) with persistent research objects: ideas, hypotheses, notes, experiments, conclusions.
+5. **AI Research Agents** — specialized agents (Research, Idea, Strategy Builder, Experiment Runner, Evaluation) layered on the existing research framework — never one general-purpose agent, and only after the research framework exists.
+6. **Strategy Promotion Pipeline** — governed maturity lifecycle (Research → Prototype → Backtest → Walk-Forward → Paper → Review → Human Approval → Live) with measurable promotion criteria and automatic demotion on degradation.
+7. **Autonomous Trading Operating System** — the platform autonomously generates ideas, builds strategies, runs experiments, ranks results, selects promotion candidates, deploys to paper, monitors, and demotes.
+
+**Cross-cutting requirement — knowledge management:** every experiment persists reasoning, not only metrics (hypothesis, expected vs. actual outcome, failure/success reason, confidence, lessons learned), accumulating an internal research knowledge base that prevents repeating failed ideas.
+
+**Guiding principles:** architecture before features; reproducibility over convenience; research before automation; portfolio thinking over individual-strategy thinking; human oversight before autonomous execution; knowledge accumulation over isolated experimentation.
 
 ### Product Positioning
 
@@ -564,5 +592,22 @@ The future API should expose platform data cleanly to the dashboard without dire
 | Defer dashboard work until the engine is trustworthy | The engine, analytics, and paper workflow must be credible before UI investment | — Pending |
 | DB connection lifecycle is an explicit reloadable manager (`db/session.py`), not a process-immutable singleton (DB-01) | The 215-test suite must be able to point the engine/session factory at the test database vs. the local database within one process; a hard singleton would break that. Engine/session memoization uses the keyed `(url, echo)` dict-cache exclusively — no `functools`-decorator-based memoization of engines/sessions anywhere (DB-02) | 10-03: session.py docstring declares the model; import-boundary test pins it |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-07-15 after completing v1.1 Phase 12 (Structural Refactor and Tooling); all v1.1 phases (7–12) now executed*
+*Last updated: 2026-07-15 — milestone v1.3 Operator Platform started; long-term ATOS direction adopted*
