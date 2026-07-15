@@ -3,31 +3,31 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: planning
-last_updated: "2026-07-15T07:30:19.292Z"
+last_updated: "2026-07-15T08:00:00.000Z"
 last_activity: 2026-07-15
 progress:
-  total_phases: 0
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 21
+  completed_phases: 16
+  total_plans: 48
+  completed_plans: 48
+  percent: 76
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-07)
+See: .planning/PROJECT.md (updated 2026-07-15)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 13 — console foundation and system status
+**Current focus:** Phase 17 — Job Framework (v1.3 Operator Platform)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-07-15 — Milestone v1.3 started
+Phase: 17 of 21 (Job Framework) — v1.3 Operator Platform
+Plan: Not yet broken down
+Status: Roadmap approved, ready to plan Phase 17
+Last activity: 2026-07-15 — ROADMAP.md created: Phases 17-21 derived from the 28 v1.3 requirements (JOB/ORCH/OPS/CTRL/SCHED/AUD/NOTIF), 100% coverage validated
 
 ## Performance Metrics
 
@@ -107,6 +107,8 @@ Recent decisions affecting current work:
 - [Phase 12-03]: 12-03: STRUCT-04 part 1 — services/execution package created (contracts.py/transition.py/idempotency.py); all consumers repointed; order_state_machine.py/order_identity.py deleted; test_log_enforcement.py LOG-01 path list repointed 1:1 (frozen length 12), same pattern 12-02 established. Full suite 306 passed / 0 failed.
 - [Phase 12]: [12-06]: worker/__main__.py split into worker/parser.py + worker/commands/{bootstrap,ingest,backtest,risk_check,paper_execute,reconcile,operator}.py; entrypoint reduced to 32-line routing dispatcher (DISPATCH map); full suite holds at 306/0, closing STRUCT-02 (phase-wide zero-behavior-change proof) and STRUCT-03. operator.py added as a documented seventh sibling module for the two operator-* subcommands. Discovered but deliberately preserved (not fixed) a pre-existing run_sync_metadata scripts-path off-by-one bug (deferred-items.md).
 - [Phase 12]: [12-07]: E501 excluded from the blocking ruff lint rule set (repo predates the tooling, ~200+ pre-existing long lines out of scope); ruff-format hook explicitly scoped via a files: regex to the Phase-12 structural surface after the un-scoped hook was proven (first commit attempt) to reformat any staged out-of-scope file — restored and re-committed clean. Task 1/Task 2 code changes to submit_orders.py/matcher.py/report.py landed together in the Task 2 commit since ruff-format and the mypy annotation-only fixes touch overlapping lines. Phase 12 (Structural Refactor and Tooling) is now fully complete: TOOL-01/TOOL-02 Complete, closing STRUCT-01..08 and TOOL-01/02 all Complete in v1.1-paused REQUIREMENTS.md.
+- [v1.3-roadmap]: Phases 17-21 derived strictly from architecture-invariant dependency order, not from the requirement-category groupings alone: Phase 17 (Job Framework, JOB-01..07) ships first as pure backend infrastructure with no operator-visible surface; Phase 18 (Orchestration Surface, ORCH-01..04) builds the generic idempotent HTTP/CLI layer on top of it before any operation-specific UI exists; Phase 19 (Operation Triggers & Control) merges the OPS-01..07 and CTRL-01..02 categories into one phase since every operation trigger and control action shares the identical console-wiring pattern over the Phase 18 surface; Phase 20 (Scheduling) depends on Phase 19 because the two initial schedules target Job types (paper session, market-data sync) that phase establishes; Phase 21 (Audit & Operational Status) merges AUD-01..03 and NOTIF-01..02 and is deliberately last — it retrofits full audit persistence across every action already built in Phases 19-20 rather than gating those phases on audit infrastructure existing first.
+- [v1.3-roadmap]: v1.2's active Phase 13-16 detail was collapsed into a historical `<details>` summary in ROADMAP.md (matching the v1.0/v1.1 pattern); full v1.2 requirements/roadmap detail is archived at `.planning/milestones/v1.2-operator-console/`. v1.1's `<details>` summary was corrected from PAUSED to SHIPPED 2026-07-15 to match MILESTONES.md (Phase 12 completed that date; the roadmap had not been updated to reflect it).
 
 ### Pending Todos
 

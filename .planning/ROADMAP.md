@@ -3,23 +3,15 @@
 ## Milestones
 
 - ✅ **v1.0 MVP Backtest & Paper Trading** - Phases 1-6 (shipped 2026-03-15)
-- ⏸️ **v1.1 Execution Correctness & Hardening** - Phases 7-12 (Phase 7 shipped 2026-04-20; Phases 8-12 PAUSED, resume after v1.2 — full detail archived in `.planning/milestones/v1.1-paused/`)
-- 🚧 **v1.2 Operator Console v0** - Phases 13-16 (in progress)
+- ✅ **v1.1 Execution Correctness & Hardening** - Phases 7-12 (shipped 2026-07-15; full detail archived in `.planning/milestones/v1.1-paused/`)
+- ✅ **v1.2 Operator Console v0** - Phases 13-16 (shipped 2026-07-09; full detail archived in `.planning/milestones/v1.2-operator-console/`)
+- 🚧 **v1.3 Operator Platform** - Phases 17-21 (in progress)
 
 ## Overview
 
-v1.2 gives the single operator a read-only Next.js console over the existing FastAPI read surface so every backtest, risk evaluation, and paper-trading run is inspectable — signals, blocked trades, orders, fills, positions, statistics, kill-switch state — without reading raw logs or querying the database directly. This is a debugging instrument, not a dashboard product: every screen increases inspectability of state that already exists; nothing in this milestone adds a new backend capability, mutation, or control surface. The console consumes only the FastAPI read routes shipped in Phase 6 (`operator_reads`, `analytics`, `system`, `health`) plus the strategy registry read surface.
+v1.3 evolves the console from a read-only monitor into an operations control center. The Operator API becomes the single orchestration surface: every manual operation (backtest, risk evaluation, paper session, reconciliation, market-data sync, broker sync) executes through HTTP as a Job, backed by a generic, extensible, restart-safe DB-backed job framework — no Redis/Celery. Jobs orchestrate; the existing service layer keeps all domain logic. Scheduling becomes a Job producer over that same public API path, not a parallel execution mechanism. Every operator action, manual or scheduled, is idempotent and fully audited in a forward-compatible schema.
 
-Phase order follows foundation → screens → charting polish: Phase 13 builds the app shell, the shared fetch/error/as-of pattern every other screen reuses, and the system-status + kill-switch banner (the banner must exist in the shell before any other screen is built on top of it). Phases 14 and 15 build the two independent inspection surfaces (strategy/runs, and live paper-trading status). Phase 16 closes with the charting-heavy analytics view, which depends on the run-detail page built in Phase 14.
-
-## Known Gaps (Backend Read-Surface)
-
-Two v1.2 requirements reference operator-facing data that the existing FastAPI read surface does not yet expose end-to-end. Per the milestone rule ("no new backend capabilities"), these are surfaced here rather than silently patched during roadmap creation. Both are pure wiring/serialization gaps (no new business logic, no new computation) but each still requires a backend code change, which is why they are flagged for explicit operator decision before/at plan time rather than assumed away:
-
-1. **Kill-switch live state has no HTTP route** (blocks STAT-03, KILL-01). `OperatorReadService.get_kill_switch_state()` exists and is fully implemented (`src/trading_platform/services/operator_reads.py:374`) but is currently called only from the worker CLI (`src/trading_platform/worker/__main__.py:517`) — no route in `api/routes/system.py` or elsewhere returns it. The console cannot show current kill-switch state without either (a) a narrow, explicitly-approved exception to add one thin GET route that calls this existing service method, or (b) rendering an honest "not available via current API" state per CONS-02 until that route exists.
-2. **Equity curve series is computed but not serialized in the wired analytics response** (blocks ANLX-01). `materialize_backtest_report()` (`src/trading_platform/services/backtest_reporting.py:84`) computes `equity_curve`, but `StrategyAnalyticsService._summarize_backtest()` (`src/trading_platform/services/analytics.py:127-136`) explicitly filters the report down to `run_id, status, started_at, completed_at, summary, metrics` before it reaches `GET /api/v1/analytics/strategies/{strategy_id}` — `equity_curve` never leaves the service. Charting the equity curve requires either a narrow addition of that one field to the existing response, or an honest "not available" state on the chart panel.
-
-**Resolution (operator decision, 2026-07-07): both approved as narrow exceptions.** Read-only exposure of already-computed state counts as inspectability, not new capability. Scope of the exception: (1) one thin GET route calling the existing `get_kill_switch_state()` service method — Phase 13; (2) adding the existing `equity_curve` field to the existing analytics response — Phase 16. No other backend change is authorized under this exception.
+Phase order follows the architecture invariants directly: Phase 17 builds the generic Job framework in isolation (lifecycle, persistence, registry, dependencies, cancellation, progress/logs) — pure backend infrastructure with no operator-visible surface yet. Phase 18 builds the HTTP orchestration surface on top of it (idempotency, transport-agnostic observation, CLI-as-thin-wrapper enforcement) before any operation-specific UI exists. Phase 19 is the first phase with real console screens: every operation trigger, retry, strategy control, and the kill switch, built on the v1.2 console shell and wired through the Phase 18 surface. Phase 20 (Scheduling) depends on the specific Job types Phase 19 establishes (paper session, market-data sync) so the two initial schedules have something real to produce. Phase 21 (Audit & Operational Status) closes the milestone by retrofitting full audit persistence across every action built in Phases 19-20, plus the in-console status feed and global failure indicator.
 
 ## Phases
 
@@ -27,7 +19,7 @@ Two v1.2 requirements reference operator-facing data that the existing FastAPI r
 
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
-- v1.2 continues numbering from 13 (v1.1 reserved 7-12; Phases 8-12 paused, not part of this milestone)
+- v1.3 continues numbering from 17 (v1.0 reserved 1-6, v1.1 reserved 7-12, v1.2 reserved 13-16)
 
 <details>
 <summary>✅ v1.0 MVP Backtest & Paper Trading (Phases 1-6) — SHIPPED 2026-03-15</summary>
@@ -44,27 +36,40 @@ Full phase-level goals, success criteria, and plan lists: `.planning/milestones/
 </details>
 
 <details>
-<summary>⏸️ v1.1 Execution Correctness & Hardening (Phases 7-12) — PAUSED 2026-07-07 at Phase 7/12</summary>
+<summary>✅ v1.1 Execution Correctness & Hardening (Phases 7-12) — SHIPPED 2026-07-15</summary>
 
 - [x] **Phase 7: Correctness Kernel** - Closed order state machine, deterministic `client_order_id` idempotency, persistent global kill switch with operator CLI. Completed 2026-04-20.
-- [x] **Phase 8: Concurrency Guard** (RESUMING 2026-07-12 — detail migrated to active Phase Details below) - Advisory lock per (strategy_id, session_date), stale-run detection. (completed 2026-07-13)
+- [x] **Phase 8: Concurrency Guard** - Advisory lock per (strategy_id, session_date), stale-run detection and reclaim. Completed 2026-07-13.
 - [x] **Phase 9: Reconciliation Rewrite** - Typed snapshots, O(n) matcher, closed findings enum, materialized report, explicit corrective entrypoint. Completed 2026-07-13.
-- [x] **Phase 10: Startup Hardening** (RESUMING 2026-07-13 — detail migrated to active Phase Details below) - Fail-fast config validation, log sanitization, DB lifecycle consolidation. (completed 2026-07-13)
-- [x] **Phase 11: Query Performance** (4/4 plans completed 2026-07-14; PERF-01, PERF-02, and PERF-03 complete) - Preflight N+1 fix, reconciliation scaling, covering indices.
-- [x] **Phase 12: Structural Refactor and Tooling** (7/7 plans complete) - Worker split, service reorganization, lint/type-check gates. (completed 2026-07-15)
+- [x] **Phase 10: Startup Hardening** - Fail-fast config validation, log sanitization, single canonical DB lifecycle. Completed 2026-07-13.
+- [x] **Phase 11: Query Performance** - Preflight N+1 fix, linear reconciliation scaling, named covering indices with EXPLAIN proof. Completed 2026-07-14.
+- [x] **Phase 12: Structural Refactor and Tooling** - Worker split into bounded command modules, service package reorganization, ruff + mypy blocking pre-commit gates. Completed 2026-07-15.
 
-Full remaining scope, requirements, and phase details: `.planning/milestones/v1.1-paused/ROADMAP.md` and `.planning/milestones/v1.1-paused/REQUIREMENTS.md`. Standing gate: `.planning/00-VERIFY.md` must be green before Phase 8+ resumes.
+Full requirements, success criteria, and plan lists: `.planning/milestones/v1.1-paused/ROADMAP.md` and `.planning/milestones/v1.1-paused/REQUIREMENTS.md`.
 
 </details>
 
-### 🚧 v1.2 Operator Console v0 (In Progress)
+<details>
+<summary>✅ v1.2 Operator Console v0 (Phases 13-16) — SHIPPED 2026-07-09</summary>
 
-**Milestone Goal:** Read-only Next.js console over the existing FastAPI read surface — every run, decision, and system state inspectable without reading raw logs. No new backend capabilities.
+- [x] **Phase 13: Console Foundation & System Status** - App shell, env-driven API client, shared error/as-of-timestamp pattern, health/system screen, kill-switch global banner. Completed 2026-07-08.
+- [x] **Phase 14: Strategy & Runs Inspection** - Strategy overview, filterable runs table, and full run-detail audit trail (signals, risk decisions, orders/fills, metrics). Completed 2026-07-09.
+- [x] **Phase 15: Paper Trading Status** - Positions, open orders, latest reconciliation result, latest account snapshot. Completed 2026-07-09.
+- [x] **Phase 16: Analytics & Charting** - Equity curve chart and summary statistics for a selected backtest run. Completed 2026-07-09.
 
-- [x] **Phase 13: Console Foundation & System Status** - App shell, env-driven API client, shared error/as-of-timestamp pattern, health/system screen, kill-switch global banner. (completed 2026-07-08)
-- [x] **Phase 14: Strategy & Runs Inspection** - Strategy overview, filterable runs table, and full run-detail audit trail (signals, risk decisions, orders/fills, metrics). (completed 2026-07-09)
-- [x] **Phase 15: Paper Trading Status** - Positions, open orders, latest reconciliation result, latest account snapshot. (completed 2026-07-09)
-- [x] **Phase 16: Analytics & Charting** - Equity curve chart and summary statistics for a selected backtest run. (completed 2026-07-09)
+Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-operator-console/ROADMAP.md` and `.planning/milestones/v1.2-operator-console/REQUIREMENTS.md`.
+
+</details>
+
+### 🚧 v1.3 Operator Platform (In Progress)
+
+**Milestone Goal:** Console evolves from read-only monitor to operations control center — every manual operation executes through HTTP as a Job, backed by a generic, extensible, restart-safe DB job framework with full lifecycle, progress, logs, scheduling, and audit.
+
+- [ ] **Phase 17: Job Framework** - Generic DB-backed job queue: closed lifecycle enum, restart-safe persistence, registry-based extensibility, import-boundary enforcement, dependencies, cancellation, progress and structured logs.
+- [ ] **Phase 18: Orchestration Surface** - HTTP API as the single orchestration surface: idempotent mutating endpoints, transport-agnostic Job observation, CLI-as-thin-wrapper enforcement.
+- [ ] **Phase 19: Operation Triggers & Control** - Operator runs every operation (backtest, risk evaluation, paper session, reconciliation, market-data sync, broker sync), retries failed Jobs, and controls strategy enable/disable and the kill switch, all from the console.
+- [ ] **Phase 20: Scheduling** - Scheduler as a Job producer over the same public API path; operator manages the Daily Paper Trading and Daily Market Data Sync schedules from the console.
+- [ ] **Phase 21: Audit & Operational Status** - Full operator-action audit trail (forward-compatible for multi-user), inspectable and filterable in console, plus an in-console status feed and global failure indicator.
 
 ## Phase Details
 
@@ -136,8 +141,8 @@ Plans:
 - [x] 10-02-PLAN.md — Log sanitization core: sanitize() redaction + broker-id last-6 masking + get_logger wrapper (LOG-02, LOG-03, LOG-04, LOG-05)
 - [x] 10-03-PLAN.md — DB lifecycle: formalize the one reloadable manager, resolve caching duality, single canonical import path (DB-01, DB-02, DB-03)
 - [x] 10-04-PLAN.md — Paper-execution transaction integrity: explicit boundary, commit-after-both, rollback schedules reconciliation (DB-04, DB-05, DB-06)
-- [ ] 10-05-PLAN.md — Startup gate wired into every entrypoint: DB preflight + non-zero exit before service init (CFG-04, CFG-06)
-- [ ] 10-06-PLAN.md — Logger migration + formatter backstop + import-boundary & emitted-line enforcement tests (LOG-01, LOG-06)
+- [x] 10-05-PLAN.md — Startup gate wired into every entrypoint: DB preflight + non-zero exit before service init (CFG-04, CFG-06)
+- [x] 10-06-PLAN.md — Logger migration + formatter backstop + import-boundary & emitted-line enforcement tests (LOG-01, LOG-06)
 
 ### Phase 11: Query Performance
 
@@ -186,89 +191,84 @@ Plans:
 - [x] 12-06-PLAN.md — STRUCT-03 worker split (routing-only __main__ <100 lines); STRUCT-02 zero-behavior-change proof
 - [x] 12-07-PLAN.md — TOOL-01 ruff + TOOL-02 mypy via blocking pre-commit hook
 
-### Phase 13: Console Foundation & System Status
+### Phase 17: Job Framework
 
-**Goal**: Operator can start the console against a running API, and every screen inherits an honest fetch/error/freshness pattern plus a persistent kill-switch banner, before any inspection screen is built on top.
-**Depends on**: Nothing (first phase of v1.2; consumes existing v1.0/v1.1 FastAPI read surface)
-**Requirements**: CONS-01, CONS-02, CONS-03, STAT-01, STAT-02, STAT-03, KILL-01
+**Goal**: A generic, extensible, restart-safe DB-backed Job framework exists in PostgreSQL — every long-running operation can run as a Job with a closed lifecycle, explicit dependencies, cancellation, progress, and structured logs, with zero Redis/Celery infrastructure.
+**Depends on**: Nothing (first phase of v1.3; builds on the existing PostgreSQL persistence layer)
+**Requirements**: JOB-01, JOB-02, JOB-03, JOB-04, JOB-05, JOB-06, JOB-07
 **Success Criteria** (what must be TRUE):
 
-  1. Operator starts the console locally with a single documented command, and it reads the FastAPI base URL from local env config (CONS-01).
-  2. When the API is unreachable or any endpoint errors, the affected screen shows an explicit error state naming the failing endpoint and status — never an empty or fake-success render (CONS-02); every screen shows an as-of fetch timestamp with a manual refresh control (CONS-03).
-  3. Operator can view health, environment name, and DB connection state, plus the latest run of any type with its status and errors, on a system status screen (STAT-01, STAT-02).
-  4. Kill-switch state is visible on the system status screen and as a global banner on every console screen whenever tripped (STAT-03, KILL-01) — per Known Gaps #1 resolution, this phase includes the approved narrow exception: one thin GET route exposing the existing `get_kill_switch_state()` service method.
+  1. A Job's state is always one of `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED` — no other state is representable, proven by an enforcement test (JOB-01).
+  2. A Job queued before a worker restart executes after it; a running Job whose worker crashes is detected and moved to a terminal state, never silently lost or duplicated (JOB-02).
+  3. Registering a new Job type touches zero existing queue-framework modules, and an import-boundary test proves Job handlers invoke only domain services — never HTTP, scheduling, or UI modules (JOB-03, JOB-04).
+  4. A Job with declared dependencies starts only after all dependencies succeed; a failed dependency moves dependents to a terminal non-executed state without running them (JOB-05).
+  5. Operator can cancel a queued or running Job, transitioning it to `CANCELLED` with an audit record; every Job's progress and structured logs are queryable via the API during and after execution (JOB-06, JOB-07).
 
-**Plans**: 4 plans
+**Plans**: TBD
 
-Plans:
+### Phase 18: Orchestration Surface
 
-- [ ] 13-01-PLAN.md — Thin GET /api/v1/system/kill-switch route + route-level test (approved narrow exception)
-- [ ] 13-02-PLAN.md — Next.js console scaffold in console/, env-driven /backend proxy, app shell, documented start command
-- [ ] 13-03-PLAN.md — Shared fetchApi/useApiQuery + ErrorState/FetchMeta pattern (vitest-covered) and global KillSwitchBanner in layout
-- [ ] 13-04-PLAN.md — System status screen (health, readiness/DB, system info, kill-switch, latest run) + operator verification checkpoint
-
-### Phase 14: Strategy & Runs Inspection
-
-**Goal**: Operator can see the strategy's current state and drill from a runs table into any single run's complete audit trail without reading logs or querying the database.
-**Depends on**: Phase 13 (app shell, fetch/error/as-of pattern, kill-switch banner)
-**Requirements**: STRA-01, STRA-02, RUNS-01, RUNS-02, RUNS-03, RUNS-04, RUNS-05, RUNS-06
+**Goal**: The HTTP API becomes the single orchestration surface for manual operations — every mutating endpoint is idempotent, returns a transport-agnostic Job reference, and CLI worker commands are proven to be thin wrappers over the identical service layer.
+**Depends on**: Phase 17 (Job framework)
+**Requirements**: ORCH-01, ORCH-02, ORCH-03, ORCH-04
 **Success Criteria** (what must be TRUE):
 
-  1. Operator can view `TrendFollowingDailyV1` with its enabled/disabled status and config summary (universe, entry/exit rules, risk params) (STRA-01, STRA-02).
-  2. Operator can view a runs table spanning backtest/risk/paper run types with status, session date, created_at, and error indication, and can filter it by run type and status (RUNS-01, RUNS-02).
-  3. Operator can open a run detail page and see that run's signals, risk decisions including blocked trades with human-readable reasons, orders and fills with `client_order_id` intent lineage, and the run's persisted metrics (RUNS-03, RUNS-04, RUNS-05, RUNS-06).
+  1. Every manual operation is invoked only through an HTTP API endpoint — no direct business-logic or CLI-only execution path exists for it (ORCH-01).
+  2. An import/structure enforcement test proves CLI commands and API routes call the identical service layer with zero duplicated business logic (ORCH-02).
+  3. Resubmitting a mutating request with the same idempotency key returns the original Job instead of executing the operation twice (ORCH-03).
+  4. Submitting an operation returns a Job reference whose state, progress, and logs are observable via API reads alone — no architectural dependency on polling vs. push (ORCH-04).
 
-**Plans**: 5 plans
+**Plans**: TBD
 
-Plans:
+### Phase 19: Operation Triggers & Control
 
-- [ ] 14-01-PLAN.md — Strategy Overview screen (enabled/disabled + config summary) + nav links (STRA-01, STRA-02)
-- [ ] 14-02-PLAN.md — Filterable Runs table with drill-down links (RUNS-01, RUNS-02)
-- [ ] 14-03-PLAN.md — Run detail shell + Signals & Risk Decisions + run-scoped filter/CappedDisclosure primitives (RUNS-03, RUNS-04)
-- [ ] 14-04-PLAN.md — Run detail Orders/Fills (client_order_id lineage) + persisted Metrics (RUNS-05, RUNS-06)
-- [ ] 14-05-PLAN.md — Operator live-verify checkpoint: end-to-end strategy/runs drill-down + truncation-disclosure honesty (verifies STRA-01/02, RUNS-01..06)
-
-### Phase 15: Paper Trading Status
-
-**Goal**: Operator can check the live paper-trading state — what's open, what the broker says, what the account looks like — on one screen.
-**Depends on**: Phase 13 (app shell, fetch/error/as-of pattern)
-**Requirements**: PAPR-01, PAPR-02, PAPR-03, PAPR-04
+**Goal**: Operator triggers every manual platform operation and controls strategy/kill-switch state directly from the console, each executing as an audited, idempotent Job through the orchestration surface built in Phase 18.
+**Depends on**: Phase 18 (orchestration surface); builds on the v1.2 console shell
+**Requirements**: OPS-01, OPS-02, OPS-03, OPS-04, OPS-05, OPS-06, OPS-07, CTRL-01, CTRL-02
 **Success Criteria** (what must be TRUE):
 
-  1. Operator can view current positions and open orders (PAPR-01, PAPR-02).
-  2. Operator can view the latest reconciliation result and its findings (PAPR-03).
-  3. Operator can view the latest account snapshot — equity, cash, buying power (PAPR-04).
+  1. Operator can trigger a backtest, risk evaluation, paper trading session, reconciliation, market-data sync, or broker order-lifecycle sync from the console, each submitting a Job and showing its resulting state (OPS-01, OPS-02, OPS-03, OPS-04, OPS-05, OPS-06).
+  2. Operator can retry a failed run/Job from its detail view; retry explicitly creates a new Job linked to the original (OPS-07).
+  3. Operator can enable/disable the strategy from the console via the API, and the change is audited (CTRL-01).
+  4. Operator can toggle the kill switch from the console behind an explicit confirmation step, and the change is audited (CTRL-02).
 
-**Plans**: 3 plans
+**Plans**: TBD
+**UI hint**: yes
 
-Plans:
+### Phase 20: Scheduling
 
-- [ ] 15-01-PLAN.md — Paper Trading screen: account snapshot + reconciliation from the shared analytics fetch + nav link (PAPR-03, PAPR-04)
-- [ ] 15-02-PLAN.md — Current positions + open orders panels composed into /paper (PAPR-01, PAPR-02)
-- [ ] 15-03-PLAN.md — Operator live-verify checkpoint: /paper honest empty states + filter disclosure + endpoint-named errors (verifies PAPR-01..04)
-
-### Phase 16: Analytics & Charting
-
-**Goal**: Operator can visually assess a backtest run's performance with an equity curve chart and its standard summary statistics.
-**Depends on**: Phase 14 (run selection / run-detail page)
-**Requirements**: ANLX-01, ANLX-02
+**Goal**: Scheduled executions create Jobs through the identical public API path manual submissions use, and the operator manages the two initial daily schedules directly from the console.
+**Depends on**: Phase 19 (the paper-session and market-data-sync Job types the schedules target)
+**Requirements**: SCHED-01, SCHED-02, SCHED-03
 **Success Criteria** (what must be TRUE):
 
-  1. Operator can select a backtest run and view its equity curve as a chart using the locked charting library (ANLX-01) — per Known Gaps #2 resolution, this phase includes the approved narrow exception: the already-computed `equity_curve` field is added to the existing analytics response.
-  2. Operator can view summary metrics for a selected run — Sharpe, max drawdown, win rate, P&L, and trade count (ANLX-02).
+  1. An enforcement test proves the scheduler has no separate execution path — every scheduled run creates a Job through the same public API manual submissions use (SCHED-01).
+  2. Operator can view all schedules with their job type, cadence, last run, and next run (SCHED-02).
+  3. Operator can enable, disable, and edit the Daily Paper Trading and Daily Market Data Sync schedules from the console (SCHED-03).
 
-**Plans**: 3 plans
+**Plans**: TBD
+**UI hint**: yes
 
-Plans:
+### Phase 21: Audit & Operational Status
 
-- [ ] 16-01-PLAN.md — Serialize the already-computed `equity_curve` into the analytics response + service test (approved narrow backend exception) (ANLX-01)
-- [ ] 16-02-PLAN.md — Recharts equity curve + curated summary-metrics panel on the backtest run-detail surface, single-fetch owner (ANLX-01, ANLX-02)
-- [ ] 16-03-PLAN.md — Operator live-verify checkpoint: equity curve + summary metrics, backtest-only gating, honest not-available/endpoint-named errors (verifies ANLX-01, ANLX-02)
+**Goal**: Every operator action — manual or scheduled — is fully audited in a forward-compatible schema and inspectable in the console, and console-wide failure/status visibility exists without navigating to a detail page.
+**Depends on**: Phase 20 (all operation, control, and scheduling actions this phase must audit already exist)
+**Requirements**: AUD-01, AUD-02, AUD-03, NOTIF-01, NOTIF-02
+**Success Criteria** (what must be TRUE):
+
+  1. Every operator action persists initiating operator, timestamp, operation type, request parameters, resulting Job, and final outcome (AUD-01).
+  2. Operator can view and filter the full audit history in the console (AUD-02).
+  3. The audit schema carries an operator-identity field populated today with the local operator; adding multi-user support later requires no persistence redesign (AUD-03).
+  4. Console shows an in-console operational status feed of job completions, failures, and kill-switch trips (NOTIF-01).
+  5. A global failure indicator is visible from any console screen without navigating to a detail page (NOTIF-02).
+
+**Plans**: TBD
+**UI hint**: yes
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from active execution until resumed after v1.2. v1.2 executes 13 → 14 → 15 → 16 (14 and 15 may parallelize once Phase 13 is complete; 16 depends on 14).
+Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (strictly sequential — each phase builds on the orchestration surface or Job types the prior phase establishes).
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -288,6 +288,11 @@ Phases execute in numeric order. v1.1 Phases 8-12 are paused and excluded from a
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
+| 17. Job Framework | v1.3 | 0/TBD | Not started | - |
+| 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
+| 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
+| 20. Scheduling | v1.3 | 0/TBD | Not started | - |
+| 21. Audit & Operational Status | v1.3 | 0/TBD | Not started | - |
 
 ---
-*Roadmap updated: 2026-07-07 — v1.2 Operator Console v0 phases 13-16 added; v1.0/v1.1 collapsed to historical summary; full v1.1 detail archived in `.planning/milestones/v1.1-paused/`.*
+*Roadmap updated: 2026-07-15 — v1.3 Operator Platform phases 17-21 added; v1.0/v1.1/v1.2 collapsed to historical summary; full v1.1 detail archived in `.planning/milestones/v1.1-paused/`, full v1.2 detail archived in `.planning/milestones/v1.2-operator-console/`.*

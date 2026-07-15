@@ -94,40 +94,40 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| JOB-01 | — | Pending |
-| JOB-02 | — | Pending |
-| JOB-03 | — | Pending |
-| JOB-04 | — | Pending |
-| JOB-05 | — | Pending |
-| JOB-06 | — | Pending |
-| JOB-07 | — | Pending |
-| ORCH-01 | — | Pending |
-| ORCH-02 | — | Pending |
-| ORCH-03 | — | Pending |
-| ORCH-04 | — | Pending |
-| OPS-01 | — | Pending |
-| OPS-02 | — | Pending |
-| OPS-03 | — | Pending |
-| OPS-04 | — | Pending |
-| OPS-05 | — | Pending |
-| OPS-06 | — | Pending |
-| OPS-07 | — | Pending |
-| CTRL-01 | — | Pending |
-| CTRL-02 | — | Pending |
-| SCHED-01 | — | Pending |
-| SCHED-02 | — | Pending |
-| SCHED-03 | — | Pending |
-| AUD-01 | — | Pending |
-| AUD-02 | — | Pending |
-| AUD-03 | — | Pending |
-| NOTIF-01 | — | Pending |
-| NOTIF-02 | — | Pending |
+| JOB-01 | Phase 17 | Pending |
+| JOB-02 | Phase 17 | Pending |
+| JOB-03 | Phase 17 | Pending |
+| JOB-04 | Phase 17 | Pending |
+| JOB-05 | Phase 17 | Pending |
+| JOB-06 | Phase 17 | Pending |
+| JOB-07 | Phase 17 | Pending |
+| ORCH-01 | Phase 18 | Pending |
+| ORCH-02 | Phase 18 | Pending |
+| ORCH-03 | Phase 18 | Pending |
+| ORCH-04 | Phase 18 | Pending |
+| OPS-01 | Phase 19 | Pending |
+| OPS-02 | Phase 19 | Pending |
+| OPS-03 | Phase 19 | Pending |
+| OPS-04 | Phase 19 | Pending |
+| OPS-05 | Phase 19 | Pending |
+| OPS-06 | Phase 19 | Pending |
+| OPS-07 | Phase 19 | Pending |
+| CTRL-01 | Phase 19 | Pending |
+| CTRL-02 | Phase 19 | Pending |
+| SCHED-01 | Phase 20 | Pending |
+| SCHED-02 | Phase 20 | Pending |
+| SCHED-03 | Phase 20 | Pending |
+| AUD-01 | Phase 21 | Pending |
+| AUD-02 | Phase 21 | Pending |
+| AUD-03 | Phase 21 | Pending |
+| NOTIF-01 | Phase 21 | Pending |
+| NOTIF-02 | Phase 21 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 28 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 28 ⚠️ (expected before roadmap creation)
+- Mapped to phases: 28 (Phases 17-21)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-07-15*
-*Last updated: 2026-07-15 after initial definition*
+*Last updated: 2026-07-15 after roadmap creation — all 28 requirements mapped to Phases 17-21*
