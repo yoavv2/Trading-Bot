@@ -37,7 +37,7 @@ Build a trustworthy, auditable trading platform that can reproducibly validate a
 
 ## Paused Milestone: v1.1 Execution Correctness & Hardening (Phase 11/12 complete)
 
-Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and completed on 2026-07-13 through 2026-07-14, delivering concurrency guards, the reconciliation rewrite, startup hardening, and verified query-performance invariants. Phase 11 closed with paper preflight bounded to two queries, linear reconciliation benchmarks, and named-index EXPLAIN proof for every critical query path. Phase 12 (structural refactor and tooling) remains the only paused v1.1 phase. Full scope is recorded in `.planning/milestones/v1.1-paused/` and MILESTONES.md.
+Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and completed on 2026-07-13 through 2026-07-14, delivering concurrency guards, the reconciliation rewrite, startup hardening, and verified query-performance invariants. Phase 11 closed with paper preflight bounded to two queries, linear reconciliation benchmarks, and named-index EXPLAIN proof for every critical query path. Phase 12 (structural refactor and tooling) completed 2026-07-15 — the final v1.1 phase — splitting worker orchestration into bounded `worker/commands/*` modules (`__main__.py` reduced to 32 routing-only lines), reorganizing execution/reconciliation/config into declared service packages, confirming the single canonical settings surface, and wiring ruff + mypy as merge-blocking local pre-commit gates. The whole refactor landed with zero behavior change: the full suite held at its 306-pass baseline with no assertion changes, independently verified. All ten STRUCT/TOOL requirements are Complete; every v1.1 phase (7–12) is now executed. Full scope is recorded in `.planning/milestones/v1.1-paused/` and MILESTONES.md.
 
 ## Requirements
 
@@ -565,4 +565,4 @@ The future API should expose platform data cleanly to the dashboard without dire
 | DB connection lifecycle is an explicit reloadable manager (`db/session.py`), not a process-immutable singleton (DB-01) | The 215-test suite must be able to point the engine/session factory at the test database vs. the local database within one process; a hard singleton would break that. Engine/session memoization uses the keyed `(url, echo)` dict-cache exclusively — no `functools`-decorator-based memoization of engines/sessions anywhere (DB-02) | 10-03: session.py docstring declares the model; import-boundary test pins it |
 
 ---
-*Last updated: 2026-07-14 after completing v1.1 Phase 11 (Query Performance); Phase 12 remains paused*
+*Last updated: 2026-07-15 after completing v1.1 Phase 12 (Structural Refactor and Tooling); all v1.1 phases (7–12) now executed*
