@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-07-19T09:52:12.763Z"
+stopped_at: Completed 17-03-PLAN.md
+last_updated: "2026-07-19T13:44:52.512Z"
 last_activity: 2026-07-19
 progress:
   total_phases: 10
   completed_phases: 0
   total_plans: 9
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-15)
 ## Current Position
 
 Phase: 17 (job-framework) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-07-19
 
@@ -111,6 +111,7 @@ Recent decisions affecting current work:
 - [v1.3-roadmap]: Phases 17-21 derived strictly from architecture-invariant dependency order, not from the requirement-category groupings alone: Phase 17 (Job Framework, JOB-01..07) ships first as pure backend infrastructure with no operator-visible surface; Phase 18 (Orchestration Surface, ORCH-01..04) builds the generic idempotent HTTP/CLI layer on top of it before any operation-specific UI exists; Phase 19 (Operation Triggers & Control) merges the OPS-01..07 and CTRL-01..02 categories into one phase since every operation trigger and control action shares the identical console-wiring pattern over the Phase 18 surface; Phase 20 (Scheduling) depends on Phase 19 because the two initial schedules target Job types (paper session, market-data sync) that phase establishes; Phase 21 (Audit & Operational Status) merges AUD-01..03 and NOTIF-01..02 and is deliberately last — it retrofits full audit persistence across every action already built in Phases 19-20 rather than gating those phases on audit infrastructure existing first.
 - [v1.3-roadmap]: v1.2's active Phase 13-16 detail was collapsed into a historical `<details>` summary in ROADMAP.md (matching the v1.0/v1.1 pattern); full v1.2 requirements/roadmap detail is archived at `.planning/milestones/v1.2-operator-console/`. v1.1's `<details>` summary was corrected from PAUSED to SHIPPED 2026-07-15 to match MILESTONES.md (Phase 12 completed that date; the roadmap had not been updated to reflect it).
 - [Phase 17]: 17-01: Job framework persistence foundation shipped — four ORM models (Job/JobDependency/JobEvent/JobLog), closed JobStatus/JobFailureReason/JobCancellationCause vocabulary defined once in job.py, migration 0018 with five native PostgreSQL enum types (job_status reused across 4 columns via create_type=False), reversibility verified (upgrade head -> downgrade -1 -> upgrade head), two enforcement tests proving JOB-01 closed-enum and D-06 self-dependency rejection at the DB layer.
+- [Phase 17]: 17-03: apply_job_transition ships as the single guarded writer of Job.status -- 8-edge closed transition table with absorbing terminal states, D-01/D-03/D-09 outcome_uncertain and infrastructure-failure-vs-cancellation guards enforced in code, D-12 progress-preservation via deliberate omission of progress columns. 9 tests green against a real Postgres database; grep confirms lifecycle.py is the sole writer of Job.status in the codebase.
 
 ### Pending Todos
 
@@ -134,6 +135,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-19T09:40:14.859Z
-Stopped at: Completed 17-01-PLAN.md
+Last session: 2026-07-19T13:44:52.503Z
+Stopped at: Completed 17-03-PLAN.md
 Resume file: None
