@@ -111,7 +111,9 @@ def serialize_operator_filters(filters: OperatorReadFilters) -> dict[str, Any]:
         "strategy_id": filters.strategy_id,
         "run_type": filters.run_type,
         "status": filters.status,
-        "session_start": filters.session_start.isoformat() if filters.session_start is not None else None,
+        "session_start": filters.session_start.isoformat()
+        if filters.session_start is not None
+        else None,
         "session_end": filters.session_end.isoformat() if filters.session_end is not None else None,
         "limit": filters.limit,
     }
