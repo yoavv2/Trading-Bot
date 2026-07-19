@@ -104,3 +104,7 @@ None - no external service configuration required.
 ---
 *Phase: 17-job-framework*
 *Completed: 2026-07-19*
+
+## Self-Check: PASSED
+
+Both created files verified present on disk (`src/trading_platform/jobs/queue.py`, `tests/test_stale_job_reclaim.py`); all three commit hashes (a231ca1, ef12e87, a14d3c3) verified present in git log.
