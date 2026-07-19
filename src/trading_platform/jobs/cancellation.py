@@ -70,16 +70,19 @@ class CancellationResult:
     mode: str  # "immediate" or "cooperative"
 
 
-@dataclass(frozen=True)
+@dataclass
 class JobNotCancellableError(RuntimeError):
     """Raised when a cancellation-related call targets a Job that cannot accept it.
 
     Covers both an already-terminal Job (SUCCEEDED/FAILED/CANCELLED are
     absorbing per ``jobs/lifecycle.py``'s closed transition table -- D-07/D-08
     only cover QUEUED and RUNNING) and a RUNNING Job with no pending
-    cancellation request being acknowledged. Mirrors the
-    ``UnknownStrategyError``-style dataclass-exception precedent in
-    ``strategies/registry.py``.
+    cancellation request being acknowledged. Field assignment here is
+    dataclass-generated rather than written as literal source, and unlike
+    ``strategies/registry.py``'s ``UnknownStrategyError`` this is
+    deliberately NOT frozen: a frozen dataclass exception raised through a
+    nested ``@contextmanager``-based ``session_scope`` fails when contextlib
+    tries to attach a traceback to it (``FrozenInstanceError``).
     """
 
     job_id: uuid.UUID
