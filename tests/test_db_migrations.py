@@ -12,6 +12,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,6 +24,8 @@ from scripts.seed_phase1 import seed_phase_one
 from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
+    Job,
+    JobDependency,
     OrderEvent,
     OrderLifecycleState,
     OrderTransitionEventType,
@@ -935,3 +938,95 @@ def test_ready_endpoint_reflects_database_connectivity(
     degraded_body = degraded.json()
     assert degraded_body["ready"] is False
     assert degraded_body["checks"]["database"]["status"] == "error"
+
+
+def test_alembic_upgrade_creates_phase17_job_tables(migrated_database: str) -> None:
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+
+    table_names = set(inspector.get_table_names())
+    assert {"jobs", "job_dependencies", "job_events", "job_logs"}.issubset(table_names)
+
+    enums = {enum["name"]: set(enum["labels"]) for enum in inspector.get_enums()}
+    assert enums["job_status"] == {"queued", "running", "succeeded", "failed", "cancelled"}
+    assert enums["job_failure_reason"] == {
+        "handler_error",
+        "worker_lost",
+        "lease_expired",
+        "cancellation_timeout",
+    }
+    assert enums["job_cancellation_cause"] == {
+        "operator_request",
+        "dependency_failed",
+        "dependency_cancelled",
+    }
+
+    job_cols = {col["name"] for col in inspector.get_columns("jobs")}
+    assert job_cols >= {
+        "id",
+        "job_type",
+        "payload",
+        "status",
+        "queued_at",
+        "started_at",
+        "completed_at",
+        "lease_owner",
+        "lease_expires_at",
+        "heartbeat_at",
+        "failure_reason",
+        "failure_message",
+        "outcome_uncertain",
+        "result_summary",
+        "cancellation_requested_at",
+        "cancellation_requested_by",
+        "cancellation_reason",
+        "cancellation_acknowledged_at",
+        "cancellation_cause",
+        "blocking_job_id",
+        "blocking_job_status",
+        "root_cause_job_id",
+        "progress_percent",
+        "progress_step",
+        "progress_current",
+        "progress_total",
+        "progress_updated_at",
+    }
+
+    job_log_constraints = {uc["name"] for uc in inspector.get_unique_constraints("job_logs")}
+    assert "uq_job_logs_job_id_sequence" in job_log_constraints
+
+    # JOB-01 database-level proof: a status literal outside the closed five-member
+    # enum set is rejected by PostgreSQL itself, not merely by Python-side validation.
+    with pytest.raises(DBAPIError):
+        with session_scope(settings) as session:
+            session.execute(
+                text(
+                    "INSERT INTO jobs (id, job_type, payload, status, result_summary) "
+                    "VALUES (:id, :job_type, CAST(:payload AS JSON), CAST(:status AS job_status), "
+                    "CAST(:result_summary AS JSON))"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "job_type": "phase17_enum_isolation_probe",
+                    "payload": "{}",
+                    # "stale" is a valid StrategyRunStatus value but not a JobStatus
+                    # value -- deliberately chosen to prove enum type isolation.
+                    "status": "stale",
+                    "result_summary": "{}",
+                },
+            )
+
+
+def test_phase17_job_dependency_rejects_self_edge(migrated_database: str) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        job = Job(job_type="phase17_self_dependency_probe", payload={})
+        session.add(job)
+        session.flush()
+        job_id = job.id
+
+    with pytest.raises(IntegrityError):
+        with session_scope(settings) as session:
+            session.add(JobDependency(job_id=job_id, depends_on_job_id=job_id))
+            session.flush()
