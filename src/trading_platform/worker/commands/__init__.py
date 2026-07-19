@@ -38,6 +38,7 @@ from trading_platform.worker.commands.paper_execute import (
 )
 from trading_platform.worker.commands.reconcile import run_reconcile_paper_execution_command
 from trading_platform.worker.commands.risk_check import run_evaluate_risk_command
+from trading_platform.worker.commands.run_jobs import run_jobs_command
 
 DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "backtest": run_backtest_command,
@@ -53,6 +54,7 @@ DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "ingest-bars": run_ingest_bars,
     "sync-metadata": run_sync_metadata,
     "sync-sessions": run_sync_sessions,
+    "run-jobs": run_jobs_command,
 }
 
 __all__ = ["DISPATCH", "run_dry_bootstrap", "run_placeholder_worker"]

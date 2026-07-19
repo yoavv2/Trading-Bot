@@ -1,4 +1,4 @@
-"""Job execution: the runner (JOB-02, JOB-03).
+"""Job execution: the runner and the restart-safe worker loop (JOB-02, JOB-03).
 
 This module contains no job-type literals and no domain behavior. Every
 Job type it can execute is resolved by a string key (``job_type``) read
@@ -7,15 +7,23 @@ names a concrete job type. That is precisely what makes JOB-03's "adding
 a Job type touches zero queue-framework modules" claim true -- this file
 is one of the queue-framework modules that must never change to add one.
 
-``execute_job`` resolves the handler for one claimed Job, runs it with no
-database session open (mirroring the DB-04/DB-05 convention: external side
-effects never run inside an open transaction), and lands every possible
-outcome (success, handler exception, cooperative cancellation, unknown job
-type, lost lease) on the correct terminal state.
+Two responsibilities live here:
+
+1. ``execute_job`` -- resolves the handler for one claimed Job, runs it
+   with no database session open (mirroring the DB-04/DB-05 convention:
+   external side effects never run inside an open transaction), and lands
+   every possible outcome (success, handler exception, cooperative
+   cancellation, unknown job type, lost lease) on the correct terminal
+   state.
+2. ``run_worker_loop`` -- the restart-safe poll loop: sweeps lost leases
+   and cancellation timeouts, claims the next ready Job, executes it, and
+   repeats until told to stop. This is the execution half of JOB-02 (a
+   Job queued before a worker restart survives and runs after it).
 """
 
 from __future__ import annotations
 
+import signal
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -29,12 +37,18 @@ from trading_platform.core.settings import Settings
 from trading_platform.db.models import Job, JobEventType, JobFailureReason, JobLog, JobStatus
 from trading_platform.db.session import session_scope
 from trading_platform.jobs import progress as _progress
-from trading_platform.jobs.cancellation import acknowledge_cancellation
+from trading_platform.jobs.cancellation import acknowledge_cancellation, sweep_cancellation_timeouts
 from trading_platform.jobs.context import DatabaseJobContext
 from trading_platform.jobs.contracts import JobCancelledError
 from trading_platform.jobs.dependencies import cascade_dependency_outcome
 from trading_platform.jobs.lifecycle import JobTransitionRequest, apply_job_transition
-from trading_platform.jobs.queue import HEARTBEAT_SECONDS, renew_lease
+from trading_platform.jobs.queue import (
+    HEARTBEAT_SECONDS,
+    POLL_INTERVAL_SECONDS,
+    claim_next_job,
+    reclaim_lost_jobs,
+    renew_lease,
+)
 from trading_platform.jobs.registry import JobRegistry, UnknownJobTypeError
 
 logger = get_logger(__name__)
@@ -221,3 +235,112 @@ def execute_job(
         )
         cascade_dependency_outcome(session, terminal_job_id=job_id)
     return JobStatus.FAILED
+
+
+def run_worker_loop(
+    *,
+    worker_id: str,
+    registry: JobRegistry,
+    max_jobs: int | None = None,
+    poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
+    once: bool = False,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Poll, sweep, claim, and execute Jobs until told to stop.
+
+    Every iteration opens one short transaction that runs
+    ``reclaim_lost_jobs`` then ``sweep_cancellation_timeouts`` -- both cheap,
+    idempotent, single-query-driven sweeps that are safe on every poll --
+    then attempts ``claim_next_job`` in the same transaction. A claimed Job
+    is executed via ``execute_job`` outside that transaction.
+
+    Stops after ``max_jobs`` executions when set, after a single pass when
+    ``once=True``, or on SIGTERM/SIGINT (the in-flight Job, if any, finishes
+    first so no lease is orphaned). Any previously installed SIGTERM/SIGINT
+    handlers are restored on exit. When no Job was claimed, sleeps
+    ``poll_interval_seconds`` via an interruptible ``threading.Event.wait``
+    rather than ``time.sleep``, so a shutdown signal is honored promptly.
+    """
+
+    shutdown_event = threading.Event()
+
+    def _handle_shutdown_signal(signum: int, _frame: Any) -> None:
+        logger.warning(
+            "job_runner_shutdown_signal_received",
+            extra={"context": {"signal": signum, "worker_id": worker_id}},
+        )
+        shutdown_event.set()
+
+    previous_handlers: dict[int, Any] = {}
+    for signal_number in (signal.SIGTERM, signal.SIGINT):
+        previous_handlers[int(signal_number)] = signal.signal(
+            signal_number, _handle_shutdown_signal
+        )
+
+    jobs_executed = 0
+    succeeded = 0
+    failed = 0
+    cancelled = 0
+    reclaimed_total = 0
+    cancellation_timeouts_total = 0
+    stopped_reason = "signal"
+
+    try:
+        while True:
+            if shutdown_event.is_set():
+                stopped_reason = "signal"
+                break
+            if max_jobs is not None and jobs_executed >= max_jobs:
+                stopped_reason = "max_jobs"
+                break
+
+            with session_scope(settings) as session:
+                reclaimed = reclaim_lost_jobs(session)
+                timed_out = sweep_cancellation_timeouts(session)
+                claimed_job_id = claim_next_job(session, worker_id=worker_id)
+
+            reclaimed_total += len(reclaimed)
+            cancellation_timeouts_total += len(timed_out)
+
+            if claimed_job_id is not None:
+                status = execute_job(
+                    job_id=claimed_job_id,
+                    worker_id=worker_id,
+                    registry=registry,
+                    settings=settings,
+                )
+                jobs_executed += 1
+                if status is JobStatus.SUCCEEDED:
+                    succeeded += 1
+                elif status is JobStatus.FAILED:
+                    failed += 1
+                elif status is JobStatus.CANCELLED:
+                    cancelled += 1
+
+            if once:
+                stopped_reason = "once"
+                break
+            if max_jobs is not None and jobs_executed >= max_jobs:
+                stopped_reason = "max_jobs"
+                break
+
+            if claimed_job_id is None:
+                # Nothing to do this pass -- wait interruptibly rather than
+                # busy-polling or blocking a shutdown signal.
+                if shutdown_event.wait(poll_interval_seconds):
+                    stopped_reason = "signal"
+                    break
+    finally:
+        for restore_signal_number, restore_handler in previous_handlers.items():
+            signal.signal(restore_signal_number, restore_handler)
+
+    return {
+        "worker_id": worker_id,
+        "jobs_executed": jobs_executed,
+        "succeeded": succeeded,
+        "failed": failed,
+        "cancelled": cancelled,
+        "reclaimed": reclaimed_total,
+        "cancellation_timeouts": cancellation_timeouts_total,
+        "stopped_reason": stopped_reason,
+    }

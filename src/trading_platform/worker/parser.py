@@ -208,4 +208,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--to-date", metavar="YYYY-MM-DD", help="Session sync end (inclusive)."
     )
 
+    run_jobs_parser = subparsers.add_parser(
+        "run-jobs",
+        help="Run the restart-safe generic Job worker loop: claim, execute, sweep.",
+    )
+    run_jobs_parser.add_argument(
+        "--worker-id",
+        default=None,
+        help="Worker identity for lease ownership. Defaults to '<hostname>:<pid>'.",
+    )
+    run_jobs_parser.add_argument(
+        "--max-jobs",
+        type=int,
+        default=None,
+        help="Stop after executing this many Jobs. Defaults to running indefinitely.",
+    )
+    run_jobs_parser.add_argument(
+        "--once",
+        action="store_true",
+        default=False,
+        help="Run a single poll pass (sweep + at most one claim) and exit.",
+    )
+    run_jobs_parser.add_argument("--compact", action="store_true", default=False)
+
     return parser
