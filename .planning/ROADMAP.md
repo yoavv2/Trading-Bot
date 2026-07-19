@@ -183,6 +183,7 @@ Plans:
   4. A pre-commit or CI gate blocks merge when ruff (or equivalent) lint/format check fails; mypy or pyright blocks merge on type errors in execution, reconciliation, and config modules.
 
 **Plans**: 7 plans (sequential waves 1-7; each depends on the prior to avoid shared-working-tree collisions documented in STATE.md — may be collapsed if run single-threaded)
+
 - [x] 12-01-PLAN.md — STRUCT-01 Tier-0 gate + baseline capture; STRUCT-07 tolerance consolidation
 - [x] 12-02-PLAN.md — STRUCT-06 config -> services/config/{validation,secrets}; STRUCT-08 single settings surface
 - [x] 12-03-PLAN.md — STRUCT-04 (part 1) execution package: transition + idempotency + contracts
@@ -208,13 +209,27 @@ Plans:
 
 Plans:
 
+**Wave 1**
+
 - [ ] 17-01-PLAN.md — Job ORM models, closed status/failure/cancellation enums, migration 0018, migration enforcement tests (JOB-01, JOB-05, JOB-06, JOB-07)
 - [ ] 17-02-PLAN.md — JobContext/JobHandler contracts, JobRegistry, JOB-03 extensibility test, JOB-04 import-boundary test
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 17-03-PLAN.md — Closed transition table and guarded apply_job_transition with per-transition audit (JOB-01, JOB-06)
 - [ ] 17-04-PLAN.md — DatabaseJobContext: progress snapshots, sanitized deterministic log writes, cancellation checkpoint (JOB-07, JOB-06)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 17-05-PLAN.md — Dependency validation, cycle rejection, readiness gating, transitive cancellation cascade (JOB-05)
 - [ ] 17-06-PLAN.md — Atomic queued cancel, cooperative running cancel, grace-period timeout sweep (JOB-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 17-07-PLAN.md — Claim/lease queue with SKIP LOCKED, lease-expiry crash reclaim, idempotency tests (JOB-02)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 17-08-PLAN.md — JobReadService and read-only /api/v1/jobs routes for state, progress, logs, events (JOB-07, JOB-06, JOB-05)
 - [ ] 17-09-PLAN.md — Job runner: handler execution, outcome landing, worker loop, run-jobs CLI command (JOB-02, JOB-03)
 
