@@ -17,7 +17,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [ ] **JOB-04**: Job handlers invoke domain services only; an import-boundary test asserts no domain service imports job, HTTP, scheduling, or UI modules
 - [ ] **JOB-05**: A Job can declare explicit dependencies on other Jobs; a dependent Job starts only after all dependencies succeed, and a failed dependency moves dependents to a terminal non-executed state
 - [ ] **JOB-06**: Operator can cancel a queued or running Job; cancellation transitions it to `CANCELLED` and is audited
-- [ ] **JOB-07**: Every Job records progress and structured logs observable via the API during and after execution
+- [x] **JOB-07**: Every Job records progress and structured logs observable via the API during and after execution
 
 ### Orchestration Surface
 
@@ -100,7 +100,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | JOB-04 | Phase 17 | Pending |
 | JOB-05 | Phase 17 | Pending |
 | JOB-06 | Phase 17 | Pending |
-| JOB-07 | Phase 17 | Pending |
+| JOB-07 | Phase 17 | Complete |
 | ORCH-01 | Phase 18 | Pending |
 | ORCH-02 | Phase 18 | Pending |
 | ORCH-03 | Phase 18 | Pending |

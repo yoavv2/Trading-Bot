@@ -230,7 +230,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 17-08-PLAN.md — JobReadService and read-only /api/v1/jobs routes for state, progress, logs, events (JOB-07, JOB-06, JOB-05)
+- [x] 17-08-PLAN.md — JobReadService and read-only /api/v1/jobs routes for state, progress, logs, events (JOB-07, JOB-06, JOB-05)
 - [ ] 17-09-PLAN.md — Job runner: handler execution, outcome landing, worker loop, run-jobs CLI command (JOB-02, JOB-03)
 
 ### Phase 18: Orchestration Surface
@@ -315,7 +315,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 17. Job Framework | v1.3 | 7/9 | In Progress|  |
+| 17. Job Framework | v1.3 | 8/9 | In Progress|  |
 | 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |

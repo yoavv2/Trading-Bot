@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 17-07-PLAN.md
-last_updated: "2026-07-19T18:58:35.580Z"
-last_activity: 2026-07-19
+stopped_at: Completed 17-08-PLAN.md
+last_updated: "2026-07-20T00:00:00.000Z"
+last_activity: 2026-07-20
 progress:
   total_phases: 10
   completed_phases: 0
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-15)
 ## Current Position
 
 Phase: 17 (job-framework) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-07-19
 
@@ -116,6 +116,7 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-05: submit_job/validate_dependency_set/find_ready_job_ids/cascade_dependency_outcome ship JOB-05's mechanism -- iterative three-color DFS cycle/self-dependency rejection before insertion, a single-query readiness predicate reused verbatim by 17-07's claim loop, and a BFS cascade that transitively cancels unstarted descendants with full causal chain (blocking_job_id/blocking_job_status/root_cause_job_id), idempotently and cycle-safely. 15 tests green. JOB-05 left Pending -- the 'starts only after dependencies succeed' half needs 17-07's claim loop to actually call find_ready_job_ids before it is verifiable end-to-end.
 - [Phase 17]: 17-06: request_cancellation/acknowledge_cancellation/sweep_cancellation_timeouts ship JOB-06's cancellation mechanism -- atomic QUEUED cancel under a row lock (D-07), cooperative RUNNING cancel gated on handler acknowledgement (D-08), and an honest FAILED/cancellation_timeout landing on grace-period overrun (D-09), with the full D-10 audit record. JobNotCancellableError uses a mutable (non-frozen) dataclass rather than mirroring UnknownStrategyError's frozen-dataclass precedent, since raising a frozen-dataclass exception through session_scope's @contextmanager triggered FrozenInstanceError when contextlib attached a traceback post-construction. 15 tests green. JOB-06 left Pending -- no operator-facing surface calls request_cancellation yet, and acknowledge_cancellation/sweep_cancellation_timeouts need 17-07's worker loop to be exercised end-to-end.
 - [Phase 17]: 17-07: claim_next_job/renew_lease/find_lost_job_ids/reclaim_lost_jobs ship JOB-02's persistence half -- SELECT ... FOR UPDATE SKIP LOCKED makes concurrent double-claim structurally impossible (proven with two real connections and a non-blocking thread-join assertion), lease-expiry crash detection lands crashed Jobs on FAILED with outcome_uncertain forced True (D-01/D-03), reclaim never requeues (D-02) and cascades to unstarted dependents (D-04). 14 tests green. JOB-02 left Pending -- its literal text also requires "a queued job submitted before a worker restart executes after it", which needs 17-09's worker runner (this plan only transitions QUEUED->RUNNING, it never executes a handler); marking Complete now would overclaim the same way this phase has avoided for JOB-05/JOB-06. JOB-05's readiness-gap note from 17-05 is also now closed in code/tests (claim_next_job actually calls unsatisfied_dependency_exists) but left Pending in REQUIREMENTS.md since this plan's frontmatter declares only JOB-02 -- both flagged for the orchestrator/gsd-transition.
+- [Phase 17]: 17-08: JobReadService + five read-only /api/v1/jobs routes (list/detail/progress/logs/events) ship the D-15 generic read surface -- sequence-ordered cursor-paginated logs (D-13), dependency causal chain (D-05), cancellation audit (D-10), and progress readable during (RUNNING) and after (FAILED, D-12) execution, all boundary-respecting (JOB-04, zero jobs/ imports, zero writes). 19 tests green against real Postgres. JOB-07 marked Complete -- the only requirement this plan closes end-to-end; JOB-05/JOB-06 remain Pending since this plan only reads dependency/cancellation state and ships no gating or cancel-action surface.
 
 ### Pending Todos
 
@@ -140,9 +141,10 @@ Recent decisions affecting current work:
 - (found 2026-07-19 during 17-05, tracking-only, not a code blocker) 17-05's frontmatter lists requirements [JOB-05], and this plan ships the full mechanism (submission-time validation, readiness predicate, dependency-outcome cascade), but requirements mark-complete was skipped -- the readiness predicate (find_ready_job_ids) is unit-tested but not yet called by any real claim/execution loop, since no queue/worker exists in the codebase yet. Mark JOB-05 Complete once plan 17-07 wires find_ready_job_ids into the actual claim path and that path is verified end-to-end.
 - (found 2026-07-19 during 17-06, tracking-only, not a code blocker) 17-06's frontmatter lists requirements [JOB-06], and this plan ships the full cancellation mechanism (atomic QUEUED cancel, cooperative RUNNING cancel, grace-period timeout, full D-10 audit), but requirements mark-complete was skipped -- no operator-facing surface calls request_cancellation yet (Phase 18/19 scope), and acknowledge_cancellation/sweep_cancellation_timeouts are only exercised by unit tests today. Mark JOB-06 Complete once plan 17-07 wires the acknowledgement/sweep calls into the real claim/execution loop and that path is verified end-to-end.
 - (found 2026-07-19 during 17-07, tracking-only, not a code blocker) JOB-05's end-to-end readiness gap noted in 17-05's SUMMARY is now closed: claim_next_job (17-07) actually calls unsatisfied_dependency_exists on every claim, and test_claim_skips_job_with_unsatisfied_dependency exercises the full path. requirements mark-complete was intentionally NOT run for JOB-05 in this plan since 17-07's frontmatter declares only [JOB-02] -- mark JOB-05 Complete at the next plan that touches it, or at /gsd-transition.
+- (found 2026-07-20 during 17-08, tracking-only, not a code blocker) 17-08's frontmatter lists requirements [JOB-07, JOB-06, JOB-05]; only JOB-07 was marked Complete (the JobReadService + /api/v1/jobs routes close its "observable via the API during and after execution" text end-to-end). JOB-05 and JOB-06 remain Pending -- this plan only reads dependency/cancellation state on the new detail/events routes; it ships no dependency-gated start behavior and no operator-facing cancel action, so neither requirement's literal text is newly satisfied. JOB-05 still needs its readiness mechanism exercised by a real execution loop beyond claim_next_job (17-05/17-07 precedent); JOB-06 still needs an operator-facing surface calling request_cancellation (Phase 18/19 scope, 17-06 precedent). Full detail: 17-08-SUMMARY.md "Requirements Frontmatter Discrepancy".
 
 ## Session Continuity
 
-Last session: 2026-07-19T18:58:35.572Z
-Stopped at: Completed 17-07-PLAN.md
+Last session: 2026-07-20T00:00:00.000Z
+Stopped at: Completed 17-08-PLAN.md
 Resume file: None
