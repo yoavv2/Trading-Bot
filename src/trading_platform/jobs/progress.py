@@ -68,7 +68,12 @@ class ProgressSnapshot:
 
     def is_empty(self) -> bool:
         """True when none of the four fields were supplied."""
-        return self.percent is None and self.step is None and self.current is None and self.total is None
+        return (
+            self.percent is None
+            and self.step is None
+            and self.current is None
+            and self.total is None
+        )
 
     def to_dict(self) -> dict[str, int | str | None]:
         """Return the four fields as a plain dict, for embedding in log
