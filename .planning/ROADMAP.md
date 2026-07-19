@@ -212,7 +212,7 @@ Plans:
 **Wave 1**
 
 - [x] 17-01-PLAN.md — Job ORM models, closed status/failure/cancellation enums, migration 0018, migration enforcement tests (JOB-01, JOB-05, JOB-06, JOB-07)
-- [ ] 17-02-PLAN.md — JobContext/JobHandler contracts, JobRegistry, JOB-03 extensibility test, JOB-04 import-boundary test
+- [x] 17-02-PLAN.md — JobContext/JobHandler contracts, JobRegistry, JOB-03 extensibility test, JOB-04 import-boundary test
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -315,7 +315,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 17. Job Framework | v1.3 | 1/9 | In Progress|  |
+| 17. Job Framework | v1.3 | 2/9 | In Progress|  |
 | 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |
