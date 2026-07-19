@@ -41,7 +41,7 @@ key-decisions:
   - "JSON not-null columns (payload, result_summary, details, context) get a table-creation-time server_default '{}'::json that is immediately dropped via alter_column, matching the 0009/0013 migration convention exactly"
   - "The enum-isolation test inserts raw SQL with status='stale' (a valid StrategyRunStatus value, invalid JobStatus value) to prove PostgreSQL enum type isolation, not just Python-side validate_strings rejection"
 
-requirements-completed: [JOB-01, JOB-05, JOB-06, JOB-07]
+requirements-completed: []  # Plan frontmatter lists JOB-01/05/06/07, but this plan ships only the persistence foundation (schema, models, migration). None of these requirements describe schema alone -- each names runtime behavior (execution, dependency gating, cancellation action, API observation) that lands in later Phase 17 plans. Deliberately left Pending in REQUIREMENTS.md to avoid overclaiming; see "Requirements Frontmatter Discrepancy" note below.
 
 # Metrics
 duration: ~20min
@@ -93,6 +93,17 @@ _No separate plan-metadata commit yet — this commit follows this SUMMARY.md's 
 
 None - plan executed exactly as written. All acceptance criteria in Tasks 1-3 verified directly (enum membership, table/column/constraint presence, FK ondelete behavior, migration reversibility, both enforcement tests green, full `test_db_migrations.py` suite holds at 13/13 with no regressions).
 
+## Requirements Frontmatter Discrepancy
+
+This plan's frontmatter lists `requirements: [JOB-01, JOB-05, JOB-06, JOB-07]`, but none of these four requirements are satisfied by a persistence-only foundation plan:
+
+- **JOB-01** ("every long-running operation executes as a Job... no state outside the enum is representable") — the closed-enum sub-claim is now proven at the DB level, but no operation executes as a Job yet; there is no queue, worker, or orchestration.
+- **JOB-05** ("a dependent Job starts only after all dependencies succeed... failed dependency moves dependents to a terminal state") — this plan ships the `job_dependencies` edge table and the self-edge CheckConstraint backstop only; dependency-gated execution and cascade-cancellation logic (D-04) land in a later plan (`jobs/dependencies.py` per PATTERNS.md).
+- **JOB-06** ("Operator can cancel a queued or running Job... audited") — this plan ships the cancellation columns and `job_events` audit table only; the cancellation action path (`jobs/cancellation.py`) lands in a later plan.
+- **JOB-07** ("progress and structured logs observable via the API") — this plan ships the `job_logs`/progress columns only; the read-only API route (`api/routes/jobs.py`) lands in a later plan.
+
+Per the 16-02/16-01 and 11-03 precedents in STATE.md (do not mark a requirement Complete until the behavior it describes is actually verifiable), `requirements mark-complete` was deliberately skipped for this plan. All four remain `Pending` in `REQUIREMENTS.md`. A blocker note has been added to STATE.md flagging this frontmatter/scope mismatch so a later Phase 17 plan (or `/gsd-transition`) marks each ID complete once its actual behavior ships and is verified.
+
 ## Issues Encountered
 
 None.
@@ -105,7 +116,7 @@ None - no external service configuration required.
 
 - All four Job tables, the closed `JobStatus` enum, and the stable `JobFailureReason`/`JobCancellationCause` vocabulary are live in PostgreSQL and importable from `trading_platform.db.models`.
 - Downstream Phase 17 plans (registry, lifecycle transitions, queue/lease claim, dependencies validation, cancellation, progress/logging, API read routes) can now import `Job`, `JobDependency`, `JobEvent`, `JobLog` and their enums directly rather than redefining any vocabulary.
-- No blockers identified for 17-02 onward.
+- No code blockers identified for 17-02 onward. See "Requirements Frontmatter Discrepancy" above for a tracking-only blocker (JOB-01/05/06/07 left Pending, needs a later plan or transition to mark complete once their behavior ships).
 
 ---
 *Phase: 17-job-framework*
