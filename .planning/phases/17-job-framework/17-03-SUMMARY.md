@@ -98,3 +98,7 @@ None - no external service configuration required.
 ---
 *Phase: 17-job-framework*
 *Completed: 2026-07-19*
+
+## Self-Check: PASSED
+
+Both created files verified present on disk (`src/trading_platform/jobs/lifecycle.py`, `tests/test_job_lifecycle.py`); all three commit hashes (eb9f3bf, 9f35489, 7b3d1e5) verified present in git log.
