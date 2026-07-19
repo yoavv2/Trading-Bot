@@ -7,6 +7,10 @@ from trading_platform.db.models.backtest_signal import BacktestSignal
 from trading_platform.db.models.backtest_trade import BacktestTrade
 from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.models.execution_event import ExecutionEvent
+from trading_platform.db.models.job import Job, JobCancellationCause, JobFailureReason, JobStatus
+from trading_platform.db.models.job_dependency import JobDependency
+from trading_platform.db.models.job_event import JobEvent, JobEventType, JobTransitionOutcome
+from trading_platform.db.models.job_log import JobLog
 from trading_platform.db.models.market_data_ingestion_run import MarketDataIngestionRun
 from trading_platform.db.models.market_session import MarketSession
 from trading_platform.db.models.order_event import (
@@ -37,6 +41,15 @@ __all__ = [
     "DailyBar",
     "ExecutionEvent",
     "GLOBAL_KILL_SWITCH_NAME",
+    "Job",
+    "JobCancellationCause",
+    "JobDependency",
+    "JobEvent",
+    "JobEventType",
+    "JobFailureReason",
+    "JobLog",
+    "JobStatus",
+    "JobTransitionOutcome",
     "KillSwitchState",
     "MarketDataIngestionRun",
     "MarketSession",
