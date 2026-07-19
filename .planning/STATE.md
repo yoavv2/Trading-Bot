@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 17-03-PLAN.md
-last_updated: "2026-07-19T13:44:52.512Z"
+stopped_at: Completed 17-04-PLAN.md
+last_updated: "2026-07-19T16:04:56.806Z"
 last_activity: 2026-07-19
 progress:
   total_phases: 10
   completed_phases: 0
   total_plans: 9
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-15)
 ## Current Position
 
 Phase: 17 (job-framework) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-07-19
 
@@ -112,6 +112,7 @@ Recent decisions affecting current work:
 - [v1.3-roadmap]: v1.2's active Phase 13-16 detail was collapsed into a historical `<details>` summary in ROADMAP.md (matching the v1.0/v1.1 pattern); full v1.2 requirements/roadmap detail is archived at `.planning/milestones/v1.2-operator-console/`. v1.1's `<details>` summary was corrected from PAUSED to SHIPPED 2026-07-15 to match MILESTONES.md (Phase 12 completed that date; the roadmap had not been updated to reflect it).
 - [Phase 17]: 17-01: Job framework persistence foundation shipped — four ORM models (Job/JobDependency/JobEvent/JobLog), closed JobStatus/JobFailureReason/JobCancellationCause vocabulary defined once in job.py, migration 0018 with five native PostgreSQL enum types (job_status reused across 4 columns via create_type=False), reversibility verified (upgrade head -> downgrade -1 -> upgrade head), two enforcement tests proving JOB-01 closed-enum and D-06 self-dependency rejection at the DB layer.
 - [Phase 17]: 17-03: apply_job_transition ships as the single guarded writer of Job.status -- 8-edge closed transition table with absorbing terminal states, D-01/D-03/D-09 outcome_uncertain and infrastructure-failure-vs-cancellation guards enforced in code, D-12 progress-preservation via deliberate omission of progress columns. 9 tests green against a real Postgres database; grep confirms lifecycle.py is the sole writer of Job.status in the codebase.
+- [Phase 17]: 17-04: DatabaseJobContext ships as the concrete JobContext -- ProgressSnapshot partial-update reporting (D-11/D-12), the single sanitized Job-log write path with per-Job sequence ordering and volume caps (D-13), and the is_cancellation_requested/raise_if_cancelled checkpoint (D-08). JOB-06/JOB-07 left Pending -- this plan ships only the write-side/checkpoint half; the API read routes (17-08) and the cancellation action path (17-06) complete each requirement.
 
 ### Pending Todos
 
@@ -132,9 +133,10 @@ Recent decisions affecting current work:
 - Alpaca paper credentials are not configured, so account, positions, and orders remain unverified with POPULATED data — the /paper screen's honest-empty rendering for all four surfaces WAS live-verified and approved in 15-03 (2026-07-09). Populated-data rendering (real balances/positions/orders, hidden-row reveal controls, >100-row truncation) remains unverified until Alpaca paper creds are configured.
 - Docker daemon was unavailable during Phase 1 and 2-01 verification; local PostgreSQL@14 (Homebrew) used instead of Docker Compose.
 - (found 2026-07-19 during 17-01, tracking-only, not a code blocker) 17-01's frontmatter assigns requirements [JOB-01, JOB-05, JOB-06, JOB-07], but the plan delivers only the Job persistence foundation (four ORM models, migration 0018). End-to-end satisfaction (Job execution/orchestration for JOB-01, dependency-gated execution + cascade cancellation for JOB-05, the operator cancellation action path for JOB-06, the read-only API for JOB-07) lands in later Phase 17 plans (per 17-PATTERNS.md: jobs/dependencies.py, jobs/cancellation.py, api/routes/jobs.py). All four requirement IDs deliberately left Pending in REQUIREMENTS.md rather than marked complete now (16-02/11-03 precedent) -- mark each complete at the plan that ships its actual behavior, or at /gsd-transition.
+- (found 2026-07-19 during 17-04, tracking-only, not a code blocker) 17-04's frontmatter lists requirements [JOB-07, JOB-06], but the plan ships only the write-side/checkpoint half of each: JOB-07 also needs the read-only API routes (17-08, api/routes/jobs.py); JOB-06 also needs the operator cancellation action path (17-06, jobs/cancellation.py). Both left Pending in REQUIREMENTS.md per the 17-01/17-03 precedent -- mark each complete at the plan that ships its remaining behavior, or at /gsd-transition.
 
 ## Session Continuity
 
-Last session: 2026-07-19T13:44:52.503Z
-Stopped at: Completed 17-03-PLAN.md
+Last session: 2026-07-19T16:04:39.580Z
+Stopped at: Completed 17-04-PLAN.md
 Resume file: None
