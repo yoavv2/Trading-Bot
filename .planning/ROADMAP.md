@@ -222,7 +222,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 17-05-PLAN.md — Dependency validation, cycle rejection, readiness gating, transitive cancellation cascade (JOB-05)
-- [ ] 17-06-PLAN.md — Atomic queued cancel, cooperative running cancel, grace-period timeout sweep (JOB-06)
+- [x] 17-06-PLAN.md — Atomic queued cancel, cooperative running cancel, grace-period timeout sweep (JOB-06)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -315,7 +315,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 17. Job Framework | v1.3 | 5/9 | In Progress|  |
+| 17. Job Framework | v1.3 | 6/9 | In Progress|  |
 | 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |
