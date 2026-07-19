@@ -125,3 +125,7 @@ However, per the 17-01/17-03/17-04/17-05 precedent (do not mark a requirement Co
 ---
 *Phase: 17-job-framework*
 *Completed: 2026-07-19*
+
+## Self-Check: PASSED
+
+Both created files verified present on disk (`src/trading_platform/jobs/cancellation.py`, `tests/test_job_cancellation.py`); all three commit hashes (e77f837, 2f2beae, 28e938a) verified present in git log.
