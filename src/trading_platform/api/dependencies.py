@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from typing import Any
 
 from fastapi import HTTPException, Query, Request
 
 from trading_platform.core.settings import Settings
-from trading_platform.db.models import StrategyRunStatus, StrategyRunType
+from trading_platform.db.models import JobStatus, StrategyRunStatus, StrategyRunType
 from trading_platform.services.analytics import StrategyAnalyticsService
+from trading_platform.services.job_reads import (
+    DEFAULT_LIMIT as JOB_DEFAULT_LIMIT,
+)
+from trading_platform.services.job_reads import (
+    DEFAULT_LOG_PAGE_SIZE as JOB_DEFAULT_LOG_PAGE_SIZE,
+)
+from trading_platform.services.job_reads import (
+    MAX_LIMIT as JOB_MAX_LIMIT,
+)
+from trading_platform.services.job_reads import (
+    MAX_LOG_PAGE_SIZE as JOB_MAX_LOG_PAGE_SIZE,
+)
+from trading_platform.services.job_reads import JobReadFilters, JobReadService
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.base import StrategyMetadata
 from trading_platform.strategies.registry import (
@@ -21,6 +35,11 @@ from trading_platform.strategies.registry import (
 DEFAULT_STRATEGY_ID = "trend_following_daily"
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
+
+# Re-exported for route modules that need the log-pagination bounds without
+# importing services.job_reads twice.
+DEFAULT_LOG_PAGE_SIZE = JOB_DEFAULT_LOG_PAGE_SIZE
+MAX_LOG_PAGE_SIZE = JOB_MAX_LOG_PAGE_SIZE
 
 
 def get_settings(request: Request) -> Settings:
@@ -40,6 +59,22 @@ def get_strategy_analytics_service(request: Request) -> StrategyAnalyticsService
 
 def get_operator_read_service(request: Request) -> OperatorReadService:
     return OperatorReadService(get_settings(request))
+
+
+def get_job_read_service(request: Request) -> JobReadService:
+    return JobReadService(get_settings(request))
+
+
+def get_job_read_filters(
+    status: JobStatus | None = Query(None),
+    job_type: str | None = Query(None),
+    limit: int = Query(JOB_DEFAULT_LIMIT, ge=1, le=JOB_MAX_LIMIT),
+) -> JobReadFilters:
+    return JobReadFilters(
+        status=status.value if status is not None else None,
+        job_type=job_type,
+        limit=limit,
+    )
 
 
 def get_operator_read_filters(
@@ -82,13 +117,22 @@ def serialize_operator_filters(filters: OperatorReadFilters) -> dict[str, Any]:
     }
 
 
+def serialize_job_filters(filters: JobReadFilters) -> dict[str, Any]:
+    return {
+        "status": filters.status,
+        "job_type": filters.job_type,
+        "limit": filters.limit,
+    }
+
+
 def build_collection_response(
     *,
-    filters: OperatorReadFilters,
+    filters: OperatorReadFilters | JobReadFilters,
     items: list[dict[str, Any]],
+    serializer: Callable[[Any], dict[str, Any]] = serialize_operator_filters,
 ) -> dict[str, Any]:
     return {
-        "filters": serialize_operator_filters(filters),
+        "filters": serializer(filters),
         "count": len(items),
         "items": items,
     }
@@ -110,6 +154,13 @@ def build_operator_read_catalog(base_path: str) -> dict[str, Any]:
         "runs": {
             "list": f"{normalized_base_path}/runs",
             "detail": f"{normalized_base_path}/runs/{{run_id}}",
+        },
+        "jobs": {
+            "list": f"{normalized_base_path}/jobs",
+            "detail": f"{normalized_base_path}/jobs/{{job_id}}",
+            "progress": f"{normalized_base_path}/jobs/{{job_id}}/progress",
+            "logs": f"{normalized_base_path}/jobs/{{job_id}}/logs",
+            "events": f"{normalized_base_path}/jobs/{{job_id}}/events",
         },
         "operations": {
             "orders": f"{normalized_base_path}/operations/orders",

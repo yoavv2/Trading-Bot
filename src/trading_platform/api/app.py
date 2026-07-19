@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from trading_platform.api.routes.analytics import router as analytics_router
 from trading_platform.api.routes.health import router as health_router
+from trading_platform.api.routes.jobs import router as jobs_router
 from trading_platform.api.routes.operations import router as operations_router
 from trading_platform.api.routes.runs import router as runs_router
 from trading_platform.api.routes.strategies import router as strategies_router
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(strategies_router)
     app.include_router(analytics_router)
     app.include_router(runs_router)
+    app.include_router(jobs_router)
     app.include_router(operations_router)
     app.include_router(system_router)
     return app
