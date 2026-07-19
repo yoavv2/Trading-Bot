@@ -128,3 +128,7 @@ Per the 17-01/17-03/16-02/11-03 precedent in STATE.md (do not mark a requirement
 ---
 *Phase: 17-job-framework*
 *Completed: 2026-07-19*
+
+## Self-Check: PASSED
+
+All three created files (`src/trading_platform/jobs/progress.py`, `src/trading_platform/jobs/context.py`, `tests/test_job_context.py`) verified present on disk; all four task/summary commit hashes (2461d4d, a14b0bb, 85f353d, d2ac4f4) verified present in git log.
