@@ -12,7 +12,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Job Framework
 
 - [ ] **JOB-01**: Every long-running operation executes as a Job with the closed lifecycle enum `QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED`; no state outside the enum is representable
-- [ ] **JOB-02**: Jobs persist in PostgreSQL and survive restart — a queued job submitted before a worker restart executes after it; a running job interrupted by crash is detected and moved to a terminal state, never silently lost or duplicated
+- [x] **JOB-02**: Jobs persist in PostgreSQL and survive restart — a queued job submitted before a worker restart executes after it; a running job interrupted by crash is detected and moved to a terminal state, never silently lost or duplicated
 - [ ] **JOB-03**: New Job types are registered through a job-type registry without modifying queue infrastructure — adding a type touches zero queue-framework modules (enforcement test)
 - [ ] **JOB-04**: Job handlers invoke domain services only; an import-boundary test asserts no domain service imports job, HTTP, scheduling, or UI modules
 - [ ] **JOB-05**: A Job can declare explicit dependencies on other Jobs; a dependent Job starts only after all dependencies succeed, and a failed dependency moves dependents to a terminal non-executed state
@@ -95,7 +95,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | JOB-01 | Phase 17 | Pending |
-| JOB-02 | Phase 17 | Pending |
+| JOB-02 | Phase 17 | Complete |
 | JOB-03 | Phase 17 | Pending |
 | JOB-04 | Phase 17 | Pending |
 | JOB-05 | Phase 17 | Pending |

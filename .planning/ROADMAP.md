@@ -226,7 +226,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 17-07-PLAN.md — Claim/lease queue with SKIP LOCKED, lease-expiry crash reclaim, idempotency tests (JOB-02)
+- [x] 17-07-PLAN.md — Claim/lease queue with SKIP LOCKED, lease-expiry crash reclaim, idempotency tests (JOB-02)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -315,7 +315,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 17. Job Framework | v1.3 | 6/9 | In Progress|  |
+| 17. Job Framework | v1.3 | 7/9 | In Progress|  |
 | 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |
