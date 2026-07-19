@@ -204,7 +204,19 @@ Plans:
   4. A Job with declared dependencies starts only after all dependencies succeed; a failed dependency moves dependents to a terminal non-executed state without running them (JOB-05).
   5. Operator can cancel a queued or running Job, transitioning it to `CANCELLED` with an audit record; every Job's progress and structured logs are queryable via the API during and after execution (JOB-06, JOB-07).
 
-**Plans**: TBD
+**Plans**: 9 plans
+
+Plans:
+
+- [ ] 17-01-PLAN.md — Job ORM models, closed status/failure/cancellation enums, migration 0018, migration enforcement tests (JOB-01, JOB-05, JOB-06, JOB-07)
+- [ ] 17-02-PLAN.md — JobContext/JobHandler contracts, JobRegistry, JOB-03 extensibility test, JOB-04 import-boundary test
+- [ ] 17-03-PLAN.md — Closed transition table and guarded apply_job_transition with per-transition audit (JOB-01, JOB-06)
+- [ ] 17-04-PLAN.md — DatabaseJobContext: progress snapshots, sanitized deterministic log writes, cancellation checkpoint (JOB-07, JOB-06)
+- [ ] 17-05-PLAN.md — Dependency validation, cycle rejection, readiness gating, transitive cancellation cascade (JOB-05)
+- [ ] 17-06-PLAN.md — Atomic queued cancel, cooperative running cancel, grace-period timeout sweep (JOB-06)
+- [ ] 17-07-PLAN.md — Claim/lease queue with SKIP LOCKED, lease-expiry crash reclaim, idempotency tests (JOB-02)
+- [ ] 17-08-PLAN.md — JobReadService and read-only /api/v1/jobs routes for state, progress, logs, events (JOB-07, JOB-06, JOB-05)
+- [ ] 17-09-PLAN.md — Job runner: handler execution, outcome landing, worker loop, run-jobs CLI command (JOB-02, JOB-03)
 
 ### Phase 18: Orchestration Surface
 
