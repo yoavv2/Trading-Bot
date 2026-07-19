@@ -35,8 +35,9 @@ key-decisions:
   - "reclaim_lost_jobs re-fetches each lost Job under with_for_update=True and re-checks status==RUNNING and lease_expires_at < now before transitioning it, even though the plan's literal task text only required find_lost_job_ids-driven iteration -- a defensive re-check under the lock (Rule 2) so two concurrent reclaim sweeps racing the same lost Job cannot both attempt the transition against a stale read"
   - "Crash-recovery tests seed a lost Job directly with status=RUNNING and an expired lease rather than driving it there via apply_job_transition(CLAIMED), so the only JobEvent a reclaim produces is LEASE_EXPIRED itself -- keeping 'exactly one audit event' and 'idempotent reclaim leaves exactly one event' assertions unambiguous"
   - "The concurrency-safety test opens session_one directly from get_session_factory() (not session_scope) so its transaction can be held open across the thread boundary and rolled back deliberately afterward, proving the skipped row becomes claimable again once the first transaction ends"
+  - "JOB-02 deliberately left Pending despite being this plan's sole frontmatter requirement -- its literal text bundles two clauses, and only the second ('never silently lost or duplicated') is fully proven here. The first ('a queued job submitted before a worker restart executes after it') requires an actual handler-execution runner, which does not exist until plan 17-09; claim_next_job only transitions QUEUED->RUNNING, it does not execute a handler. Marking JOB-02 Complete now would be the same overclaim this phase has deliberately avoided for JOB-05/JOB-06's deferred halves (17-04/17-05/17-06 precedent) -- caught on advisor review before this plan closed, corrected before commit."
 
-requirements-completed: [JOB-02]
+requirements-completed: []  # JOB-02 left Pending -- see 'Requirements Note' below
 
 # Metrics
 duration: ~30min
@@ -93,11 +94,16 @@ None. Both tasks passed all acceptance-criteria greps and the full test run on t
 
 None - no external service configuration required.
 
+## Requirements Note
+
+This plan's frontmatter lists `requirements: [JOB-02]`, and this plan ships the full persistence mechanism JOB-02's second clause describes -- `SELECT ... FOR UPDATE SKIP LOCKED` makes concurrent double-claim structurally impossible (proven with two real connections and a non-blocking thread-join assertion), and lease-expiry detection plus `reclaim_lost_jobs` land a crashed worker's Job on FAILED, never silently lost.
+
+However, per the 17-01/17-03/17-04/17-05/17-06 precedent (do not mark a requirement Complete until its full literal text is verifiable end-to-end, not just the half this plan ships), `requirements mark-complete` was deliberately skipped for JOB-02. Its literal text bundles two clauses: "never silently lost or duplicated" (fully proven here) and "a queued job submitted before a worker restart executes after it" (NOT proven here -- `claim_next_job` only transitions a Job from QUEUED to RUNNING; nothing in this plan invokes a Job handler). Execution requires the worker runner that plan 17-09 ships. JOB-02 remains `Pending` in `REQUIREMENTS.md`; it should be marked Complete once 17-09's runner actually executes a claimed Job end-to-end (submit before restart, claim and execute after restart), or at `/gsd-transition`.
+
 ## Next Phase Readiness
 
 - `claim_next_job`, `renew_lease`, `find_lost_job_ids`, `reclaim_lost_jobs`, and the `LEASE_SECONDS`/`HEARTBEAT_SECONDS`/`POLL_INTERVAL_SECONDS` constants are all importable from `trading_platform.jobs.queue` for plan 17-09's worker runner: the runner loop calls `claim_next_job` on its poll cadence, `renew_lease` on the heartbeat cadence (stopping work when it returns `False`), and `reclaim_lost_jobs`/`sweep_cancellation_timeouts` (from 17-06) together on the same sweep cadence.
-- JOB-02 is marked Complete in `REQUIREMENTS.md` (this plan's sole frontmatter requirement) -- both halves of its literal claim are now code-real and tested: "a queued job submitted before a worker restart executes after it" (claim survives process restart because it is pure PostgreSQL row state, no in-memory queue) and "a running job interrupted by crash is detected and moved to a terminal state, never silently lost or duplicated" (lease-expiry detection + `reclaim_lost_jobs`, plus the two-connection `SKIP LOCKED` proof for the duplication half).
-- JOB-05's previously-noted gap ("the readiness predicate is unit-tested but not yet called by any real claim/execution loop") is now closed in code and test (`test_claim_skips_job_with_unsatisfied_dependency` exercises `claim_next_job` -> `unsatisfied_dependency_exists` end-to-end), but `requirements mark-complete` was intentionally NOT run for JOB-05 here since this plan's frontmatter declares only `[JOB-02]` -- flagging this as a tracking note for the orchestrator/`/gsd-transition` rather than overclaiming outside this plan's declared scope, consistent with the 16-02/11-03 precedent.
+- JOB-05's previously-noted gap ("the readiness predicate is unit-tested but not yet called by any real claim/execution loop") is now closed in code and test (`test_claim_skips_job_with_unsatisfied_dependency` exercises `claim_next_job` -> `unsatisfied_dependency_exists` end-to-end), but `requirements mark-complete` was intentionally NOT run for JOB-05 here either, since this plan's frontmatter declares only `[JOB-02]` -- flagging this as a tracking note for the orchestrator/`/gsd-transition` rather than overclaiming outside this plan's declared scope, consistent with the 16-02/11-03 precedent.
 - JOB-06 remains Pending: `acknowledge_cancellation`/`sweep_cancellation_timeouts` (from 17-06) are still only exercised by unit tests -- no production runner calls them yet. That wiring is plan 17-09's scope.
 - No code blockers identified for 17-08/17-09. Full suite holds at 413/414 (one documented pre-existing environmental flake, confirmed to pass in isolation).
 
