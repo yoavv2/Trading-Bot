@@ -152,7 +152,28 @@ def execute_job(
 
     def _heartbeat_loop() -> None:
         while not stop_heartbeat.wait(HEARTBEAT_SECONDS):
-            if not renew_lease(job_id=job_id, worker_id=worker_id, settings=settings):
+            try:
+                renewed = renew_lease(job_id=job_id, worker_id=worker_id, settings=settings)
+            except Exception:
+                # renew_lease opens its own session_scope, so a transient DB
+                # error would otherwise raise out of this thread target and
+                # silently kill all future renewals (thread exceptions do not
+                # propagate to the main thread). Log and retry on the next tick
+                # instead: a single transient blip must not abandon a healthy
+                # Job. If the error persists, the lease lapses and a sweep
+                # reclaims the Job -- now tolerated by the terminal-write guard
+                # in execute_job -- rather than crashing.
+                logger.exception(
+                    "job_runner_heartbeat_error",
+                    extra={
+                        "context": {
+                            "job_id": str(job_id),
+                            "worker_id": worker_id,
+                        }
+                    },
+                )
+                continue
+            if not renewed:
                 lease_lost.set()
                 return
 
