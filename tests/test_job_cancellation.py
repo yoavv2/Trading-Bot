@@ -23,6 +23,7 @@ from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     Job,
     JobCancellationCause,
+    JobDependency,
     JobEvent,
     JobEventType,
     JobFailureReason,
@@ -431,3 +432,79 @@ def test_find_cancellation_timeout_job_ids_detects_only_pending_past_cutoff(
     with session_scope(settings) as session:
         found = find_cancellation_timeout_job_ids(session)
     assert found == [job_id]
+
+
+def _seed_dependent(session: Any, *, depends_on: uuid.UUID, **overrides: Any) -> Job:
+    """Seed a QUEUED Job with a JobDependency edge onto ``depends_on``."""
+    dependent = _seed_job(session, status=JobStatus.QUEUED, **overrides)
+    session.add(JobDependency(job_id=dependent.id, depends_on_job_id=depends_on))
+    session.flush()
+    return dependent
+
+
+def test_timeout_sweep_cascades_to_unstarted_dependent(
+    migrated_job_cancellation_db: str,
+) -> None:
+    """CR-01 regression (timeout path): a QUEUED dependent of a Job that times
+    out its cancellation (RUNNING -> FAILED) must be cascade-CANCELLED rather
+    than stranded forever behind the dead dependency (D-04).
+    """
+    settings = load_settings()
+    with session_scope(settings) as session:
+        blocker = _seed_running_job(session)
+        blocker_id = blocker.id
+        blocker.cancellation_requested_at = datetime.now(UTC) - timedelta(
+            seconds=CANCELLATION_GRACE_SECONDS + 60
+        )
+        blocker.cancellation_requested_by = "operator_1"
+        dependent = _seed_dependent(session, depends_on=blocker_id)
+        dependent_id = dependent.id
+
+    with session_scope(settings) as session:
+        swept = sweep_cancellation_timeouts(session)
+    assert swept == [blocker_id]
+
+    with session_scope(settings) as session:
+        blocker = session.get(Job, blocker_id)
+        dependent = session.get(Job, dependent_id)
+        assert blocker is not None and blocker.status is JobStatus.FAILED
+        assert dependent is not None
+        # The dependent is no longer stranded in QUEUED.
+        assert dependent.status is JobStatus.CANCELLED
+        assert dependent.cancellation_cause is JobCancellationCause.DEPENDENCY_FAILED
+        assert dependent.root_cause_job_id == blocker_id
+
+    with session_scope(settings) as session:
+        ready = find_ready_job_ids(session, limit=10)
+    assert dependent_id not in ready
+
+
+def test_immediate_cancel_cascades_to_unstarted_dependent(
+    migrated_job_cancellation_db: str,
+) -> None:
+    """CR-01 regression (immediate-cancel path): a QUEUED dependent of a QUEUED
+    Job that is cancelled immediately must be cascade-CANCELLED rather than
+    stranded behind the cancelled dependency (D-04).
+    """
+    settings = load_settings()
+    with session_scope(settings) as session:
+        blocker = _seed_job(session)
+        blocker_id = blocker.id
+        dependent = _seed_dependent(session, depends_on=blocker_id)
+        dependent_id = dependent.id
+
+    result = request_cancellation(job_id=blocker_id, requested_by="operator_1", settings=settings)
+    assert result.status is JobStatus.CANCELLED
+
+    with session_scope(settings) as session:
+        blocker = session.get(Job, blocker_id)
+        dependent = session.get(Job, dependent_id)
+        assert blocker is not None and blocker.status is JobStatus.CANCELLED
+        assert dependent is not None
+        assert dependent.status is JobStatus.CANCELLED
+        assert dependent.cancellation_cause is JobCancellationCause.DEPENDENCY_CANCELLED
+        assert dependent.root_cause_job_id == blocker_id
+
+    with session_scope(settings) as session:
+        ready = find_ready_job_ids(session, limit=10)
+    assert dependent_id not in ready

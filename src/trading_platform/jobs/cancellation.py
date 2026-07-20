@@ -113,6 +113,10 @@ def request_cancellation(
     audit record.
     """
 
+    # Imported inside the function to avoid a new module-level coupling from
+    # cancellation -> dependencies; dependencies never imports cancellation.
+    from trading_platform.jobs.dependencies import cascade_dependency_outcome
+
     with session_scope(settings) as session:
         # The row lock is what makes the QUEUED path atomic against a worker
         # concurrently claiming the same Job (D-07): the cancel transaction
@@ -143,6 +147,10 @@ def request_cancellation(
                     acknowledged_at=now,
                 ),
             )
+            # D-04: the Job just reached CANCELLED. Cascade to unstarted QUEUED
+            # dependents so they are not stranded behind it, in the same
+            # transaction (the session is already open and row-locked).
+            cascade_dependency_outcome(session, terminal_job_id=job_id)
             return CancellationResult(
                 job_id=job_id,
                 status=JobStatus.CANCELLED,
@@ -291,6 +299,11 @@ def sweep_cancellation_timeouts(
     transaction boundary.
     """
 
+    # Imported inside the function to avoid a new module-level coupling from
+    # cancellation -> dependencies; dependencies never imports cancellation,
+    # so this is only a cascade dispatch, mirroring reclaim_lost_jobs.
+    from trading_platform.jobs.dependencies import cascade_dependency_outcome
+
     resolved_now = now or datetime.now(UTC)
     job_ids = find_cancellation_timeout_job_ids(
         session, grace_seconds=grace_seconds, now=resolved_now
@@ -320,6 +333,10 @@ def sweep_cancellation_timeouts(
                 acknowledged_at=None,
             ),
         )
+        # D-04: the Job just reached FAILED (CANCELLATION_TIMEOUT). Cascade to
+        # unstarted QUEUED dependents so they are not stranded behind it, in
+        # the same transaction as the terminal write -- mirrors reclaim_lost_jobs.
+        cascade_dependency_outcome(session, terminal_job_id=job_id)
         swept.append(job_id)
 
     return swept
