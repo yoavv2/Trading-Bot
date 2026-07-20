@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
-status: executing
-stopped_at: Completed 17-08-PLAN.md
-last_updated: "2026-07-20T00:00:00.000Z"
+status: verifying
+stopped_at: Completed 17-09-PLAN.md (Phase 17 job-framework fully executed, awaiting orchestrator phase-complete)
+last_updated: "2026-07-20T08:17:50.613Z"
 last_activity: 2026-07-20
 progress:
   total_phases: 10
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 9
-  completed_plans: 8
-  percent: 0
+  completed_plans: 9
+  percent: 10
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-07-15)
 
 Phase: 17 (job-framework) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
-Last activity: 2026-07-19
+Status: Phase complete — ready for verification
+Last activity: 2026-07-20
 
 ## Performance Metrics
 
@@ -117,6 +117,7 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-06: request_cancellation/acknowledge_cancellation/sweep_cancellation_timeouts ship JOB-06's cancellation mechanism -- atomic QUEUED cancel under a row lock (D-07), cooperative RUNNING cancel gated on handler acknowledgement (D-08), and an honest FAILED/cancellation_timeout landing on grace-period overrun (D-09), with the full D-10 audit record. JobNotCancellableError uses a mutable (non-frozen) dataclass rather than mirroring UnknownStrategyError's frozen-dataclass precedent, since raising a frozen-dataclass exception through session_scope's @contextmanager triggered FrozenInstanceError when contextlib attached a traceback post-construction. 15 tests green. JOB-06 left Pending -- no operator-facing surface calls request_cancellation yet, and acknowledge_cancellation/sweep_cancellation_timeouts need 17-07's worker loop to be exercised end-to-end.
 - [Phase 17]: 17-07: claim_next_job/renew_lease/find_lost_job_ids/reclaim_lost_jobs ship JOB-02's persistence half -- SELECT ... FOR UPDATE SKIP LOCKED makes concurrent double-claim structurally impossible (proven with two real connections and a non-blocking thread-join assertion), lease-expiry crash detection lands crashed Jobs on FAILED with outcome_uncertain forced True (D-01/D-03), reclaim never requeues (D-02) and cascades to unstarted dependents (D-04). 14 tests green. JOB-02 left Pending -- its literal text also requires "a queued job submitted before a worker restart executes after it", which needs 17-09's worker runner (this plan only transitions QUEUED->RUNNING, it never executes a handler); marking Complete now would overclaim the same way this phase has avoided for JOB-05/JOB-06. JOB-05's readiness-gap note from 17-05 is also now closed in code/tests (claim_next_job actually calls unsatisfied_dependency_exists) but left Pending in REQUIREMENTS.md since this plan's frontmatter declares only JOB-02 -- both flagged for the orchestrator/gsd-transition.
 - [Phase 17]: 17-08: JobReadService + five read-only /api/v1/jobs routes (list/detail/progress/logs/events) ship the D-15 generic read surface -- sequence-ordered cursor-paginated logs (D-13), dependency causal chain (D-05), cancellation audit (D-10), and progress readable during (RUNNING) and after (FAILED, D-12) execution, all boundary-respecting (JOB-04, zero jobs/ imports, zero writes). 19 tests green against real Postgres. JOB-07 marked Complete -- the only requirement this plan closes end-to-end; JOB-05/JOB-06 remain Pending since this plan only reads dependency/cancellation state and ships no gating or cancel-action surface.
+- [Phase 17-09]: Runner (execute_job/run_worker_loop) ships the missing execution half of the Job framework, closing JOB-01/02/03/04/05 end-to-end; JOB-06 remains Pending (no operator-invocable cancel surface until Phase 18/19); JOB-04 recording gap from 17-02 corrected here (test was always green, requirements mark-complete never ran).
 
 ### Pending Todos
 
@@ -145,6 +146,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-20T00:00:00.000Z
-Stopped at: Completed 17-08-PLAN.md
+Last session: 2026-07-20T08:17:50.605Z
+Stopped at: Completed 17-09-PLAN.md (Phase 17 job-framework fully executed, awaiting orchestrator phase-complete)
 Resume file: None

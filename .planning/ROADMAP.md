@@ -65,7 +65,7 @@ Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-
 
 **Milestone Goal:** Console evolves from read-only monitor to operations control center — every manual operation executes through HTTP as a Job, backed by a generic, extensible, restart-safe DB job framework with full lifecycle, progress, logs, scheduling, and audit.
 
-- [ ] **Phase 17: Job Framework** - Generic DB-backed job queue: closed lifecycle enum, restart-safe persistence, registry-based extensibility, import-boundary enforcement, dependencies, cancellation, progress and structured logs.
+- [x] **Phase 17: Job Framework** - Generic DB-backed job queue: closed lifecycle enum, restart-safe persistence, registry-based extensibility, import-boundary enforcement, dependencies, cancellation, progress and structured logs. (completed 2026-07-20)
 - [ ] **Phase 18: Orchestration Surface** - HTTP API as the single orchestration surface: idempotent mutating endpoints, transport-agnostic Job observation, CLI-as-thin-wrapper enforcement.
 - [ ] **Phase 19: Operation Triggers & Control** - Operator runs every operation (backtest, risk evaluation, paper session, reconciliation, market-data sync, broker sync), retries failed Jobs, and controls strategy enable/disable and the kill switch, all from the console.
 - [ ] **Phase 20: Scheduling** - Scheduler as a Job producer over the same public API path; operator manages the Daily Paper Trading and Daily Market Data Sync schedules from the console.
@@ -231,7 +231,7 @@ Plans:
 **Wave 5** *(blocked on Wave 4 completion)*
 
 - [x] 17-08-PLAN.md — JobReadService and read-only /api/v1/jobs routes for state, progress, logs, events (JOB-07, JOB-06, JOB-05)
-- [ ] 17-09-PLAN.md — Job runner: handler execution, outcome landing, worker loop, run-jobs CLI command (JOB-02, JOB-03)
+- [x] 17-09-PLAN.md — Job runner: handler execution, outcome landing, worker loop, run-jobs CLI command (JOB-02, JOB-03)
 
 ### Phase 18: Orchestration Surface
 
@@ -315,7 +315,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 17. Job Framework | v1.3 | 8/9 | In Progress|  |
+| 17. Job Framework | v1.3 | 9/9 | Complete   | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |
