@@ -34,6 +34,12 @@ from trading_platform.jobs.progress import ProgressSnapshot, apply_progress
 MAX_LOG_MESSAGE_CHARS = 4000
 MAX_LOG_CONTEXT_BYTES = 16384
 
+# JobLog.event_code and JobLog.handler_type are String(64) columns; values are
+# truncated to this width before insert so an over-length value never raises a
+# DataError at commit.
+MAX_LOG_EVENT_CODE_CHARS = 64
+MAX_LOG_HANDLER_TYPE_CHARS = 64
+
 _VALID_LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
 _MAX_SEQUENCE_RETRY_ATTEMPTS = 2
 
@@ -108,6 +114,13 @@ class DatabaseJobContext:
             )
 
         truncated_message = message[:MAX_LOG_MESSAGE_CHARS]
+        # event_code and handler_type map to String(64) columns. Truncate them
+        # to the column width -- consistent with the message truncation above
+        # and the "never raise merely because a value ran long" policy -- so an
+        # over-length value cannot raise a DataError at commit (which, unlike an
+        # IntegrityError, the sequence-retry loop below would not catch).
+        truncated_event_code = event_code[:MAX_LOG_EVENT_CODE_CHARS]
+        truncated_handler_type = self._job_type[:MAX_LOG_HANDLER_TYPE_CHARS]
 
         # This is the single Job-log write path. Every context dict is
         # routed through trading_platform.core.log_sanitizer.sanitize --
@@ -143,9 +156,9 @@ class DatabaseJobContext:
                             sequence=next_sequence,
                             logged_at=logged_at,
                             level=normalized_level,
-                            event_code=event_code,
+                            event_code=truncated_event_code,
                             message=truncated_message,
-                            handler_type=self._job_type,
+                            handler_type=truncated_handler_type,
                             context=sanitized_context,
                         )
                     )

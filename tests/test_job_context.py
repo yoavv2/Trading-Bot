@@ -24,7 +24,11 @@ from scripts.migrate import build_alembic_config
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import Job, JobLog, JobStatus
 from trading_platform.db.session import clear_engine_cache, session_scope
-from trading_platform.jobs.context import DatabaseJobContext
+from trading_platform.jobs.context import (
+    MAX_LOG_EVENT_CODE_CHARS,
+    MAX_LOG_HANDLER_TYPE_CHARS,
+    DatabaseJobContext,
+)
 from trading_platform.jobs.contracts import JobCancelledError, JobContext
 
 
@@ -319,6 +323,37 @@ def test_log_truncates_oversized_message_and_context(migrated_job_context_db: st
         assert len(log.message) == 4000
         assert log.context.get("_truncated") is True
         assert isinstance(log.context.get("_original_bytes"), int)
+
+
+def test_log_truncates_oversized_event_code_and_handler_type(
+    migrated_job_context_db: str,
+) -> None:
+    """WR-03 regression: event_code and handler_type map to String(64) columns.
+    An over-length value must be truncated to the column width rather than raise
+    a DataError at commit (which the sequence-retry loop would not catch).
+    """
+    settings = load_settings()
+
+    # The Job row's job_type is itself a String(64) column, so seed a valid
+    # Job but hand the context an over-length job_type: handler_type on JobLog
+    # is taken from the context, independently of the Job row.
+    with session_scope(settings) as session:
+        job = _seed_job(session)
+        job_id = job.id
+
+    long_handler_type = "h" * 200
+    context = _make_context(job_id, job_type=long_handler_type)
+    long_event_code = "e" * 200
+
+    # Must not raise a DataError.
+    context.log(level="info", event_code=long_event_code, message="ok")
+
+    with session_scope(settings) as session:
+        log = session.execute(select(JobLog).where(JobLog.job_id == job_id)).scalar_one()
+        assert len(log.event_code) == MAX_LOG_EVENT_CODE_CHARS
+        assert len(log.handler_type) == MAX_LOG_HANDLER_TYPE_CHARS
+        assert log.event_code == long_event_code[:MAX_LOG_EVENT_CODE_CHARS]
+        assert log.handler_type == long_handler_type[:MAX_LOG_HANDLER_TYPE_CHARS]
 
 
 def test_is_cancellation_requested_reflects_persisted_request(migrated_job_context_db: str) -> None:
