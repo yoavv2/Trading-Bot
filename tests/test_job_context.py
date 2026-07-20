@@ -144,6 +144,34 @@ def test_report_progress_persists_partial_snapshot(migrated_job_context_db: str)
         assert job.progress_step == "writing"
 
 
+@pytest.mark.parametrize(
+    "terminal_status", [JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED]
+)
+def test_report_progress_is_noop_on_terminal_job(
+    migrated_job_context_db: str, terminal_status: JobStatus
+) -> None:
+    """WR-01 regression: a progress write onto an already-terminal Job (the
+    CR-02 race, where a handler is still running after a concurrent sweep
+    terminalized the Job) must be a cooperative no-op preserving the last
+    snapshot (D-12), not overwrite progress on a FAILED/CANCELLED Job.
+    """
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        job = _seed_job(session, status=terminal_status, progress_percent=60)
+        job_id = job.id
+
+    context = _make_context(job_id)
+    context.report_progress(percent=90, step="should-not-apply")
+
+    with session_scope(settings) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is terminal_status
+        assert job.progress_percent == 60
+        assert job.progress_step is None
+
+
 def test_report_progress_rejects_out_of_range_percent(migrated_job_context_db: str) -> None:
     settings = load_settings()
 

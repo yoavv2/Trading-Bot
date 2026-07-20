@@ -24,7 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from trading_platform.core.log_sanitizer import sanitize
 from trading_platform.core.settings import Settings
-from trading_platform.db.models.job import Job
+from trading_platform.db.models.job import Job, JobStatus
 from trading_platform.db.models.job_log import JobLog
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.contracts import JobCancelledError
@@ -85,6 +85,12 @@ class DatabaseJobContext:
             job = session.get(Job, self._job_id)
             if job is None:
                 raise ValueError(f"Job '{self._job_id}' does not exist.")
+            # D-12: progress is written only while the Job is still RUNNING. In
+            # the same race that CR-02 guards (a handler still running after a
+            # concurrent sweep/reclaim terminalized the Job), skip the write so
+            # a FAILED/CANCELLED Job keeps its last-reported progress untouched.
+            if job.status is not JobStatus.RUNNING:
+                return  # cooperative no-op; a terminalized Job keeps its snapshot
             apply_progress(job, snapshot, now=now)
 
     def log(
