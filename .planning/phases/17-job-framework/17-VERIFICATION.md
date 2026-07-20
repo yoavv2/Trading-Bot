@@ -1,9 +1,16 @@
 ---
 phase: 17-job-framework
 verified: 2026-07-20T08:42:25Z
-status: gaps_found
-score: 5/6 must-haves verified (JOB-06 split into framework mechanism VERIFIED + operator surface FAILED)
-overrides_applied: 0
+status: passed
+score: 6/6 must-haves verified (JOB-06 accepted at framework level for Phase 17; operator surface assigned to Phase 18)
+overrides_applied: 1
+override_note: >
+  Developer decision (2026-07-20): JOB-06's cancellation FRAMEWORK MECHANISM is
+  accepted as satisfying Phase 17's backend scope (ROADMAP explicitly scopes Phase 17
+  as "no operator-visible surface yet"). The orphaned operator-invocable cancel surface
+  is no longer orphaned — it is assigned to Phase 18 via a new success criterion 5
+  ("mutating cancellation endpoint"), and JOB-06 is marked Complete in REQUIREMENTS.md
+  with dual-phase traceability. No Phase 17 rework required.
 gaps:
   - truth: "Operator can cancel a queued or running Job, transitioning it to CANCELLED with an audit record (JOB-06 — operator-invocable surface)"
     status: partial

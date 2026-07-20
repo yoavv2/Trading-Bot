@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
-status: verifying
-stopped_at: Completed 17-09-PLAN.md (Phase 17 job-framework fully executed, awaiting orchestrator phase-complete)
-last_updated: "2026-07-20T08:17:50.613Z"
+status: ready_to_plan
+stopped_at: Phase 17 complete (9/9) — ready to discuss Phase 18
+last_updated: 2026-07-20T08:47:08.467Z
 last_activity: 2026-07-20
 progress:
   total_phases: 10
@@ -21,20 +21,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-15)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 17 — job-framework
+**Current focus:** Phase 18 — orchestration surface
 
 ## Current Position
 
-Phase: 17 (job-framework) — EXECUTING
-Plan: 9 of 9
-Status: Phase complete — ready for verification
+Phase: 18
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-07-20
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 48 (v1.0: 16, v1.1: 14, v1.2: 10)
+- Total plans completed: 57 (v1.0: 16, v1.1: 14, v1.2: 10)
 - Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min, 08-03: ~10 min, 08-04: ~25 min, 08-05: ~20 min, 09-01: ~30 min, 09-02: ~20 min, 09-03: ~35 min, 09-04: ~25 min, 10-05: ~35 min, 10-06: ~20 min, 11-01: ~10 min, 11-02: ~15 min, 11-03: single session, 12-01: ~15 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
 - Total execution time: -
 

@@ -244,6 +244,7 @@ Plans:
   2. An import/structure enforcement test proves CLI commands and API routes call the identical service layer with zero duplicated business logic (ORCH-02).
   3. Resubmitting a mutating request with the same idempotency key returns the original Job instead of executing the operation twice (ORCH-03).
   4. Submitting an operation returns a Job reference whose state, progress, and logs are observable via API reads alone — no architectural dependency on polling vs. push (ORCH-04).
+  5. A mutating cancellation endpoint exposes JOB-06's cancellation framework (built and tested in Phase 17) as an operator-invocable surface — the endpoint calls `jobs.cancellation.request_cancellation` for a QUEUED/RUNNING Job and returns the updated Job reference. *(Operator-surface owner for JOB-06; the framework mechanism was completed in Phase 17.)*
 
 **Plans**: TBD
 
@@ -315,7 +316,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 14. Strategy & Runs Inspection | v1.2 | 5/5 | Complete | 2026-07-09 |
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
-| 17. Job Framework | v1.3 | 9/9 | Complete   | 2026-07-20 |
+| 17. Job Framework | v1.3 | 9/9 | Complete    | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |
