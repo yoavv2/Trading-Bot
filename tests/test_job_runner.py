@@ -29,8 +29,12 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.jobs import runner as runner_module
-from trading_platform.jobs.cancellation import request_cancellation
-from trading_platform.jobs.contracts import JobContext, JobHandler
+from trading_platform.jobs.cancellation import (
+    CANCELLATION_GRACE_SECONDS,
+    request_cancellation,
+    sweep_cancellation_timeouts,
+)
+from trading_platform.jobs.contracts import JobCancelledError, JobContext, JobHandler
 from trading_platform.jobs.dependencies import submit_job
 from trading_platform.jobs.queue import claim_next_job, reclaim_lost_jobs
 from trading_platform.jobs.registry import JobRegistry
@@ -182,6 +186,48 @@ class _LeaseLossHandler:
         # a chance to observe the expired/reclaimed lease before returning.
         time.sleep(0.3)
         return {"should": "never be persisted"}
+
+
+class _ConcurrentTimeoutThenSucceedHandler:
+    """CR-02 race (success path): simulates another worker's cancellation-timeout
+    sweep terminalizing this Job (RUNNING -> FAILED) mid-execution -- without
+    expiring the lease -- then returns normally. execute_job's success-path
+    terminal write must tolerate the already-terminal Job (IllegalJobTransition)
+    rather than crash the worker.
+    """
+
+    job_type = "phase17_runner_concurrent_timeout_succeed"
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        overdue = datetime.now(UTC) - timedelta(seconds=CANCELLATION_GRACE_SECONDS + 60)
+        with session_scope() as session:
+            job = session.get(Job, context.job_id)
+            assert job is not None
+            job.cancellation_requested_at = overdue
+            job.cancellation_requested_by = "operator-concurrent"
+        with session_scope() as session:
+            sweep_cancellation_timeouts(session)
+        return {"should": "not be persisted as SUCCEEDED"}
+
+
+class _ConcurrentTimeoutThenCancelHandler:
+    """CR-02 race (cancelled path): same concurrent RUNNING -> FAILED sweep, but
+    the handler then raises JobCancelledError. execute_job's acknowledge_cancellation
+    must tolerate the already-terminal Job (JobNotCancellableError) rather than crash.
+    """
+
+    job_type = "phase17_runner_concurrent_timeout_cancel"
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        overdue = datetime.now(UTC) - timedelta(seconds=CANCELLATION_GRACE_SECONDS + 60)
+        with session_scope() as session:
+            job = session.get(Job, context.job_id)
+            assert job is not None
+            job.cancellation_requested_at = overdue
+            job.cancellation_requested_by = "operator-concurrent"
+        with session_scope() as session:
+            sweep_cancellation_timeouts(session)
+        raise JobCancelledError(context.job_id)
 
 
 def _registry(*handlers: JobHandler) -> JobRegistry:
@@ -413,6 +459,58 @@ def test_worker_loop_reports_tallies(migrated_job_runner_db: str) -> None:
     assert report["succeeded"] == 1
     assert report["failed"] == 1
     assert report["cancelled"] == 0
+
+
+def test_concurrent_terminalization_on_success_does_not_crash_worker(
+    migrated_job_runner_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-02: a concurrent sweep terminalizing a Job mid-execution must not crash
+    the worker on the success terminal write; execute_job returns the honest
+    already-terminal status instead of raising IllegalJobTransition.
+    """
+    load_settings()
+    # Keep the heartbeat from firing during the short handler so the CR-02
+    # window (terminalized but lease_lost still unset) is what's exercised --
+    # not the already-covered lost-lease path.
+    monkeypatch.setattr(runner_module, "HEARTBEAT_SECONDS", 3600)
+    handler = _ConcurrentTimeoutThenSucceedHandler()
+    job_id = _submit(handler.job_type)
+
+    with session_scope() as session:
+        claim_next_job(session, worker_id="worker-A")
+
+    status = execute_job(job_id=job_id, worker_id="worker-A", registry=_registry(handler))
+
+    # The concurrent sweep already wrote FAILED (CANCELLATION_TIMEOUT); the
+    # success terminal write must not have raised or overwritten it.
+    assert status is JobStatus.FAILED
+    job = _get_job(job_id)
+    assert job.status is JobStatus.FAILED
+    assert job.failure_reason is JobFailureReason.CANCELLATION_TIMEOUT
+    assert job.result_summary == {}
+
+
+def test_concurrent_terminalization_on_cancel_does_not_crash_worker(
+    migrated_job_runner_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CR-02: the cancelled terminal path (acknowledge_cancellation) must also
+    tolerate a Job concurrently terminalized to FAILED, returning the honest
+    status instead of raising JobNotCancellableError.
+    """
+    load_settings()
+    monkeypatch.setattr(runner_module, "HEARTBEAT_SECONDS", 3600)
+    handler = _ConcurrentTimeoutThenCancelHandler()
+    job_id = _submit(handler.job_type)
+
+    with session_scope() as session:
+        claim_next_job(session, worker_id="worker-A")
+
+    status = execute_job(job_id=job_id, worker_id="worker-A", registry=_registry(handler))
+
+    assert status is JobStatus.FAILED
+    job = _get_job(job_id)
+    assert job.status is JobStatus.FAILED
+    assert job.failure_reason is JobFailureReason.CANCELLATION_TIMEOUT
 
 
 def test_worker_loop_stops_after_max_jobs(migrated_job_runner_db: str) -> None:

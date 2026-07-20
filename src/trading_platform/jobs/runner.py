@@ -37,11 +37,19 @@ from trading_platform.core.settings import Settings
 from trading_platform.db.models import Job, JobEventType, JobFailureReason, JobLog, JobStatus
 from trading_platform.db.session import session_scope
 from trading_platform.jobs import progress as _progress
-from trading_platform.jobs.cancellation import acknowledge_cancellation, sweep_cancellation_timeouts
+from trading_platform.jobs.cancellation import (
+    JobNotCancellableError,
+    acknowledge_cancellation,
+    sweep_cancellation_timeouts,
+)
 from trading_platform.jobs.context import DatabaseJobContext
 from trading_platform.jobs.contracts import JobCancelledError
 from trading_platform.jobs.dependencies import cascade_dependency_outcome
-from trading_platform.jobs.lifecycle import JobTransitionRequest, apply_job_transition
+from trading_platform.jobs.lifecycle import (
+    IllegalJobTransition,
+    JobTransitionRequest,
+    apply_job_transition,
+)
 from trading_platform.jobs.queue import (
     HEARTBEAT_SECONDS,
     POLL_INTERVAL_SECONDS,
@@ -198,43 +206,71 @@ def execute_job(
             job = session.get(Job, job_id)
             return job.status if job is not None else JobStatus.FAILED
 
-    if outcome_kind == "success":
+    # The terminal writes below assume this Job is still RUNNING and owned by
+    # this worker. Under concurrency that can be false: another worker's
+    # cancellation-timeout sweep or lease reclaim can terminalize this Job
+    # within the HEARTBEAT_SECONDS window before this worker's next
+    # renew_lease would set lease_lost. The success path then hits
+    # SUCCEEDED-from-terminal (IllegalJobTransition), the cancelled path hits
+    # a non-RUNNING acknowledge_cancellation (JobNotCancellableError), and the
+    # error path hits FAILED-from-terminal (IllegalJobTransition). In every
+    # case the Job is already correctly terminal and this worker no longer
+    # owns it, so this is not data loss -- treat it exactly like a lost lease:
+    # write nothing and report the current status honestly, rather than
+    # letting the exception crash the worker process.
+    try:
+        if outcome_kind == "success":
+            with session_scope(settings) as session:
+                job = session.get(Job, job_id)
+                if job is None:
+                    raise LookupError(f"Job '{job_id}' was not found.")
+                _progress.mark_completed(job, now=datetime.now(UTC))
+                apply_job_transition(
+                    session,
+                    job_id=job_id,
+                    request=JobTransitionRequest(
+                        event_type=JobEventType.SUCCEEDED,
+                        result_summary=result if result is not None else {},
+                    ),
+                )
+            return JobStatus.SUCCEEDED
+
+        if outcome_kind == "cancelled":
+            with session_scope(settings) as session:
+                acknowledge_cancellation(session, job_id=job_id)
+                cascade_dependency_outcome(session, terminal_job_id=job_id)
+            return JobStatus.CANCELLED
+
+        # outcome_kind == "error"
         with session_scope(settings) as session:
-            job = session.get(Job, job_id)
-            if job is None:
-                raise LookupError(f"Job '{job_id}' was not found.")
-            _progress.mark_completed(job, now=datetime.now(UTC))
+            outcome_uncertain = _job_emitted_external_side_effect_log(session, job_id=job_id)
             apply_job_transition(
                 session,
                 job_id=job_id,
                 request=JobTransitionRequest(
-                    event_type=JobEventType.SUCCEEDED,
-                    result_summary=result if result is not None else {},
+                    event_type=JobEventType.FAILED,
+                    failure_reason=JobFailureReason.HANDLER_ERROR,
+                    failure_message=failure_message,
+                    outcome_uncertain=outcome_uncertain,
                 ),
             )
-        return JobStatus.SUCCEEDED
-
-    if outcome_kind == "cancelled":
-        with session_scope(settings) as session:
-            acknowledge_cancellation(session, job_id=job_id)
             cascade_dependency_outcome(session, terminal_job_id=job_id)
-        return JobStatus.CANCELLED
-
-    # outcome_kind == "error"
-    with session_scope(settings) as session:
-        outcome_uncertain = _job_emitted_external_side_effect_log(session, job_id=job_id)
-        apply_job_transition(
-            session,
-            job_id=job_id,
-            request=JobTransitionRequest(
-                event_type=JobEventType.FAILED,
-                failure_reason=JobFailureReason.HANDLER_ERROR,
-                failure_message=failure_message,
-                outcome_uncertain=outcome_uncertain,
-            ),
+        return JobStatus.FAILED
+    except (IllegalJobTransition, JobNotCancellableError):
+        logger.warning(
+            "job_runner_concurrently_terminalized",
+            extra={
+                "context": {
+                    "job_id": str(job_id),
+                    "worker_id": worker_id,
+                    "job_type": job_type,
+                    "outcome_kind": outcome_kind,
+                }
+            },
         )
-        cascade_dependency_outcome(session, terminal_job_id=job_id)
-    return JobStatus.FAILED
+        with session_scope(settings) as session:
+            job = session.get(Job, job_id)
+            return job.status if job is not None else JobStatus.FAILED
 
 
 def run_worker_loop(
@@ -303,19 +339,38 @@ def run_worker_loop(
             cancellation_timeouts_total += len(timed_out)
 
             if claimed_job_id is not None:
-                status = execute_job(
-                    job_id=claimed_job_id,
-                    worker_id=worker_id,
-                    registry=registry,
-                    settings=settings,
-                )
+                # Last-resort net: execute_job already converts the known
+                # concurrent-terminalization races (IllegalJobTransition /
+                # JobNotCancellableError) into an honest status return, so this
+                # broad except only fires on a genuinely unforeseen error. No
+                # single Job may crash the poll loop and terminate the worker
+                # process -- log it and continue. jobs_executed is still
+                # incremented so max_jobs bounds hold and the loop cannot spin
+                # forever on one pathological Job.
+                try:
+                    status = execute_job(
+                        job_id=claimed_job_id,
+                        worker_id=worker_id,
+                        registry=registry,
+                        settings=settings,
+                    )
+                    if status is JobStatus.SUCCEEDED:
+                        succeeded += 1
+                    elif status is JobStatus.FAILED:
+                        failed += 1
+                    elif status is JobStatus.CANCELLED:
+                        cancelled += 1
+                except Exception:
+                    logger.exception(
+                        "job_runner_execution_crashed",
+                        extra={
+                            "context": {
+                                "job_id": str(claimed_job_id),
+                                "worker_id": worker_id,
+                            }
+                        },
+                    )
                 jobs_executed += 1
-                if status is JobStatus.SUCCEEDED:
-                    succeeded += 1
-                elif status is JobStatus.FAILED:
-                    failed += 1
-                elif status is JobStatus.CANCELLED:
-                    cancelled += 1
 
             if once:
                 stopped_reason = "once"
