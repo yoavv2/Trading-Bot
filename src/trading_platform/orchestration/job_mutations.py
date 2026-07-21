@@ -145,9 +145,8 @@ def _request_fingerprint(material: Mapping[str, Any], *, job_type: str) -> str:
 
 
 def _is_named_uniqueness_error(exc: IntegrityError) -> bool:
-    return getattr(getattr(exc, "orig", None), "diag", None) is not None and (
-        getattr(exc.orig.diag, "constraint_name", None) == "uq_job_mutations_endpoint_key"
-    )
+    diagnostic = getattr(exc.orig, "diag", None)
+    return getattr(diagnostic, "constraint_name", None) == "uq_job_mutations_endpoint_key"
 
 
 class JobOrchestrationService:
@@ -175,8 +174,8 @@ class JobOrchestrationService:
         )
 
     @staticmethod
-    def _require_job(session: Any, job_id: UUID) -> Job:
-        job = session.get(Job, job_id)
+    def _require_job(session: Any, job_id: UUID, *, lock: bool = False) -> Job:
+        job = session.get(Job, job_id, with_for_update=lock)
         if job is None:
             raise JobMutationNotFoundError(job_id=job_id)
         return job
@@ -295,22 +294,21 @@ class JobOrchestrationService:
             if existing is not None:
                 return existing
 
-            job = self._require_job(session, job_id)
+            job = self._require_job(session, job_id, lock=True)
             if job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED):
                 raise JobTerminalConflictError(job_id=job_id, status=job.status.value)
-            if job.status is JobStatus.CANCELLED or (
-                job.status is JobStatus.RUNNING and job.cancellation_requested_at is not None
-            ):
-                return MutationResult(reference=self._reference(job), replayed=False, created=False)
 
             try:
                 with session.begin_nested():
-                    request_cancellation(
-                        job_id=job_id,
-                        requested_by=LOCAL_OPERATOR,
-                        reason=normalized_reason,
-                        session=session,
-                    )
+                    if job.status is not JobStatus.CANCELLED and not (
+                        job.status is JobStatus.RUNNING and job.cancellation_requested_at is not None
+                    ):
+                        request_cancellation(
+                            job_id=job_id,
+                            requested_by=LOCAL_OPERATOR,
+                            reason=normalized_reason,
+                            session=session,
+                        )
                     session.add(
                         JobMutation(
                             endpoint_id=CANCEL_ENDPOINT_ID,
