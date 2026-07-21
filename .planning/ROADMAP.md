@@ -257,11 +257,13 @@ Plans:
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 18-03-PLAN.md — Transport-independent orchestration service with race-safe replay, cancellation, and compact references (ORCH-03, ORCH-04)
 
-**Wave 3** *(blocked on Wave 2; plans run in parallel)*
+**Wave 3** *(blocked on Wave 2)*
 - [ ] 18-04-PLAN.md — Thin idempotent Job submission/cancellation HTTP adapters and contract tests (ORCH-01, ORCH-03, ORCH-04)
-- [ ] 18-05-PLAN.md — Remove direct mutating CLI paths and enforce adapter/application/domain boundaries (ORCH-01, ORCH-02)
 
 **Wave 4** *(blocked on Wave 3)*
+- [ ] 18-05-PLAN.md — Remove direct mutating CLI paths and enforce adapter/application/domain boundaries (ORCH-01, ORCH-02)
+
+**Wave 5** *(blocked on Wave 4)*
 - [ ] 18-06-PLAN.md — DB-ready API startup and test-only submit → execute → linked-observe E2E proof (ORCH-01–ORCH-04)
 
 ### Phase 19: Operation Triggers & Control
