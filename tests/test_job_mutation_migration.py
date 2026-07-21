@@ -4,11 +4,14 @@ import os
 import sys
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import psycopg
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import func, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -17,8 +20,8 @@ from alembic import command
 from scripts.migrate import build_alembic_config
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import JobMutation
-from trading_platform.db.session import clear_engine_cache, get_engine
+from trading_platform.db.models import Job, JobMutation
+from trading_platform.db.session import clear_engine_cache, get_engine, session_scope
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -146,3 +149,131 @@ def test_phase18_migration_creates_job_mutation_schema(migrated_job_mutation_db:
             "comment": None,
         }
     ]
+
+
+def _create_job() -> uuid.UUID:
+    with session_scope(load_settings()) as session:
+        job = Job(job_type="phase18_idempotency_probe", payload={})
+        session.add(job)
+        session.flush()
+        return job.id
+
+
+def _insert_mutation(*, endpoint_id: str, idempotency_key: str, job_id: uuid.UUID) -> None:
+    with session_scope(load_settings()) as session:
+        session.add(
+            JobMutation(
+                endpoint_id=endpoint_id,
+                idempotency_key=idempotency_key,
+                request_fingerprint="a" * 64,
+                job_id=job_id,
+            )
+        )
+        session.flush()
+
+
+def test_phase18_schema_enforces_endpoint_scoped_concurrent_uniqueness(
+    migrated_job_mutation_db: str,
+) -> None:
+    settings = load_settings()
+    first_job_id = _create_job()
+    second_job_id = _create_job()
+    endpoint_id = "POST:/api/v1/jobs"
+    idempotency_key = "shared-key"
+    second_insert_started = Event()
+
+    def _conflicting_insert() -> None:
+        second_insert_started.set()
+        _insert_mutation(
+            endpoint_id=endpoint_id,
+            idempotency_key=idempotency_key,
+            job_id=second_job_id,
+        )
+
+    engine = get_engine(settings)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO job_mutations (id, endpoint_id, idempotency_key, request_fingerprint, job_id)
+                    VALUES (:id, :endpoint_id, :idempotency_key, :request_fingerprint, :job_id)
+                    """
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "endpoint_id": endpoint_id,
+                    "idempotency_key": idempotency_key,
+                    "request_fingerprint": "a" * 64,
+                    "job_id": first_job_id,
+                },
+            )
+            future = executor.submit(_conflicting_insert)
+            assert second_insert_started.wait(timeout=2)
+            assert not future.done()
+
+        with pytest.raises(IntegrityError):
+            future.result(timeout=5)
+
+    with session_scope(settings) as session:
+        persisted = session.execute(select(JobMutation)).scalars().all()
+    assert len(persisted) == 1
+    assert persisted[0].job_id == first_job_id
+
+
+def test_phase18_schema_scopes_keys_per_endpoint_and_enforces_job_fk(
+    migrated_job_mutation_db: str,
+) -> None:
+    settings = load_settings()
+    first_job_id = _create_job()
+    second_job_id = _create_job()
+    idempotency_key = "same-literal-key"
+
+    _insert_mutation(
+        endpoint_id="POST:/api/v1/jobs",
+        idempotency_key=idempotency_key,
+        job_id=first_job_id,
+    )
+    _insert_mutation(
+        endpoint_id="POST:/api/v1/jobs/{job_id}/cancel",
+        idempotency_key=idempotency_key,
+        job_id=second_job_id,
+    )
+
+    with pytest.raises(IntegrityError):
+        _insert_mutation(
+            endpoint_id="POST:/api/v1/jobs",
+            idempotency_key="unknown-job-key",
+            job_id=uuid.uuid4(),
+        )
+
+    with session_scope(settings) as session:
+        persisted_count = session.execute(
+            select(func.count()).select_from(JobMutation)
+        ).scalar_one()
+    assert persisted_count == 2
+
+
+def test_phase18_migration_downgrade_and_reupgrade_preserve_jobs(
+    migrated_job_mutation_db: str,
+) -> None:
+    config = build_alembic_config()
+    command.downgrade(config, "-1")
+    clear_settings_cache()
+    clear_engine_cache()
+
+    inspector = inspect(get_engine(load_settings()))
+    assert "jobs" in inspector.get_table_names()
+    assert "job_mutations" not in inspector.get_table_names()
+
+    command.upgrade(config, "head")
+    clear_settings_cache()
+    clear_engine_cache()
+
+    inspector = inspect(get_engine(load_settings()))
+    assert "job_mutations" in inspector.get_table_names()
+    unique_constraints = {
+        constraint["name"]: tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints("job_mutations")
+    }
+    assert unique_constraints["uq_job_mutations_endpoint_key"] == ("endpoint_id", "idempotency_key")
