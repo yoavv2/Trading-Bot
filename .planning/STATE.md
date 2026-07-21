@@ -4,13 +4,13 @@ milestone: v1.3
 milestone_name: Operator Platform
 status: executing
 stopped_at: context exhaustion at 78% (2026-07-21)
-last_updated: "2026-07-21T17:12:12.824Z"
+last_updated: "2026-07-21T17:24:59.709Z"
 last_activity: 2026-07-21
 progress:
   total_phases: 10
   completed_phases: 1
   total_plans: 15
-  completed_plans: 10
+  completed_plans: 11
   percent: 10
 ---
 
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-07-15)
 ## Current Position
 
 Phase: 18 (orchestration-surface) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-21
-**Progress:** [███████░░░] 67%
+**Progress:** [███████░░░] 73%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Last activity: 2026-07-21
 - Trend: v1.1 resumed at Phase 8/12 after prioritizing and shipping the read-only operator console (v1.2); Phases 8, 9, 10, and now 11 are all fully closed out. Only Phase 12 (Structural Refactor and Tooling) remains paused in v1.1; the next milestone-execution decision (resume v1.1 Phase 12, or address the Phase 9 RECON-05/07 marking gap first) is the orchestrator's/user's to make.
 
 *Updated after each plan completion*
+| Phase 18 P02 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,8 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-08: JobReadService + five read-only /api/v1/jobs routes (list/detail/progress/logs/events) ship the D-15 generic read surface -- sequence-ordered cursor-paginated logs (D-13), dependency causal chain (D-05), cancellation audit (D-10), and progress readable during (RUNNING) and after (FAILED, D-12) execution, all boundary-respecting (JOB-04, zero jobs/ imports, zero writes). 19 tests green against real Postgres. JOB-07 marked Complete -- the only requirement this plan closes end-to-end; JOB-05/JOB-06 remain Pending since this plan only reads dependency/cancellation state and ships no gating or cancel-action surface.
 - [Phase 17-09]: Runner (execute_job/run_worker_loop) ships the missing execution half of the Job framework, closing JOB-01/02/03/04/05 end-to-end; JOB-06 remains Pending (no operator-invocable cancel surface until Phase 18/19); JOB-04 recording gap from 17-02 corrected here (test was always green, requirements mark-complete never ran).
 - [Phase 18]: Endpoint/key database uniqueness is the authoritative Job mutation idempotency backstop; RESTRICT preserves original Job linkage. — Application lookups cannot prevent concurrent duplicate mutation identities, while durable references must retain the original Job.
+- [Phase 18-02]: submit_job and request_cancellation accept caller-owned Sessions — One flush-only mutation path preserves standalone commits while allowing orchestration idempotency and Job changes to roll back atomically.
+- [Phase 18-02]: Cancellation repeat tests pin requester, reason, and timestamp immutability — Phase 18 transaction composition must not weaken the Phase 17 first-request audit contract.
 
 ### Pending Todos
 
@@ -152,6 +155,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-21T17:10:16.271Z
+Last session: 2026-07-21T17:24:04.041Z
 Stopped at: context exhaustion at 78% (2026-07-21)
 Resume file: None
