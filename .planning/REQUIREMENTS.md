@@ -24,7 +24,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [ ] **ORCH-01**: Every manual operation is exposed as an HTTP API endpoint; the console invokes only the HTTP API — never business logic or CLI code directly
 - [x] **ORCH-02**: CLI worker commands are thin wrappers over the same service layer the API uses — no business logic exists in CLI or API route code (import/structure enforcement)
 - [x] **ORCH-03**: Every mutating endpoint is idempotent — resubmitting the same operation with the same idempotency key returns the existing Job instead of executing twice
-- [ ] **ORCH-04**: Submitting an operation returns a Job reference whose state, progress, and logs the console observes via API reads — transport-agnostic, no architectural dependency on polling vs push
+- [x] **ORCH-04**: Submitting an operation returns a Job reference whose state, progress, and logs the console observes via API reads — transport-agnostic, no architectural dependency on polling vs push
 
 ### Operation Triggers
 
@@ -104,7 +104,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ORCH-01 | Phase 18 | Pending |
 | ORCH-02 | Phase 18 | Complete |
 | ORCH-03 | Phase 18 | Complete |
-| ORCH-04 | Phase 18 | Pending |
+| ORCH-04 | Phase 18 | Complete |
 | OPS-01 | Phase 19 | Pending |
 | OPS-02 | Phase 19 | Pending |
 | OPS-03 | Phase 19 | Pending |
