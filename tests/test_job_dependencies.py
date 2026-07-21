@@ -463,3 +463,78 @@ def test_no_dependent_is_left_queued_behind_a_dead_dependency(
         job_c = session.get(Job, job_c_id)
         assert job_c is not None
         assert job_c.status is JobStatus.CANCELLED
+
+
+def test_submit_with_caller_session_matches_standalone_submission(
+    migrated_job_dependencies_db: str,
+) -> None:
+    settings = load_settings()
+    dependency_id = submit_job(job_type="dependency", payload={}, settings=settings)
+    standalone_job_id = submit_job(
+        job_type="probe",
+        payload={"source": "standalone"},
+        depends_on=[dependency_id, dependency_id],
+        settings=settings,
+    )
+
+    with session_scope(settings) as session:
+        caller_session_job_id = submit_job(
+            job_type="probe",
+            payload={"source": "standalone"},
+            depends_on=[dependency_id, dependency_id],
+            session=session,
+        )
+
+    with session_scope(settings) as session:
+        standalone_job = session.get(Job, standalone_job_id)
+        caller_session_job = session.get(Job, caller_session_job_id)
+        assert standalone_job is not None
+        assert caller_session_job is not None
+        assert (caller_session_job.job_type, caller_session_job.payload, caller_session_job.status) == (
+            standalone_job.job_type,
+            standalone_job.payload,
+            standalone_job.status,
+        )
+
+        for job_id in (standalone_job_id, caller_session_job_id):
+            dependency_rows = session.execute(
+                select(JobDependency.depends_on_job_id).where(JobDependency.job_id == job_id)
+            ).scalars().all()
+            events = session.execute(
+                select(JobEvent).where(JobEvent.job_id == job_id)
+            ).scalars().all()
+            assert dependency_rows == [dependency_id]
+            assert len(events) == 1
+            assert events[0].event_type is JobEventType.SUBMITTED
+            assert events[0].to_status is JobStatus.QUEUED
+
+
+def test_submit_with_caller_session_rolls_back_all_submission_rows(
+    migrated_job_dependencies_db: str,
+) -> None:
+    settings = load_settings()
+    dependency_id = submit_job(job_type="dependency", payload={}, settings=settings)
+    submitted_job_id: uuid.UUID
+
+    with pytest.raises(RuntimeError, match="force rollback"):
+        with session_scope(settings) as session:
+            submitted_job_id = submit_job(
+                job_type="probe",
+                payload={"source": "caller-session"},
+                depends_on=[dependency_id],
+                session=session,
+            )
+            assert session.get(Job, submitted_job_id) is not None
+            raise RuntimeError("force rollback")
+
+    with session_scope(settings) as session:
+        assert session.get(Job, submitted_job_id) is None
+        dependency_count = session.execute(
+            select(func.count()).select_from(JobDependency).where(JobDependency.job_id == submitted_job_id)
+        ).scalar_one()
+        event_count = session.execute(
+            select(func.count()).select_from(JobEvent).where(JobEvent.job_id == submitted_job_id)
+        ).scalar_one()
+
+    assert dependency_count == 0
+    assert event_count == 0

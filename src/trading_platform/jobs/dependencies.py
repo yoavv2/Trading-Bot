@@ -171,12 +171,59 @@ def validate_dependency_set(
         raise DependencyCycleError(cycle=cycle)
 
 
+def _submit_job_in_session(
+    session: Session,
+    *,
+    job_type: str,
+    payload: Mapping[str, Any],
+    depends_on: Sequence[uuid.UUID],
+) -> uuid.UUID:
+    """Insert one Job and its immutable submission records into ``session``."""
+
+    unique_depends_on = list(dict.fromkeys(depends_on))
+    new_job_id = uuid.uuid4()
+
+    validate_dependency_set(
+        session,
+        new_job_id=new_job_id,
+        depends_on=unique_depends_on,
+        job_type=job_type,
+    )
+
+    event_at = datetime.now(UTC)
+    session.add(
+        Job(
+            id=new_job_id,
+            job_type=job_type,
+            payload=dict(payload),
+            status=JobStatus.QUEUED,
+        )
+    )
+
+    for dependency_id in unique_depends_on:
+        session.add(JobDependency(job_id=new_job_id, depends_on_job_id=dependency_id))
+
+    session.add(
+        JobEvent(
+            job_id=new_job_id,
+            from_status=None,
+            to_status=JobStatus.QUEUED,
+            event_type=JobEventType.SUBMITTED,
+            outcome=JobTransitionOutcome.ACCEPTED,
+            event_at=event_at,
+        )
+    )
+    session.flush()
+    return new_job_id
+
+
 def submit_job(
     *,
     job_type: str,
     payload: Mapping[str, Any],
     depends_on: Sequence[uuid.UUID] = (),
     settings: Settings | DatabaseSettings | None = None,
+    session: Session | None = None,
 ) -> uuid.UUID:
     """Submit a new Job with an immutable, validated dependency set.
 
@@ -189,6 +236,10 @@ def submit_job(
     transitioning it, and the closed transition table in ``jobs/lifecycle.py``
     has no inbound edge to QUEUED by design.
 
+    When ``session`` is supplied, this function flushes its inserts into that
+    caller-owned transaction without committing or closing it. Otherwise it
+    preserves the standalone ``session_scope(settings)`` transaction behavior.
+
     Validation failure raises before any insert, so the whole transaction
     rolls back with nothing written.
 
@@ -197,44 +248,21 @@ def submit_job(
     deliberately no ``add_dependency`` or ``remove_dependency`` function.
     """
 
-    unique_depends_on = list(dict.fromkeys(depends_on))
-
-    with session_scope(settings) as session:
-        new_job_id = uuid.uuid4()
-
-        validate_dependency_set(
+    if session is not None:
+        return _submit_job_in_session(
             session,
-            new_job_id=new_job_id,
-            depends_on=unique_depends_on,
             job_type=job_type,
+            payload=payload,
+            depends_on=depends_on,
         )
 
-        event_at = datetime.now(UTC)
-
-        job = Job(
-            id=new_job_id,
+    with session_scope(settings) as standalone_session:
+        return _submit_job_in_session(
+            standalone_session,
             job_type=job_type,
-            payload=dict(payload),
-            status=JobStatus.QUEUED,
+            payload=payload,
+            depends_on=depends_on,
         )
-        session.add(job)
-
-        for dependency_id in unique_depends_on:
-            session.add(JobDependency(job_id=new_job_id, depends_on_job_id=dependency_id))
-
-        session.add(
-            JobEvent(
-                job_id=new_job_id,
-                from_status=None,
-                to_status=JobStatus.QUEUED,
-                event_type=JobEventType.SUBMITTED,
-                outcome=JobTransitionOutcome.ACCEPTED,
-                event_at=event_at,
-            )
-        )
-        session.flush()
-
-    return new_job_id
 
 
 def unsatisfied_dependency_exists(job_id_column: Any) -> ColumnElement[bool]:
