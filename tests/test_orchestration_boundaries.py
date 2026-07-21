@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,26 @@ from trading_platform.worker.commands.run_jobs import run_jobs_command
 from trading_platform.worker.parser import build_parser
 
 _ROOT = Path(__file__).resolve().parents[1]
+_RUNTIME_PACKAGE_ROOTS = (
+    _ROOT / "src/trading_platform/api",
+    _ROOT / "src/trading_platform/worker",
+    _ROOT / "src/trading_platform/jobs",
+    _ROOT / "src/trading_platform/orchestration",
+)
+_SCHEMA_MUTATION_TARGETS = {
+    "metadata.create_all",
+    "metadata.drop_all",
+    "alembic.command.upgrade",
+    "alembic.command.downgrade",
+}
+_PHASE19_OPERATION_TYPES = {
+    "backtest",
+    "risk",
+    "paper",
+    "reconciliation",
+    "market-data",
+    "broker-order-lifecycle",
+}
 _RETAINED_CLI_COMMANDS = {
     "serve",
     "report-backtest",
@@ -43,9 +64,7 @@ _REMOVED_CLI_COMMANDS = {
 
 def _parser_commands(parser: argparse.ArgumentParser) -> set[str]:
     actions = [
-        action
-        for action in parser._actions
-        if isinstance(action, argparse._SubParsersAction)
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
     ]
     assert len(actions) == 1
     return set(actions[0].choices)
@@ -105,7 +124,9 @@ def _effective_routes() -> dict[str, set[str]]:
 
     routes: dict[str, set[str]] = {}
     for route in create_app().routes:
-        candidates = route.effective_candidates() if hasattr(route, "effective_candidates") else [route]
+        candidates = (
+            route.effective_candidates() if hasattr(route, "effective_candidates") else [route]
+        )
         for candidate in candidates:
             path = str(getattr(candidate, "path", ""))
             methods = set(getattr(candidate, "methods", set()))
@@ -122,7 +143,9 @@ def test_api_route_modules_have_only_the_two_job_mutation_decorators() -> None:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for decorator in node.decorator_list:
-                if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
+                if not isinstance(decorator, ast.Call) or not isinstance(
+                    decorator.func, ast.Attribute
+                ):
                     continue
                 if decorator.func.attr not in {"post", "put", "patch", "delete"}:
                     continue
@@ -214,3 +237,151 @@ def test_default_registry_remains_empty_until_phase_19() -> None:
     from trading_platform.jobs.registry import build_default_registry
 
     assert build_default_registry().list_job_types() == []
+
+
+def _runtime_python_files() -> tuple[Path, ...]:
+    return tuple(
+        path for package_root in _RUNTIME_PACKAGE_ROOTS for path in package_root.rglob("*.py")
+    )
+
+
+def _dotted_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _dotted_name(node.value)
+        return f"{parent}.{node.attr}" if parent is not None else None
+    return None
+
+
+def _import_aliases(tree: ast.Module) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _resolve_import_alias(target: str, aliases: dict[str, str]) -> str:
+    root, *rest = target.split(".")
+    if root not in aliases:
+        return target
+    return ".".join((aliases[root], *rest))
+
+
+def _schema_mutation_offenders(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    aliases = _import_aliases(tree)
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target = _dotted_name(node.func)
+        if target is not None:
+            resolved = _resolve_import_alias(target, aliases)
+            normalized_target = ".".join(resolved.split(".")[-2:])
+            if (
+                normalized_target in _SCHEMA_MUTATION_TARGETS
+                or resolved in _SCHEMA_MUTATION_TARGETS
+            ):
+                offenders.append(f"{path.relative_to(_ROOT)}:{node.lineno} calls {resolved}")
+
+        if target is None or target.split(".")[-1] not in {
+            "run",
+            "call",
+            "check_call",
+            "check_output",
+            "Popen",
+        }:
+            continue
+        arguments = [*node.args]
+        arguments.extend(keyword.value for keyword in node.keywords if keyword.arg == "args")
+        for argument in arguments:
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                literal = argument.value
+            elif isinstance(argument, (ast.List, ast.Tuple)):
+                literal = " ".join(
+                    item.value
+                    for item in argument.elts
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                )
+            else:
+                continue
+            normalized_literal = " ".join(literal.lower().split())
+            if "alembic upgrade" in normalized_literal or "alembic downgrade" in normalized_literal:
+                offenders.append(
+                    f"{path.relative_to(_ROOT)}:{node.lineno} runs {normalized_literal!r}"
+                )
+    return offenders
+
+
+def test_runtime_packages_forbid_schema_mutation_and_alembic_commands() -> None:
+    offenders = [
+        offender
+        for path in _runtime_python_files()
+        for offender in _schema_mutation_offenders(path)
+    ]
+
+    assert not offenders, "Runtime schema mutation is Alembic-only:\n" + "\n".join(offenders)
+
+
+def _class_job_types(tree: ast.Module) -> dict[str, str]:
+    types: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for statement in node.body:
+            if (
+                isinstance(statement, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "job_type"
+                    for target in statement.targets
+                )
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                types[node.name] = statement.value.value
+    return types
+
+
+def _registered_operation_types(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    class_types = _class_job_types(tree)
+    registered: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "register":
+            continue
+        for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                registered.add(argument.value)
+            if isinstance(argument, ast.Name) and argument.id in class_types:
+                registered.add(class_types[argument.id])
+            if isinstance(argument, ast.Call) and isinstance(argument.func, ast.Name):
+                if argument.func.id in class_types:
+                    registered.add(class_types[argument.func.id])
+    return registered.intersection(_PHASE19_OPERATION_TYPES)
+
+
+def test_phase18_diff_excludes_console_and_phase19_handler_registrations() -> None:
+    changed_paths = subprocess.run(
+        ["git", "diff", "--name-only", "f33e62c...HEAD"],
+        cwd=_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    console_paths = [path for path in changed_paths if path.startswith("console/")]
+    registrations = {
+        str(path.relative_to(_ROOT)): sorted(_registered_operation_types(path))
+        for path in _runtime_python_files()
+        if _registered_operation_types(path)
+    }
+
+    assert not console_paths, f"Phase 18 must not change console paths: {console_paths}"
+    assert not registrations, f"Phase 19 Job registrations found: {registrations}"

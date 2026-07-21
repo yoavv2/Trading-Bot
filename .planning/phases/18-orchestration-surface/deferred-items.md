@@ -1,0 +1,3 @@
+# Deferred Items
+
+- Repository-wide `ruff check .` remains blocked by 12 pre-existing violations in historical Alembic migrations and scripts: import ordering in `alembic/env.py`, `alembic/versions/0001_phase1_foundation.py`, `scripts/report_strategy_analytics.py`, `scripts/submit_paper_orders.py`, and `scripts/sync_symbol_metadata.py`; unused/undefined `bind` names in migrations `0004`, `0007`, `0008`, and `0010`; unused imports in `0001` and `sync_symbol_metadata.py`. These files are outside Phase 18 Plan 06’s runtime/API/test scope. The full pytest suite is green (500 passed), and all owned files pass Ruff.
