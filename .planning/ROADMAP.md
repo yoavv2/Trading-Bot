@@ -261,7 +261,7 @@ Plans:
 - [x] 18-04-PLAN.md — Thin idempotent Job submission/cancellation HTTP adapters and contract tests (ORCH-01, ORCH-03, ORCH-04)
 
 **Wave 4** *(blocked on Wave 3)*
-- [ ] 18-05-PLAN.md — Remove direct mutating CLI paths and enforce adapter/application/domain boundaries (ORCH-01, ORCH-02)
+- [x] 18-05-PLAN.md — Remove direct mutating CLI paths and enforce adapter/application/domain boundaries (ORCH-01, ORCH-02)
 
 **Wave 5** *(blocked on Wave 4)*
 - [ ] 18-06-PLAN.md — DB-ready API startup and test-only submit → execute → linked-observe E2E proof (ORCH-01–ORCH-04)
@@ -335,7 +335,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete    | 2026-07-20 |
-| 18. Orchestration Surface | v1.3 | 4/6 | In Progress|  |
+| 18. Orchestration Surface | v1.3 | 5/6 | In Progress | - |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |
 | 21. Audit & Operational Status | v1.3 | 0/TBD | Not started | - |
