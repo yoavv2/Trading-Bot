@@ -4,13 +4,13 @@ milestone: v1.3
 milestone_name: Operator Platform
 status: executing
 stopped_at: context exhaustion at 78% (2026-07-21)
-last_updated: "2026-07-21T17:56:59.850Z"
+last_updated: "2026-07-21T18:11:22.553Z"
 last_activity: 2026-07-21
 progress:
   total_phases: 10
   completed_phases: 1
   total_plans: 15
-  completed_plans: 12
+  completed_plans: 13
   percent: 10
 ---
 
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-07-15)
 ## Current Position
 
 Phase: 18 (orchestration-surface) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-07-21
-**Progress:** [████████░░] 80%
+**Progress:** [█████████░] 87%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Last activity: 2026-07-21
 *Updated after each plan completion*
 | Phase 18 P02 | 8min | 2 tasks | 4 files |
 | Phase 18 P03 | 20min | 2 tasks | 4 files |
+| Phase 18 P04 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -131,6 +132,8 @@ Recent decisions affecting current work:
 - [Phase 18-03]: Public JobSubmissionSpec validation stays registry-adjacent while DB-aware orchestration remains outside services.
 - [Phase 18-03]: Named JobMutation uniqueness plus savepoint rollback is the concurrent submission replay/conflict backstop.
 - [Phase 18-03]: Fresh cancellation identities are recorded for pending/CANCELLED repeats without overwriting first-request audit facts.
+- [Phase 18-04]: FastAPI 0.131 route allowlist tests aggregate effective included-router candidates by path.
+- [Phase 18-04]: Mutation adapters return JobOrchestrationService compact references unchanged and only map typed outcomes.
 
 ### Pending Todos
 
@@ -159,6 +162,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-21T17:55:53.557Z
+Last session: 2026-07-21T18:11:22.544Z
 Stopped at: context exhaustion at 78% (2026-07-21)
 Resume file: None
