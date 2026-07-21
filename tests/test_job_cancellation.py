@@ -28,6 +28,7 @@ from trading_platform.db.models import (
     JobEventType,
     JobFailureReason,
     JobStatus,
+    JobTransitionOutcome,
 )
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.jobs.cancellation import (
@@ -287,11 +288,24 @@ def test_second_cancellation_request_does_not_overwrite_first_requester(
         job = _seed_running_job(session)
         job_id = job.id
 
-    first_result = request_cancellation(job_id=job_id, requested_by="operator_1", settings=settings)
+    first_result = request_cancellation(
+        job_id=job_id,
+        requested_by="operator_1",
+        reason="first reason",
+        settings=settings,
+    )
     assert first_result.accepted is True
 
+    with session_scope(settings) as session:
+        first_job = session.get(Job, job_id)
+        assert first_job is not None
+        first_requested_at = first_job.cancellation_requested_at
+
     second_result = request_cancellation(
-        job_id=job_id, requested_by="operator_2", settings=settings
+        job_id=job_id,
+        requested_by="operator_2",
+        reason="second reason",
+        settings=settings,
     )
     assert second_result.accepted is False
 
@@ -299,6 +313,8 @@ def test_second_cancellation_request_does_not_overwrite_first_requester(
         job = session.get(Job, job_id)
         assert job is not None
         assert job.cancellation_requested_by == "operator_1"
+        assert job.cancellation_reason == "first reason"
+        assert job.cancellation_requested_at == first_requested_at
 
 
 def test_grace_period_overrun_fails_with_cancellation_timeout(
@@ -508,3 +524,146 @@ def test_immediate_cancel_cascades_to_unstarted_dependent(
     with session_scope(settings) as session:
         ready = find_ready_job_ids(session, limit=10)
     assert dependent_id not in ready
+
+
+def test_caller_session_queued_cancellation_rolls_back_all_mutations(
+    migrated_job_cancellation_db: str,
+) -> None:
+    settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_job(session)
+        job_id = job.id
+
+    with pytest.raises(RuntimeError, match="force rollback"):
+        with session_scope(settings) as session:
+            result = request_cancellation(
+                job_id=job_id,
+                requested_by="operator_1",
+                reason="stop queued job",
+                session=session,
+            )
+            assert result.status is JobStatus.CANCELLED
+            raise RuntimeError("force rollback")
+
+    with session_scope(settings) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is JobStatus.QUEUED
+        assert job.cancellation_requested_at is None
+        assert job.cancellation_requested_by is None
+        assert job.cancellation_reason is None
+        assert job.cancellation_acknowledged_at is None
+        cancellation_events = session.execute(
+            select(JobEvent).where(
+                JobEvent.job_id == job_id,
+                JobEvent.event_type == JobEventType.CANCELLED,
+            )
+        ).scalars().all()
+    assert cancellation_events == []
+
+
+def test_caller_session_running_cancellation_rolls_back_all_mutations(
+    migrated_job_cancellation_db: str,
+) -> None:
+    settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_running_job(session)
+        job_id = job.id
+
+    with pytest.raises(RuntimeError, match="force rollback"):
+        with session_scope(settings) as session:
+            result = request_cancellation(
+                job_id=job_id,
+                requested_by="operator_1",
+                reason="stop running job",
+                session=session,
+            )
+            assert result.status is JobStatus.RUNNING
+            raise RuntimeError("force rollback")
+
+    with session_scope(settings) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is JobStatus.RUNNING
+        assert job.cancellation_requested_at is None
+        assert job.cancellation_requested_by is None
+        assert job.cancellation_reason is None
+        assert job.cancellation_acknowledged_at is None
+        request_events = session.execute(
+            select(JobEvent).where(
+                JobEvent.job_id == job_id,
+                JobEvent.event_type == JobEventType.CANCELLATION_REQUESTED,
+            )
+        ).scalars().all()
+    assert request_events == []
+
+
+def test_caller_session_running_cancellation_matches_standalone_mode(
+    migrated_job_cancellation_db: str,
+) -> None:
+    settings = load_settings()
+    with session_scope(settings) as session:
+        standalone_job = _seed_running_job(session)
+        caller_session_job = _seed_running_job(session)
+        standalone_job_id = standalone_job.id
+        caller_session_job_id = caller_session_job.id
+
+    standalone_result = request_cancellation(
+        job_id=standalone_job_id,
+        requested_by="operator_1",
+        reason="stop it",
+        settings=settings,
+    )
+    with session_scope(settings) as session:
+        caller_session_result = request_cancellation(
+            job_id=caller_session_job_id,
+            requested_by="operator_1",
+            reason="stop it",
+            session=session,
+        )
+
+    assert (
+        caller_session_result.status,
+        caller_session_result.accepted,
+        caller_session_result.already_terminal,
+        caller_session_result.mode,
+    ) == (
+        standalone_result.status,
+        standalone_result.accepted,
+        standalone_result.already_terminal,
+        standalone_result.mode,
+    )
+
+    with session_scope(settings) as session:
+        standalone_job = session.get(Job, standalone_job_id)
+        caller_session_job = session.get(Job, caller_session_job_id)
+        assert standalone_job is not None
+        assert caller_session_job is not None
+        assert (
+            caller_session_job.status,
+            caller_session_job.cancellation_requested_by,
+            caller_session_job.cancellation_reason,
+            caller_session_job.cancellation_acknowledged_at,
+        ) == (
+            standalone_job.status,
+            standalone_job.cancellation_requested_by,
+            standalone_job.cancellation_reason,
+            standalone_job.cancellation_acknowledged_at,
+        )
+        assert standalone_job.cancellation_requested_at is not None
+        assert caller_session_job.cancellation_requested_at is not None
+
+        for job_id in (standalone_job_id, caller_session_job_id):
+            events = session.execute(
+                select(JobEvent).where(
+                    JobEvent.job_id == job_id,
+                    JobEvent.event_type == JobEventType.CANCELLATION_REQUESTED,
+                )
+            ).scalars().all()
+            assert len(events) == 1
+            assert events[0].from_status is JobStatus.RUNNING
+            assert events[0].to_status is None
+            assert events[0].outcome is JobTransitionOutcome.ACCEPTED
+            assert events[0].requested_by == "operator_1"
+            assert events[0].reason == "stop it"
+            assert events[0].requested_at is not None

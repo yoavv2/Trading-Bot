@@ -95,12 +95,115 @@ class JobNotCancellableError(RuntimeError):
         )
 
 
+def _request_cancellation_in_session(
+    session: Session,
+    *,
+    job_id: uuid.UUID,
+    requested_by: str,
+    reason: str | None,
+) -> CancellationResult:
+    """Apply one cancellation request using a caller-owned transaction."""
+
+    # Imported here to avoid a module-level coupling from cancellation ->
+    # dependencies; dependencies never imports cancellation.
+    from trading_platform.jobs.dependencies import cascade_dependency_outcome
+
+    # The row lock is what makes the QUEUED path atomic against a worker
+    # concurrently claiming the same Job (D-07): the cancel transaction
+    # and the claim transaction serialize on this row, and once this
+    # transaction commits CANCELLED, a claim attempt finds an absorbing
+    # terminal status and can never proceed.
+    job = session.get(Job, job_id, with_for_update=True)
+    if job is None:
+        raise LookupError(f"Job '{job_id}' was not found.")
+
+    if job.status is JobStatus.QUEUED:
+        now = datetime.now(UTC)
+        job.cancellation_requested_at = now
+        job.cancellation_requested_by = requested_by
+        job.cancellation_reason = reason
+        job.cancellation_acknowledged_at = now
+
+        apply_job_transition(
+            session,
+            job_id=job_id,
+            request=JobTransitionRequest(
+                event_type=JobEventType.CANCELLED,
+                cancellation_cause=JobCancellationCause.OPERATOR_REQUEST,
+                failure_reason=None,
+                requested_by=requested_by,
+                reason=reason,
+                requested_at=now,
+                acknowledged_at=now,
+            ),
+        )
+        # D-04: the Job just reached CANCELLED. Cascade to unstarted QUEUED
+        # dependents so they are not stranded behind it, in the same
+        # transaction (the session is already open and row-locked).
+        cascade_dependency_outcome(session, terminal_job_id=job_id)
+        return CancellationResult(
+            job_id=job_id,
+            status=JobStatus.CANCELLED,
+            accepted=True,
+            already_terminal=False,
+            mode="immediate",
+        )
+
+    if job.status is JobStatus.RUNNING:
+        if job.cancellation_requested_at is not None:
+            # A request is already pending -- do not overwrite the first
+            # requester's identity, reason, or timestamp.
+            return CancellationResult(
+                job_id=job_id,
+                status=job.status,
+                accepted=False,
+                already_terminal=False,
+                mode="cooperative",
+            )
+
+        now = datetime.now(UTC)
+        job.cancellation_requested_at = now
+        job.cancellation_requested_by = requested_by
+        job.cancellation_reason = reason
+
+        # No apply_job_transition call here: the Job stays RUNNING until
+        # the handler acknowledges (D-08). CANCELLATION_REQUESTED is
+        # deliberately absent from lifecycle.py's transition table, so
+        # this JobEvent is appended directly with to_status=None.
+        session.add(
+            JobEvent(
+                job_id=job_id,
+                from_status=JobStatus.RUNNING,
+                to_status=None,
+                event_type=JobEventType.CANCELLATION_REQUESTED,
+                outcome=JobTransitionOutcome.ACCEPTED,
+                event_at=now,
+                requested_by=requested_by,
+                reason=reason,
+                requested_at=now,
+            )
+        )
+        session.flush()
+        return CancellationResult(
+            job_id=job_id,
+            status=JobStatus.RUNNING,
+            accepted=True,
+            already_terminal=False,
+            mode="cooperative",
+        )
+
+    # SUCCEEDED, FAILED, CANCELLED are absorbing terminal states (D-07/D-08
+    # only cover QUEUED and RUNNING).
+    raise JobNotCancellableError(job_id=job_id, status=job.status)
+
+
 def request_cancellation(
     *,
     job_id: uuid.UUID,
     requested_by: str,
     reason: str | None = None,
     settings: Settings | DatabaseSettings | None = None,
+    session: Session | None = None,
 ) -> CancellationResult:
     """Request cancellation of a Job, atomic for QUEUED and cooperative for RUNNING.
 
@@ -111,100 +214,27 @@ def request_cancellation(
     a no-op that returns ``accepted=False`` without overwriting the original
     requester, reason, or ``requested_at`` -- the first requester owns the
     audit record.
+
+    When ``session`` is supplied, this function flushes its mutations without
+    committing or closing the caller-owned transaction. Otherwise it preserves
+    standalone ``session_scope(settings)`` transaction behavior.
     """
 
-    # Imported inside the function to avoid a new module-level coupling from
-    # cancellation -> dependencies; dependencies never imports cancellation.
-    from trading_platform.jobs.dependencies import cascade_dependency_outcome
+    if session is not None:
+        return _request_cancellation_in_session(
+            session,
+            job_id=job_id,
+            requested_by=requested_by,
+            reason=reason,
+        )
 
-    with session_scope(settings) as session:
-        # The row lock is what makes the QUEUED path atomic against a worker
-        # concurrently claiming the same Job (D-07): the cancel transaction
-        # and the claim transaction serialize on this row, and once this
-        # transaction commits CANCELLED, a claim attempt finds an absorbing
-        # terminal status and can never proceed.
-        job = session.get(Job, job_id, with_for_update=True)
-        if job is None:
-            raise LookupError(f"Job '{job_id}' was not found.")
-
-        if job.status is JobStatus.QUEUED:
-            now = datetime.now(UTC)
-            job.cancellation_requested_at = now
-            job.cancellation_requested_by = requested_by
-            job.cancellation_reason = reason
-            job.cancellation_acknowledged_at = now
-
-            apply_job_transition(
-                session,
-                job_id=job_id,
-                request=JobTransitionRequest(
-                    event_type=JobEventType.CANCELLED,
-                    cancellation_cause=JobCancellationCause.OPERATOR_REQUEST,
-                    failure_reason=None,
-                    requested_by=requested_by,
-                    reason=reason,
-                    requested_at=now,
-                    acknowledged_at=now,
-                ),
-            )
-            # D-04: the Job just reached CANCELLED. Cascade to unstarted QUEUED
-            # dependents so they are not stranded behind it, in the same
-            # transaction (the session is already open and row-locked).
-            cascade_dependency_outcome(session, terminal_job_id=job_id)
-            return CancellationResult(
-                job_id=job_id,
-                status=JobStatus.CANCELLED,
-                accepted=True,
-                already_terminal=False,
-                mode="immediate",
-            )
-
-        if job.status is JobStatus.RUNNING:
-            if job.cancellation_requested_at is not None:
-                # A request is already pending -- do not overwrite the first
-                # requester's identity, reason, or timestamp.
-                return CancellationResult(
-                    job_id=job_id,
-                    status=job.status,
-                    accepted=False,
-                    already_terminal=False,
-                    mode="cooperative",
-                )
-
-            now = datetime.now(UTC)
-            job.cancellation_requested_at = now
-            job.cancellation_requested_by = requested_by
-            job.cancellation_reason = reason
-
-            # No apply_job_transition call here: the Job stays RUNNING until
-            # the handler acknowledges (D-08). CANCELLATION_REQUESTED is
-            # deliberately absent from lifecycle.py's transition table, so
-            # this JobEvent is appended directly with to_status=None.
-            session.add(
-                JobEvent(
-                    job_id=job_id,
-                    from_status=JobStatus.RUNNING,
-                    to_status=None,
-                    event_type=JobEventType.CANCELLATION_REQUESTED,
-                    outcome=JobTransitionOutcome.ACCEPTED,
-                    event_at=now,
-                    requested_by=requested_by,
-                    reason=reason,
-                    requested_at=now,
-                )
-            )
-            session.flush()
-            return CancellationResult(
-                job_id=job_id,
-                status=JobStatus.RUNNING,
-                accepted=True,
-                already_terminal=False,
-                mode="cooperative",
-            )
-
-        # SUCCEEDED, FAILED, CANCELLED are absorbing terminal states (D-07/D-08
-        # only cover QUEUED and RUNNING).
-        raise JobNotCancellableError(job_id=job_id, status=job.status)
+    with session_scope(settings) as standalone_session:
+        return _request_cancellation_in_session(
+            standalone_session,
+            job_id=job_id,
+            requested_by=requested_by,
+            reason=reason,
+        )
 
 
 def acknowledge_cancellation(session: Session, *, job_id: uuid.UUID) -> CancellationResult:
