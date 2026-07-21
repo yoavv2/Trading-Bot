@@ -532,10 +532,25 @@ def test_events_expose_rejected_and_accepted_transitions(migrated_job_api_db: st
     assert "rejected" in outcomes
 
 
-def test_jobs_router_exposes_no_mutating_verbs() -> None:
+def test_jobs_router_exposes_exact_allowed_methods() -> None:
     app = create_app()
+    job_routes: dict[str, set[str]] = {}
     for route in app.routes:
-        path = str(getattr(route, "path", ""))
-        if path.startswith("/api/v1/jobs"):
-            methods = set(getattr(route, "methods", set()))
-            assert methods <= {"GET", "HEAD"}, (path, methods)
+        candidates = route.effective_candidates() if hasattr(route, "effective_candidates") else [route]
+        for candidate in candidates:
+            path = str(getattr(candidate, "path", ""))
+            if path.startswith("/api/v1/jobs"):
+                job_routes.setdefault(path, set()).update(getattr(candidate, "methods", set()))
+
+    assert job_routes == {
+        "/api/v1/jobs": {"GET", "POST"},
+        "/api/v1/jobs/{job_id}": {"GET"},
+        "/api/v1/jobs/{job_id}/progress": {"GET"},
+        "/api/v1/jobs/{job_id}/logs": {"GET"},
+        "/api/v1/jobs/{job_id}/events": {"GET"},
+        "/api/v1/jobs/{job_id}/cancel": {"POST"},
+    }
+    assert all(
+        not methods.intersection({"PUT", "PATCH", "DELETE"})
+        for methods in job_routes.values()
+    )
