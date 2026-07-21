@@ -126,7 +126,7 @@ def test_app_bootstrap_serves_foundation_endpoints(monkeypatch, tmp_path: Path) 
 
     clear_settings_cache()
     app = create_app()
-    registered_paths = {route.path for route in app.routes}
+    registered_paths = set(app.openapi()["paths"])
 
     with TestClient(app) as client:
         health = client.get("/health")
