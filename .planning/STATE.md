@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
-status: planning
-stopped_at: Phase 18 context gathered
-last_updated: "2026-07-21T09:53:19.269Z"
-last_activity: 2026-07-20
+status: executing
+stopped_at: context exhaustion at 78% (2026-07-21)
+last_updated: "2026-07-21T17:12:12.824Z"
+last_activity: 2026-07-21
 progress:
   total_phases: 10
   completed_phases: 1
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 15
+  completed_plans: 10
   percent: 10
 ---
 
@@ -21,16 +21,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-15)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 18 — orchestration surface
+**Current focus:** Phase 18 — orchestration-surface
 
 ## Current Position
 
-Phase: 18
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-20
+Phase: 18 (orchestration-surface) — EXECUTING
+Plan: 2 of 6
+Status: Ready to execute
+Last activity: 2026-07-21
+**Progress:** [███████░░░] 67%
 
 ## Performance Metrics
+
+| Plan | Duration | Tasks | Files |
+| --- | --- | --- | --- |
+| Phase 18 P01 | 12min | 2 tasks | 4 files |
 
 **Velocity:**
 
@@ -118,6 +123,7 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-07: claim_next_job/renew_lease/find_lost_job_ids/reclaim_lost_jobs ship JOB-02's persistence half -- SELECT ... FOR UPDATE SKIP LOCKED makes concurrent double-claim structurally impossible (proven with two real connections and a non-blocking thread-join assertion), lease-expiry crash detection lands crashed Jobs on FAILED with outcome_uncertain forced True (D-01/D-03), reclaim never requeues (D-02) and cascades to unstarted dependents (D-04). 14 tests green. JOB-02 left Pending -- its literal text also requires "a queued job submitted before a worker restart executes after it", which needs 17-09's worker runner (this plan only transitions QUEUED->RUNNING, it never executes a handler); marking Complete now would overclaim the same way this phase has avoided for JOB-05/JOB-06. JOB-05's readiness-gap note from 17-05 is also now closed in code/tests (claim_next_job actually calls unsatisfied_dependency_exists) but left Pending in REQUIREMENTS.md since this plan's frontmatter declares only JOB-02 -- both flagged for the orchestrator/gsd-transition.
 - [Phase 17]: 17-08: JobReadService + five read-only /api/v1/jobs routes (list/detail/progress/logs/events) ship the D-15 generic read surface -- sequence-ordered cursor-paginated logs (D-13), dependency causal chain (D-05), cancellation audit (D-10), and progress readable during (RUNNING) and after (FAILED, D-12) execution, all boundary-respecting (JOB-04, zero jobs/ imports, zero writes). 19 tests green against real Postgres. JOB-07 marked Complete -- the only requirement this plan closes end-to-end; JOB-05/JOB-06 remain Pending since this plan only reads dependency/cancellation state and ships no gating or cancel-action surface.
 - [Phase 17-09]: Runner (execute_job/run_worker_loop) ships the missing execution half of the Job framework, closing JOB-01/02/03/04/05 end-to-end; JOB-06 remains Pending (no operator-invocable cancel surface until Phase 18/19); JOB-04 recording gap from 17-02 corrected here (test was always green, requirements mark-complete never ran).
+- [Phase 18]: Endpoint/key database uniqueness is the authoritative Job mutation idempotency backstop; RESTRICT preserves original Job linkage. — Application lookups cannot prevent concurrent duplicate mutation identities, while durable references must retain the original Job.
 
 ### Pending Todos
 
@@ -146,6 +152,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-21T09:53:19.259Z
-Stopped at: Phase 18 context gathered
-Resume file: .planning/phases/18-orchestration-surface/18-CONTEXT.md
+Last session: 2026-07-21T17:10:16.271Z
+Stopped at: context exhaustion at 78% (2026-07-21)
+Resume file: None
