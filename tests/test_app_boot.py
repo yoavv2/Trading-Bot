@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
+from trading_platform.jobs.registry import JobRegistry
 
 
 def _write_config(path: Path, payload: dict) -> None:
@@ -65,7 +65,9 @@ def test_settings_loader_merges_file_and_environment(monkeypatch, tmp_path: Path
     monkeypatch.setenv("TRADING_PLATFORM_CONFIG_FILE", str(config_file))
     monkeypatch.setenv("TRADING_PLATFORM_STRATEGY_CONFIG_DIR", str(strategy_dir))
     monkeypatch.setenv("TRADING_PLATFORM_API__PORT", "9090")
-    monkeypatch.setenv("TRADING_PLATFORM_STRATEGIES__TREND_FOLLOWING_DAILY__RISK__MAX_POSITIONS", "7")
+    monkeypatch.setenv(
+        "TRADING_PLATFORM_STRATEGIES__TREND_FOLLOWING_DAILY__RISK__MAX_POSITIONS", "7"
+    )
 
     clear_settings_cache()
     settings = load_settings()
@@ -125,7 +127,18 @@ def test_app_bootstrap_serves_foundation_endpoints(monkeypatch, tmp_path: Path) 
     monkeypatch.setenv("TRADING_PLATFORM_STRATEGY_CONFIG_DIR", str(strategy_dir))
 
     clear_settings_cache()
-    app = create_app()
+    settings = load_settings()
+    startup_calls: list[dict[str, object]] = []
+
+    def _enforce_startup_config(**kwargs: object):
+        startup_calls.append(kwargs)
+        return settings
+
+    import trading_platform.api.app as api_app
+
+    monkeypatch.setattr(api_app, "enforce_startup_config", _enforce_startup_config)
+    injected_registry = JobRegistry()
+    app = api_app.create_app(job_registry=injected_registry)
     registered_paths = set(app.openapi()["paths"])
 
     with TestClient(app) as client:
@@ -136,6 +149,8 @@ def test_app_bootstrap_serves_foundation_endpoints(monkeypatch, tmp_path: Path) 
         strategy_detail = client.get("/api/v1/strategies/trend_following_daily")
 
     assert health.status_code == 200
+    assert startup_calls == [{"mode": api_app.ExecutionMode.BACKTEST, "require_database": True}]
+    assert app.state.job_registry is injected_registry
     assert health.json()["status"] == "ok"
 
     assert ready.status_code == 200
@@ -157,7 +172,10 @@ def test_app_bootstrap_serves_foundation_endpoints(monkeypatch, tmp_path: Path) 
     assert strategies.json()["count"] == 1
 
     assert strategy_detail.status_code == 200
-    assert strategy_detail.json()["operator_reads"]["runs"] == "/api/v1/runs?strategy_id=trend_following_daily"
+    assert (
+        strategy_detail.json()["operator_reads"]["runs"]
+        == "/api/v1/runs?strategy_id=trend_following_daily"
+    )
 
     assert {
         "/api/v1/analytics/strategies/{strategy_id}",
