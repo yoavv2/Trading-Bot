@@ -66,7 +66,7 @@ Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-
 **Milestone Goal:** Console evolves from read-only monitor to operations control center — every manual operation executes through HTTP as a Job, backed by a generic, extensible, restart-safe DB job framework with full lifecycle, progress, logs, scheduling, and audit.
 
 - [x] **Phase 17: Job Framework** - Generic DB-backed job queue: closed lifecycle enum, restart-safe persistence, registry-based extensibility, import-boundary enforcement, dependencies, cancellation, progress and structured logs. (completed 2026-07-20)
-- [ ] **Phase 18: Orchestration Surface** - HTTP API as the single orchestration surface: idempotent mutating endpoints, transport-agnostic Job observation, CLI-as-thin-wrapper enforcement.
+- [x] **Phase 18: Orchestration Surface** - HTTP API as the single orchestration surface: idempotent mutating endpoints, transport-agnostic Job observation, CLI-as-thin-wrapper enforcement. (completed 2026-07-21)
 - [ ] **Phase 19: Operation Triggers & Control** - Operator runs every operation (backtest, risk evaluation, paper session, reconciliation, market-data sync, broker sync), retries failed Jobs, and controls strategy enable/disable and the kill switch, all from the console.
 - [ ] **Phase 20: Scheduling** - Scheduler as a Job producer over the same public API path; operator manages the Daily Paper Trading and Daily Market Data Sync schedules from the console.
 - [ ] **Phase 21: Audit & Operational Status** - Full operator-action audit trail (forward-compatible for multi-user), inspectable and filterable in console, plus an in-console status feed and global failure indicator.
@@ -246,7 +246,25 @@ Plans:
   4. Submitting an operation returns a Job reference whose state, progress, and logs are observable via API reads alone — no architectural dependency on polling vs. push (ORCH-04).
   5. A mutating cancellation endpoint exposes JOB-06's cancellation framework (built and tested in Phase 17) as an operator-invocable surface — the endpoint calls `jobs.cancellation.request_cancellation` for a QUEUED/RUNNING Job and returns the updated Job reference. *(Operator-surface owner for JOB-06; the framework mechanism was completed in Phase 17.)*
 
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+
+**Wave 1**
+- [x] 18-01-PLAN.md — Durable endpoint-scoped Job mutation idempotency schema and migration proof (ORCH-03)
+- [x] 18-02-PLAN.md — Caller-session Job submission/cancellation primitives for atomic orchestration (ORCH-02, ORCH-03)
+
+**Wave 2** *(blocked on Wave 1)*
+- [x] 18-03-PLAN.md — Transport-independent orchestration service with race-safe replay, cancellation, and compact references (ORCH-03, ORCH-04)
+
+**Wave 3** *(blocked on Wave 2)*
+- [x] 18-04-PLAN.md — Thin idempotent Job submission/cancellation HTTP adapters and contract tests (ORCH-01, ORCH-03, ORCH-04)
+
+**Wave 4** *(blocked on Wave 3)*
+- [x] 18-05-PLAN.md — Remove direct mutating CLI paths and enforce adapter/application/domain boundaries (ORCH-01, ORCH-02)
+
+**Wave 5** *(blocked on Wave 4)*
+- [x] 18-06-PLAN.md — DB-ready API startup and test-only submit → execute → linked-observe E2E proof (ORCH-01–ORCH-04)
 
 ### Phase 19: Operation Triggers & Control
 
@@ -317,7 +335,7 @@ Phases execute in numeric order. v1.3 executes 17 → 18 → 19 → 20 → 21 (s
 | 15. Paper Trading Status | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete    | 2026-07-20 |
-| 18. Orchestration Surface | v1.3 | 0/TBD | Not started | - |
+| 18. Orchestration Surface | v1.3 | 6/6 | Complete    | 2026-07-21 |
 | 19. Operation Triggers & Control | v1.3 | 0/TBD | Not started | - |
 | 20. Scheduling | v1.3 | 0/TBD | Not started | - |
 | 21. Audit & Operational Status | v1.3 | 0/TBD | Not started | - |

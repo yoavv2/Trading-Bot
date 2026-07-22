@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: ready_to_plan
-stopped_at: Phase 17 complete (9/9) — ready to discuss Phase 18
-last_updated: 2026-07-20T08:47:08.467Z
-last_activity: 2026-07-20
+stopped_at: Phase 18 complete (6/6) — ready to discuss Phase 19
+last_updated: 2026-07-21T19:27:14.622Z
+last_activity: 2026-07-21
 progress:
   total_phases: 10
-  completed_phases: 1
-  total_plans: 9
-  completed_plans: 9
-  percent: 10
+  completed_phases: 2
+  total_plans: 15
+  completed_plans: 15
+  percent: 20
 ---
 
 # Project State
@@ -21,20 +21,25 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-15)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 18 — orchestration surface
+**Current focus:** Phase 19 — operation triggers & control
 
 ## Current Position
 
-Phase: 18
+Phase: 19
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-07-20
+Last activity: 2026-07-21
+**Progress:** [██████████] 100%
 
 ## Performance Metrics
 
+| Plan | Duration | Tasks | Files |
+| --- | --- | --- | --- |
+| Phase 18 P01 | 12min | 2 tasks | 4 files |
+
 **Velocity:**
 
-- Total plans completed: 57 (v1.0: 16, v1.1: 14, v1.2: 10)
+- Total plans completed: 63 (v1.0: 16, v1.1: 14, v1.2: 10)
 - Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min, 08-03: ~10 min, 08-04: ~25 min, 08-05: ~20 min, 09-01: ~30 min, 09-02: ~20 min, 09-03: ~35 min, 09-04: ~25 min, 10-05: ~35 min, 10-06: ~20 min, 11-01: ~10 min, 11-02: ~15 min, 11-03: single session, 12-01: ~15 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
 - Total execution time: -
 
@@ -50,6 +55,11 @@ Last activity: 2026-07-20
 - Trend: v1.1 resumed at Phase 8/12 after prioritizing and shipping the read-only operator console (v1.2); Phases 8, 9, 10, and now 11 are all fully closed out. Only Phase 12 (Structural Refactor and Tooling) remains paused in v1.1; the next milestone-execution decision (resume v1.1 Phase 12, or address the Phase 9 RECON-05/07 marking gap first) is the orchestrator's/user's to make.
 
 *Updated after each plan completion*
+| Phase 18 P02 | 8min | 2 tasks | 4 files |
+| Phase 18 P03 | 20min | 2 tasks | 4 files |
+| Phase 18 P04 | 3min | 2 tasks | 4 files |
+| Phase 18 P05 | 7min | 3 tasks | 6 files |
+| Phase 18 P06 | 20min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -118,6 +128,18 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-07: claim_next_job/renew_lease/find_lost_job_ids/reclaim_lost_jobs ship JOB-02's persistence half -- SELECT ... FOR UPDATE SKIP LOCKED makes concurrent double-claim structurally impossible (proven with two real connections and a non-blocking thread-join assertion), lease-expiry crash detection lands crashed Jobs on FAILED with outcome_uncertain forced True (D-01/D-03), reclaim never requeues (D-02) and cascades to unstarted dependents (D-04). 14 tests green. JOB-02 left Pending -- its literal text also requires "a queued job submitted before a worker restart executes after it", which needs 17-09's worker runner (this plan only transitions QUEUED->RUNNING, it never executes a handler); marking Complete now would overclaim the same way this phase has avoided for JOB-05/JOB-06. JOB-05's readiness-gap note from 17-05 is also now closed in code/tests (claim_next_job actually calls unsatisfied_dependency_exists) but left Pending in REQUIREMENTS.md since this plan's frontmatter declares only JOB-02 -- both flagged for the orchestrator/gsd-transition.
 - [Phase 17]: 17-08: JobReadService + five read-only /api/v1/jobs routes (list/detail/progress/logs/events) ship the D-15 generic read surface -- sequence-ordered cursor-paginated logs (D-13), dependency causal chain (D-05), cancellation audit (D-10), and progress readable during (RUNNING) and after (FAILED, D-12) execution, all boundary-respecting (JOB-04, zero jobs/ imports, zero writes). 19 tests green against real Postgres. JOB-07 marked Complete -- the only requirement this plan closes end-to-end; JOB-05/JOB-06 remain Pending since this plan only reads dependency/cancellation state and ships no gating or cancel-action surface.
 - [Phase 17-09]: Runner (execute_job/run_worker_loop) ships the missing execution half of the Job framework, closing JOB-01/02/03/04/05 end-to-end; JOB-06 remains Pending (no operator-invocable cancel surface until Phase 18/19); JOB-04 recording gap from 17-02 corrected here (test was always green, requirements mark-complete never ran).
+- [Phase 18]: Endpoint/key database uniqueness is the authoritative Job mutation idempotency backstop; RESTRICT preserves original Job linkage. — Application lookups cannot prevent concurrent duplicate mutation identities, while durable references must retain the original Job.
+- [Phase 18-02]: submit_job and request_cancellation accept caller-owned Sessions — One flush-only mutation path preserves standalone commits while allowing orchestration idempotency and Job changes to roll back atomically.
+- [Phase 18-02]: Cancellation repeat tests pin requester, reason, and timestamp immutability — Phase 18 transaction composition must not weaken the Phase 17 first-request audit contract.
+- [Phase 18-03]: Public JobSubmissionSpec validation stays registry-adjacent while DB-aware orchestration remains outside services.
+- [Phase 18-03]: Named JobMutation uniqueness plus savepoint rollback is the concurrent submission replay/conflict backstop.
+- [Phase 18-03]: Fresh cancellation identities are recorded for pending/CANCELLED repeats without overwriting first-request audit facts.
+- [Phase 18-04]: FastAPI 0.131 route allowlist tests aggregate effective included-router candidates by path.
+- [Phase 18-04]: Mutation adapters return JobOrchestrationService compact references unchanged and only map typed outcomes.
+- [Phase 18]: Worker CLI exposes only serve, run-jobs, and read/report commands; direct manual mutation entries are absent from parser and dispatch. — The HTTP Job API is the only manual mutation surface.
+- [Phase 18]: Retired CLI behavior is tested through durable domain-service invariants rather than preserving unreachable command handlers. — Safety coverage must remain independent of removed public entrypoints.
+- [Phase 18-06]: The mutation-capable API performs required PostgreSQL preflight before creating registry or boot state. — It prevents a write surface from booting without durable persistence.
+- [Phase 18-06]: The Phase 18 execution proof uses one test-local handler/spec registry while the production registry remains empty. — It proves the generic lifecycle without pulling Phase 19 operations forward.
 
 ### Pending Todos
 
@@ -146,6 +168,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-20T08:17:50.605Z
-Stopped at: Completed 17-09-PLAN.md (Phase 17 job-framework fully executed, awaiting orchestrator phase-complete)
+Last session: 2026-07-21T19:01:38.710Z
+Stopped at: Completed 18-06-PLAN.md
 Resume file: None

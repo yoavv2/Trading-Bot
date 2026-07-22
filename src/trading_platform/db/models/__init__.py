@@ -11,6 +11,7 @@ from trading_platform.db.models.job import Job, JobCancellationCause, JobFailure
 from trading_platform.db.models.job_dependency import JobDependency
 from trading_platform.db.models.job_event import JobEvent, JobEventType, JobTransitionOutcome
 from trading_platform.db.models.job_log import JobLog
+from trading_platform.db.models.job_mutation import JobMutation
 from trading_platform.db.models.market_data_ingestion_run import MarketDataIngestionRun
 from trading_platform.db.models.market_session import MarketSession
 from trading_platform.db.models.order_event import (
@@ -48,6 +49,7 @@ __all__ = [
     "JobEventType",
     "JobFailureReason",
     "JobLog",
+    "JobMutation",
     "JobStatus",
     "JobTransitionOutcome",
     "KillSwitchState",

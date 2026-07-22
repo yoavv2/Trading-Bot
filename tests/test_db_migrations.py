@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import uuid
@@ -916,7 +917,7 @@ def test_phase7_global_kill_switch_migration_creates_table_and_seeds_armed_state
     assert rows[0][2] == "system_bootstrap"
 
 
-def test_ready_endpoint_reflects_database_connectivity(
+def test_ready_endpoint_requires_database_at_api_startup(
     monkeypatch: pytest.MonkeyPatch,
     migrated_database: str,
 ) -> None:
@@ -931,13 +932,17 @@ def test_ready_endpoint_reflects_database_connectivity(
     monkeypatch.setenv("TRADING_PLATFORM_DATABASE__PORT", "6543")
     clear_settings_cache()
     clear_engine_cache()
-    with TestClient(create_app()) as client:
-        degraded = client.get("/ready")
+    import trading_platform.api.app as api_app
 
-    assert degraded.status_code == 503
-    degraded_body = degraded.json()
-    assert degraded_body["ready"] is False
-    assert degraded_body["checks"]["database"]["status"] == "error"
+    app = create_app()
+
+    async def _start_lifespan() -> None:
+        async with api_app.lifespan(app):
+            pass
+
+    with pytest.raises(SystemExit):
+        asyncio.run(_start_lifespan())
+    assert not hasattr(app.state, "bootstrapped")
 
 
 def test_alembic_upgrade_creates_phase17_job_tables(migrated_database: str) -> None:

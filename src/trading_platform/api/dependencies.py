@@ -10,6 +10,8 @@ from fastapi import HTTPException, Query, Request
 
 from trading_platform.core.settings import Settings
 from trading_platform.db.models import JobStatus, StrategyRunStatus, StrategyRunType
+from trading_platform.jobs.registry import JobRegistry, build_default_registry
+from trading_platform.orchestration.job_mutations import JobOrchestrationService
 from trading_platform.services.analytics import StrategyAnalyticsService
 from trading_platform.services.job_reads import (
     DEFAULT_LIMIT as JOB_DEFAULT_LIMIT,
@@ -29,7 +31,9 @@ from trading_platform.strategies.base import StrategyMetadata
 from trading_platform.strategies.registry import (
     StrategyRegistry,
     UnknownStrategyError,
-    build_default_registry,
+)
+from trading_platform.strategies.registry import (
+    build_default_registry as build_default_strategy_registry,
 )
 
 DEFAULT_STRATEGY_ID = "trend_following_daily"
@@ -46,11 +50,22 @@ def get_settings(request: Request) -> Settings:
     settings = getattr(request.app.state, "settings", None)
     if settings is None:
         raise HTTPException(status_code=503, detail="Application settings not loaded yet.")
-    return settings  # type: ignore[return-value]
+    return settings
 
 
 def get_strategy_registry(request: Request) -> StrategyRegistry:
+    return build_default_strategy_registry(get_settings(request))
+
+
+def get_job_registry(request: Request) -> JobRegistry:
+    registry = getattr(request.app.state, "job_registry", None)
+    if registry is not None:
+        return registry
     return build_default_registry(get_settings(request))
+
+
+def get_job_orchestration_service(request: Request) -> JobOrchestrationService:
+    return JobOrchestrationService(get_settings(request), get_job_registry(request))
 
 
 def get_strategy_analytics_service(request: Request) -> StrategyAnalyticsService:

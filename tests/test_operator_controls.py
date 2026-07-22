@@ -43,8 +43,6 @@ from trading_platform.services.operator_reads import (  # noqa: E402
     OperatorReadService,
 )
 from trading_platform.services.operator_status import build_operator_status_report  # noqa: E402
-from trading_platform.worker.commands.operator import run_operator_control_command  # noqa: E402
-from trading_platform.worker.parser import build_parser  # noqa: E402
 
 
 def test_operator_control_service_persists_status_transitions_and_audit_events(
@@ -246,100 +244,6 @@ def test_kill_switch_tripped_state_is_restart_safe(migrated_paper_db: str) -> No
     assert snapshot.state == KillSwitchState.TRIPPED.value
     assert snapshot.is_tripped is True
     assert snapshot.last_change_reason == "ensure persistence survives reload"
-
-
-def test_operator_control_cli_exposes_kill_switch_actions() -> None:
-    parser = build_parser()
-    args = parser.parse_args([
-        "operator-control",
-        "trip-kill-switch",
-        "--reason",
-        "global halt for incident",
-        "--actor",
-        "pytest",
-        "--trigger-source",
-        "pytest",
-    ])
-
-    assert args.command == "operator-control"
-    assert args.action == "trip-kill-switch"
-    assert args.reason == "global halt for incident"
-
-    for action in ("trip-kill-switch", "reset-kill-switch", "show-kill-switch"):
-        parsed = parser.parse_args(["operator-control", action])
-        assert parsed.action == action
-
-
-def test_operator_control_cli_round_trips_global_kill_switch(
-    migrated_paper_db: str, capsys
-) -> None:
-    settings = load_settings()
-    parser = build_parser()
-
-    trip_args = parser.parse_args(
-        [
-            "operator-control",
-            "trip-kill-switch",
-            "--reason",
-            "cli-initiated halt",
-            "--actor",
-            "pytest",
-            "--trigger-source",
-            "pytest",
-        ]
-    )
-    run_operator_control_command(trip_args)
-    capsys.readouterr()
-
-    show_args = parser.parse_args(
-        [
-            "operator-control",
-            "show-kill-switch",
-            "--trigger-source",
-            "pytest",
-        ]
-    )
-    run_operator_control_command(show_args)
-    show_output = capsys.readouterr().out
-    assert '"state": "tripped"' in show_output
-    assert '"is_tripped": true' in show_output
-
-    reset_args = parser.parse_args(
-        [
-            "operator-control",
-            "reset-kill-switch",
-            "--reason",
-            "cli-initiated reset",
-            "--actor",
-            "pytest",
-            "--trigger-source",
-            "pytest",
-        ]
-    )
-    run_operator_control_command(reset_args)
-    capsys.readouterr()
-
-    snapshot = load_kill_switch_state(settings=settings)
-    assert snapshot.state == KillSwitchState.ARMED.value
-    assert snapshot.last_change_reason == "cli-initiated reset"
-
-    with session_scope(settings) as session:
-        control_runs = session.execute(
-            select(StrategyRun)
-            .where(StrategyRun.run_type == StrategyRunType.OPERATOR_CONTROL)
-            .order_by(StrategyRun.started_at.asc())
-        ).scalars().all()
-        kill_switch_events = session.execute(
-            select(ExecutionEvent)
-            .where(ExecutionEvent.event_type.in_(["kill_switch_trip", "kill_switch_reset"]))
-            .order_by(ExecutionEvent.event_at.asc())
-        ).scalars().all()
-
-    assert [run.parameters_snapshot.get("action") for run in control_runs] == ["trip", "reset"]
-    assert [event.event_type for event in kill_switch_events] == [
-        "kill_switch_trip",
-        "kill_switch_reset",
-    ]
 
 
 def test_operator_reads_list_blocked_paper_executions_includes_kill_switch_runs(

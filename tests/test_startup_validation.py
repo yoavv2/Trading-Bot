@@ -19,6 +19,7 @@ tests, once the gate is wired into a real entrypoint.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import sys
 from pathlib import Path
@@ -79,7 +80,9 @@ def test_config_validation_exit_code_is_non_zero_and_distinct_from_lock_code() -
 # --- missing secret: CFG-01 surfaced at startup -----------------------------
 
 
-def test_missing_paper_secret_exits_non_zero_naming_field(capsys: pytest.CaptureFixture[str]) -> None:
+def test_missing_paper_secret_exits_non_zero_naming_field(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     payload = _reachable_db_payload()
     payload["broker"]["alpaca"]["api_key"] = ""
     payload["broker"]["alpaca"]["api_secret"] = ""
@@ -98,7 +101,9 @@ def test_missing_paper_secret_exits_non_zero_naming_field(capsys: pytest.Capture
 # traceback from a subsequent load_settings() call) -------------------------
 
 
-def test_out_of_range_tolerance_exits_non_zero_naming_field(capsys: pytest.CaptureFixture[str]) -> None:
+def test_out_of_range_tolerance_exits_non_zero_naming_field(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     payload = _reachable_db_payload()
     payload["strategies"]["trend_following_daily"]["risk"]["risk_per_trade"] = 2.0
 
@@ -155,62 +160,62 @@ def test_valid_passes_config_and_reachable_db_returns_settings() -> None:
 # --- CFG-06: ordering — the gate runs before any domain service is constructed --
 
 
-def test_submit_paper_orders_command_exits_before_domain_service_constructed(
+def test_run_jobs_command_exits_before_worker_loop_constructed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An invalid paper config (missing broker secrets — the default test-env
-    state) must SystemExit at the gate before `run_paper_order_submission`
-    (the domain service that would construct a broker client) is ever
-    called."""
-    from trading_platform.worker.commands import paper_execute as paper_execute_commands
+    """An invalid paper config exits at the retained worker gate before the
+    generic runner can claim or execute any Job."""
+    from trading_platform.worker.commands import run_jobs as run_jobs_commands
     from trading_platform.worker.parser import build_parser
 
     called = {"value": False}
 
     def _fail_if_called(*args: object, **kwargs: object) -> None:
         called["value"] = True
-        raise AssertionError("run_paper_order_submission must not be called")
+        raise AssertionError("run_worker_loop must not be called")
 
-    monkeypatch.setattr(paper_execute_commands, "run_paper_order_submission", _fail_if_called)
+    monkeypatch.setattr(run_jobs_commands, "run_worker_loop", _fail_if_called)
 
-    parser = build_parser()
-    args = parser.parse_args(
-        [
-            "submit-paper-orders",
-            "--strategy",
-            "trend_following_daily",
-            "--as-of",
-            "2024-01-05",
-            "--compact",
-        ]
-    )
+    args = build_parser().parse_args(["run-jobs", "--once", "--compact"])
 
     with pytest.raises(SystemExit) as exc_info:
-        paper_execute_commands.run_submit_paper_orders_command(args)
+        run_jobs_commands.run_jobs_command(args)
 
     assert exc_info.value.code == CONFIG_VALIDATION_EXIT_CODE
     assert called["value"] is False
 
 
-# --- Backtest/API boot with empty Alpaca keys still succeeds -----------------
+# --- Backtest/API boot with empty Alpaca keys requires the database ---------
 
 
-def test_api_lifespan_boots_with_empty_alpaca_keys_and_no_reachable_db() -> None:
-    """mode=BACKTEST requires no broker secret, and the API gate does not
-    require DB reachability (see api/app.py's lifespan comment) — an
-    API-only boot with empty broker keys and no live DB must still succeed."""
+def test_api_lifespan_rejects_empty_alpaca_keys_when_db_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mutation-capable API gates startup on PostgreSQL even in BACKTEST mode."""
+    import trading_platform.api.app as api_app
+
     payload = _refused_port_db_payload()
     payload["broker"]["alpaca"]["api_key"] = ""
     payload["broker"]["alpaca"]["api_secret"] = ""
+    startup_calls: list[dict[str, object]] = []
 
-    settings = enforce_startup_config(
-        mode=ExecutionMode.BACKTEST,
-        require_database=False,
-        payload=payload,
-    )
+    def _enforce_startup_config(**kwargs: object) -> Settings:
+        startup_calls.append(kwargs)
+        return enforce_startup_config(payload=payload, **kwargs)
 
-    assert isinstance(settings, Settings)
-    assert settings.broker.alpaca.api_key == ""
+    monkeypatch.setattr(api_app, "enforce_startup_config", _enforce_startup_config)
+    app = api_app.create_app()
+
+    async def _start_lifespan() -> None:
+        async with api_app.lifespan(app):
+            pass
+
+    with pytest.raises(SystemExit) as exc_info:
+        asyncio.run(_start_lifespan())
+
+    assert exc_info.value.code == CONFIG_VALIDATION_EXIT_CODE
+    assert startup_calls == [{"mode": ExecutionMode.BACKTEST, "require_database": True}]
+    assert not hasattr(app.state, "bootstrapped")
 
 
 def test_gate_is_wired_into_api_worker_and_bootstrap_entrypoints() -> None:
@@ -228,6 +233,7 @@ def test_gate_is_wired_into_api_worker_and_bootstrap_entrypoints() -> None:
     from trading_platform.worker.commands import paper_execute as paper_execute_commands
     from trading_platform.worker.commands import reconcile as reconcile_commands
     from trading_platform.worker.commands import risk_check as risk_check_commands
+    from trading_platform.worker.commands import run_jobs as run_jobs_commands
 
     assert "enforce_startup_config" in inspect.getsource(api_app.lifespan)
     assert "enforce_startup_config" in inspect.getsource(bootstrap.run_dry_bootstrap)
@@ -245,6 +251,7 @@ def test_gate_is_wired_into_api_worker_and_bootstrap_entrypoints() -> None:
         reconcile_commands.run_reconcile_paper_execution_command,
         operator_commands.run_operator_control_command,
         operator_commands.run_operator_status_command,
+        run_jobs_commands.run_jobs_command,
         ingest_commands.run_ingest_bars,
         ingest_commands.run_sync_metadata,
         ingest_commands.run_sync_sessions,

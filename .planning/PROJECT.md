@@ -14,6 +14,8 @@ Build a trustworthy, auditable trading platform that can reproducibly validate a
 
 **Goal:** Console evolves from read-only monitor to operations control center. The Operator API becomes the single orchestration surface: every manual operation executes through HTTP, backed by a generic, extensible, restart-safe DB job framework with full lifecycle, progress, logs, and audit.
 
+**Current state:** Phases 17–18 complete — restart-safe Job framework and generic idempotent HTTP orchestration surface verified. Phase 19 will register operation handlers and expose operator controls.
+
 **Architecture invariants:**
 
 1. **Single orchestration surface** — all manual operations execute through the HTTP API. The UI never invokes business logic directly and never depends on CLI implementations. API routes submit Jobs, Jobs invoke services, CLI commands become thin wrappers around the same services — one business-logic implementation regardless of entry point.
@@ -610,4 +612,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-15 — milestone v1.3 Operator Platform started; long-term ATOS direction adopted*
+*Last updated: 2026-07-21 — Phase 18 orchestration surface completed and verified*

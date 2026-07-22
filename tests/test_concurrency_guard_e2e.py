@@ -1,14 +1,13 @@
-"""Phase 8 (Concurrency Guard) capstone: CLI exit-code mapping (LOCK-01) and
-crash/restart lock-release proof (LOCK-06), end-to-end against a real
-migrated Postgres database.
+"""Phase 8 (Concurrency Guard) capstone: lock denial and crash/restart
+lock-release proof, end-to-end against a real migrated Postgres database.
 
-Test A proves the operator/scheduler-distinguishable exit path: holding the
-tuple's advisory lock forces `submit-paper-orders` to exit with the reserved
-`CONCURRENT_RUN_LOCK_EXIT_CODE`, no traceback, and zero side effects.
+Test A proves the service-level lock contract: holding the tuple's advisory
+lock raises `ConcurrentRunLockedError` before any database write or broker
+submission.
 
 Test B proves the crash-release guarantee: a lock-holder that crashes (its
-connection drops without an explicit unlock) auto-releases the advisory
-lock, so a subsequent run for the SAME tuple acquires cleanly -- no manual
+connection drops without an explicit unlock) auto-releases the advisory lock,
+so a subsequent run for the SAME tuple acquires cleanly -- no manual
 intervention -- and reclaims the crashed run's leftover `running` row as
 STALE.
 """
@@ -45,7 +44,7 @@ from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.concurrency_guard import (
-    CONCURRENT_RUN_LOCK_EXIT_CODE,
+    ConcurrentRunLockedError,
     advisory_lock_key,
     session_run_lock,
 )
@@ -57,8 +56,6 @@ from trading_platform.services.execution import (
     run_paper_order_submission,
 )
 from trading_platform.strategies.registry import build_default_registry
-from trading_platform.worker.commands.paper_execute import run_submit_paper_orders_command
-from trading_platform.worker.parser import build_parser
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -123,11 +120,8 @@ def migrated_paper_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         )
 
     _set_database_env(monkeypatch, database_name)
-    # 10-05's startup gate validates mode=PAPER for submit-paper-orders before
-    # this fixture's caller ever reaches the lock/service-init logic under
-    # test; the test env's broker keys are empty by default (conftest.py
-    # disables .env loading), so Test A needs real-looking paper creds to
-    # pass config validation and reach the lock contention it's testing.
+    # Keep the test Settings structurally valid even though all execution
+    # flows inject FakeExecutionService and make no broker call.
     monkeypatch.setenv("TRADING_PLATFORM_BROKER__ALPACA__API_KEY", "test-key")
     monkeypatch.setenv("TRADING_PLATFORM_BROKER__ALPACA__API_SECRET", "test-secret")
     clear_settings_cache()
@@ -245,30 +239,20 @@ def _seed_approved_risk_batch(*, session_date: date = date(2024, 1, 5)) -> tuple
 
 
 # ---------------------------------------------------------------------------
-# Test A -- exit code (LOCK-01): a held lock forces the reserved exit code,
-# no traceback, and zero side effects.
+# Test A -- lock denial (LOCK-01): a held lock raises a typed service error
+# before any side effect.
 # ---------------------------------------------------------------------------
 
 
-def test_submit_paper_orders_exits_with_reserved_exit_code_and_no_side_effects_when_lock_held(
+def test_run_paper_order_submission_rejects_lock_contention_without_side_effects(
     migrated_paper_db: str,
 ) -> None:
     _seed_approved_risk_batch()
+    settings = load_settings()
     strategy_id = "trend_following_daily"
     session_date = date(2024, 1, 5)
     lock_key = advisory_lock_key(strategy_id, session_date)
-
-    parser = build_parser()
-    args = parser.parse_args(
-        [
-            "submit-paper-orders",
-            "--strategy",
-            strategy_id,
-            "--as-of",
-            session_date.isoformat(),
-            "--compact",
-        ]
-    )
+    execution_service = FakeExecutionService()
 
     holder_connection = _connect_raw(migrated_paper_db)
     try:
@@ -277,24 +261,26 @@ def test_submit_paper_orders_exits_with_reserved_exit_code_and_no_side_effects_w
             (acquired,) = cursor.fetchone()
         assert acquired is True
 
-        with pytest.raises(SystemExit) as exc_info:
-            run_submit_paper_orders_command(args)
-
-        assert exc_info.value.code == CONCURRENT_RUN_LOCK_EXIT_CODE
+        with pytest.raises(ConcurrentRunLockedError):
+            run_paper_order_submission(
+                strategy_id,
+                as_of_session=session_date,
+                settings=settings,
+                execution_service=execution_service,
+                trigger_source="pytest_lock_contention",
+            )
     finally:
         holder_connection.close()
 
-    settings = load_settings()
     with session_scope(settings) as session:
         execution_runs = session.execute(
             select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
         ).scalars().all()
         paper_orders = session.execute(select(PaperOrder)).scalars().all()
 
-    # The loser wrote NO run row and submitted NO orders -- the lock denial
-    # happened before any DB write or broker call (LOCK-01).
     assert execution_runs == []
     assert paper_orders == []
+    assert execution_service.submitted_intents == []
 
 
 # ---------------------------------------------------------------------------

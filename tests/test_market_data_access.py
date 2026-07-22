@@ -103,11 +103,23 @@ def migrated_access_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         clear_engine_cache()
         with _connect_admin(admin_params) as connection:
             with connection.cursor() as cursor:
+                # Terminate only fixture-owned backends. The SQLAlchemy engine
+                # is already disposed by clear_engine_cache() above, so this is
+                # a safety net for any connection this fixture opened as its
+                # login role. Scoping to usename = current_user avoids
+                # signalling system/superuser-owned backends (e.g. an autovacuum
+                # worker on the freshly migrated schema, whose usename is NULL),
+                # which a non-superuser login role may not terminate -- that is
+                # the InsufficientPrivilege (SQLSTATE 42501) this teardown
+                # otherwise raised. Such backends release on their own, so the
+                # DROP still succeeds. Mirrors the working teardown already used
+                # by tests/test_job_dependencies.py's fixture.
                 cursor.execute(
                     """
                     SELECT pg_terminate_backend(pid)
                     FROM pg_stat_activity
                     WHERE datname = %s
+                      AND usename = current_user
                       AND pid <> pg_backend_pid()
                     """,
                     (database_name,),

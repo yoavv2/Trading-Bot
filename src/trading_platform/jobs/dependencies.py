@@ -171,12 +171,100 @@ def validate_dependency_set(
         raise DependencyCycleError(cycle=cycle)
 
 
+def _submit_job_in_session(
+    session: Session,
+    *,
+    job_type: str,
+    payload: Mapping[str, Any],
+    depends_on: Sequence[uuid.UUID],
+) -> uuid.UUID:
+    """Insert one Job and its immutable submission records into ``session``."""
+
+    unique_depends_on = list(dict.fromkeys(depends_on))
+    new_job_id = uuid.uuid4()
+
+    validate_dependency_set(
+        session,
+        new_job_id=new_job_id,
+        depends_on=unique_depends_on,
+        job_type=job_type,
+    )
+
+    event_at = datetime.now(UTC)
+    session.add(
+        Job(
+            id=new_job_id,
+            job_type=job_type,
+            payload=dict(payload),
+            status=JobStatus.QUEUED,
+        )
+    )
+
+    for dependency_id in unique_depends_on:
+        session.add(JobDependency(job_id=new_job_id, depends_on_job_id=dependency_id))
+
+    session.add(
+        JobEvent(
+            job_id=new_job_id,
+            from_status=None,
+            to_status=JobStatus.QUEUED,
+            event_type=JobEventType.SUBMITTED,
+            outcome=JobTransitionOutcome.ACCEPTED,
+            event_at=event_at,
+        )
+    )
+    session.flush()
+
+    _resolve_terminal_dependencies_at_submission(
+        session, depends_on=unique_depends_on
+    )
+    return new_job_id
+
+
+def _resolve_terminal_dependencies_at_submission(
+    session: Session,
+    *,
+    depends_on: Sequence[uuid.UUID],
+) -> None:
+    """Immediately resolve a Job submitted against an already-terminal dependency.
+
+    A declared dependency may already be FAILED or CANCELLED at submission time
+    (or reach a terminal state concurrently with the insert). In that case no
+    later dependency transition will ever fire ``cascade_dependency_outcome``
+    over the freshly submitted dependent, and ``unsatisfied_dependency_exists``
+    keeps it out of ``find_ready_job_ids`` forever -- the new Job would strand
+    in QUEUED behind a dead dependency.
+
+    Each declared dependency is re-read under a row lock (``with_for_update``)
+    so this serializes against a concurrent dependency transition; it is
+    deadlock-free against that transition because the other transaction never
+    waits on the new Job (its just-flushed ``JobDependency`` row is not visible
+    outside this caller-owned transaction). For each dependency already in
+    FAILED or CANCELLED -- taken in declaration order -- ``cascade_dependency_outcome``
+    is invoked: the first such call cancels the new QUEUED Job (it is a freshly
+    flushed dependent of that terminal Job) using the existing dependency
+    semantics, and every later call is a no-op because the Job is no longer
+    QUEUED. This reuses the exact cascade + ``apply_job_transition`` mechanism,
+    writing exactly one CANCELLED lifecycle event with a deterministic cause and
+    no duplicated transition logic. SUCCEEDED/RUNNING/QUEUED dependencies need no
+    action -- the Job stays QUEUED and becomes eligible normally.
+    """
+
+    for dependency_id in depends_on:
+        dependency = session.get(Job, dependency_id, with_for_update=True)
+        if dependency is None:
+            continue
+        if dependency.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+            cascade_dependency_outcome(session, terminal_job_id=dependency_id)
+
+
 def submit_job(
     *,
     job_type: str,
     payload: Mapping[str, Any],
     depends_on: Sequence[uuid.UUID] = (),
     settings: Settings | DatabaseSettings | None = None,
+    session: Session | None = None,
 ) -> uuid.UUID:
     """Submit a new Job with an immutable, validated dependency set.
 
@@ -189,6 +277,10 @@ def submit_job(
     transitioning it, and the closed transition table in ``jobs/lifecycle.py``
     has no inbound edge to QUEUED by design.
 
+    When ``session`` is supplied, this function flushes its inserts into that
+    caller-owned transaction without committing or closing it. Otherwise it
+    preserves the standalone ``session_scope(settings)`` transaction behavior.
+
     Validation failure raises before any insert, so the whole transaction
     rolls back with nothing written.
 
@@ -197,44 +289,21 @@ def submit_job(
     deliberately no ``add_dependency`` or ``remove_dependency`` function.
     """
 
-    unique_depends_on = list(dict.fromkeys(depends_on))
-
-    with session_scope(settings) as session:
-        new_job_id = uuid.uuid4()
-
-        validate_dependency_set(
+    if session is not None:
+        return _submit_job_in_session(
             session,
-            new_job_id=new_job_id,
-            depends_on=unique_depends_on,
             job_type=job_type,
+            payload=payload,
+            depends_on=depends_on,
         )
 
-        event_at = datetime.now(UTC)
-
-        job = Job(
-            id=new_job_id,
+    with session_scope(settings) as standalone_session:
+        return _submit_job_in_session(
+            standalone_session,
             job_type=job_type,
-            payload=dict(payload),
-            status=JobStatus.QUEUED,
+            payload=payload,
+            depends_on=depends_on,
         )
-        session.add(job)
-
-        for dependency_id in unique_depends_on:
-            session.add(JobDependency(job_id=new_job_id, depends_on_job_id=dependency_id))
-
-        session.add(
-            JobEvent(
-                job_id=new_job_id,
-                from_status=None,
-                to_status=JobStatus.QUEUED,
-                event_type=JobEventType.SUBMITTED,
-                outcome=JobTransitionOutcome.ACCEPTED,
-                event_at=event_at,
-            )
-        )
-        session.flush()
-
-    return new_job_id
 
 
 def unsatisfied_dependency_exists(job_id_column: Any) -> ColumnElement[bool]:
@@ -334,17 +403,29 @@ def cascade_dependency_outcome(
     while queue:
         parent_id, blocking_job_id, blocking_job_status, depth = queue.popleft()
 
-        dependents_stmt = (
-            select(Job.id, Job.status)
-            .join(JobDependency, JobDependency.job_id == Job.id)
-            .where(JobDependency.depends_on_job_id == parent_id)
+        dependents_stmt = select(JobDependency.job_id).where(
+            JobDependency.depends_on_job_id == parent_id
         )
-        for dependent_id, dependent_status in session.execute(dependents_stmt).all():
+        for dependent_id in session.execute(dependents_stmt).scalars().all():
             if dependent_id in visited:
                 continue
             visited.add(dependent_id)
 
-            if dependent_status is not JobStatus.QUEUED:
+            # Lock and re-read the candidate before deciding eligibility. Two
+            # concurrent cascades can both observe a shared descendant as
+            # QUEUED in an unlocked read, then both attempt the CANCELLED
+            # transition; the loser would hit an absorbing terminal from_status
+            # inside apply_job_transition, write a stray REJECTED event, and
+            # raise IllegalJobTransition for an expected race. The row lock
+            # serializes them: the loser blocks here until the winner commits,
+            # then reads the now-terminal status and skips -- so exactly one
+            # CANCELLED transition and one JobEvent are persisted per
+            # descendant. This lock targets the same row apply_job_transition
+            # would lock (re-entrant within this session), adding no new locked
+            # rows. Genuine illegal transitions elsewhere still raise, since
+            # only this cascade's own QUEUED-only candidates are guarded here.
+            dependent = session.get(Job, dependent_id, with_for_update=True)
+            if dependent is None or dependent.status is not JobStatus.QUEUED:
                 continue
 
             cause = (
