@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,7 @@ from unittest import mock
 import psycopg
 import pytest
 from alembic import command
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import aliased
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -30,8 +31,13 @@ from trading_platform.db.models import (
     JobEventType,
     JobFailureReason,
     JobStatus,
+    JobTransitionOutcome,
 )
-from trading_platform.db.session import clear_engine_cache, session_scope
+from trading_platform.db.session import (
+    clear_engine_cache,
+    get_session_factory,
+    session_scope,
+)
 from trading_platform.jobs.dependencies import (
     DependencyCycleError,
     SelfDependencyError,
@@ -40,7 +46,11 @@ from trading_platform.jobs.dependencies import (
     find_ready_job_ids,
     submit_job,
 )
-from trading_platform.jobs.lifecycle import JobTransitionRequest, apply_job_transition
+from trading_platform.jobs.lifecycle import (
+    IllegalJobTransition,
+    JobTransitionRequest,
+    apply_job_transition,
+)
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -538,3 +548,272 @@ def test_submit_with_caller_session_rolls_back_all_submission_rows(
 
     assert dependency_count == 0
     assert event_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 18.1 Concern 1: a Job submitted against an already-terminal dependency must
+# be resolved immediately and atomically rather than stranded in QUEUED.
+# ---------------------------------------------------------------------------
+
+
+def _terminal_event_counts(session: Any, job_id: uuid.UUID) -> tuple[int, int, int]:
+    """Return (SUBMITTED, CANCELLED, REJECTED) event counts for a Job."""
+    submitted = session.execute(
+        select(func.count())
+        .select_from(JobEvent)
+        .where(JobEvent.job_id == job_id, JobEvent.event_type == JobEventType.SUBMITTED)
+    ).scalar_one()
+    cancelled = session.execute(
+        select(func.count())
+        .select_from(JobEvent)
+        .where(JobEvent.job_id == job_id, JobEvent.event_type == JobEventType.CANCELLED)
+    ).scalar_one()
+    rejected = session.execute(
+        select(func.count())
+        .select_from(JobEvent)
+        .where(JobEvent.job_id == job_id, JobEvent.outcome == JobTransitionOutcome.REJECTED)
+    ).scalar_one()
+    return submitted, cancelled, rejected
+
+
+def test_submit_against_already_succeeded_dependency_stays_ready(
+    migrated_job_dependencies_db: str,
+) -> None:
+    settings = load_settings()
+    with session_scope(settings) as session:
+        dep = _seed_job(session, job_type="dep", status=JobStatus.SUCCEEDED)
+        dep_id = dep.id
+
+    dependent_id = submit_job(
+        job_type="dependent", payload={}, depends_on=[dep_id], settings=settings
+    )
+
+    with session_scope(settings) as session:
+        dependent = session.get(Job, dependent_id)
+        assert dependent is not None
+        assert dependent.status is JobStatus.QUEUED
+        assert dependent_id in find_ready_job_ids(session, limit=10)
+
+
+def test_submit_against_already_failed_dependency_is_cancelled_immediately(
+    migrated_job_dependencies_db: str,
+) -> None:
+    settings = load_settings()
+    dep_id = submit_job(job_type="dep", payload={}, settings=settings)
+    _fail_job(settings, dep_id)
+
+    dependent_id = submit_job(
+        job_type="dependent", payload={}, depends_on=[dep_id], settings=settings
+    )
+
+    with session_scope(settings) as session:
+        dependent = session.get(Job, dependent_id)
+        assert dependent is not None
+        assert dependent.status is JobStatus.CANCELLED
+        assert dependent.cancellation_cause is JobCancellationCause.DEPENDENCY_FAILED
+        assert dependent.blocking_job_id == dep_id
+        assert dependent.blocking_job_status is JobStatus.FAILED
+        assert dependent.root_cause_job_id == dep_id
+        assert dependent.failure_reason is None
+        # Exactly one terminal (CANCELLED) event -- the Job legitimately also
+        # carries its SUBMITTED event, and no REJECTED event is written.
+        submitted, cancelled, rejected = _terminal_event_counts(session, dependent_id)
+        assert (submitted, cancelled, rejected) == (1, 1, 0)
+        # Not stranded: a cancelled Job never appears as ready-to-claim.
+        assert dependent_id not in find_ready_job_ids(session, limit=10)
+
+
+def test_submit_against_already_cancelled_dependency_is_cancelled_immediately(
+    migrated_job_dependencies_db: str,
+) -> None:
+    settings = load_settings()
+    dep_id = submit_job(job_type="dep", payload={}, settings=settings)
+    _cancel_queued_job(settings, dep_id)
+
+    dependent_id = submit_job(
+        job_type="dependent", payload={}, depends_on=[dep_id], settings=settings
+    )
+
+    with session_scope(settings) as session:
+        dependent = session.get(Job, dependent_id)
+        assert dependent is not None
+        assert dependent.status is JobStatus.CANCELLED
+        assert dependent.cancellation_cause is JobCancellationCause.DEPENDENCY_CANCELLED
+        assert dependent.blocking_job_status is JobStatus.CANCELLED
+        assert dependent.blocking_job_id == dep_id
+        assert dependent.root_cause_job_id == dep_id
+        submitted, cancelled, rejected = _terminal_event_counts(session, dependent_id)
+        assert (submitted, cancelled, rejected) == (1, 1, 0)
+
+
+def test_submit_against_mixed_terminal_dependencies_resolves_by_declaration_order(
+    migrated_job_dependencies_db: str,
+) -> None:
+    settings = load_settings()
+    failed_id = submit_job(job_type="failed_dep", payload={}, settings=settings)
+    _fail_job(settings, failed_id)
+    cancelled_id = submit_job(job_type="cancelled_dep", payload={}, settings=settings)
+    _cancel_queued_job(settings, cancelled_id)
+
+    # FAILED declared first -> the first-declared terminal dependency deterministically
+    # decides the cause; every later terminal dependency's cascade is a no-op.
+    failed_first_id = submit_job(
+        job_type="dependent_a",
+        payload={},
+        depends_on=[failed_id, cancelled_id],
+        settings=settings,
+    )
+    # CANCELLED declared first -> proves resolution follows declaration order, not
+    # a fixed severity or id ordering.
+    cancelled_first_id = submit_job(
+        job_type="dependent_b",
+        payload={},
+        depends_on=[cancelled_id, failed_id],
+        settings=settings,
+    )
+
+    with session_scope(settings) as session:
+        failed_first = session.get(Job, failed_first_id)
+        cancelled_first = session.get(Job, cancelled_first_id)
+        assert failed_first is not None and cancelled_first is not None
+
+        assert failed_first.status is JobStatus.CANCELLED
+        assert failed_first.cancellation_cause is JobCancellationCause.DEPENDENCY_FAILED
+        assert failed_first.blocking_job_id == failed_id
+        assert failed_first.root_cause_job_id == failed_id
+        assert _terminal_event_counts(session, failed_first_id) == (1, 1, 0)
+
+        assert cancelled_first.status is JobStatus.CANCELLED
+        assert cancelled_first.cancellation_cause is JobCancellationCause.DEPENDENCY_CANCELLED
+        assert cancelled_first.blocking_job_id == cancelled_id
+        assert cancelled_first.root_cause_job_id == cancelled_id
+        assert _terminal_event_counts(session, cancelled_first_id) == (1, 1, 0)
+
+
+def test_submit_against_terminal_dependency_in_caller_session_rolls_back(
+    migrated_job_dependencies_db: str,
+) -> None:
+    settings = load_settings()
+    dep_id = submit_job(job_type="dep", payload={}, settings=settings)
+    _fail_job(settings, dep_id)
+    dependent_id: uuid.UUID
+
+    with pytest.raises(RuntimeError, match="force rollback"):
+        with session_scope(settings) as session:
+            dependent_id = submit_job(
+                job_type="dependent", payload={}, depends_on=[dep_id], session=session
+            )
+            # The immediate resolution happens inside the caller-owned transaction.
+            resolved = session.get(Job, dependent_id)
+            assert resolved is not None and resolved.status is JobStatus.CANCELLED
+            raise RuntimeError("force rollback")
+
+    # Rollback discards the Job, its dependency rows, the SUBMITTED event, and the
+    # cascade CANCELLED event together -- nothing partially committed.
+    with session_scope(settings) as session:
+        assert session.get(Job, dependent_id) is None
+        dependency_count = session.execute(
+            select(func.count())
+            .select_from(JobDependency)
+            .where(JobDependency.job_id == dependent_id)
+        ).scalar_one()
+        event_count = session.execute(
+            select(func.count()).select_from(JobEvent).where(JobEvent.job_id == dependent_id)
+        ).scalar_one()
+    assert dependency_count == 0
+    assert event_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 18.1 Concern 2: concurrent cascades over a shared QUEUED descendant must be
+# idempotent -- exactly one terminal transition/event, no leaked race error.
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_cascades_on_shared_descendant_are_idempotent(
+    migrated_job_dependencies_db: str,
+) -> None:
+    """Realistic single-shared-row shape: D depends on A and B, both FAILED. Two
+    cascades -- one from A, one from B -- race to cancel D from genuinely
+    separate sessions. The row lock in cascade serializes them: exactly one
+    cancels D and one lifecycle event is written; the loser observes the
+    now-terminal state and returns safely without raising IllegalJobTransition.
+    ``lock_timeout`` bounds any lock regression to a deterministic failure
+    rather than a hang.
+    """
+    settings = load_settings()
+    job_a_id = submit_job(job_type="a", payload={}, settings=settings)
+    job_b_id = submit_job(job_type="b", payload={}, settings=settings)
+    job_d_id = submit_job(
+        job_type="d", payload={}, depends_on=[job_a_id, job_b_id], settings=settings
+    )
+    _fail_job(settings, job_a_id)
+    _fail_job(settings, job_b_id)
+
+    session_factory = get_session_factory(settings)
+    barrier = threading.Barrier(2)
+    results: dict[str, list[uuid.UUID]] = {}
+    errors: list[BaseException] = []
+
+    def _cascade(name: str, terminal_id: uuid.UUID) -> None:
+        session = session_factory()
+        try:
+            session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            barrier.wait(timeout=5)
+            results[name] = cascade_dependency_outcome(session, terminal_job_id=terminal_id)
+            session.commit()
+        except BaseException as exc:  # noqa: BLE001 - captured for the main thread to assert on
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    thread_a = threading.Thread(target=_cascade, args=("a", job_a_id))
+    thread_b = threading.Thread(target=_cascade, args=("b", job_b_id))
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=15)
+    thread_b.join(timeout=15)
+
+    assert not thread_a.is_alive() and not thread_b.is_alive()
+    assert not errors, f"cascade thread raised: {errors!r}"
+    # Exactly one cascade cancelled D; the other saw it already terminal.
+    assert sorted([results["a"], results["b"]], key=len) == [[], [job_d_id]]
+
+    with session_scope(settings) as session:
+        job_d = session.get(Job, job_d_id)
+        assert job_d is not None
+        assert job_d.status is JobStatus.CANCELLED
+        cancelled = session.execute(
+            select(func.count())
+            .select_from(JobEvent)
+            .where(JobEvent.job_id == job_d_id, JobEvent.event_type == JobEventType.CANCELLED)
+        ).scalar_one()
+        rejected = session.execute(
+            select(func.count())
+            .select_from(JobEvent)
+            .where(JobEvent.job_id == job_d_id, JobEvent.outcome == JobTransitionOutcome.REJECTED)
+        ).scalar_one()
+    assert cancelled == 1
+    assert rejected == 0
+
+
+def test_unrelated_illegal_transition_still_raises(migrated_job_dependencies_db: str) -> None:
+    """The cascade race guard must not soften genuine lifecycle guards: an event
+    illegal for a Job's current status still raises IllegalJobTransition.
+    """
+    settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_job(session, status=JobStatus.SUCCEEDED)
+        job_id = job.id
+
+    with session_scope(settings) as session:
+        with pytest.raises(IllegalJobTransition):
+            apply_job_transition(
+                session,
+                job_id=job_id,
+                request=JobTransitionRequest(
+                    event_type=JobEventType.FAILED,
+                    failure_reason=JobFailureReason.HANDLER_ERROR,
+                ),
+            )

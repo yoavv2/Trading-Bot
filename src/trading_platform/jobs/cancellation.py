@@ -335,14 +335,34 @@ def sweep_cancellation_timeouts(
     from trading_platform.jobs.dependencies import cascade_dependency_outcome
 
     resolved_now = now or datetime.now(UTC)
+    cutoff = resolved_now - timedelta(seconds=grace_seconds)
     job_ids = find_cancellation_timeout_job_ids(
         session, grace_seconds=grace_seconds, now=resolved_now
     )
 
     swept: list[uuid.UUID] = []
     for job_id in job_ids:
-        job = session.get(Job, job_id)
+        # Candidate selection above was an unlocked read: between it and the
+        # transition below a concurrent worker can acknowledge cancellation or
+        # land the Job terminal. Lock the row and re-check every eligibility
+        # condition against the same cutoff before transitioning, so a losing
+        # sweep skips the candidate instead of hitting an absorbing terminal
+        # from_status and raising IllegalJobTransition (which, since the whole
+        # poll iteration is one transaction, would roll back reclaim + sweep +
+        # claim together). A skipped candidate writes nothing, so the original
+        # cancellation-request facts and event are left untouched. This is not
+        # broad suppression: recovery is by locked revalidation of persisted
+        # state, and a genuinely illegal transition still raises.
+        job = session.get(Job, job_id, with_for_update=True)
         if job is None:
+            continue
+        if job.status is not JobStatus.RUNNING:
+            continue
+        if job.cancellation_requested_at is None:
+            continue
+        if job.cancellation_acknowledged_at is not None:
+            continue
+        if job.cancellation_requested_at >= cutoff:
             continue
 
         apply_job_transition(

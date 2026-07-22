@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -13,7 +15,7 @@ from typing import Any
 import psycopg
 import pytest
 from alembic import command
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -30,7 +32,11 @@ from trading_platform.db.models import (
     JobStatus,
     JobTransitionOutcome,
 )
-from trading_platform.db.session import clear_engine_cache, session_scope
+from trading_platform.db.session import (
+    clear_engine_cache,
+    get_session_factory,
+    session_scope,
+)
 from trading_platform.jobs.cancellation import (
     CANCELLATION_GRACE_SECONDS,
     JobNotCancellableError,
@@ -667,3 +673,161 @@ def test_caller_session_running_cancellation_matches_standalone_mode(
             assert events[0].requested_by == "operator_1"
             assert events[0].reason == "stop it"
             assert events[0].requested_at is not None
+
+
+# ---------------------------------------------------------------------------
+# 18.1 Concern 3: the timeout sweep must lock and revalidate each candidate
+# before transitioning, so a concurrent acknowledgement or terminal landing
+# never causes a duplicate or illegal terminal transition.
+# ---------------------------------------------------------------------------
+
+
+def _seed_running_job_with_expired_request(session: Any, **overrides: Any) -> Job:
+    """Seed a RUNNING Job whose cancellation request has outlived the grace period."""
+    job = _seed_running_job(session, **overrides)
+    job.cancellation_requested_at = datetime.now(UTC) - timedelta(
+        seconds=CANCELLATION_GRACE_SECONDS + 60
+    )
+    job.cancellation_requested_by = "operator_1"
+    job.cancellation_reason = "stop it"
+    return job
+
+
+def _timeout_events(session: Any, job_id: uuid.UUID) -> list[JobEvent]:
+    return list(
+        session.execute(
+            select(JobEvent).where(
+                JobEvent.job_id == job_id,
+                JobEvent.event_type == JobEventType.CANCELLATION_TIMEOUT,
+            )
+        ).scalars().all()
+    )
+
+
+def _cancelled_events(session: Any, job_id: uuid.UUID) -> list[JobEvent]:
+    return list(
+        session.execute(
+            select(JobEvent).where(
+                JobEvent.job_id == job_id,
+                JobEvent.event_type == JobEventType.CANCELLED,
+            )
+        ).scalars().all()
+    )
+
+
+def _race_sweep_against_holder(
+    settings: Any,
+    holder: Any,
+) -> tuple[list[uuid.UUID] | None, list[BaseException]]:
+    """Race a background timeout sweep against a lock-holding winner.
+
+    ``holder(session_one)`` performs the winning action (another sweep, a
+    cancellation acknowledgement, or a normal terminal landing), flushing it
+    into ``session_one`` without committing so its row lock is still held. A
+    background sweep then runs in a separate session bounded by
+    ``lock_timeout``; it blocks on the locked row, the holder commits, and the
+    sweep re-reads the now-ineligible state under its own lock and skips.
+    Returns ``(swept_ids, errors)`` from the background sweep.
+    """
+    session_factory = get_session_factory(settings)
+    session_one = session_factory()
+    result: dict[str, list[uuid.UUID]] = {}
+    errors: list[BaseException] = []
+    try:
+        holder(session_one)  # flush + hold the row lock, uncommitted
+
+        def _sweep_in_thread() -> None:
+            session_two = session_factory()
+            try:
+                session_two.execute(text("SET LOCAL lock_timeout = '5s'"))
+                result["swept"] = sweep_cancellation_timeouts(session_two)
+                session_two.commit()
+            except BaseException as exc:  # noqa: BLE001 - captured for the main thread
+                errors.append(exc)
+                session_two.rollback()
+            finally:
+                session_two.close()
+
+        thread = threading.Thread(target=_sweep_in_thread)
+        thread.start()
+        time.sleep(0.5)  # let the sweep reach and block on the FOR UPDATE
+        session_one.commit()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+    finally:
+        session_one.close()
+    return result.get("swept"), errors
+
+
+def test_concurrent_timeout_sweeps_produce_one_terminal_transition(
+    migrated_job_cancellation_db: str,
+) -> None:
+    settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_running_job_with_expired_request(session)
+        job_id = job.id
+
+    def _winning_sweep(session_one: Any) -> None:
+        assert sweep_cancellation_timeouts(session_one) == [job_id]
+
+    swept, errors = _race_sweep_against_holder(settings, _winning_sweep)
+
+    assert not errors, f"sweep thread raised: {errors!r}"
+    assert swept == []  # the losing sweep found the Job already FAILED and skipped
+    with session_scope(settings) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is JobStatus.FAILED
+        assert job.failure_reason is JobFailureReason.CANCELLATION_TIMEOUT
+        assert len(_timeout_events(session, job_id)) == 1
+
+
+def test_timeout_sweep_skips_job_acknowledged_by_worker(
+    migrated_job_cancellation_db: str,
+) -> None:
+    settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_running_job_with_expired_request(session)
+        job_id = job.id
+
+    def _winning_ack(session_one: Any) -> None:
+        acknowledge_cancellation(session_one, job_id=job_id)
+
+    swept, errors = _race_sweep_against_holder(settings, _winning_ack)
+
+    assert not errors, f"sweep thread raised: {errors!r}"
+    assert swept == []  # the sweep saw the Job acknowledged/CANCELLED and skipped
+    with session_scope(settings) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is JobStatus.CANCELLED
+        assert job.cancellation_cause is JobCancellationCause.OPERATOR_REQUEST
+        # The worker's CANCELLED landing stands; no timeout FAILED event leaks.
+        assert len(_cancelled_events(session, job_id)) == 1
+        assert _timeout_events(session, job_id) == []
+
+
+def test_timeout_sweep_skips_job_that_landed_terminal_normally(
+    migrated_job_cancellation_db: str,
+) -> None:
+    settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_running_job_with_expired_request(session)
+        job_id = job.id
+
+    def _winning_success(session_one: Any) -> None:
+        apply_job_transition(
+            session_one,
+            job_id=job_id,
+            request=JobTransitionRequest(event_type=JobEventType.SUCCEEDED),
+        )
+
+    swept, errors = _race_sweep_against_holder(settings, _winning_success)
+
+    assert not errors, f"sweep thread raised: {errors!r}"
+    assert swept == []  # the sweep saw the Job already SUCCEEDED and skipped
+    with session_scope(settings) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is JobStatus.SUCCEEDED
+        assert _timeout_events(session, job_id) == []

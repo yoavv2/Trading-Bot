@@ -367,6 +367,7 @@ def migrated_ingest_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
                     SELECT pg_terminate_backend(pid)
                     FROM pg_stat_activity
                     WHERE datname = %s
+                      AND usename = current_user
                       AND pid <> pg_backend_pid()
                     """,
                     (database_name,),
