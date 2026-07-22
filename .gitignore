@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 .data/
 .vercel
+.DS_Store
+**/.DS_Store
