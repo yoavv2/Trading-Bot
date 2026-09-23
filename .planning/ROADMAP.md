@@ -171,7 +171,7 @@ Plans:
 **Requirements**: OPS-01, ORCH-05, ORCH-06, ORCH-07, JOBUI-01, JOBUI-02, JOBUI-03, JOBUI-04, JOBUI-05
 **Success Criteria** (what must be TRUE):
 
-  1. An E2E test using the production registry (not a test-only handler) submits a backtest via the API, `run-jobs` claims and executes it through the existing backtest service, the Job lands `SUCCEEDED`, and progress, logs, events, and `result_summary.run_id` resolve through the Job reference links (OPS-01).
+  1. An E2E test using the production registry (not a test-only handler) submits a backtest via the API, `run-jobs` claims and executes it through the existing backtest service, the Job lands `SUCCEEDED`, progress, logs, and events resolve through the Job reference links, and the Job detail's `resources[]` contains the created `strategy_run` (persisted `strategy_runs.job_id` FK; `result_summary.run_id` equals it) (OPS-01).
   2. Resubmitting with the same `Idempotency-Key` returns the same `job_id` and exactly one backtest run exists (OPS-01, ORCH-03 regression).
   3. A test parsing `docker-compose.yml` asserts the worker service command is `run-jobs`; no deploy configuration starts the placeholder `serve` loop (ORCH-05).
   4. `GET /api/v1/job-types` lists exactly the registered Job types, each with a description and cancellation mode; an enforcement test asserts every registered type appears in the catalog (ORCH-06).
