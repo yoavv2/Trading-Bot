@@ -12,38 +12,36 @@ Build a trustworthy, auditable trading platform that can reproducibly validate a
 
 ## Current Milestone: v1.3 Operator Platform
 
-**Goal:** Console evolves from read-only monitor to operations control center. The Operator API becomes the single orchestration surface: every manual operation executes through HTTP, backed by a generic, extensible, restart-safe DB job framework with full lifecycle, progress, logs, and audit.
+**Goal (re-scoped 2026-09-23):** Every existing long-running operation executes as a Job that the operator submits, observes, cancels, and retries from generic Job surfaces in the console; immediate safety controls work from the console without depending on the worker; and exactly one mutation path exists per operation class — no `scripts/`, CLI, or Makefile bypasses.
 
-**Current state:** Phases 17–18 complete — restart-safe Job framework and generic idempotent HTTP orchestration surface verified. Phase 19 will register operation handlers and expose operator controls.
+**Current state:** Phases 17 and 18 complete — restart-safe Job framework, idempotent HTTP submit/cancel surface, and post-Phase-18 framework race/test hardening (PR #1). A 2026-09-23 audit found the surface not yet usable in production: the Job registry is intentionally empty, the compose worker runs the placeholder `serve` loop instead of `run-jobs`, the console is GET-only, the kill switch has no supported trip/reset path, and mutating `scripts/*.py` still call domain services directly (ORCH-01/02 Partial). Remaining: Phase 19 (Job Operations Vertical Slice — backtest end-to-end + generic Job UI), Phase 20 (Complete Operation Migration & Safety Controls), Phase 21 (Operations History & Polish), then v1.3 closes.
 
 **Architecture invariants:**
 
-1. **Single orchestration surface** — all manual operations execute through the HTTP API. The UI never invokes business logic directly and never depends on CLI implementations. API routes submit Jobs, Jobs invoke services, CLI commands become thin wrappers around the same services — one business-logic implementation regardless of entry point.
+1. **Two mutation paths, nothing else** — long-running operations: Console → HTTP → Job orchestration → worker → existing domain service. Immediate safety controls (kill-switch trip/reset, strategy enable/disable): Console → HTTP → `OperatorControlService`, synchronous, idempotent by target state, audited; a kill-switch operation never depends on a healthy worker. The UI never invokes business logic directly; no script, CLI command, or Makefile target invokes a mutating domain service outside a Job handler or the control service (deployment tooling such as `migrate`/`seed` is explicitly exempted).
 2. **Jobs are orchestration-only** — Jobs orchestrate work rather than implement business logic. All domain behavior remains inside the existing service layer. A Job carries lifecycle, progress, logs, and audit linkage — never domain semantics.
-3. **Generic, extensible Job abstraction** — one operation-agnostic Job model with closed lifecycle enum `QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED`, progress reporting, structured logs, and audit history. New Job types are registerable without modifying queue infrastructure — future Experiment Runner, Portfolio Optimization, AI Research, and Live Deployment workflows plug into the same framework.
-4. **Transport-agnostic observation** — the console submits jobs and observes job state. The architecture assumes no transport; polling, SSE, WebSockets, or another mechanism can be chosen or changed at implementation time without architectural change.
-5. **Idempotent operations** — every operator action is safely retryable. Duplicate submissions from browser refreshes, retries, network failures, or repeated requests never execute the same operation twice unless explicitly requested by the operator.
-6. **Scheduling is a Job producer, not part of the Job framework** — scheduled executions create Jobs through the same public API used by manual operator actions. Manual and scheduled execution always follow the identical execution path. The scheduler supports any registered Job type; the initial UI exposes only Daily Paper Trading and Daily Market Data Synchronization.
-7. **Job dependency support** — the Job framework supports explicit job dependencies so larger workflows compose from independent Jobs (e.g., Market Data Sync → Risk Evaluation → Paper Session → Reconciliation) rather than embedding sequencing inside individual implementations.
-8. **Domain services remain infrastructure-independent** — business services must not depend on Jobs, HTTP, scheduling, or UI concerns. They remain directly callable by tests, CLI, API, future AI agents, and future workflow engines. Jobs orchestrate services; services never depend on Jobs.
-9. **Forward-compatible audit model** — every operator action records: initiating operator (currently always the local operator), timestamp, operation type, request parameters, resulting Job, and final outcome. Persistence is designed so multi-user support can be added later without redesign.
+3. **Generic, extensible Job abstraction** — one operation-agnostic Job model with closed lifecycle enum `QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED`, progress reporting, structured logs, and audit history. New Job types are registerable without modifying queue infrastructure, and the console's Job list/detail/progress/log/event/cancel surfaces are job-type-agnostic so future types (parameter sweeps, walk-forward tests, strategy comparisons) reuse them unchanged. Submission forms are explicit per operation; no JSON-Schema form framework.
+4. **Transport-agnostic observation** — the console submits jobs and observes job state. v1.3 uses polling; no SSE/WebSocket commitment.
+5. **Idempotent operations** — every operator action is safely retryable. Duplicate submissions from browser refreshes, retries, network failures, or repeated requests never execute the same operation twice. Operator retry of a FAILED/CANCELLED Job is an explicit new Job linked via `retry_of_job_id` — no automatic retries.
+6. **Cooperative cancellation (accepted limitation)** — cancellation is checked at handler/service-call boundaries; running Jobs stop at the next step boundary or land `FAILED`/`cancellation_timeout`. No cancellation/progress abstraction enters the domain services in v1.3.
+7. **Job dependency support** — the Job framework supports explicit job dependencies so larger workflows compose from independent Jobs rather than embedding sequencing inside individual implementations.
+8. **Domain services remain infrastructure-independent** — business services must not depend on Jobs, HTTP, scheduling, or UI concerns. Jobs orchestrate services; services never depend on Jobs.
+9. **Audit from existing records** — every Job and safety-control change is inspectable (timestamp, operation type, parameters, resulting Job or control record, outcome) from the existing Job/JobEvent/JobMutation and control audit records. Single operator: no identity/actor schema is added until a concrete requirement needs it.
 
-**Target features:**
-- Job framework — DB-backed generic queue: jobs table + worker execution loop, registerable job types, dependencies, cancellation, progress, structured logs; no Redis/Celery
-- Operation triggers from UI — backtest, risk evaluation, paper session, reconciliation, market-data sync, broker sync — all as Jobs through the API
-- Strategy control — enable/disable strategy from UI via API
-- Kill switch — toggle from UI (explicit, guarded action)
-- Retry failed run/job — explicit re-trigger from detail view (the one sanctioned "run it again" path)
-- Scheduling — scheduler-as-Job-producer over registered Job types; UI manages the two initial schedules
-- Audit history — full operator-action audit trail per invariant 9, inspectable in console
-- Operational status — in-console status feed (failures, kill-switch trips, job completions); no external channels
+**Target features (remaining):**
+- Phase 19: backtest as the first production Job, production worker wiring, job-type catalog, public-deploy mutation guard, generic Job list/detail/progress/logs/events/cancel UI, minimal backtest submission form
+- Phase 20: risk evaluation, paper session, reconciliation, `ingest-bars`, `sync-symbol-metadata`, `sync-market-sessions`, broker order-lifecycle sync as Jobs; synchronous kill-switch and strategy controls; operator retry with lineage; typed domain-conflict failures; retirement of every mutation bypass with boundary enforcement
+- Phase 21: unified operational history and global failure indicator from existing audit data; operational UX cleanup
 
 **Explicit non-goals for v1.3:**
+- Scheduling of any kind — deferred to a future Paper Automation milestone (SCHED-01..03)
 - Live trading or live-trading controls
-- Multi-user auth/RBAC (audit model is multi-user-shaped, but no auth surface ships)
+- Multi-user auth/RBAC and identity/`submitted_by` fields (AUD-03 deferred); the public deploy is protected only by a mutations-disabled config flag
 - External notification channels (email/Telegram/Slack)
-- Redis/Celery or any new queue infrastructure — DB-backed only
-- Experiment domain (Stage 2) — the Job framework must be able to carry it later, but it does not ship now
+- Redis/Celery/Kafka, distributed workers, SSE/WebSockets, external observability — DB-backed and polling only
+- New Job types beyond existing operations, and the Experiment domain (Stage 2) — the generic Job UI must carry them later, but they do not ship now
+
+**Next milestone direction:** Strategy Research / Strategy Lab (ATOS Stage 2). After v1.3 closes, work moves away from operator infrastructure.
 
 ## Shipped Milestone: v1.2 Operator Console v0 (Completed 2026-07-09)
 
@@ -72,7 +70,7 @@ Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and compl
 - [ ] Run deterministic backtests for `TrendFollowingDailyV1`, persist runs, trades, equity curves, and summary metrics, and make fees/slippage assumptions explicit.
 - [ ] Persist candles, signals, strategy runs, orders, fills, positions, account snapshots, risk events, and performance summaries in PostgreSQL.
 - [ ] Route every signal through a mandatory risk engine before execution, including risk-per-trade checks, position limits, strategy allocation limits, portfolio allocation limits, stale-data blocking, duplicate prevention, reconciliation guards, and repeated-failure guards.
-- [ ] Support paper trading through Alpaca for v1, using the same strategy and risk flow as backtesting where possible, with daily scheduled execution and persistent order lifecycle tracking.
+- [ ] Support paper trading through Alpaca for v1, using the same strategy and risk flow as backtesting where possible, with persistent order lifecycle tracking. In v1.3, paper sessions are run manually by the operator from the console as Jobs; daily scheduled (unattended) execution is deferred from v1.3 to a later Paper Automation milestone (SCHED-01..03).
 - [ ] Produce trustworthy analytics for both backtests and paper trading, including per-run metrics, trade inspection, current positions, recent orders, and enough statistics to compare runs without reading raw logs.
 - [ ] Make observability part of the product through structured logs, visible failures, blocked-trade explanations, kill-switch support, restart-safe behavior, and full audit trails.
 - [ ] Externalize and version configuration so strategy settings, risk settings, and runtime configuration are not hardcoded inside the strategy implementation.
@@ -124,7 +122,7 @@ Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and compl
 
 The platform's end state is not a trading bot but an Autonomous Trading Operating System that manages the complete lifecycle of quantitative strategies, from research through live deployment. Development follows staged milestones; each stage is a candidate milestone, not current scope:
 
-1. **Operator Platform** (= v1.3, current) — console becomes a full operational control center; every manual CLI operation executable from the UI through a single API orchestration surface.
+1. **Operator Platform** (= v1.3, current) — console becomes a full operational control center; every manual CLI operation executable from the UI through a single API orchestration surface. Re-scoped 2026-09-23: scheduling deferred to a later Paper Automation stage; v1.3 closes after Phase 21.
 2. **Strategy Laboratory** — Experiment domain (Strategy → Experiment → Run → Metrics → Comparison) with complete reproducibility: parameters, dataset, date range, commit hash, config snapshot, environment, metrics persisted per experiment.
 3. **Portfolio Management** — multiple concurrent strategies evaluated collectively: capital allocation, risk budgets, strategy weighting, exposure, correlation matrix as first-class metric, portfolio optimization.
 4. **Research Platform** — structured research lifecycle (Idea → Hypothesis → Implementation → Experiment → Evaluation → Decision) with persistent research objects: ideas, hypotheses, notes, experiments, conclusions.
@@ -612,4 +610,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-21 — Phase 18 orchestration surface completed and verified*
+*Last updated: 2026-09-23 — v1.3 re-scoped after repository audit (two mutation paths, vertical-slice Phase 19, scheduling and identity groundwork deferred, next milestone Strategy Lab)*

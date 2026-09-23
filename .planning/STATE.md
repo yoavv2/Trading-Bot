@@ -2,34 +2,36 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
-status: ready_to_plan
-stopped_at: Phase 18 complete (6/6) — ready to discuss Phase 19
-last_updated: 2026-07-21T19:27:14.622Z
-last_activity: 2026-07-21
+status: planning
+stopped_at: v1.3 planning-state cleanup complete — ready to discuss/plan Phase 19 (Job Operations Vertical Slice)
+last_updated: "2026-09-23T18:17:52.633Z"
+last_activity: 2026-09-23
 progress:
-  total_phases: 10
+  total_phases: 5
   completed_phases: 2
   total_plans: 15
   completed_plans: 15
-  percent: 20
+  percent: 40
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-15)
+See: .planning/PROJECT.md (updated 2026-09-23)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 19 — operation triggers & control
+**Current focus:** Phase 19 — Job Operations Vertical Slice (backtest end-to-end + generic Job UI)
 
 ## Current Position
 
-Phase: 19
+Phase: 19 — Job Operations Vertical Slice
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-07-21
-**Progress:** [██████████] 100%
+Last activity: 2026-09-23
+**Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
+
+v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase race/test hardening done) → 19 → 20 → 21 → close v1.3. Scheduling deferred. Next milestone direction: Strategy Research / Strategy Lab.
 
 ## Performance Metrics
 
@@ -67,6 +69,14 @@ Last activity: 2026-07-21
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+- [v1.3 re-scope 2026-09-23]: Repository audit found the production Job registry empty, the compose worker running the placeholder `serve` loop instead of `run-jobs`, no console mutation support, no supported kill-switch trip/reset path, and a live `scripts/` bypass of the orchestration surface. v1.3 re-cut into Phase 19 (Job Operations Vertical Slice — backtest end-to-end + generic Job UI), Phase 20 (Complete Operation Migration & Safety Controls), Phase 21 (Operations History & Polish); then close v1.3.
+- [v1.3 re-scope D1]: Two mutation paths. Long-running operations: Console → HTTP → Job orchestration → worker → domain service. Immediate safety controls (kill switch, strategy enable/disable): Console → HTTP → `OperatorControlService`, synchronous, idempotent by target state, audited, never dependent on the worker.
+- [v1.3 re-scope D2]: Cancellation stays cooperative at handler/service-call boundaries; no cancellation/progress abstraction in domain services for v1.3. Limitation documented, not hidden.
+- [v1.3 re-scope D3]: SCHED-01..03 deferred to a future Paper Automation milestone; no scheduler of any kind in v1.3.
+- [v1.3 re-scope D4]: Vertical slice first — Phase 20 starts only after Phase 19 proves Console → HTTP → Job → worker → backtest service end-to-end.
+- [v1.3 re-scope scope rules]: Generic abstraction is Job lifecycle/observation, not form generation (explicit per-operation forms). No `submitted_by`/identity fields (AUD-03 deferred). OPS-07 retry = one nullable `retry_of_job_id`, FAILED/CANCELLED only, idempotent, no automatic retry/policies. OPS-05 = three Job types (`ingest-bars`, `sync-symbol-metadata`, `sync-market-sessions`), no composite flag-switching handler. Render mutation exposure solved by a config flag (ORCH-07), not auth.
+- [Phase 18 post-phase hardening, recorded 2026-09-23]: Race/test hardening completed 2026-07-22 inside PR #1 (`2b88d49`) — dependency-cascade and cancellation-timeout-sweep race fixes + real-PostgreSQL race regressions. Recorded under Phase 18 (not a standalone phase; briefly tracked as inserted 18.1 during the 2026-09-23 cleanup, folded back into Phase 18 to keep GSD phase accounting consistent). No separate PLAN/VERIFICATION artifacts.
 
 - [Init]: Scope v1.2 to a read-only console consuming the existing FastAPI read surface only — no new backend capabilities in this milestone.
 - [07-03]: Persistent global kill switch (`system_controls` table) ships in Phase 7; `OperatorControlService`/`OperatorReadService` expose `get_kill_switch_state()`, but no HTTP route wires it yet (relevant to v1.2 Phase 13 — see ROADMAP.md Known Gaps #1).
@@ -147,17 +157,29 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
-- (found 2026-07-14 during 11-01, non-blocking, resolved without data loss) A concurrent Phase 11 Plan 03 executor ran a broad `git add -A`-style stage-and-commit in this shared working tree while 11-01's Task 2 (`paper_execution.py`) edit was uncommitted, sweeping it into an unrelated 11-03 commit. Same failure mode as the 10-04/10-05 collision below. No git history rewriting was performed (per explicit guidance — rebasing a live concurrent agent's history risks destroying its work); the other agent's commit was independently amended shortly after, the diff reappeared unstaged, and it was re-verified (full diff matched exactly, 27/27 tests green) and committed cleanly under 11-01. See 11-01-SUMMARY.md "Deviations from Plan" for full detail. Confirms parallel plan-level execution against a single shared git working tree (config.json `parallelization.plan_level: true`) carries real collision risk that individual executors currently resolve reactively rather than being structurally prevented.
+**Active v1.3 concerns:**
+
+- ENVIRONMENT (found 2026-09-23, not a product/code gap): the local `.venv` is broken — `.venv/bin` contains no `python` interpreter and `pyvenv.cfg` records creation at a different path (`.../Trading Bot Project/.venv`, Python 3.13.1). Makefile `PYTHON ?= .venv/bin/python` therefore fails. Recreate the venv before Phase 19 verification; the 2026-09-23 audit could not execute tests or scripts and relied on static evidence.
+- RESOLVED 2026-09-23: the 17-01 … 17-08 "tracking-only" requirement-marking notes below are superseded — JOB-01..07 are all Complete (JOB-06 operator surface delivered by Phase 18 `POST /api/v1/jobs/{job_id}/cancel`).
+- (found 2026-09-23, tracked as Phase 20 scope) Makefile targets `dry-run` and `sync-sessions` call worker subcommands removed in Phase 18 (dead); mutating `scripts/*.py` bypass the orchestration surface (ORCH-01/02 Partial → ORCH-08).
+- (found 2026-09-23, UNRESOLVED — Phase 20 must classify) `scripts/dry_run.py` and `scripts/generate_signals.py` call services/DB directly; classify each from actual behavior — migrate/retire if state-changing or a manual operation, exempt only if genuinely read-only or development-only. Default is NOT exemption (ORCH-08).
+
+**Carried forward (non-blocking; still relevant context — e.g. Phase 20 reconciliation/control Jobs and verification environment):**
+
 - (found 2026-07-13 during 10-04, non-blocking, environmental) Under parallel-plan/full-suite load, a throwaway test database's `pg_terminate_backend` teardown intermittently raises `psycopg.errors.InsufficientPrivilege` ("must be a superuser to terminate superuser process"), non-deterministically failing one unrelated test per full-suite run (observed in `test_market_data_access.py` and `test_market_data_ingestion.py`). Reproduced on a clean tree with 10-04's own changes fully removed (via `git stash`), confirming it predates and is unrelated to this plan — likely an autovacuum/background-worker connection racing test-DB teardown, worsened by concurrent parallel-plan execution contending for the same Postgres instance. Root cause not investigated. `tests/test_paper_execution.py` alone (this plan's scope) is reliably 25/25 green.
 - (found 2026-07-13 during 09-04, non-blocking) `worker/__main__.py`'s standalone `reconcile-paper-execution` CLI command calls only the now-read-only `reconcile_paper_execution` and never invokes the new `apply_reconciliation_corrections`. Before 09-03, this CLI path's single reconcile call also mutated `PaperOrder.sync_failure_count` as a side effect; that capability disappeared silently when 09-03 made reconcile read-only, and is out of 09-04's declared `files_modified` scope. No test pins the old behavior. A follow-up plan should add a CLI subcommand that explicitly invokes the corrective entrypoint if standalone (non-session-runner) auto-healing is still needed operationally.
-- (found 2026-07-13 during 09-04, non-blocking) `REQUIREMENTS.md` marks RECON-05 and RECON-07 `Pending` even though both are already implemented in `reconciliation_types.py` (09-01: typed `Local*Snapshot` dataclasses for RECON-05; the closed 5-member `ReconciliationFinding` enum for RECON-07). 09-04's frontmatter declares only `requirements: [RECON-04]`, so this plan's `requirements mark-complete` step correctly did not touch RECON-05/07. Likely a 09-01 execution oversight; a follow-up should verify and mark both complete.
-- (found 2026-07-14 during 11-03, deliberate marking gap, not an oversight) `REQUIREMENTS.md` leaves `PERF-03` `Pending` even though 4/5 representative critical-path queries (operator reads, reconciliation, order-lifecycle sync local-order/position loads) are fully EXPLAIN-verified as index scans at realistic scale (`tests/test_query_index_usage.py`). The 5th, the order-lifecycle-sync broker-fill dedup query (`select(PaperFill.broker_fill_id)`, unconditional full-table read, `paper_execution.py` `_ingest_paper_fills`), already has a named unique index (`uq_paper_fills_broker_fill_id`) but Postgres correctly chooses a Seq Scan for this query shape regardless — proven via a direct forced-plan cost comparison (`SET enable_seqscan=off`: forced Index Only Scan costs ~2365 vs. the chosen Seq Scan's ~1454, at ~40k rows), not assumed. No index addition can satisfy PERF-03's literal "EXPLAIN output shows the index is used" for this query. The real fix is a query rewrite (`WHERE broker_fill_id IN (...)`, scoping the dedup check to the current sync batch instead of the entire historical fill table) in `paper_execution.py`, outside 11-03's declared `files_modified` scope (and outside 11-01's, the other plan that touches that file this phase). A follow-up plan should make that rewrite, add a regression test proving the query no longer scans unboundedly, and then mark PERF-03 Complete. Full account: `.planning/phases/11-query-performance/11-03-SUMMARY.md` and `.planning/phases/11-query-performance/deferred-items.md`.
 - BACKEND DATA-INTEGRITY (found 2026-07-09 during 14-05 live verification, deferred to a future backend phase): an `operator_control` `strategy_run` had `completed_at` (2026-07-08T17:47:49.391645+03:00) earlier than `started_at` (2026-07-08T17:47:49.468307+03:00). Not a console bug — `RunHeaderPanel` maps/renders both fields correctly; the read-only console honestly surfaces the backend's inverted timestamps. v1.2 authorizes no backend writes, so correcting the timestamp-generation ordering for `operator_control` runs is out of scope here. No blocker to Phase 14/15/16.
-- RESOLVED 2026-07-07: both backend read-surface gaps approved as narrow exceptions — Phase 13 adds one thin GET route for `get_kill_switch_state()`; Phase 16 adds the existing `equity_curve` field to the analytics response. No other backend change authorized under this exception. Phase 16's exception was implemented in 16-01 (2026-07-09) as a single-line passthrough.
-- `00-VERIFY` remains the gate for resuming v1.1 backend work (Phase 8+). It does NOT block v1.2 Operator Console read-only UI work, which consumes existing read endpoints only.
 - The operator `.env` currently overrides the temporary app-boot test environment (`local` instead of expected `test`), so the focused baseline is not green.
 - Polygon has a configured non-placeholder credential but has not completed an authorized read-only request in this verification pass.
 - Alpaca paper credentials are not configured, so account, positions, and orders remain unverified with POPULATED data — the /paper screen's honest-empty rendering for all four surfaces WAS live-verified and approved in 15-03 (2026-07-09). Populated-data rendering (real balances/positions/orders, hidden-row reveal controls, >100-row truncation) remains unverified until Alpaca paper creds are configured.
+
+**Historical — shipped milestones (v1.0–v1.2) and completed Phases 11–17. Not current v1.3 blockers; kept verbatim for the record:**
+
+- (found 2026-07-14 during 11-01, non-blocking, resolved without data loss) A concurrent Phase 11 Plan 03 executor ran a broad `git add -A`-style stage-and-commit in this shared working tree while 11-01's Task 2 (`paper_execution.py`) edit was uncommitted, sweeping it into an unrelated 11-03 commit. Same failure mode as the 10-04/10-05 collision below. No git history rewriting was performed (per explicit guidance — rebasing a live concurrent agent's history risks destroying its work); the other agent's commit was independently amended shortly after, the diff reappeared unstaged, and it was re-verified (full diff matched exactly, 27/27 tests green) and committed cleanly under 11-01. See 11-01-SUMMARY.md "Deviations from Plan" for full detail. Confirms parallel plan-level execution against a single shared git working tree (config.json `parallelization.plan_level: true`) carries real collision risk that individual executors currently resolve reactively rather than being structurally prevented.
+- (found 2026-07-13 during 09-04, non-blocking) `REQUIREMENTS.md` marks RECON-05 and RECON-07 `Pending` even though both are already implemented in `reconciliation_types.py` (09-01: typed `Local*Snapshot` dataclasses for RECON-05; the closed 5-member `ReconciliationFinding` enum for RECON-07). 09-04's frontmatter declares only `requirements: [RECON-04]`, so this plan's `requirements mark-complete` step correctly did not touch RECON-05/07. Likely a 09-01 execution oversight; a follow-up should verify and mark both complete.
+- (found 2026-07-14 during 11-03, deliberate marking gap, not an oversight) `REQUIREMENTS.md` leaves `PERF-03` `Pending` even though 4/5 representative critical-path queries (operator reads, reconciliation, order-lifecycle sync local-order/position loads) are fully EXPLAIN-verified as index scans at realistic scale (`tests/test_query_index_usage.py`). The 5th, the order-lifecycle-sync broker-fill dedup query (`select(PaperFill.broker_fill_id)`, unconditional full-table read, `paper_execution.py` `_ingest_paper_fills`), already has a named unique index (`uq_paper_fills_broker_fill_id`) but Postgres correctly chooses a Seq Scan for this query shape regardless — proven via a direct forced-plan cost comparison (`SET enable_seqscan=off`: forced Index Only Scan costs ~2365 vs. the chosen Seq Scan's ~1454, at ~40k rows), not assumed. No index addition can satisfy PERF-03's literal "EXPLAIN output shows the index is used" for this query. The real fix is a query rewrite (`WHERE broker_fill_id IN (...)`, scoping the dedup check to the current sync batch instead of the entire historical fill table) in `paper_execution.py`, outside 11-03's declared `files_modified` scope (and outside 11-01's, the other plan that touches that file this phase). A follow-up plan should make that rewrite, add a regression test proving the query no longer scans unboundedly, and then mark PERF-03 Complete. Full account: `.planning/phases/11-query-performance/11-03-SUMMARY.md` and `.planning/phases/11-query-performance/deferred-items.md`.
+- RESOLVED 2026-07-07: both backend read-surface gaps approved as narrow exceptions — Phase 13 adds one thin GET route for `get_kill_switch_state()`; Phase 16 adds the existing `equity_curve` field to the analytics response. No other backend change authorized under this exception. Phase 16's exception was implemented in 16-01 (2026-07-09) as a single-line passthrough.
+- `00-VERIFY` remains the gate for resuming v1.1 backend work (Phase 8+). It does NOT block v1.2 Operator Console read-only UI work, which consumes existing read endpoints only.
 - Docker daemon was unavailable during Phase 1 and 2-01 verification; local PostgreSQL@14 (Homebrew) used instead of Docker Compose.
 - (found 2026-07-19 during 17-01, tracking-only, not a code blocker) 17-01's frontmatter assigns requirements [JOB-01, JOB-05, JOB-06, JOB-07], but the plan delivers only the Job persistence foundation (four ORM models, migration 0018). End-to-end satisfaction (Job execution/orchestration for JOB-01, dependency-gated execution + cascade cancellation for JOB-05, the operator cancellation action path for JOB-06, the read-only API for JOB-07) lands in later Phase 17 plans (per 17-PATTERNS.md: jobs/dependencies.py, jobs/cancellation.py, api/routes/jobs.py). All four requirement IDs deliberately left Pending in REQUIREMENTS.md rather than marked complete now (16-02/11-03 precedent) -- mark each complete at the plan that ships its actual behavior, or at /gsd-transition.
 - (found 2026-07-19 during 17-04, tracking-only, not a code blocker) 17-04's frontmatter lists requirements [JOB-07, JOB-06], but the plan ships only the write-side/checkpoint half of each: JOB-07 also needs the read-only API routes (17-08, api/routes/jobs.py); JOB-06 also needs the operator cancellation action path (17-06, jobs/cancellation.py). Both left Pending in REQUIREMENTS.md per the 17-01/17-03 precedent -- mark each complete at the plan that ships its remaining behavior, or at /gsd-transition.
@@ -168,6 +190,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-07-21T19:01:38.710Z
-Stopped at: Completed 18-06-PLAN.md
+Last session: 2026-09-23
+Stopped at: v1.3 planning-state cleanup complete — ready to discuss/plan Phase 19 (Job Operations Vertical Slice)
 Resume file: None

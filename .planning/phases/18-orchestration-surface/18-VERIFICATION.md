@@ -160,3 +160,28 @@ None. This phase is backend-only and its externally observable HTTP/worker flow 
 
 _Verified: 2026-07-21T19:24:48Z_
 _Verifier: Claude (gsd-verifier)_
+
+---
+
+## Post-Verification Correction (2026-09-23)
+
+*Appended after a repository audit. The verification above is preserved unchanged; this section corrects its scope.*
+
+**ORCH-01 / ORCH-02 were overclaimed.** Truth #1 ("no direct business-logic/CLI-only path remains") was verified against the worker CLI parser/dispatch and the API route modules only. The audit found mutating `scripts/*.py` entrypoints and Makefile targets that still call domain services directly, outside any Job or HTTP path:
+
+- `scripts/run_backtest.py`, `scripts/ingest_polygon_bars.py`, `scripts/sync_symbol_metadata.py`, `scripts/evaluate_risk.py`, `scripts/run_paper_session.py`, `scripts/submit_paper_orders.py`, `scripts/sync_paper_state.py`, `scripts/reconcile_paper_execution.py`, `scripts/operator_control.py` (strategy enable/disable), and the Makefile targets that wrap them.
+- `scripts/dry_run.py` and `scripts/generate_signals.py` also call services/DB directly; whether they mutate state is unclassified. Phase 20 (ORCH-08) must classify each from actual behavior: migrate or retire if state-changing/manual; exempt only if genuinely read-only or development-only. Exemption is not the default.
+- Makefile targets `dry-run` and `sync-sessions` invoke worker subcommands this phase removed (dead paths).
+- `tests/test_orchestration_boundaries.py` does not cover `scripts/` or the Makefile.
+
+Evidence is static (imports and service signatures); scripts were not executed because the local `.venv` has no interpreter (environment issue, not a product gap).
+
+**Status change:** ORCH-01 and ORCH-02 → **Partial** in REQUIREMENTS.md. They close in Phase 20 via ORCH-08 (bypass retirement plus boundary enforcement extended to `scripts/` and the Makefile). ORCH-03 and ORCH-04 stand as verified.
+
+**Related observations (not Phase 18 goal failures, recorded for traceability):**
+
+- The production Job registry is intentionally empty (pinned by `test_default_registry_remains_empty_until_phase_19`), and `docker-compose.yml` runs the placeholder `serve` loop, not `run-jobs`. The verified submit → execute → observe flow is therefore test-only until Phase 19 (OPS-01, ORCH-05).
+- Removing the `operator-control` CLI left no supported path to trip/reset the kill switch (no script covers it; the API is GET-only). Restored in Phase 20 (CTRL-02) as a synchronous HTTP control endpoint.
+- The three Phase 17 concurrency concerns listed above were closed by post-phase race/test hardening recorded under Phase 18 (completed 2026-07-22, PR #1, commit `2b88d49`): dependency-cascade race, cancellation-timeout sweep race, and real-PostgreSQL race regressions.
+
+_Correction recorded: 2026-09-23 (planning-state audit)_

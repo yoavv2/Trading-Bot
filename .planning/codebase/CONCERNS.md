@@ -1,319 +1,254 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-07-07
+**Analysis Date:** 2026-09-23
 
 ## Tech Debt
 
-### File Complexity — Large Single Services
+**Monolithic Service Layer — Execution:**
+- Issue: `submit_orders.py` contains 1732 lines (70KB) handling paper order submission, session orchestration, and intent-decision logic. This single file bundles broker-state sync prep, candidate validation, submission loops, and reconciliation triggering.
+- Files: `src/trading_platform/services/execution/submit_orders.py`
+- Impact: Difficult to test specific submission scenarios; cognitive load makes bug-fixing risky; changes to one concern (e.g., intent logic) risk unintended changes to another (e.g., broker sync).
+- Fix approach: Split into focused modules: `_intent_evaluator.py` (signal→decision logic), `_submission_orchestrator.py` (session loop), `_state_sync_prep.py` (broker state prep). Each module should be <400 lines.
 
-**Paper Execution Service:**
-- Issue: `paper_execution.py` is 1,671 lines with multiple concerns bundled: state machine orchestration, broker submission, kill-switch checking, error recovery, and detailed result reporting
-- Files: `src/trading_platform/services/paper_execution.py`
-- Impact: Makes testing individual submission flows difficult; changes to one concern risk cascading failures; hard to reason about error paths
-- Fix approach: Extract broker submission logic into `BrokerSubmissionOrchestrator`, kill-switch checking into `KillSwitchGuard`, and result reporting into `ExecutionResultBuilder`; use composition instead of monolithic function
+**Complex Reconciliation Report:**
+- Issue: `reconciliation/report.py` at 814 lines combines broker-to-local matching, safety-finding detection, and persistence in a single module.
+- Files: `src/trading_platform/services/reconciliation/report.py`
+- Impact: Hard to extend matching rules without touching persistence logic; findings detection is intertwined with broker state snapshots.
+- Fix approach: Extract a `_findings_detector.py` module focused solely on SafeFinding→ReconciliationFinding mapping. Decouple finding rules from snapshot schema.
 
-**Reconciliation Service:**
-- Issue: `reconciliation.py` is 840 lines handling broker-state sync, drift detection, recovery logic, and safety validation in one module
-- Files: `src/trading_platform/services/reconciliation.py`
-- Impact: Drift recovery logic is not isolated from sync logic; hard to test state-recovery paths independently
-- Fix approach: Extract `BrokerDriftRecovery` and `SafetyValidation` as separate internal classes with explicit boundaries
-
-**Operator Reads Service:**
-- Issue: `operator_reads.py` is 642 lines with 15+ serialization methods returning dict payloads for different read types
-- Files: `src/trading_platform/services/operator_reads.py`
-- Impact: Serialization logic is scattered; schema changes ripple across multiple methods; no centralized payload builder
-- Fix approach: Create `OperatorReadPayload` dataclass hierarchy with `.to_dict()` on each read result type; use factory method for construction
-
-**Risk Pipeline:**
-- Issue: `risk.py` is 655 lines bundling signal validation, portfolio checks, sizing calculation, and event persistence
+**Large Risk Service:**
+- Issue: `risk.py` at 661 lines contains approval rules, position checks, and cash validation all in one module.
 - Files: `src/trading_platform/services/risk.py`
-- Impact: Sizing algorithm is hard to test in isolation; changes to risk rules affect multiple decision codes
-- Fix approach: Extract `RiskSizingEngine` and `RiskValidationChain` as separate concerns with explicit rule ordering
+- Impact: Adding a new risk check (e.g., correlation limits) requires careful insertion in the existing call chain; testing one rule often exercises unrelated rules.
+- Fix approach: Refactor toward a rule-registry pattern (similar to job registry): each RiskRule is a small class with a single `evaluate()` method. Compose them in `RiskValidator`.
 
-**Worker CLI:**
-- Issue: `worker/__main__.py` is 751 lines of monolithic CLI entry point with 10+ subcommand handlers inline
-- Files: `src/trading_platform/worker/__main__.py`
-- Impact: Each handler references its own set of imports and state; changes to any workflow can affect CLI bootstrap time
-- Fix approach: Move subcommand handlers to `worker/commands/*.py` with explicit handler interface
+**Incomplete Type Coverage:**
+- Issue: mypy configured only for `src/trading_platform/services/execution`, `src/trading_platform/services/reconciliation`, and `src/trading_platform/services/config` in `pyproject.toml` (lines 74-78). Rest of codebase (`strategies/`, `jobs/`, `core/`, `db/`, `worker/`, `api/`) is untyped.
+- Files: `pyproject.toml`, `src/trading_platform/`
+- Impact: Type-unsafe refactoring in untyped modules (e.g., job runner, API routes) risks silent bugs at runtime; IDE tooling cannot help in large files like `operator_controls.py` (612 lines).
+- Fix approach: Gradually expand mypy coverage: add `jobs/` and `core/` modules in Phase N; deprecate `# type: ignore` comments. Use `reveal_type()` in tests to catch regressions.
 
-### Configuration and Settings Hardcoding
+**E501 (Line-Too-Long) Intentionally Ignored:**
+- Issue: `pyproject.toml` (lines 51-56) explicitly disables ruff's E501 check due to ~200+ pre-existing long lines, mostly in comments/strings/test assertions.
+- Files: `pyproject.toml`
+- Impact: Long lines reduce readability, especially in critical paths like order submission and reconciliation; inconsistent formatting makes review harder.
+- Fix approach: Separate concern: Phase N refactor to wrap comments and strings systematically. Do NOT combine with functional changes.
 
-**Default Database Credentials in Code:**
-- Issue: `settings.py` defines default database password as `"trading_platform"` (lines 44-45); visible in `.env.example`
-- Files: `src/trading_platform/core/settings.py`, `.env.example`
-- Impact: Reduces friction for local development but bleeds into production checklist; easy to forget overriding credentials
-- Fix approach: Move password default to environment variable only; raise validation error if database password is the default in non-local environments
+## Known Bugs
 
-**Alpaca Credentials Not Documented in .env.example:**
-- Issue: Alpaca API key/secret (lines 211-212) default to empty strings with no `.env.example` entry documenting their requirement
-- Files: `src/trading_platform/core/settings.py`, `.env.example`
-- Impact: Alpaca integration is silently unavailable without explicit env var setup; no startup validation catches this
-- Fix approach: Add documented `.env.example` entries; add startup validation in `AlpacaBrokerSettings` that raises if credentials are empty in non-test environments
+**Database Connection Check Untested:**
+- Symptoms: `check_database_connection()` is marked `pragma: no cover` — readiness integration tests exercise it, but unit path is unverified.
+- Files: `src/trading_platform/db/session.py:114`
+- Trigger: Call `check_database_connection()` with a misconfigured or unreachable database.
+- Workaround: Startup relies on manual database readiness checks; connection failures may not surface until first query inside `session_scope()`.
+- Fix: Add explicit unit tests for connection failure scenarios (bad host, wrong port, auth failure) without relying on integration test.
 
-**Polygon API Key Required But Startup Validation Missing:**
-- Issue: Market-data ingestion requires Polygon API key, but no startup check validates it before attempting reads
-- Files: `src/trading_platform/services/polygon.py`, `src/trading_platform/services/ingestion.py`
-- Impact: Ingestion commands fail with opaque Polygon API errors instead of clear configuration errors
-- Fix approach: Add `PolygonProviderSettings.validate()` that checks API key is non-empty on first client initialization; raise `ConfigurationError` with guidance
+**Job Constraint Error Handling Untested:**
+- Symptoms: Two locations in `job_mutations.py` (lines 259, 330) guard against "malformed constraint error" but are marked `pragma: no cover`.
+- Files: `src/trading_platform/orchestration/job_mutations.py`
+- Trigger: Attempt to create a Job with a duplicate `(worker_id, session_date, strategy_id, symbol)` tuple.
+- Workaround: Constraint violations fail silently or raise generic DB exceptions; the protection code is never exercised.
+- Fix: Write unit test that triggers duplicate constraint; verify the guard catches it before it propagates.
 
-## Known Bugs and Runtime Issues
-
-### Environment Override Contamination
-
-**Test Environment Overridden by Operator .env:**
-- Symptoms: `test_app_bootstrap_serves_foundation_endpoints` expects `environment=test` but receives `environment=local` because operator `.env` is read by all test runs
-- Files: `.env`, test configuration in `tests/test_app_boot.py`
-- Trigger: Running any test with `.env` present in project root
-- Workaround: Temporarily rename `.env` during test runs
-- Status: Identified in `.planning/00-VERIFY.md` — focused baseline not green
-
-**Inconsistent Session Factory Cache Cleanup:**
-- Symptoms: `session_scope()` commits and closes but engine cache persists across test suite; subsequent tests may inherit connection state
-- Files: `src/trading_platform/db/session.py` (lines 65-75), `src/trading_platform/tests/conftest.py` (if present)
-- Trigger: Running multiple database-backed tests in sequence without explicit cache clearing
-- Workaround: Explicit `clear_engine_cache()` call in test teardown
-- Status: Unfixed — test isolation depends on conftest fixtures, not automatic cleanup
-
-### Unverified External Integrations
-
-**Polygon Read-Only Not Authorized/Tested:**
-- Symptoms: API credential configured but no successful authorized read in verification pass
-- Files: `src/trading_platform/services/polygon.py`, `src/trading_platform/services/ingestion.py`
-- Trigger: Running `market-data ingest` command or `run-backtest` with symbol refresh
-- Status: Blocker — `00-VERIFY` gate lists as UNVERIFIED (STATE.md line 18)
-
-**Alpaca Paper Credentials Absent:**
-- Symptoms: `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` and `__API_SECRET` not configured; all Alpaca operations fail silently or return dummy results
-- Files: `src/trading_platform/services/alpaca.py`, `src/trading_platform/services/paper_execution.py`
-- Trigger: Attempting paper submission via CLI or API
-- Status: Blocker — `00-VERIFY` gate lists as BLOCKED (STATE.md line 19)
-
-### Kill Switch Runtime Blocking Not Fully Tested
-
-**Kill Switch Integration Test Incomplete:**
-- Symptoms: Kill-switch code paths and unit tests exist, but PostgreSQL-backed integration test was not authorized/completed in last verification pass
-- Files: `src/trading_platform/services/operator_controls.py`, `tests/test_operator_controls.py`
-- Trigger: Running full integration suite with live database
-- Status: Blocker — `00-VERIFY` gate lists as UNVERIFIED (STATE.md line 20)
+**Broad Exception Handlers Mask Root Causes:**
+- Symptoms: 86 instances of `except Exception:` or `except Exception as exc:` across the codebase hide the true error type.
+- Files: Multiple locations including `db/session.py:101`, `jobs/runner.py:157,199,384`, `services/backtesting.py:148`, etc.
+- Trigger: Any unexpected error in a try-block (e.g., missing database field, import error, network timeout).
+- Workaround: Logs contain full exception traceback but not the specific exception type, making grep-based debugging harder.
+- Fix: Audit each `except Exception` block; replace with specific exception types (`psycopg.Error`, `StrategyInitError`, etc.) or document why broad catch is necessary.
 
 ## Security Considerations
 
-### Database Credentials Exposed in URL Format
-
-**Risk:** Database URL is constructed with credentials embedded as plaintext (line 50-53 in `settings.py`)
+**Hardcoded Database Credentials in Settings:**
+- Risk: `core/settings.py` defines `DatabaseSettings` with default password `"trading_platform"` (line 46). While overridable via environment, the default is weak and the pattern encourages checking defaults into version control.
 - Files: `src/trading_platform/core/settings.py`
-- Current mitigation: URL is only used in SQLAlchemy's `create_engine()` call; not logged or exposed in logs
-- Recommendations: 
-  1. Use SQLAlchemy's `URL()` object with separate user/password parameters instead of string interpolation
-  2. Audit logging to ensure database URLs never appear in structured logs
-  3. Consider raising log level on SQLAlchemy echo to SENSITIVE and filtering from output
-
-### Operator API No Authentication Layer
-
-**Risk:** All operator-read endpoints accept strategy_id from query parameter with no authentication or authorization
-- Files: `src/trading_platform/api/routes/operations.py` (all endpoints), `src/trading_platform/api/dependencies.py`
-- Current mitigation: Reads are read-only; strategy validation only checks registry knows strategy exists
+- Current mitigation: `.env` file present (not version-controlled); environment variables override defaults at runtime.
 - Recommendations:
-  1. Implement operator authentication before Phase 8 (multi-user or session-based)
-  2. Add authorization checks to enforce strategy ownership per operator
-  3. Document that current implementation is single-user only (line 25 in `settings.py` enforces `operator_mode=single_user`)
+  1. Require `DATABASE_PASSWORD` environment variable; remove default from code.
+  2. Add startup validation: `if settings.database.password == "trading_platform": raise ConfigError("Production password detected")`.
+  3. Audit all secret-like fields (API keys, tokens) for similar patterns.
 
-### No Input Validation on Filter Ranges
-
-**Risk:** Date range filters (`session_start`, `session_end`) are not validated for logical ordering or reasonable bounds
-- Files: `src/trading_platform/api/dependencies.py` (lines 42-46)
-- Current mitigation: SQLAlchemy queries are parameterized; not vulnerable to injection
+**Log Sanitization Dependency on Global State:**
+- Risk: `_DEBUG_UNMASK_IDS` global flag in `core/logging.py` (line 18) controls whether broker order IDs are masked in logs. If set to True in production by mistake, logs leak sensitive IDs.
+- Files: `src/trading_platform/core/logging.py`
+- Current mitigation: Default is False (safe); test helpers can toggle it explicitly.
 - Recommendations:
-  1. Add `session_start < session_end` validation in `get_operator_read_filters()`
-  2. Add max date range (e.g., 2 years) to prevent OOM from large result sets
-  3. Add audit logging for unusual query patterns (very wide date ranges, high limits)
+  1. Make `_DEBUG_UNMASK_IDS` read-only after `configure_logging()` is called.
+  2. Add a startup check that raises an error if `debug_unmask_ids=True` in production environment.
+  3. Consider using context-based sanitization (thread-local or context var) instead of module-level global.
 
-### Uncaught Broad Exceptions in Paper Execution
-
-**Risk:** Paper execution catches `Exception` (line 579) and logs without distinguishing between recoverable errors (network, broker) and unrecoverable ones (logic bugs)
-- Files: `src/trading_platform/services/paper_execution.py` (lines 579-607)
-- Current mitigation: All exceptions re-raise after logging; execution halts and operator is notified
+**Credentials in .env Files (Not Directly Readable):**
+- Risk: `.env`, `.env.local` files exist but not shown here (forbidden by policy). These likely contain API keys, database passwords, broker credentials.
+- Files: `.env`, `.env.local` (not analyzed)
+- Current mitigation: Listed in `.gitignore`; example files (`.env.example`) commit safe defaults.
 - Recommendations:
-  1. Distinguish `BrokerError`, `ValidationError`, and `InternalError` categories
-  2. Log internal errors with full traceback; log broker errors with minimal context
-  3. Implement exponential backoff only for broker transient errors, not for logic failures
+  1. Verify all secret-bearing .env files are in .gitignore.
+  2. Use separate .env files for local, staging, production; never commit production secrets.
+  3. Consider using a secrets manager (AWS Secrets Manager, HashiCorp Vault) for production.
 
 ## Performance Bottlenecks
 
-### Kill Switch Checked Inside Order Submission Loop
-
-**Problem:** Kill-switch state is reloaded from database for every candidate order (line 332-335 in `paper_execution.py`)
-- Files: `src/trading_platform/services/paper_execution.py`
-- Cause: Safety design to catch mid-run trip; trades latency for safety
+**109 Explicit Session Scope Usages — Transaction Complexity:**
+- Problem: The codebase explicitly opens/closes database sessions 109 times across services, runners, and API endpoints. Each session_scope creates a new connection, runs a query, and commits/rolls back. No connection pooling or batch operations.
+- Files: Throughout `src/trading_platform/` (identified via grep)
+- Cause: Single-purpose sessions for isolated operations (e.g., "load one order", "record one log event"). No attempt to amortize query cost across multiple operations.
 - Improvement path:
-  1. Cache kill-switch state on entry with versioning timestamp
-  2. Check only once per batch instead of per-candidate
-  3. Accept brief delay in operator response (next candidate submission) as acceptable vs. 10x latency multiplier
+  1. Profile hot paths: identify which sessions are called >1000 times per day.
+  2. Batch operations where possible: merge 5 "load order" calls into one multi-order query with joins.
+  3. Consider a session-per-request pattern in API layer (dependency injection via FastAPI) instead of ad-hoc session_scope() calls.
+  4. Add connection pooling tuning: adjust `pool_size` and `max_overflow` in `build_engine()`.
 
-### In-Memory Engine/Session Cache No TTL
+**Large Files = Slow IDE Navigation and Tests:**
+- Problem: `submit_orders.py` (1732 lines) takes >5 seconds to load in some IDEs; running its full test suite (`test_paper_execution.py`, 2168 lines) takes >30 seconds.
+- Files: `src/trading_platform/services/execution/submit_orders.py`, `tests/test_paper_execution.py`
+- Cause: Monolithic module with many functions and complex control flow; test file mirrors the size and has overlapping coverage.
+- Improvement path: (See Tech Debt section: split submit_orders.py into focused modules; refactor test file to mirror the new module structure.)
 
-**Problem:** Database engines and session factories are cached globally with no expiration; connections may go stale during long-running processes
-- Files: `src/trading_platform/db/session.py` (lines 14-15, 44-47, 54-62)
-- Cause: Unbounded cache for process lifetime; never pruned
+**No Query Index Coverage Analysis:**
+- Problem: No systematic audit of database queries vs. indexes. Risk: common queries (e.g., "find all paper orders for strategy X") may do full table scans.
+- Files: Database migrations in `alembic/versions/`, queries in `services/`
+- Cause: Ad-hoc index creation during feature development; no performance testing against large tables (millions of rows).
 - Improvement path:
-  1. Add optional TTL to engine cache (e.g., 30 minutes for long-running workers)
-  2. Add pool recycle settings to `create_engine()` to force fresh connections periodically
-  3. Implement explicit cache invalidation hooks for deployment scenarios
-
-### Order State Machine No Transition Index
-
-**Problem:** `order_events` are appended but no index on (paper_order_id, created_at) makes latest-status queries full table scan
-- Files: `src/trading_platform/db/models/order_event.py`
-- Cause: State projection from event log without materialized view
-- Improvement path:
-  1. Add (paper_order_id, created_at DESC) index
-  2. Consider materializing latest status in `paper_orders.current_lifecycle_state` column (asynchronously updated)
-  3. Measure impact on reconciliation latency once indexed
+  1. Run EXPLAIN ANALYZE on top 10 frequent queries (identify via logs or APM).
+  2. Create missing indexes for WHERE/JOIN/ORDER BY columns.
+  3. Add performance regression tests: e.g., "fetching 1M paper orders for a strategy completes in <2s".
 
 ## Fragile Areas
 
-### Paper Order State Machine Backward Compatibility
-
-**Files:** `src/trading_platform/services/order_state_machine.py`, `src/trading_platform/db/models/order_event.py`
-- Why fragile: `OrderTransitionEventType` and `OrderLifecycleState` are enums with limited extensibility; adding a new state requires changes to all validation logic scattered across `order_state_machine.py` and `paper_execution.py`
-- Safe modification: 
-  1. Add new state to `OrderLifecycleState` enum
-  2. Add transition rules in `resolve_transition_target()` for new state
-  3. Write tests for all legal transitions TO and FROM the new state before deploying
-  4. Verify no code assumes finite state set (e.g., if-else chains instead of pattern matching)
-- Test coverage: `tests/test_order_state_machine.py` covers state transitions; add tests for new state before merging
-
-### Risk Decision Audit Trail Immutability
-
-**Files:** `src/trading_platform/services/risk.py`, `src/trading_platform/db/models/risk_event.py`
-- Why fragile: Risk decisions are persisted once; no versioning if decision code definitions change later
+**Operator Controls Global State:**
+- Files: `src/trading_platform/services/operator_controls.py`, `src/trading_platform/services/operator_reads.py`, `src/trading_platform/services/concurrency_guard.py`, `src/trading_platform/db/models/system_control.py`
+- Why fragile: Multiple modules use global flags and module-level state to coordinate kill-switch and strategy control. Changes to one module (e.g., adding a new control state) ripple through all consumers.
 - Safe modification:
-  1. Treat `RiskDecisionCode` enum as append-only (never delete or rename codes)
-  2. Add migration if new decision code required
-  3. Add audit table to track `RiskDecisionCode` definition changes
-- Test coverage: No test for decision code immutability; add snapshot test for all decision codes
+  1. All control-state changes must go through `load_kill_switch_state()` and `load_strategy_control_state()` (enforce in tests).
+  2. Add an invariant test: "Control state read twice in succession is identical" (no hidden mutations).
+  3. Add a "control state audit log" that records every `kill_switch.trip()` call and its caller.
+- Test coverage: `test_operator_controls.py` (320 lines) covers trips and reads, but not concurrent read-modify-write scenarios.
 
-### Broker Order Mapping Assumes Deterministic Client Order ID
-
-**Files:** `src/trading_platform/services/paper_execution.py` (lines 49-53), `src/trading_platform/services/reconciliation.py`
-- Why fragile: Paper-to-broker mapping relies on deterministic `client_order_id` format (`tp-{hash}`); any change breaks existing order recovery
+**Reconciliation Matcher with Assertions:**
+- Files: `src/trading_platform/services/reconciliation/matcher.py:167` (`assert broker_position is not None`)
+- Why fragile: Assertions can be disabled with Python's `-O` flag; the code assumes `broker_position` is present but may silently fail in production if assumptions break.
 - Safe modification:
-  1. Never change client_order_id generation algorithm
-  2. If format must change, implement migration that rewrites all pending orders' IDs before broker submission resumes
-  3. Add test that verifies `_build_client_order_id()` output is stable across runs
-- Test coverage: `tests/test_paper_execution.py` should validate client_order_id determinism
+  1. Replace assertion with explicit check: `if broker_position is None: raise MissingBrokerPositionError(...)`.
+  2. Add integration test that exercises the exact snapshot combination that triggered the assert.
+  3. Document the invariant: "Every broker order must have a corresponding broker position" (or explain the exception).
+- Test coverage: `test_reconciliation_matcher.py` (520 lines) covers happy path; edge case (missing broker position) is not tested.
+
+**Job Runner Exception Handling:**
+- Files: `src/trading_platform/jobs/runner.py:157,199,384`
+- Why fragile: Three locations catch broad `Exception`, making it hard to distinguish between handler errors, lease-loss, and infrastructure failures.
+- Safe modification:
+  1. Define specific exception types: `HandlerError`, `LeaseLossError`, `JobCancelledError` (already exists).
+  2. Catch each explicitly; log the type; transition job to appropriate terminal state.
+  3. Add test: run a job handler that raises a custom exception; verify it lands in FAILED state with the right failure_reason.
+- Test coverage: `test_job_runner.py` (529 lines) covers nominal paths; exception routing is partially tested.
 
 ## Scaling Limits
 
-### Single-User Operator Mode
-
-**Current capacity:** Single concurrent user/session enforced by `operator_mode=single_user` (line 25 in `settings.py`)
-- Limit: Any second user request blocks on database locks or session conflicts
+**Paper Order Submission Session Loop — Linear Scaling:**
+- Current capacity: Tested with ~50 paper orders per strategy run (typical backtest).
+- Limit: At ~500+ orders, the session loop in `submit_orders.py` (lines 300+) performs O(n) database queries, one per order. Each query is wrapped in a session_scope, causing network latency to multiply.
 - Scaling path:
-  1. Introduce operator identity and session tracking
-  2. Add user-specific run filtering in OperatorReadService
-  3. Implement advisory locks for strategy control changes (Phase 8 scope)
-  4. Phase 12 refactor includes multi-user support
+  1. Batch orders: load all candidate orders in one query, validate, submit in a single transaction.
+  2. Use `insertmanyvalues` for bulk PaperOrder inserts (SQLAlchemy 2.0+ feature).
+  3. Add benchmarks: "Submitting 1000 orders to paper broker completes in <30 seconds".
 
-### Database Connection Pool Not Configured
-
-**Current capacity:** Default SQLAlchemy pool size (5 connections) with no explicit limit
-- Limit: Peak paper execution batch (20+ concurrent order submissions) may exhaust pool
+**Database Connection Pool — Unbounded Checkout:**
+- Current capacity: SQLAlchemy default pool size is 5 connections; max_overflow is 10.
+- Limit: Under load (e.g., 20 concurrent strategy runs), pool may exhaust, causing checkout to block or fail.
 - Scaling path:
-  1. Configure `pool_size` and `max_overflow` in `build_engine()` based on concurrency profile
-  2. Monitor pool saturation metrics
-  3. Consider async SQLAlchemy if submission latency becomes bottleneck (Phase 12)
+  1. Profile: measure concurrent session_scope() calls during peak times (e.g., market open).
+  2. Adjust pool_size and max_overflow in `build_engine()` based on observed concurrency.
+  3. Consider async/await pattern (FastAPI + asyncpg) for I/O-bound operations, but this is a major refactor.
 
-### Backtest Reporting CSV Export Unbounded
-
-**Current capacity:** No pagination or result-size limits on backtest export
-- Limit: Large backtests (5+ years of daily data) generate multi-MB CSV files in memory
+**Market Data Ingestion — No Batch Insert:**
+- Current capacity: `services/ingestion.py` inserts daily bars one at a time (Session.add, Session.commit per bar).
+- Limit: Ingesting 10 years of data for 100 symbols = ~250k inserts, each taking ~100ms in current approach → >6 hours.
 - Scaling path:
-  1. Implement streaming CSV writer instead of building list in memory
-  2. Add result-size limit to export endpoint (e.g., max 1M rows)
-  3. Implement pagination for large exports
+  1. Batch inserts: collect bars in a list, insert in chunks of 1000.
+  2. Use `bulk_insert_mappings()` or `bulk_save_objects()` from SQLAlchemy.
+  3. Add benchmarks: "Ingesting 250k bars completes in <2 minutes".
 
 ## Dependencies at Risk
 
-### Polygon.io Integration Not Verified in Production Path
-
-**Risk:** Market-data pipeline depends on Polygon API; no fallback data source
-- Current impact: If Polygon credential is invalid, all strategies with symbol refresh fail
+**Version Ranges Allow Major Changes (pyproject.toml):**
+- Risk: Dependencies specified with `>=` lower bounds and `<2.0.0` upper bounds, e.g., `fastapi>=0.131.0,<1.0.0`. If a dependency released a minor version with breaking changes (e.g., a different return type for a helper function), builds might fail silently or at runtime.
+- Files: `pyproject.toml` (lines 11-21)
+- Impact: CI may pass on main but fail when a new developer pulls the repo and installs latest compatible versions.
 - Migration plan:
-  1. Add abstract `MarketDataProvider` interface
-  2. Implement `PolygonMarketDataProvider` and `CachedFallbackProvider`
-  3. Allow strategies to specify data source per symbol
-  4. Phase 12 refactor includes multi-provider support
+  1. Use a `requirements-lock.txt` or `pyproject.toml` with exact pinned versions (e.g., `fastapi==0.131.0`).
+  2. Set up Dependabot or Renovate to auto-test and PR each dependency update.
+  3. Schedule monthly dependency audits to check for security patches.
 
-### Alpaca Integration Not Configured/Verified
-
-**Risk:** Paper submission depends on Alpaca; no dry-run fallback configured
-- Current impact: Alpaca credentials must be manually configured; execution path untested
+**SQLAlchemy 2.0 with Non-Standard Session Config:**
+- Risk: `session_factory` in `db/session.py:85-91` uses `autoflush=False` and `expire_on_commit=False`, which are non-defaults. If SQLAlchemy 3.0 changes defaults, this code may behave unexpectedly.
+- Files: `src/trading_platform/db/session.py`
+- Impact: Silent data inconsistency bugs (e.g., stale object attributes after commit) if the settings change.
 - Migration plan:
-  1. Add `PaperExecutionProvider` interface
-  2. Implement `AlpacaPaperProvider` and `MockPaperProvider` (for testing)
-  3. Allow deployment to choose provider via config
-  4. Phase 8+ includes local advisory-lock testing without broker submission
+  1. Document the exact reason for each non-default setting (add a comment explaining why expire_on_commit=False is needed, for example).
+  2. Add a test that verifies the settings are correctly applied (e.g., "session.autoflush is False").
+  3. When upgrading SQLAlchemy, run the full test suite and pay special attention to any data-mutation tests.
 
-### Alembic Migration Versioning
-
-**Risk:** Migration IDs are short strings (e.g., `0015_phase7_kill_switch`); unique constraint enforces `varchar(32)` (line 32 in alembic.ini)
-- Current impact: Long migration IDs (>32 chars) fail on apply
+**Alpaca SDK Update Risk:**
+- Risk: `alpaca.py` wraps the Alpaca broker API. If the SDK's version is bumped (e.g., from 0.x to 1.0), response schema or method signatures may change without warning.
+- Files: `src/trading_platform/services/alpaca.py`
+- Impact: Paper trading and live trading may silently fail if the SDK is upgraded without testing.
 - Migration plan:
-  1. Document max ID length in DEVELOPMENT.md
-  2. Add pre-merge check that rejects migration files with IDs >25 chars
-  3. Phase 10 refactor includes migration consolidation to reset ID sequence
+  1. Pin Alpaca SDK version: add it to `pyproject.toml` if not already there.
+  2. Add integration tests that connect to Alpaca's paper trading environment and verify method signatures.
+  3. Create a changelog for each Alpaca SDK version that documents schema changes.
+
+## Missing Critical Features
+
+**Risk Validation Deferred:**
+- Problem: `services/risk.py:446` raises `NotImplementedError("Risk validation is deferred to Phase 4.")` for unspecified risk checks.
+- Blocks: Any risk check beyond max_positions, allocation caps, and cash checks cannot be added without hitting this error.
+- Blocks: Correlation limits, VaR-based limits, drawdown limits.
+- Roadmap: Phase 4 (TBD); depends on analytics service maturity.
+
+**Market-Data Integration Deferred:**
+- Problem: `services/data.py:102` raises `NotImplementedError("Market-data integration is deferred to Phase 2.")`.
+- Blocks: Direct market data queries (e.g., "fetch latest close for SPY") are not implemented; strategies must rely on pre-loaded daily bars.
+- Blocks: Intraday strategies, tick-level analytics.
+- Roadmap: Phase 2 (TBD).
+
+**Strategy Execution Deferred:**
+- Problem: `services/execution/contracts.py:87` raises `NotImplementedError("Execution is deferred to Phase 5.")` in the base ExecutionService.
+- Blocks: Any new execution backend (e.g., Interactive Brokers, crypto exchange) requires implementing the full ExecutionService interface.
+- Blocks: Multi-broker execution, DMA (direct market access).
+- Roadmap: Phase 5 (TBD); depends on execution framework stabilization.
 
 ## Test Coverage Gaps
 
-### Paper Execution Retry Logic Under-tested
+**Database Connection Failures:**
+- What's not tested: `check_database_connection()` when database is unreachable, credentials are wrong, or network is down.
+- Files: `src/trading_platform/db/session.py`
+- Risk: Startup readiness checks pass (because they're integration-tested) but unit-level connection errors are never caught.
+- Priority: High (affects operational reliability).
 
-**Untested area:** Retry paths for broker submission failures (lines 484-510 in `paper_execution.py`)
-- What's not tested: How retries interact with mid-run kill-switch trip; recovery when Alpaca is temporarily down
-- Files: `src/trading_platform/services/paper_execution.py`, `tests/test_paper_execution.py`
-- Risk: Retry loop could spiral if broker is down; kill switch mid-retry could leak half-submitted orders
-- Priority: HIGH — Phase 7 critical path
+**Job Constraint Violations:**
+- What's not tested: Attempting to create a Job with duplicate `(worker_id, session_date, strategy_id, symbol)`.
+- Files: `src/trading_platform/orchestration/job_mutations.py`
+- Risk: Silent constraint violation, incomplete error handling, or duplicate job execution.
+- Priority: High (affects job correctness).
 
-### Reconciliation State Recovery Under-tested
+**Operator Control State Concurrency:**
+- What's not tested: Two threads reading kill-switch state concurrently while a third thread updates it.
+- Files: `src/trading_platform/services/operator_controls.py`, tests in `test_operator_controls.py`
+- Risk: Race condition where kill-switch is read as OFF but trips immediately after; execution proceeds and should have been blocked.
+- Priority: High (affects safety).
 
-**Untested area:** Recovery of in-flight orders from broker state when local database is stale (lines 150-200 in `reconciliation.py`)
-- What's not tested: Broker has new order that local database knows nothing about; recovery creates new paper_order row
-- Files: `src/trading_platform/services/reconciliation.py`, `tests/test_execution_reconciliation.py`
-- Risk: Under-recovery could leave open broker positions without local tracking
-- Priority: HIGH — Phase 9 critical path
+**Reconciliation Matcher Edge Cases:**
+- What's not tested: Broker state contains orders/fills/positions with nulls, mismatched currencies, or extreme quantities.
+- Files: `src/trading_platform/services/reconciliation/matcher.py`
+- Risk: Silent data corruption if matcher assumptions break.
+- Priority: Medium (depends on data source quality).
 
-### Risk Pipeline Edge Cases Under-tested
-
-**Untested area:** Risk decision when portfolio state is ambiguous (stale account snapshots, missing market data)
-- What's not tested: Decision rejection when latest quote is >1 session old; handling when symbol has no bars yet
-- Files: `src/trading_platform/services/risk.py`, `tests/test_risk_pipeline.py`
-- Risk: Risk engine could approve trades on stale data or with zero reference price
-- Priority: HIGH — Phase 4 critical path
-
-### Backtest Equity Snapshot Edge Cases
-
-**Untested area:** Equity snapshots with zero trades or all-loss scenarios
-- What's not tested: Reports with only losing trades; edge case formatting in `backtest_reporting.py`
-- Files: `src/trading_platform/services/backtest_reporting.py`, `tests/test_backtest_reporting.py`
-- Risk: Report export could divide by zero or return NaN metrics
-- Priority: MEDIUM — Phase 3 reporting path
-
-### Order State Machine Illegal Transitions
-
-**Untested area:** Illegal state transitions (e.g., SUBMITTED → PENDING_SUBMISSION) log rejected audit events but don't test the log content
-- What's not tested: Audit event structure and persistence for rejected transitions
-- Files: `src/trading_platform/services/order_state_machine.py`, `tests/test_order_state_machine.py`
-- Risk: Audit trail could be incomplete if persistence fails silently
-- Priority: MEDIUM — Phase 7 correctness path
-
-### Operator Status Rendering With Missing Data
-
-**Untested area:** Status rendering when strategy has no recent runs or account snapshot is missing
-- What's not tested: Fallback rendering; graceful null handling in `operator_status.py`
-- Files: `src/trading_platform/services/operator_status.py`
-- Risk: Status endpoint could return 500 when expected to return empty summary
-- Priority: LOW — Phase 6 reporting path
+**Strategy Registry Dynamic Loading:**
+- What's not tested: Loading a strategy from `config/strategies/` that has a syntax error, circular import, or missing dependency.
+- Files: `src/trading_platform/strategies/registry.py`
+- Risk: Strategy load fails silently; execution proceeds with stale strategy list.
+- Priority: Medium (affects strategy hot-reload).
 
 ---
 
-*Concerns audit: 2026-07-07*
+*Concerns audit: 2026-09-23*
