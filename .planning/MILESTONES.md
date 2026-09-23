@@ -39,7 +39,17 @@
 
 ## v1.3 — Operator Platform (Started 2026-07-15)
 
-Console evolves from read-only monitor to operations control center. Operator API becomes the single orchestration surface; generic DB-backed Job framework (lifecycle, progress, logs, dependencies, audit); scheduling as Job producer; kill-switch and strategy control from UI. First step of the Autonomous Trading Operating System direction. Phase numbering continues from 17.
+Console evolves from read-only monitor to operations control center. Operator API becomes the single orchestration surface; generic DB-backed Job framework (lifecycle, progress, logs, dependencies, audit); kill-switch and strategy control from UI. First step of the Autonomous Trading Operating System direction. Phase numbering continues from 17.
+
+**Re-scoped 2026-09-23** (repository audit): two mutation paths — long-running operations as Jobs (Console → HTTP → Job orchestration → worker → service) and synchronous safety controls (Console → HTTP → control service); scheduling deferred to a later Paper Automation milestone; identity groundwork (AUD-03) deferred.
+
+- Phase 17: Job Framework (2026-07-20) — complete
+- Phase 18: Orchestration Surface (2026-07-21) — complete; ORCH-01/02 Partial (`scripts/` bypass) until Phase 20; post-phase race/test hardening (dependency-cascade and cancellation-timeout sweep races, real-PostgreSQL race tests) completed 2026-07-22 in PR #1
+- Phase 19: Job Operations Vertical Slice — not started
+- Phase 20: Complete Operation Migration & Safety Controls — not started
+- Phase 21: Operations History & Polish — not started; v1.3 closes after this phase
+
+**Next milestone direction:** Strategy Research / Strategy Lab.
 
 ---
-*Last updated: 2026-07-15 — v1.1 and v1.2 recorded complete, v1.3 started*
+*Last updated: 2026-09-23 — v1.3 re-scoped (post-phase race/test hardening recorded under Phase 18, Phases 19–21 re-cut, scheduling deferred)*
