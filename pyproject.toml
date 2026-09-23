@@ -64,6 +64,11 @@ known-first-party = ["trading_platform"]
 # parameter names of the same name; ruff's F811 (redefinition) doesn't
 # understand this idiom and false-positives on it.
 "tests/*" = ["F811"]
+# Historical Alembic migrations are immutable once applied, so their
+# pre-existing violations (import order, unused `bind`/imports, and a
+# stale name reference) cannot be fixed in place. Only the rule codes
+# actually present are ignored; every other rule still applies here.
+"alembic/versions/*" = ["I001", "F401", "F821", "F841"]
 
 [tool.mypy]
 python_version = "3.12"
