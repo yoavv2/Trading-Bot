@@ -7,9 +7,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import trading_platform.db.models  # noqa: F401
 from trading_platform.core.settings import load_settings
 from trading_platform.db.base import Base
-import trading_platform.db.models  # noqa: F401
 
 config = context.config
 

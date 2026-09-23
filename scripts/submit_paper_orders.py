@@ -11,7 +11,10 @@ from collections.abc import Sequence
 
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import load_settings
-from trading_platform.services.paper_execution import resolve_submission_session, run_paper_order_submission
+from trading_platform.services.paper_execution import (
+    resolve_submission_session,
+    run_paper_order_submission,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

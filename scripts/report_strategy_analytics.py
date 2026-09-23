@@ -10,7 +10,10 @@ from collections.abc import Sequence
 
 from trading_platform.core.logging import configure_logging
 from trading_platform.core.settings import load_settings
-from trading_platform.services.analytics import build_strategy_analytics_report, render_strategy_analytics_report
+from trading_platform.services.analytics import (
+    build_strategy_analytics_report,
+    render_strategy_analytics_report,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

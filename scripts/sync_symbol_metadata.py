@@ -35,7 +35,6 @@ from trading_platform.core.settings import load_settings
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import session_scope
 
-
 # ---------------------------------------------------------------------------
 # Polygon ticker-overview fetcher (thin, no separate class needed here)
 # ---------------------------------------------------------------------------
@@ -95,7 +94,6 @@ def _upsert_symbol_metadata(
 ) -> Symbol:
     """Upsert symbol metadata from a Polygon ticker overview result dict."""
     from sqlalchemy import select
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     existing = session.execute(
         select(Symbol).where(Symbol.ticker == ticker)
