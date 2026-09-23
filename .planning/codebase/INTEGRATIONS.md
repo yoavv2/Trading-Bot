@@ -1,148 +1,162 @@
 # External Integrations
 
-**Analysis Date:** 2026-07-07
+**Analysis Date:** 2026-09-23
 
 ## APIs & External Services
 
 **Market Data:**
-- Polygon.io - Historical daily OHLCV bars and symbol metadata
-  - SDK/Client: Custom httpx-based client in `src/trading_platform/services/polygon.py`
-  - Auth: Bearer token via `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY`
-  - Usage: `PolygonClient` for `/v2/aggs/ticker/{symbol}/range/` endpoint
-  - Config source: `src/trading_platform/core/settings.py::PolygonProviderSettings`
+- Polygon.io - Daily OHLCV bar ingestion, symbol metadata refresh
+  - SDK/Client: httpx (custom REST client in `src/trading_platform/services/polygon.py`)
+  - Auth: API key via `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY`
+  - Base URL: https://api.polygon.io
+  - Usage: Market data provider for backtesting and live ingest jobs
+  - Configuration: `PolygonProviderSettings` in `src/trading_platform/core/settings.py`
 
-**Broker & Execution:**
-- Alpaca Markets - Paper trading and order submission (not live)
-  - SDK/Client: Custom httpx-based client in `src/trading_platform/services/alpaca.py`
-  - Auth: Two credentials via `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` and `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET`
-  - Base URL: `https://paper-api.alpaca.markets` (configurable in `config/app.yaml`)
-  - Usage:
-    - POST `/v2/orders` - Order submission
-    - GET `/v2/orders` - List orders
-    - GET `/v2/account/activities/FILL` - Fetch fills/executions
-    - GET `/v2/positions` - Current positions
-    - GET `/v2/account` - Account snapshot
-  - Config source: `src/trading_platform/core/settings.py::AlpacaBrokerSettings`
+**Execution & Broker:**
+- Alpaca - Paper trading order submission and position sync
+  - SDK/Client: httpx (custom client in `src/trading_platform/services/alpaca.py`)
+  - Auth: Key/Secret via `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` and `__API_SECRET`
+  - Base URL: https://paper-api.alpaca.markets (paper trading, not live)
+  - Usage: Execute paper trades, sync positions and orders from broker
+  - Configuration: `AlpacaBrokerSettings` in `src/trading_platform/core/settings.py`
 
 ## Data Storage
 
 **Databases:**
-- PostgreSQL 16+
-  - Connection: `postgresql+psycopg://user:password@host:5432/trading_platform`
-  - Driver: psycopg (binary) 3.2+
-  - Client: SQLAlchemy 2.0+ ORM with synchronous session factory
-  - Configuration: `src/trading_platform/core/settings.py::DatabaseSettings`
-  - Session management: `src/trading_platform/db/session.py`
-  - Migrations: Alembic 1.18+ (migrations in `alembic/versions/`)
-
-**Database Models:**
-Located in `src/trading_platform/db/models/`:
-- `daily_bar.py` - Market data from Polygon
-- `symbol.py` - Symbol metadata and universe
-- `market_session.py` - Trading session calendar
-- `strategy.py` - Strategy registry
-- `strategy_run.py` - Historical backtest/paper runs
-- `backtest_equity_snapshot.py`, `backtest_metric.py`, `backtest_signal.py`, `backtest_trade.py` - Backtest results
-- `paper_order.py`, `paper_fill.py` - Paper trading execution records
-- `execution_event.py`, `order_event.py` - Execution state machine events
-- `position.py` - Current portfolio positions
-- `risk_event.py` - Risk constraint violations
-- `account_snapshot.py` - Broker account state snapshots
-- `system_control.py` - Global system state (kill switches, operator mode)
+- PostgreSQL 16 (local dev), Neon PostgreSQL (production free tier)
+  - Connection: Environment variables `TRADING_PLATFORM_DATABASE__*`
+  - Client: psycopg[binary] 3.2+ (sync + async support)
+  - ORM: SQLAlchemy 2.0+
+  - Models: `src/trading_platform/db/models/` (runs, trades, positions, bars, signals)
+  - Connection URL: `postgresql+psycopg://[user]:[password]@[host]:[port]/[name]`
 
 **File Storage:**
-- Local filesystem only
-- Data directory: `.data/` (configurable as `paths.data_dir` in `config/app.yaml`)
-- Backtest reports: `.data/backtest-reports/{run_id}/`
+- Local filesystem only — `.data/` directory (not committed to git)
+- Backtest results, exports, and temporary data stored locally
+- No cloud storage integration (single-user, local-first architecture)
 
 **Caching:**
-- In-memory engine/session factory caching in `src/trading_platform/db/session.py`
-- Settings loading cache via `@lru_cache` in `src/trading_platform/core/settings.py::load_settings()`
-- No distributed caching (Redis, Memcached, etc.)
+- Not detected — no Redis, Memcached, or in-memory cache layer
+- Database acts as primary persistent store
+- Frontend uses `cache: "no-store"` in API calls to ensure fresh data
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- Custom - No third-party identity provider
-- Operator mode: Single-user only (hardcoded in `src/trading_platform/core/settings.py::AppMetadata.operator_mode`)
+- Custom/None — Single-user operator mode only
+- No OAuth (Google, GitHub, etc.)
+- No API key authentication on read routes (public, unauthenticated GET endpoints)
+- Mutation endpoints (POST/PUT) are also unauthenticated in current free-tier checkpoint
+- Environment: `TRADING_PLATFORM_APP__OPERATOR_MODE = "single_user"`
 
-**API Auth Patterns:**
-- No authentication on REST endpoints (internal tool)
-- External service authentication:
-  - Polygon: Bearer token in Authorization header
-  - Alpaca: Custom headers `APCA-API-KEY-ID` and `APCA-API-SECRET-KEY`
+**Implementation:**
+- Settings validation enforces single-user constraints
+- No JWT, session tokens, or credentials management
+- Future multi-user support would require auth layer addition
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- Not detected - No Sentry, Rollbar, or similar integration
+- Not detected — no Sentry, DataDog, or external APM
+- Errors logged locally in JSON format via Python logging
 
 **Logs:**
-- Structured JSON logging to stdout
-- Logger configuration: `src/trading_platform/core/logging.py::configure_logging()`
-- Log level configured in `config/app.yaml::logging.level` (default: INFO)
-- Service name: `logging.service` (default: "trading-platform-api")
+- JSON-structured logging via Python `logging` module
+- Configuration: `src/trading_platform/core/logging.py`
+- Output: stdout (captured by Docker/Render)
+- Log level: Configurable via `TRADING_PLATFORM_LOGGING__LEVEL` (default INFO)
+- Sanitization: Credential scrubbing via `src/trading_platform/core/log_sanitizer.py`
 
-**Retry Logic:**
-- Polygon client: Exponential backoff configured in `PolygonProviderSettings` (max_retries, retry_backoff_factor)
-- Alpaca client: Exponential backoff configured in `AlpacaBrokerSettings` (max_retries, retry_backoff_factor)
-- Transient HTTP errors (429, 5xx) trigger retries; auth errors (401, 403) fail immediately
+**Tracing:**
+- Not detected — no distributed tracing (OpenTelemetry, Datadog, etc.)
 
 ## CI/CD & Deployment
 
-**Hosting:**
-- Docker containers (development and production)
-- Docker Compose for local development: `docker-compose.yml`
-- Images built from `Dockerfile` (python:3.13-slim base)
+**Hosting — Backend:**
+- Render (Docker runtime)
+  - Blueprint: `render.yaml` (free-tier read-only API deployment)
+  - Region: Oregon (configurable, set close to database)
+  - Service type: Web service (Python via Docker)
+  - Health check: `/health` endpoint
+  - Startup: `alembic upgrade head && uvicorn ...` (migrations + server)
 
-**Local Development:**
-- Makefile targets for common operations:
-  - `make up` / `make down` - Start/stop docker-compose
-  - `make migrate` - Run database migrations
-  - `make test` - Run pytest suite
-  - `make ingest-bars`, `make backtest`, `make run-paper-session` - CLI operations
+**Hosting — Frontend:**
+- Vercel (Next.js native platform)
+  - Configuration: `.vercel/project.json` (Vercel project linking only)
+  - Deployment: Connected to GitHub repo for auto-deploy on commits
+  - Project: `trading-platform-console`
 
-**CI Pipeline:**
-- Not detected - No GitHub Actions, GitLab CI, CircleCI, or similar configuration
+**Hosting — Database:**
+- Neon (PostgreSQL)
+  - Tier: Free (with caveats on compute/storage)
+  - Connection: Direct host (not pooler) for long-lived containers
+  - SSL: Auto-negotiated by psycopg default `sslmode=prefer`
+
+**CI/CD Pipeline:**
+- Not detected — no GitHub Actions, GitLab CI, or Jenkins workflows
+- Deployment via manual push to Render/Vercel (Blueprint and Vercel UI)
+- Pre-commit hooks locally (`pre-commit` framework)
+
+**Build & Deployment:**
+- Docker image: `python:3.13-slim` (both API and worker)
+- Docker Compose: Local multi-service orchestration (db, api, worker)
+- Dockerfile: Single image for API and worker (selectable via CMD)
 
 ## Environment Configuration
 
-**Required env vars:**
-- `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY` - Polygon.io API key (required)
-- `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` - Alpaca API key (required)
-- `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET` - Alpaca API secret (required)
+**Required Environment Variables:**
 
-**Database env vars (optional - override defaults in config/app.yaml):**
-- `TRADING_PLATFORM_DATABASE__HOST` - PostgreSQL host (default: localhost)
-- `TRADING_PLATFORM_DATABASE__PORT` - PostgreSQL port (default: 5432)
-- `TRADING_PLATFORM_DATABASE__NAME` - Database name (default: trading_platform)
-- `TRADING_PLATFORM_DATABASE__USER` - Database user (default: trading_platform)
-- `TRADING_PLATFORM_DATABASE__PASSWORD` - Database password (default: trading_platform)
+*Database (all environments):*
+- `TRADING_PLATFORM_DATABASE__HOST` - PostgreSQL hostname
+- `TRADING_PLATFORM_DATABASE__PORT` - PostgreSQL port (default 5432)
+- `TRADING_PLATFORM_DATABASE__NAME` - Database name
+- `TRADING_PLATFORM_DATABASE__USER` - Database user
+- `TRADING_PLATFORM_DATABASE__PASSWORD` - Database password
 
-**Docker Compose env vars:**
-- `POSTGRES_DB` - Database name (default: trading_platform)
-- `POSTGRES_USER` - Database user (default: trading_platform)
-- `POSTGRES_PASSWORD` - Database password (default: trading_platform)
+*API (all environments):*
+- `TRADING_PLATFORM_API__PORT` - API server port (default 8000)
+- `TRADING_PLATFORM_APP__ENVIRONMENT` - Deployment environment (local/test/development/staging/production)
+- `TRADING_PLATFORM_LOGGING__LEVEL` - Log level (default INFO)
 
-**Secrets location:**
-- Environment variables (recommended for production)
-- `.env` file (for local development, via pydantic-settings)
-- NOTE: .env files should never be committed
+*Market Data (worker/ingest only):*
+- `TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY` - Polygon.io API key (required for live bar ingest)
 
-**Configuration precedence (highest to lowest):**
-1. Environment variables with `TRADING_PLATFORM_` prefix
-2. Strategy YAML files from `config/strategies/`
-3. Main config file `config/app.yaml`
-4. Pydantic model defaults in `src/trading_platform/core/settings.py`
+*Broker (worker/execution only):*
+- `TRADING_PLATFORM_BROKER__ALPACA__API_KEY` - Alpaca API key
+- `TRADING_PLATFORM_BROKER__ALPACA__API_SECRET` - Alpaca API secret
+
+*Frontend (console/dev):*
+- `TRADING_CONSOLE_API_BASE_URL` - Backend API base URL (default http://127.0.0.1:8000)
+
+**Secrets Location:**
+- `.env` file (local development, git-ignored)
+- `.env.example` (template for local setup)
+- `.env.production.example` (template for Render deployment)
+- Render environment variables entered in dashboard (sync: false for secrets)
+- Never committed to git; provided at runtime via environment
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- Not detected - No webhook endpoints
+- Not detected — no webhook endpoints for external services
 
 **Outgoing:**
-- Not detected - No external webhook notifications
+- Not detected — platform does not send webhooks to external services
+
+**Job Polling:**
+- Worker polls Alpaca API for order/position updates (`sync_paper_state` job)
+- Worker ingests Polygon.io data on schedule (`ingest_bars` job)
+- No push-based integrations or event subscriptions
+
+## API Communication (Frontend ↔ Backend)
+
+**Client Configuration:**
+- Next.js rewrite proxy: `/backend/*` rewrites to backend API base URL
+- Frontend fetch: `fetchApi()` in `src/lib/api.ts` queries `/backend/api/v1/*` endpoints
+- Error handling: All HTTP errors and network failures mapped to `ApiResult<T>` (union of success/failure)
+- No authentication headers (single-user, public read-only API in free tier)
+- Cache policy: `cache: "no-store"` on all API calls (always fresh)
 
 ---
 
-*Integration audit: 2026-07-07*
+*Integration audit: 2026-09-23*

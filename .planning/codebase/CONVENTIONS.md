@@ -1,326 +1,169 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-07-07
+**Analysis Date:** 2026-09-23
 
 ## Naming Patterns
 
 **Files:**
-- Snake_case: `settings.py`, `ingestion.py`, `trading_platform/`
-- Model files: `{entity}.py` (e.g., `paper_order.py`, `strategy_run.py`)
-- Test files: `test_{module}.py` (e.g., `test_market_data_ingestion.py`)
+- **Python:** `snake_case.py` (e.g., `data.py`, `job_reads.py`, `concurrency_guard.py`)
+- **TypeScript/React:** `PascalCase.ts` or `PascalCase.tsx` for components (e.g., `ErrorState.tsx`, `FetchMeta.tsx`)
+- **Tests:** `test_*.py` (Python) or `*.test.ts(x)` (TypeScript) (e.g., `test_job_cancellation.py`, `api.test.ts`)
 
 **Functions:**
-- Snake_case for all functions and methods
-- Private helpers prefixed with underscore: `_load_yaml_file()`, `_make_polygon_settings()`
-- Descriptive names indicating purpose: `build_settings_payload()`, `emit_structured_log()`
-
-**Classes:**
-- PascalCase: `BaseStrategy`, `PolygonClient`, `JsonLogFormatter`, `PaperOrder`
-- Exception classes: `UnknownStrategyError`, `PolygonAuthError`, `IllegalOrderTransition`
-- Model classes inherit from `TimestampedModel` and `Base`
+- **Python:** `snake_case` verbs describing action (e.g., `enforce_startup_config()`, `request_cancellation()`, `find_ready_job_ids()`)
+- **TypeScript:** `camelCase` with verb prefix (e.g., `fetchApi()`, `useApiQuery()`)
 
 **Variables:**
-- Snake_case throughout
-- Constants in UPPER_SNAKE_CASE: `_PROVIDER = "polygon"`, `PROJECT_ROOT`
-- Private module variables prefixed with underscore: `_strategies`, `logger`
+- **Python:** `snake_case` throughout (e.g., `database_name`, `job_id`, `session_scope`)
+- **TypeScript:** `camelCase` for variables and constants (e.g., `statusLabel`, `parsedBody`, `contentType`)
 
 **Types:**
-- PascalCase for types and enums: `OrderLifecycleState`, `StrategyRunStatus`
-- Generic types with full type hints: `dict[str, Any]`, `list[str]`, `tuple[str, ...]`
+- **Python:** `PascalCase` for class definitions (e.g., `DailyBar`, `IngestionResult`, `MarketDataService`)
+- **TypeScript:** `PascalCase` for type names (e.g., `ApiResult<T>`, `ApiSuccess<T>`, `ApiFailure`), using `type` keyword for discriminated unions
 
 ## Code Style
 
 **Formatting:**
-- No explicit formatter configured (no .prettierrc, black, ruff config found)
-- Consistent 4-space indentation (Python default)
-- Line length appears to be ~100-120 characters based on observed code
+- **Python:** Ruff (linter and formatter) with target Python 3.12, line length 100
+- **TypeScript:** ESLint with Next.js core web vitals config, TypeScript strict mode enabled
+- No automatic formatting hook for TypeScript/ESLint in pre-commit (only Python has ruff-format via pre-commit scoped to Phase-12 services)
 
 **Linting:**
-- No ESLint or black configuration in project root
-- Uses `from __future__ import annotations` universally at top of modules
-- PEP 8 style observed throughout
+- **Python (Ruff):**
+  - Enabled rules: E (pycodestyle errors), F (Pyflakes), I (isort import sorting), W (pycodestyle warnings)
+  - Ignore: E501 (line-too-long) — pre-existing long lines in comments/strings/assertions are exempt
+  - Per-file ignores: F811 (redefinition) disabled in `tests/*` to allow pytest fixture reuse
+  - First-party module: `trading_platform`
+- **TypeScript/Next.js:**
+  - ESLint with `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`
+  - Strict TypeScript compiler: `noEmit: true`, `strict: true`, `isolatedModules: true`
 
-**Future Imports:**
-All Python files start with:
-```python
-from __future__ import annotations
-```
-This enables postponed evaluation of type hints.
-
-## Import Organization
-
-**Order:**
-1. Future imports: `from __future__ import annotations`
-2. Standard library: `import json`, `from datetime import UTC, date`
-3. Third-party: `from sqlalchemy import ...`, `from fastapi import ...`, `import pytest`
-4. Local imports: `from trading_platform.core.settings import ...`
-5. TYPE_CHECKING block for circular imports: Only import types inside `if TYPE_CHECKING:`
+**Import Organization:**
+1. Python: `from __future__ import annotations` (always first)
+2. Standard library imports (datetime, os, sys, re, etc.)
+3. Third-party imports (fastapi, pydantic, sqlalchemy, etc.)
+4. Local imports from `trading_platform` module
+5. TypeScript: Standard lib → third-party (next, react) → local imports via path aliases (`@/*`)
 
 **Path Aliases:**
-No path aliases configured. All imports are absolute from `trading_platform` root:
-- `from trading_platform.core.settings import Settings`
-- `from trading_platform.db.models.paper_order import PaperOrder`
-
-**Example from `src/trading_platform/services/ingestion.py`:**
-```python
-from __future__ import annotations
-
-import logging
-import uuid
-from datetime import UTC, date, datetime
-from decimal import Decimal
-from typing import Any
-
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
-
-from trading_platform.core.settings import MarketDataSettings
-from trading_platform.db.models.daily_bar import DailyBar as DailyBarModel
-```
-
-**TYPE_CHECKING Pattern (from `src/trading_platform/db/models/paper_order.py`):**
-```python
-if TYPE_CHECKING:
-    from trading_platform.db.models.execution_event import ExecutionEvent
-    from trading_platform.db.models.paper_fill import PaperFill
-```
+- **TypeScript:** `@/*` maps to `console/src/*` (see `console/tsconfig.json`)
 
 ## Error Handling
 
-**Custom Exception Classes:**
-- Frozen dataclasses that inherit from built-in exceptions
-- Custom `__str__()` method for readable error messages
-
-**Example from `src/trading_platform/strategies/registry.py`:**
-```python
-@dataclass(frozen=True)
-class UnknownStrategyError(KeyError):
-    strategy_id: str
-
-    def __str__(self) -> str:
-        return f"Unknown strategy '{self.strategy_id}'."
-```
-
-**Exception Chaining:**
-Always use `from exc` to preserve tracebacks:
-```python
-try:
-    return self._strategies[strategy_id]
-except KeyError as exc:
-    raise UnknownStrategyError(strategy_id) from exc
-```
-
-**Structured Error Context:**
-Exceptions include semantic fields that help with debugging (see `IllegalOrderTransition` with reason fields).
-
-**Error Propagation:**
-- Database access functions use `session_scope()` context manager
-- Network errors from HTTP clients captured and wrapped with context
-- Service functions return structured result types rather than bare exceptions where possible
+**Patterns:**
+- **Python:** Custom exceptions inheriting from base exception types
+  - `ValueError` for invalid input/state (e.g., `InvalidIdempotencyKeyError`, `UnknownJobTypeForSubmissionError`)
+  - `RuntimeError` for operation failures (e.g., `ConcurrentRunLockedError`, `JobNotCancellableError`)
+  - `KeyError`/`LookupError` for lookup failures (e.g., `UnknownStrategyError`, `UnknownJobTypeError`)
+  - Domain-specific errors as subclasses (e.g., `PolygonAuthError(PolygonClientError)`)
+  - Never rely on implicit error propagation; define custom exceptions per module
+- **TypeScript:** Explicit result types using discriminated unions
+  - `ApiResult<T> = ApiSuccess<T> | ApiFailure` with `ok` boolean flag
+  - Always return typed results; never throw from async API functions
+  - Include `endpoint` in both success and failure results for debugging (CONS-02 requirement)
+  - Status is `null` when network/proxy is unreachable, numeric for HTTP errors
 
 ## Logging
 
-**Framework:** Python standard `logging` module
+**Framework:**
+- **Python:** Standard library `logging` with custom `JsonLogFormatter` (see `core/logging.py`)
+- **TypeScript:** `console` object (no structured logging; frontend is read-only)
 
-**JSON Formatting:**
-Custom `JsonLogFormatter` in `src/trading_platform/core/logging.py` outputs structured JSON logs:
-```python
-{
-    "timestamp": "2024-07-07T10:30:00+00:00",
-    "level": "INFO",
-    "logger": "trading_platform.services.ingestion",
-    "message": "Ingestion completed",
-    "context": {
-        "strategy_id": "trend_following_daily",
-        "run_id": "uuid-...",
-        "symbol_count": 10
-    }
-}
-```
-
-**Logger Names:**
-Always use `__name__` at module level:
-```python
-logger = logging.getLogger(__name__)
-```
-
-**Structured Log Emission:**
-Use `emit_structured_log()` helper for consistent context:
-```python
-emit_structured_log(
-    logger,
-    logging.INFO,
-    "order_submitted",
-    strategy_id="trend_following_daily",
-    run_id=str(run_id),
-    order_id=str(order_id),
-)
-```
-
-**Context Building:**
-Use `build_log_context()` to assemble log metadata. It filters out None values:
-```python
-context = build_log_context(
-    strategy_id=strategy_id,
-    run_id=run_id,
-    session_date=session_date,
-    blocked_reason=blocked_reason,  # Only included if not None
-)
-```
-
-**When to Log:**
-- Entry/exit of significant operations
-- State transitions (order submitted, position opened)
-- Error conditions with full context
-- Performance milestones (ingestion start/end)
+**Patterns:**
+- **Python:**
+  - All logs emitted as JSON with `timestamp`, `level`, `logger`, `message`, and optional `context` dict
+  - Use `get_logger("module.name")` to get a pre-configured logger
+  - Call `emit_structured_log(logger, level, message, context={...})` for structured context, not raw `logger.info()`
+  - Sensitive values (API keys, passwords, order IDs) are automatically redacted via `sanitize()` (LOG-06)
+  - Context dict passed through `sanitize()` before JSON emission
+- **TypeScript:**
+  - React components use `console.error()` for errors
+  - Console errors include endpoint and status information
 
 ## Comments
 
-**Module Docstrings:**
-Every `.py` file has a module docstring:
-```python
-"""Typed runtime settings assembled from YAML files and environment overrides."""
-```
+**When to Comment:**
+- Document intent, not obvious code: explain WHY, not WHAT
+- Link to phase/ticket when a comment references a deferral or known issue (e.g., "Deferred to Phase 2" or "CFG-05")
+- Use comments for complex state-machine logic or non-obvious control flow
+- Avoid line-by-line narration of self-documenting code
 
-**Class Docstrings:**
-Classes have docstrings explaining purpose:
-```python
-class BaseStrategy(ABC):
-    """Abstract strategy contract used by the registry and dry-run flow.
-
-    Phase 2 extension: subclasses may implement ``generate_signals`` to
-    emit typed ``SignalBatch`` output...
-    """
-```
-
-**Function Docstrings:**
-Functions have brief docstrings:
-```python
-def build_log_context(...) -> dict[str, Any]:
-    """Assemble structured log context, filtering out None values."""
-```
-
-**Section Separators:**
-Code sections are separated with visual dividers for readability:
-```python
-# ---------------------------------------------------------------------------
-# Symbol upsert helpers
-# ---------------------------------------------------------------------------
-
-def _symbol_id_from_code(session: Session, symbol: str) -> uuid.UUID:
-    ...
-```
-
-**Inline Comments:**
-Minimal inline comments; code should be self-documenting through naming. Comments used for:
-- Explaining non-obvious algorithm choices
-- Referencing external specifications or bug reports
-- Marking temporary workarounds with TODO/FIXME
+**JSDoc/TSDoc:**
+- **Python:** Module docstrings at the top of every file (e.g., `"""Market-data service contracts and typed request/response models."""`)
+  - Class and function docstrings for public APIs
+  - Use `"""..."""` for docstrings
+  - Reference related functions/classes in docstrings
+- **TypeScript:**
+  - Block comment `/** ... */` for function/component documentation
+  - Describe props, return type, and behavior
+  - Example: `/** Fetches \`endpoint\` (un-prefixed FastAPI path) ... Never throws — every code path resolves to an ApiResult. */`
 
 ## Function Design
 
 **Size:**
-Functions are generally small and focused (20-50 lines typical). Longer functions are orchestration functions that delegate to helpers.
+- **Python:** Prefer smaller functions (< 50 lines) that do one thing; break up complex operations into steps
+- **TypeScript:** React components can be longer (up to 100 lines) but aim for composability via sub-components
 
 **Parameters:**
-- Type-hinted parameters with appropriate defaults
-- Use keyword-only arguments (after `*`) for optional configuration:
-```python
-def build_settings_payload(
-    *,
-    config_file: Path | None = None,
-    strategy_dir: Path | None = None,
-) -> dict[str, Any]:
-```
+- **Python:**
+  - Use dataclass/named tuples for multi-param request objects (e.g., `DailyBarRequest`)
+  - Keyword-only arguments after complex logic (use `*` separator)
+  - Type hints on all parameters
+- **TypeScript:**
+  - React components: destructure props with `type ComponentProps`
+  - Avoid spread operator on unknown objects; prefer explicit prop typing
 
 **Return Values:**
-- Explicit return type annotations on all functions
-- Functions return structured types (`@dataclass`, Pydantic models) rather than dicts when possible
-- Functions that may fail return typed result types or raise custom exceptions
-
-**Properties:**
-- Use `@property` decorator for computed values:
-```python
-@property
-def starting_cash_decimal(self) -> Decimal:
-    return Decimal(str(self.starting_cash))
-```
-
-**Dataclasses:**
-Used for immutable data structures with `frozen=True`:
-```python
-@dataclass(frozen=True)
-class StrategyMetadata:
-    strategy_id: str
-    display_name: str
-    # ...
-```
+- **Python:**
+  - Functions return domain objects (e.g., `DailyBar`, `IngestionResult`) or raise custom exceptions
+  - Use properties/computed attributes for derived values (e.g., `IngestionResult.failed_count`)
+- **TypeScript:**
+  - Async functions return `Promise<ApiResult<T>>` for API calls
+  - UI functions return JSX elements
+  - Hooks return typed state tuples or objects
 
 ## Module Design
 
 **Exports:**
-Explicit exports in `__init__.py` files:
-```python
-# src/trading_platform/db/models/__init__.py
-from trading_platform.db.models.paper_order import PaperOrder
-from trading_platform.db.models.strategy_run import StrategyRun
-# ... other exports
-```
+- **Python:**
+  - Module `__init__.py` may list `__all__` for public API
+  - Import patterns: `from module import ClassName, function_name`
+  - Modules are organized by domain (services, jobs, api, db, core)
+- **TypeScript:**
+  - Named exports for utility functions (e.g., `export async function fetchApi<T>()`)
+  - Default exports for React components
+  - Type exports: `export type ApiResult<T> = ...`
 
-**Private Implementation:**
-Helper functions and internal classes are:
-- Prefixed with underscore: `_load_yaml_file()`, `_deep_merge()`
-- Placed in implementation modules, not exported
+**Barrel Files:**
+- **Python:** Not commonly used; prefer direct imports from specific modules
+- **TypeScript:** Not used; import directly from source files
 
-**Service Layer:**
-Services are organized by responsibility:
-- `src/trading_platform/services/ingestion.py` - Market data ingestion
-- `src/trading_platform/services/execution.py` - Order execution
-- `src/trading_platform/services/reconciliation.py` - State reconciliation
+## Type System
 
-**Circular Import Avoidance:**
-Uses `TYPE_CHECKING` blocks to import types only for static analysis:
-```python
-if TYPE_CHECKING:
-    from trading_platform.db.models.strategy_run import StrategyRun
-```
-Runtime imports happen where needed via string type hints.
+**Python:**
+- **Type hints required:** All function parameters and return types must have type hints
+- **Python 3.12 features:** Use `|` for unions (e.g., `str | None`) instead of `Optional[str]`
+- **Frozen dataclasses:** Use `@dataclass(frozen=True)` for immutable value objects (e.g., `DailyBarRequest`)
+- **Generic types:** Use `list[str]` (built-in generics) instead of `List[str]`
 
-## Type Hints
+**TypeScript:**
+- **Strict mode:** Always enabled; no `any` type without explicit `// @ts-ignore` comment and justification
+- **Discriminated unions:** Use boolean or literal fields to discriminate (e.g., `ok: true | false`)
+- **Type guards:** Use `if (result.ok) { ... }` to narrow types
+- **Generics:** Use for API response types (e.g., `ApiResult<T>`)
 
-**Consistent Usage:**
-Type hints on all function parameters and return values. Examples:
-```python
-def load_settings(
-    *,
-    config_file: Path | None = None,
-    strategy_dir: Path | None = None,
-) -> Settings:
-```
+## Dataclass and Record Patterns
 
-**Union Types:**
-Use `|` operator (PEP 604) rather than `Union[X, Y]`:
-```python
-broker_order_id: str | None
-response: dict[str, Any] | None
-```
+**Python:**
+- Use `@dataclass` for request/response models (e.g., `DailyBarRequest`, `DailyBar`)
+- Mark request/response objects as `frozen=True` when they represent immutable domain values
+- Use `field(default_factory=...)` for list/dict defaults in mutable dataclasses
+- Include docstring on class explaining its purpose
 
-**Generic Collections:**
-Lowercase generic syntax (PEP 585, Python 3.9+):
-```python
-dict[str, Any]
-list[str]
-tuple[str, ...]
-set[uuid.UUID]
-```
-
-**Optional:**
-Implicit Optional via union with None:
-```python
-path: Path | None = None
-```
+**TypeScript:**
+- Use `type` for prop definitions (e.g., `type ErrorStateProps = { failure: ApiFailure; title?: string }`)
+- Destructure props in component signature: `export function ErrorState({ failure, title }: ErrorStateProps)`
 
 ---
 
-*Convention analysis: 2026-07-07*
+*Convention analysis: 2026-09-23*

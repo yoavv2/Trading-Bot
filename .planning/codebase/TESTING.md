@@ -1,429 +1,344 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-07-07
+**Analysis Date:** 2026-09-23
 
 ## Test Framework
 
 **Runner:**
-- pytest 9.0.0+
-- Config: `pyproject.toml` (minimal configuration)
+- **Python:** pytest 9.x
+  - Config: `pyproject.toml` → `[tool.pytest.ini_options]` with `testpaths = ["tests"]`
+  - Tests in `/tests/` directory at project root
+- **TypeScript:** Vitest 4.1.x
+  - Config: `console/vitest.config.ts` with `environment: "node"` and pattern `src/**/*.test.{ts,tsx}`
+  - Tests co-located with source files using `.test.ts` or `.test.tsx` suffix
+
+**Assertion Library:**
+- **Python:** pytest's built-in assertion introspection
+- **TypeScript:** Vitest's `expect()` API (compatible with Jest)
 
 **Run Commands:**
 ```bash
-pytest tests/                  # Run all tests
-pytest tests/ -v              # Verbose output
-pytest tests/ --tb=short      # Shorter tracebacks
-pytest tests/test_strategy_registry.py  # Run single file
-pytest tests/ -k "test_normalize"  # Run matching tests
-```
+# Python
+pytest                      # Run all tests
+pytest -v                   # Verbose output
+pytest tests/test_*.py      # Run specific test file
+pytest -k "test_cancel"     # Run tests matching pattern
 
-**Configuration (`pyproject.toml`):**
-```toml
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# TypeScript
+npm test                    # Run tests (cd console/)
+vitest run                  # Run once (not watch mode)
+vitest                      # Watch mode
 ```
-
-**Assertion Library:**
-- pytest's built-in assertions with `assert` statements
-- pytest helpers: `pytest.raises()`, `pytest.mark`
 
 ## Test File Organization
 
 **Location:**
-- Co-located in `tests/` directory parallel to `src/`
-- No conftest.py file for shared fixtures
-- Individual test files responsible for their own setup
+- **Python:** Co-located in `tests/` directory at project root; mirrors source structure by naming (e.g., `test_job_cancellation.py` tests job cancellation logic)
+- **TypeScript:** Co-located with source in `console/src/**/*.test.ts(x)` (e.g., `api.test.ts` in `src/lib/`)
 
 **Naming:**
-- Files: `test_{module}.py` (e.g., `test_market_data_ingestion.py`, `test_strategy_registry.py`)
-- Classes: `Test{ComponentName}` (e.g., `TestPolygonClientAuth`, `TestPolygonClientFetch`)
-- Functions: `test_{specific_behavior}()` (e.g., `test_normalize_timestamp_converts_ms_to_utc_datetime`)
+- **Python:** `test_<feature>.py` (e.g., `test_job_cancellation.py`, `test_analytics_service.py`)
+- **TypeScript:** `<module>.test.ts(x)` (e.g., `api.test.ts`)
 
 **Structure:**
 ```
-tests/
-├── fixtures/              # Test data files
-│   └── polygon_daily_bars.json
-├── conftest.py           # [Not present - fixtures defined per file]
-├── test_app_boot.py
-├── test_strategy_registry.py
-├── test_market_data_ingestion.py
-└── ...
+Trading-Bot-Project/
+├── tests/                           # Python tests
+│   ├── conftest.py                 # Shared fixtures
+│   ├── support/                    # Helper modules
+│   ├── fixtures/                   # Reusable test data
+│   └── test_*.py                   # Individual test files
+│
+└── console/src/
+    ├── lib/
+    │   ├── api.ts                  # Source
+    │   └── api.test.ts             # Co-located test
+    ├── components/
+    │   ├── ErrorState.tsx          # Component
+    │   └── ErrorState.test.tsx      # Co-located test (if present)
 ```
 
 ## Test Structure
 
-**Test Class Organization:**
-```python
-class TestNormalizationHelpers:
-    """Group related unit tests in classes for logical organization."""
-    
-    def test_normalize_timestamp_converts_ms_to_utc_datetime(self) -> None:
-        # Arrange
-        ts_ms = 1704067200000
-        
-        # Act
-        result = _normalize_timestamp(ts_ms)
-        
-        # Assert
-        assert result is not None
-        assert result.tzinfo is not None
-        assert result == datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+**Suite Organization:**
 
-    def test_normalize_timestamp_none_input(self) -> None:
-        assert _normalize_timestamp(None) is None
+**Python:**
+```python
+"""Phase 17 Job cancellation behavior tests (JOB-06, D-07-D-10)."""
+
+from __future__ import annotations
+
+import pytest
+from trading_platform.db.models import Job, JobStatus
+
+def test_cancel_queued_job_transitions_immediately(migrated_job_cancellation_db: str) -> None:
+    """Test that cancelling a QUEUED job transitions it to CANCELLED immediately."""
+    settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_job(session)
+        job_id = job.id
+
+    result = request_cancellation(job_id=job_id, requested_by="operator_1", settings=settings)
+
+    assert result.mode == "immediate"
+    assert result.accepted is True
+    assert result.status is JobStatus.CANCELLED
+
+    with session_scope(settings) as session:
+        persisted = session.get(Job, job_id)
+        assert persisted is not None
+        assert persisted.status is JobStatus.CANCELLED
 ```
 
-**Test Function Patterns:**
+**TypeScript:**
+```typescript
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { fetchApi } from "./api";
 
-1. **Unit Test (Isolated):**
-```python
-def test_registry_lists_and_resolves_default_strategy() -> None:
-    clear_settings_cache()
-    registry = build_default_registry(load_settings())
+describe("fetchApi", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
-    strategies = registry.list_public()
+  it("returns ok:true with parsed data on a successful JSON response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { status: "ok" })),
+    );
 
-    assert len(strategies) == 1
-    assert strategies[0]["strategy_id"] == "trend_following_daily"
+    const result = await fetchApi<{ status: string }>("/api/v1/system");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toEqual({ status: "ok" });
+      expect(result.endpoint).toBe("/api/v1/system");
+    }
+  });
+});
 ```
 
-2. **Integration Test (With Database):**
-```python
-@pytest.fixture()
-def migrated_order_state_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create a temporary database, migrate it, and clean up."""
-    database_name = f"order_state_machine_{uuid.uuid4().hex[:8]}"
-    admin_params = _admin_connection_settings()
-    
-    try:
-        with _connect_admin(admin_params) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(f'CREATE DATABASE "{database_name}"')
-    except psycopg.Error as exc:
-        pytest.fail("PostgreSQL is required...")
-    
-    _set_database_env(monkeypatch, database_name)
-    clear_settings_cache()
-    clear_engine_cache()
-    command.upgrade(build_alembic_config(), "head")
-    
-    try:
-        yield database_name
-    finally:
-        # Cleanup
-        clear_settings_cache()
-        clear_engine_cache()
-```
-
-3. **API Test (With TestClient):**
-```python
-def test_app_bootstrap_serves_foundation_endpoints(monkeypatch, tmp_path: Path) -> None:
-    config_file = tmp_path / "app.yaml"
-    strategy_dir = tmp_path / "strategies"
-    strategy_dir.mkdir()
-    
-    _write_config(config_file, {...})
-    
-    monkeypatch.setenv("TRADING_PLATFORM_CONFIG_FILE", str(config_file))
-    monkeypatch.setenv("TRADING_PLATFORM_STRATEGY_CONFIG_DIR", str(strategy_dir))
-    
-    clear_settings_cache()
-    app = create_app()
-    
-    with TestClient(app) as client:
-        response = client.get("/health")
-        assert response.status_code == 200
-        assert response.json()["status"] == "ok"
-```
-
-**Imports Pattern:**
-Each test file adds src/ to path:
-```python
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-```
+**Patterns:**
+- **Setup:** Helper functions (e.g., `_seed_job()`, `_seed_running_job()`) prepare test state
+- **Fixtures:** `@pytest.fixture` at module or file scope; parametrized fixtures for repeated setups
+- **Teardown:** Context managers (`with session_scope()`) handle cleanup; `afterEach()` in TypeScript
+- **Assertions:** Use explicit assertions; avoid testing internal state only test observable behavior
 
 ## Mocking
 
-**Framework:** `unittest.mock` (standard library)
+**Framework:**
+- **Python:** `pytest.MonkeyPatch` fixture for environment and function patching
+- **TypeScript:** Vitest's `vi` module for stubbing globals, mocking modules, and spying on functions
 
-**Mocking HTTP Responses:**
+**Patterns:**
+
+**Python:**
 ```python
-from unittest.mock import MagicMock, patch
-
-def test_fetch_returns_normalized_bars(self) -> None:
-    fixture = _load_fixture()
-    settings = _make_polygon_settings()
+def test_with_monkeypatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock environment variables and internal functions."""
+    monkeypatch.setenv("TRADING_PLATFORM_DATABASE__NAME", "test_db")
+    monkeypatch.setitem(settings.model_config, "env_file", None)
     
-    with patch("httpx.Client.get", return_value=self._make_response(fixture)):
-        client = PolygonClient(settings)
-        bars = client.fetch_daily_bars(
-            DailyBarRequest(
-                symbol="AAPL",
-                from_date=date(2024, 1, 1),
-                to_date=date(2024, 1, 3),
-            )
-        )
-    
-    assert len(bars) == 3
+    # Function now sees mocked environment
 ```
 
-**Response Mock Helper:**
-```python
-def _make_response(self, payload: dict) -> MagicMock:
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.raise_for_status.return_value = None
-    mock_response.json.return_value = payload
-    return mock_response
-```
+**TypeScript:**
+```typescript
+it("handles network failures", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+  );
 
-**Stateful Mocking (Side Effects):**
-```python
-responses = [self._make_response(page1), self._make_response(page2)]
-call_count = 0
-
-def mock_get(url, **kwargs):
-    nonlocal call_count
-    result = responses[call_count]
-    call_count += 1
-    return result
-
-with patch("httpx.Client.get", side_effect=mock_get):
-    # test code
-```
-
-**Patching Modules:**
-Use full import path in patch target:
-```python
-with patch("httpx.Client.get", return_value=...):
-    # Tests code that calls httpx.Client.get()
+  const result = await fetchApi("/api/v1/system");
+  
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.status).toBeNull();
+  }
+  
+  vi.unstubAllGlobals(); // Always cleanup
+});
 ```
 
 **What to Mock:**
-- External HTTP/API calls (Polygon, Alpaca)
-- System time (datetime, time.sleep)
-- File system (use pytest's tmp_path instead)
+- Database connections and fixtures (see `migrated_job_cancellation_db`)
+- External API calls (Polygon, Alpaca) via mocked HTTP responses
+- Global state (environment variables via `monkeypatch`)
+- File system operations (temporary databases, file I/O)
 
 **What NOT to Mock:**
-- Internal database calls (use real database in tests)
-- Internal service methods (test integration)
-- Pydantic model validation
+- Core business logic (job cancellation, portfolio calculations)
+- Domain models and dataclasses
+- Type assertions and type guards
+- Single-responsibility functions (mock their dependencies, not them)
 
 ## Fixtures and Factories
 
-**Test Data Helpers (Not Global Fixtures):**
-Helper functions prefixed with underscore, defined per test file:
+**Test Data:**
 
+**Python:**
 ```python
-def _make_polygon_settings(api_key: str = "test-key") -> PolygonProviderSettings:
-    return PolygonProviderSettings(
-        base_url="https://api.polygon.io",
-        api_key=api_key,
-        adjusted=True,
-        max_retries=0,
-        retry_backoff_factor=0.0,
-        timeout_seconds=5.0,
+def _seed_job(session: Any, *, status: JobStatus = JobStatus.QUEUED, **overrides: Any) -> Job:
+    """Factory helper to create test job with sensible defaults."""
+    defaults: dict[str, Any] = {
+        "job_type": "phase17_cancellation_probe",
+        "payload": {},
+        "status": status,
+    }
+    defaults.update(overrides)
+    job = Job(**defaults)
+    session.add(job)
+    session.flush()
+    return job
+
+def _seed_running_job(session: Any, **overrides: Any) -> Job:
+    """Seed a QUEUED Job and transition it to RUNNING."""
+    job = _seed_job(session, status=JobStatus.QUEUED, **overrides)
+    apply_job_transition(
+        session, job_id=job.id, request=JobTransitionRequest(event_type=JobEventType.CLAIMED)
     )
-
-def _make_market_data_settings(api_key: str = "test-key") -> MarketDataSettings:
-    return MarketDataSettings(
-        polygon=_make_polygon_settings(api_key=api_key),
-        ingest=IngestSettings(
-            default_lookback_days=10,
-            universe=("AAPL", "MSFT"),
-        ),
-    )
+    return job
 ```
 
-**Fixture Files:**
-- Location: `tests/fixtures/`
-- Format: JSON files with sample API responses
-- Example: `tests/fixtures/polygon_daily_bars.json`
+**TypeScript:**
+```typescript
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
-**Loading Fixtures:**
-```python
-FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "polygon_daily_bars.json"
-
-def _load_fixture() -> dict:
-    return json.loads(FIXTURE_PATH.read_text())
+function textResponse(status: number, body: string): Response {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/html" },
+  });
+}
 ```
 
-**pytest.fixture Usage:**
-For complex setup/teardown (database creation):
-```python
-@pytest.fixture()
-def migrated_order_state_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    # Setup
-    database_name = f"test_db_{uuid.uuid4().hex[:8]}"
-    _create_database(database_name)
-    _migrate_database(database_name)
-    
-    yield database_name  # Tests run here
-    
-    # Teardown
-    _drop_database(database_name)
-```
-
-**monkeypatch Fixture:**
-Pytest's built-in fixture for environment variables and module state:
-```python
-def test_settings_loader(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TRADING_PLATFORM_API__PORT", "9090")
-    monkeypatch.setenv("TRADING_PLATFORM_CONFIG_FILE", str(config_file))
-    
-    clear_settings_cache()
-    settings = load_settings()
-    assert settings.api.port == 9090
-```
+**Location:**
+- **Python:** Helper functions prefixed with `_` (e.g., `_seed_job()`, `_admin_connection_settings()`) live in test files alongside tests
+- **TypeScript:** Helper functions defined in test files or imported from test utilities
 
 ## Coverage
 
-**Requirements:** Not enforced in `pyproject.toml`
+**Requirements:** Not explicitly enforced; aim for high coverage of critical paths (job lifecycle, execution, reconciliation)
 
 **View Coverage:**
 ```bash
-pytest tests/ --cov=src/trading_platform --cov-report=html
-```
+# Python
+pytest --cov=trading_platform tests/
 
-**Coverage Target:** Not specified in configuration
+# TypeScript (if configured)
+# Not currently configured; would need vitest coverage setup
+```
 
 ## Test Types
 
 **Unit Tests:**
-- Isolated testing of single functions/classes
-- Mock external dependencies (HTTP, database)
-- Located in `tests/test_*.py` files
-- Example: `tests/test_market_data_ingestion.py::TestNormalizationHelpers`
-- Quick to run, deterministic
+- **Scope:** Single function/module behavior in isolation
+- **Approach:**
+  - Python: Test individual service methods, domain logic, and data transformations
+  - TypeScript: Test utility functions and helper logic (e.g., `fetchApi()`)
+  - Use fixtures for stable test data
+  - Examples: `test_job_cancellation.py` tests cancellation logic with seeded jobs
 
 **Integration Tests:**
-- Test interaction between components
-- Use real database (temporary, created per test)
-- Test service-to-service interactions
-- Example: `tests/test_order_state_machine.py` creates actual PostgreSQL databases
-- Slower but comprehensive
+- **Scope:** Multiple components working together (job lifecycle with database, API endpoints)
+- **Approach:**
+  - Python: Use database fixtures (`migrated_job_cancellation_db`, `migrated_job_lifecycle_db`) to test database interactions
+  - Multiple test functions sharing same fixture for transactional tests
+  - Example: `test_job_lifecycle.py` tests job state transitions end-to-end
 
-**API/E2E Tests:**
-- Use FastAPI's `TestClient` for synchronous API testing
-- No async test runner configured
-- Located in files like `tests/test_app_boot.py`, `tests/test_api_reads.py`
-- Example:
-```python
-from fastapi.testclient import TestClient
-
-app = create_app()
-with TestClient(app) as client:
-    response = client.get("/api/v1/strategies")
-    assert response.status_code == 200
-```
+**E2E Tests:**
+- **Framework:** Not automated; manual testing via operator console and API
+- **Approach:** Operator-level smoke tests via Vercel deployments and read-only console
 
 ## Common Patterns
 
+**Async Testing:**
+
+**Python:**
+```python
+# Pytest handles async naturally; mark functions as `async def`
+async def test_async_job_operation() -> None:
+    # Async test code
+    result = await some_async_function()
+    assert result is not None
+```
+
+**TypeScript:**
+```typescript
+it("handles async API calls", async () => {
+  const result = await fetchApi<{ status: string }>("/api/v1/system");
+  
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.data.status).toBe("ok");
+  }
+});
+```
+
 **Error Testing:**
-```python
-def test_raises_auth_error_when_api_key_is_empty(self) -> None:
-    settings = _make_polygon_settings(api_key="")
-    with pytest.raises(PolygonAuthError, match="API key"):
-        PolygonClient(settings)
 
-def test_raises_auth_error_on_401_response(self) -> None:
-    settings = _make_polygon_settings()
-    mock_response = MagicMock()
-    mock_response.status_code = 401
-    mock_response.raise_for_status.return_value = None
-    
-    with patch("httpx.Client.get", return_value=mock_response):
-        client = PolygonClient(settings)
-        with pytest.raises(PolygonAuthError, match="401"):
-            client.fetch_daily_bars(request)
-```
-
-**Pagination Testing:**
-Tests verify that pagination handlers follow next_url:
+**Python:**
 ```python
-def test_fetch_handles_pagination(self) -> None:
-    """Client must follow next_url to collect all pages."""
-    page1 = {
-        "status": "OK",
-        "results": [...],
-        "next_url": "https://api.polygon.io/...",
-    }
-    page2 = {
-        "status": "OK",
-        "results": [...],
-    }
-```
-
-**Database State Testing:**
-Tests that create specific database states:
-```python
-def test_apply_order_transition(migrated_order_state_db):
-    # Database is already migrated via fixture
-    # Create test data
-    run = _create_strategy_run(...)
-    event = _create_order_event(...)
-    
-    # Apply transition
-    result = apply_order_transition(run.id, event)
-    
-    # Verify state changed in database
-    session = session_scope()
-    order = session.query(PaperOrder).filter(...).first()
-    assert order.status == OrderLifecycleState.FILLED
-```
-
-**Settings Override Testing:**
-Tests that environment variables and config files properly override defaults:
-```python
-def test_settings_loader_merges_file_and_environment(monkeypatch, tmp_path):
-    config_file = tmp_path / "app.yaml"
-    _write_config(config_file, {"api": {"port": 8000}})
-    
-    monkeypatch.setenv("TRADING_PLATFORM_API__PORT", "9090")
-    monkeypatch.setenv("TRADING_PLATFORM_CONFIG_FILE", str(config_file))
-    
-    clear_settings_cache()
+def test_cancel_running_job_persists_request_without_transitioning(
+    migrated_job_cancellation_db: str,
+) -> None:
+    """Test that cancelling a RUNNING job raises JobNotCancellableError."""
     settings = load_settings()
+    with session_scope(settings) as session:
+        job = _seed_running_job(session)
+        job_id = job.id
+
+    # Expect cooperative mode, not immediate transition
+    result = request_cancellation(
+        job_id=job_id, requested_by="operator_1", reason="stop it", settings=settings
+    )
     
-    assert settings.api.port == 9090  # Environment override wins
+    assert result.mode == "cooperative"
+    # Job is still RUNNING; cancellation is pending
 ```
 
-## Setup and Teardown
+**TypeScript:**
+```typescript
+it("returns ok:false with status:null on network failure", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+  );
 
-**Per-Test Setup:**
-Use function scope (default) or class scope as needed:
+  const result = await fetchApi("/api/v1/system");
+
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.status).toBeNull();
+    expect(result.message.toLowerCase()).toMatch(/unreachable|network|failed/);
+    expect(result.endpoint).toBe("/api/v1/system");
+  }
+});
+```
+
+## Conftest and Shared Fixtures
+
+**Location:** `tests/conftest.py` (Python only; TypeScript fixtures are per-file)
+
+**Example:**
 ```python
-@pytest.fixture()
-def test_db(tmp_path: Path) -> Iterator[Session]:
-    db_url = f"sqlite:///{tmp_path}/test.db"
-    setup_database(db_url)
-    yield get_session()
-    cleanup_database(db_url)
+@pytest.fixture(autouse=True)
+def isolate_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep operator's real .env out of test process (00-VERIFY step 1)."""
+    monkeypatch.setitem(_settings.EnvironmentOverrides.model_config, "env_file", None)
+    _settings.clear_settings_cache()
+    yield
+    _settings.clear_settings_cache()
 ```
 
-**Cache Clearing:**
-Modules with caching require explicit clearing between tests:
-```python
-def test_something() -> None:
-    clear_settings_cache()  # Clear @lru_cache from load_settings()
-    clear_engine_cache()     # Clear SQLAlchemy engine cache
-    # Test code
-```
-
-**Module Initialization:**
-Test files explicitly initialize settings/engine for each test to avoid cross-test pollution:
-```python
-def test_app_bootstrap(monkeypatch, tmp_path):
-    monkeypatch.setenv("TRADING_PLATFORM_CONFIG_FILE", str(config_file))
-    clear_settings_cache()  # Ensure fresh load
-    app = create_app()
-    # Test code
-```
+**Autouse Fixtures:**
+- `isolate_operator_env`: Runs on every test; clears settings cache and disables .env loading to prevent real environment contamination
 
 ---
 
-*Testing analysis: 2026-07-07*
+*Testing analysis: 2026-09-23*

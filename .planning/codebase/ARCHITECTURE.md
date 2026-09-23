@@ -1,191 +1,264 @@
+<!-- refreshed: 2026-09-23 -->
 # Architecture
 
-**Analysis Date:** 2026-07-07
+**Analysis Date:** 2026-09-23
+
+## System Overview
+
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          Operator Console                                 │
+│                     Next.js Frontend (React 19)                           │
+│                  `console/src/app`, `console/src/components`              │
+│                                                                            │
+│                  - Status monitoring dashboard                            │
+│                  - Run analytics and reporting                            │
+│                  - Strategy & paper trading views                         │
+│                  - Health and system readiness checks                     │
+└─────────────────────────────────────────────────────────┬─────────────────┘
+                                                           │ HTTP proxies to
+                                                           │ /api/v1 endpoints
+                                                           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        FastAPI Control Plane                              │
+│              `src/trading_platform/api/app.py`                            │
+│                                                                            │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │  API Routes (Routers)                                           │     │
+│  ├──────────────┬──────────────┬─────────────┬─────────────────────┤     │
+│  │   Health     │   Jobs       │  Analytics  │  Operations         │     │
+│  │  `health.py` │  `jobs.py`   │ `analytics` │  `operations.py`    │     │
+│  ├──────────────┼──────────────┼─────────────┼─────────────────────┤     │
+│  │  Strategies  │   System     │   Runs      │                     │     │
+│  │ `strategies` │  `system.py` │  `runs.py`  │                     │     │
+│  └──────────────┴──────────────┴─────────────┴─────────────────────┘     │
+│                                                                            │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │  Job Orchestration Service                                      │     │
+│  │  `src/trading_platform/orchestration/job_mutations.py`          │     │
+│  │  - Idempotent job submission                                    │     │
+│  │  - Cancellation coordination                                    │     │
+│  │  - Mutation result transport                                    │     │
+│  └─────────────────────────────────────────────────────────────────┘     │
+└────────────────────────┬─────────────────────────────────────────────────┘
+                         │ (Read filters, job queries)
+                         │
+        ┌────────────────┼────────────────┐
+        ▼                ▼                ▼
+┌──────────────────┐ ┌──────────────┐ ┌──────────────────────┐
+│  Job Registry    │ │ Job Manifest │ │ Job Status / Log     │
+│  `registry.py`   │ │  `contracts` │ │  Job Query Service   │
+│                  │ │              │ │  `job_reads.py`      │
+│ - Register       │ │ - Payload    │ │                      │
+│   handlers       │ │   validation │ │ - Filter / search    │
+│ - Resolve        │ │ - Submission │ │ - Log retrieval      │
+│   by type        │ │   specs      │ │ - Status tracking    │
+└──────────────────┘ └──────────────┘ └──────────────────────┘
+        │                                       │
+        └───────────────┬───────────────────────┘
+                        │
+                        ▼
+        ┌───────────────────────────────────────┐
+        │    PostgreSQL (Event Store)           │
+        │    - jobs table                       │
+        │    - job_events table                 │
+        │    - job_logs table                   │
+        │    - job_mutations table (idempotency)│
+        │    - domain tables (runs, strategies) │
+        └───────────────────────────────────────┘
+```
+
+## Component Responsibilities
+
+| Component | Responsibility | File |
+|-----------|----------------|------|
+| **API App** | FastAPI bootstrap, lifespan, route registration | `src/trading_platform/api/app.py` |
+| **Health Router** | Liveness probes and readiness checks | `src/trading_platform/api/routes/health.py` |
+| **Jobs Router** | Job submission, cancellation, observation endpoints | `src/trading_platform/api/routes/jobs.py` |
+| **Operations Router** | System control endpoints (kill switch, operator controls) | `src/trading_platform/api/routes/operations.py` |
+| **Job Orchestration Service** | Idempotent submission, cancellation, result transport | `src/trading_platform/orchestration/job_mutations.py` |
+| **Job Registry** | In-memory registry for handler resolution | `src/trading_platform/jobs/registry.py` |
+| **Job Read Service** | Query filters, status retrieval, log pagination | `src/trading_platform/services/job_reads.py` |
+| **Database Models** | SQLAlchemy ORM for all domain entities | `src/trading_platform/db/models/` |
+| **Settings** | Typed configuration from YAML and environment | `src/trading_platform/core/settings.py` |
+| **Console Frontend** | React/Next.js operator UI with dashboard | `console/src/app/`, `console/src/components/` |
 
 ## Pattern Overview
 
-**Overall:** Layered service-oriented architecture with explicit separation of concerns:
-- HTTP API layer (FastAPI)
-- Domain service layer (business logic)
-- Persistence layer (SQLAlchemy ORM + PostgreSQL)
-- Strategy plugin layer (abstract base with registry)
-- CLI worker layer for async/scheduled operations
+**Overall:** Layered REST API with job orchestration framework at the core. The system separates read operations (observation) from write operations (mutations) into distinct services with explicit contracts.
 
 **Key Characteristics:**
-- Synchronous execution model with session-based database access
-- Pluggable strategy implementations via abstract base + registry pattern
-- Event-sourced decision records (risk, orders, fills) persisted for auditability
-- Multi-run-type architecture supporting backtest, paper execution, and live analysis
-- Operator control layer enforcing kill switches and per-strategy toggles
-- Structured logging with contextual metadata throughout
+- **Job-centric architecture**: All long-running work flows through a generic Job framework with typed handlers
+- **Idempotent mutations**: Every state change (submit, cancel) uses deterministic idempotency keys to ensure safe retries
+- **Explicit contracts**: Job handlers validate payloads before state changes; registry prevents unknown types
+- **Typed configuration**: YAML + environment overrides via Pydantic for runtime settings
+- **PostgreSQL event sourcing**: All domain state changes persist to immutable event log
+- **Single-user focus**: Current scope is local-first, single-operator system
 
 ## Layers
 
 **API Layer:**
-- Purpose: HTTP endpoints for operator inspection and control
+- Purpose: Accept client requests, validate inputs, coordinate responses
 - Location: `src/trading_platform/api/`
-- Contains: FastAPI application bootstrap, route modules, dependency injection
-- Depends on: Service layer, strategy registry, settings
-- Used by: HTTP clients, operator CLI
+- Contains: FastAPI app, route handlers, endpoint definitions
+- Depends on: Settings, orchestration services, read services
+- Used by: Frontend console, CLI/scripts, external API consumers
 
-**Service Layer:**
-- Purpose: Core business logic for trading operations, analytics, and reconciliation
+**Orchestration Layer:**
+- Purpose: Implement idempotent state mutations, job submission, and cancellation
+- Location: `src/trading_platform/orchestration/job_mutations.py`, `src/trading_platform/jobs/`
+- Contains: Job registry, handler contracts, submission logic, dependency resolution
+- Depends on: Database session, settings, job lifecycle management
+- Used by: API routes, worker processes
+
+**Domain/Service Layer:**
+- Purpose: Encapsulate business logic for jobs, analytics, operator controls
 - Location: `src/trading_platform/services/`
-- Contains: Specialized services (backtesting, paper execution, risk evaluation, analytics, reconciliation)
-- Depends on: Database models, external broker APIs, market data access, strategy registry
-- Used by: API routes, worker CLI commands
+- Contains: Job reads, analytics, risk evaluation, execution, reconciliation, operator status
+- Depends on: Database models, external APIs (Alpaca, Polygon)
+- Used by: API routes, orchestration layer
 
-**Database/Persistence Layer:**
-- Purpose: ORM models and session management
+**Persistence Layer:**
+- Purpose: Define ORM models and manage database sessions
 - Location: `src/trading_platform/db/`
-- Contains: SQLAlchemy models (18 distinct entity types), session factory, connection pooling
-- Depends on: Settings (for connection strings), PostgreSQL driver
-- Used by: All services, strategy implementations
+- Contains: SQLAlchemy models, session factory, base classes
+- Depends on: PostgreSQL database
+- Used by: All services and orchestration logic
 
-**Strategy Layer:**
-- Purpose: Pluggable strategy implementations
-- Location: `src/trading_platform/strategies/`
-- Contains: Base strategy abstract class, signal types, registry for lookup
-- Depends on: Market data access, database session, settings
-- Used by: Backtesting service, risk evaluation, signal generation
-
-**Worker/CLI Layer:**
-- Purpose: Non-HTTP entry points for scheduled/manual operations
-- Location: `src/trading_platform/worker/__main__.py`
-- Contains: Command-line interface with 20+ subcommands for operations
-- Depends on: Service layer, settings
-- Used by: Cron jobs, manual operator intervention, scheduled workflows
-
-**Core/Configuration Layer:**
-- Purpose: Configuration management and cross-cutting concerns
-- Location: `src/trading_platform/core/`
-- Contains: Settings loader (YAML + env overrides), structured logging
-- Depends on: PyYAML, Pydantic
-- Used by: All layers at startup/initialization
+**Configuration Layer:**
+- Purpose: Load and resolve typed settings from multiple sources
+- Location: `src/trading_platform/core/settings.py`
+- Contains: Pydantic settings classes, YAML loading, environment override logic
+- Depends on: File system, environment variables
+- Used by: App bootstrap, service initialization
 
 ## Data Flow
 
-**Backtest Workflow:**
+### Primary Request Path (Job Submission)
 
-1. Worker CLI receives `backtest` command with strategy and date range
-2. `BacktestingService.run_backtest()` loads strategy via registry
-3. Strategy's `generate_signals()` queries daily bars via `MarketDataAccess`
-4. Backtest engine simulates order execution with fills, tracks equity curve
-5. Results persisted as `BacktestTrade`, `BacktestSignal`, `BacktestMetric` entities
-6. Worker CLI or API renders report via `BacktestReportingService`
+1. **Client submits job** → POST `/api/v1/jobs` with job type and payload (`src/trading_platform/api/routes/jobs.py:submit_job()`)
+2. **Endpoint validates** → Check idempotency key format, normalize job type (`SubmitJobRequest` validator)
+3. **Orchestration service** → Call `JobOrchestrationService.submit()` with idempotency key (`src/trading_platform/orchestration/job_mutations.py:JobOrchestrationService.submit()`)
+4. **Registry validation** → Resolve handler; validate payload via submission spec (`src/trading_platform/jobs/registry.py:resolve()`)
+5. **Job creation** → Create Job record in QUEUED status, persist to PostgreSQL
+6. **Idempotency tracking** → Store mutation in `job_mutations` table with idempotency key hash
+7. **Response** → Return `JobReference` with job_id, type, status, and self-links
 
-**Paper Execution Workflow:**
+### Job Observation Path
 
-1. Risk evaluation produces approved `RiskEvent` records for symbol/side/quantity
-2. Worker CLI calls `run_paper_session()` which:
-   - Fetches approved risk decisions for session date
-   - Derives intended orders from risk decisions
-   - Checks operator controls (per-strategy enable/kill switch)
-   - Submits orders to Alpaca via `AlpacaExecutionService`
-   - Records `PaperOrder` and `ExecutionEvent` entities
-3. `sync_paper_state()` polls broker for fills, updates local `PaperFill` records
-4. `reconcile_paper_execution()` validates local state matches broker, reports drift
-5. Analytics queries all execution history for performance summaries
+1. **Client queries job** → GET `/api/v1/jobs/{job_id}` or filtered list
+2. **Read service** → `JobReadService.fetch()` applies filters, hydrates from database
+3. **Database query** → SELECT from jobs table with status/type/time indexes
+4. **Response** → Return job metadata: status, timestamps, progress, result summary
 
-**Risk Evaluation Workflow:**
+### Job Cancellation Path
 
-1. Worker CLI calls `run_risk_evaluation()` with target session date
-2. Strategy signals generated for all universe symbols as of that date
-3. `RiskService` evaluates each signal through:
-   - Position sizing (respecting max_positions, risk_per_trade)
-   - Portfolio constraints (margin, sector limits)
-   - Exit rules (close below threshold MA)
-4. Approved order intents recorded as `RiskEvent` entities
-5. Risk run persisted with `StrategyRun` (status=succeeded)
-
-**Analytics/Reporting Flow:**
-
-1. API or worker queries `StrategyAnalyticsService`
-2. Service pulls backtest metrics, paper execution fills, equity curves
-3. Computes Sharpe, drawdown, win rate, P&L statistics
-4. Renders as JSON or markdown summary with recent operational inspection
+1. **Client requests cancellation** → POST `/api/v1/jobs/{job_id}/cancel` with reason
+2. **Endpoint validation** → Check reason length, format idempotency key
+3. **Orchestration service** → Call `JobOrchestrationService.cancel()` with idempotency
+4. **State validation** → Verify job exists and is cancellable (not already terminal)
+5. **Cancellation request** → Set `cancellation_requested_at`, `cancellation_requested_by`, `reason`
+6. **Worker signal** → Worker polls job state, sees cancellation flag, transitions to CANCELLED
+7. **Acknowledgment** → Set `cancellation_acknowledged_at` and `cancellation_cause`
 
 **State Management:**
-
-- Immutable entity records: `StrategyRun`, `RiskEvent`, `ExecutionEvent`, `OrderEvent`
-- Current state snapshots: `Position`, `PaperOrder`, `AccountSnapshot`
-- Time-series data: `DailyBar` (market data), `BacktestEquitySnapshot` (equity curves)
-- Control state: `SystemControl` table stores global kill switch + per-strategy toggles
-- All state changes logged to database for full auditability
+- **Job lifecycle**: QUEUED → RUNNING → {SUCCEEDED|FAILED|CANCELLED}
+- **Blocking jobs**: Job can block on another job; if blocker fails, blocked job is cancelled with `DEPENDENCY_FAILED`
+- **Progress tracking**: Job can report `progress_percent`, `progress_step`, `progress_current/total`
+- **Failure tracking**: Terminal FAILED jobs record `failure_reason` and `failure_message`
 
 ## Key Abstractions
 
-**StrategyRegistry:**
-- Purpose: Plugin system for discovering and loading strategy implementations
-- Examples: `src/trading_platform/strategies/registry.py`, `src/trading_platform/strategies/base.py`
-- Pattern: Registry maintains map of strategy_id → Strategy class. Lazy instantiation via `resolve(strategy_id)`. Base class `BaseStrategy` defines abstract interface.
+**Job:**
+- Purpose: Generic unit of orchestrated work with typed handler resolution
+- Examples: `src/trading_platform/db/models/job.py`
+- Pattern: Enum-based status machine (5 states), progress tracking, failure reasons, blocking relationships
 
-**SignalBatch:**
-- Purpose: Typed container for strategy signals as of a session date
-- Examples: `src/trading_platform/strategies/signals.py`
-- Pattern: Immutable dataclass containing one Signal per universe symbol. Signals carry symbol, side (LONG/SHORT/FLAT), and reasoning metadata.
+**JobHandler (Protocol):**
+- Purpose: Contract for job execution logic
+- Examples: Handler modules in `src/trading_platform/jobs/`
+- Pattern: Implement `execute(context) -> result` with proper error propagation and heartbeat
 
-**StrategyRun:**
-- Purpose: Audit record linking all work (backtest, risk, execution) to a strategy execution
-- Examples: `src/trading_platform/db/models/strategy_run.py`
-- Pattern: Immutable entity with run_id (UUID), status (pending/succeeded/failed), type (backtest/risk/paper_order_submission), trigger_source (who initiated)
+**JobRegistry:**
+- Purpose: In-memory handler resolution by job_type
+- Examples: `src/trading_platform/jobs/registry.py`
+- Pattern: Typed register/resolve with validation, prevents duplicates, optional submission specs
 
-**MarketDataAccess:**
-- Purpose: Abstraction over daily bar queries and market session metadata
-- Examples: `src/trading_platform/services/market_data_access.py`
-- Pattern: Session-aware queries that lazily load bars, cache session metadata, provide date validation
+**Configuration Tree:**
+- Purpose: Immutable typed settings from YAML + environment
+- Examples: `AppSettings`, `ApiSettings`, `DatabaseSettings`, `StrategySettings`
+- Pattern: Pydantic `BaseSettings` with environment prefix, nested dot-notation access
 
-**OrderStateMachine:**
-- Purpose: Deterministic transitions from intended order through lifecycle states
-- Examples: `src/trading_platform/services/order_state_machine.py`
-- Pattern: Given PaperOrder + broker fill snapshot, compute next state (pending → filled, cancelled, etc). State transition immutable.
-
-**OperatorControl:**
-- Purpose: Enforce authorization and execution halts
-- Examples: `src/trading_platform/services/operator_controls.py`
-- Pattern: SystemControl entity records kill switch state + per-strategy enable/disable. All paper submission paths check controls before broker contact.
+**Strategy:**
+- Purpose: Named, versioned algorithm with configuration contract
+- Examples: `src/trading_platform/strategies/base.py`, `src/trading_platform/strategies/trend_following_daily/`
+- Pattern: Registry-based lookup, config-driven parameters, signal generation
 
 ## Entry Points
 
-**FastAPI HTTP Server:**
-- Location: `src/trading_platform/api/app.py`
-- Triggers: `trading-platform-api` CLI command or Docker container startup
-- Responsibilities: 
-  - Loads settings from YAML + env at startup
-  - Registers six route modules (health, analytics, strategies, runs, operations, system)
-  - Serves structured logging throughout request lifecycle
-  - Provides dependency injection (settings, services, registry)
+**API Server:**
+- Location: `src/trading_platform/api/app.py:main()`
+- Triggers: `trading-platform-api` command, Uvicorn startup
+- Responsibilities: Bootstrap FastAPI with lifespan, load settings, mount routes, configure logging
 
 **Worker CLI:**
-- Location: `src/trading_platform/worker/__main__.py`
-- Triggers: `trading-platform-worker <command>` with 20+ subcommands
-- Responsibilities:
-  - Argument parsing for diverse commands (backtest, risk, submit, reconcile, operator-control, etc.)
-  - Configuration loading and logging setup
-  - Delegation to service functions
-  - JSON output to stdout for consumption by external schedulers/dashboards
+- Location: `src/trading_platform/worker/__main__.py:main()`
+- Triggers: `trading-platform-worker serve` or `trading-platform-worker {command}`
+- Responsibilities: Parse command-line arguments, dispatch to handler (currently serve/dry-run/etc)
+
+**Database Migrations:**
+- Location: `alembic/` with entrypoint via `scripts/migrate.py`
+- Triggers: `PYTHONPATH=src python scripts/migrate.py upgrade head`
+- Responsibilities: Apply schema changes using Alembic
+
+## Architectural Constraints
+
+- **Threading:** FastAPI runs on async event loop (Uvicorn); database queries use sync SQLAlchemy with thread pooling
+- **Global state:** `app.state` holds job_registry and settings during lifespan; must not be mutated after bootstrap
+- **Circular imports:** Import services in route handlers via Depends() dependency injection; avoid top-level imports in api/routes/
+- **Idempotency:** Every mutation API requires `Idempotency-Key` header; same key + endpoint = same result (replay detected)
+- **Leasing:** Job workers use optimistic locking (lease_owner, lease_expires_at) to prevent concurrent execution
+- **Single-user scope:** All operations assume one operator; no multi-user authorization layer
+
+## Anti-Patterns
+
+### Circular Service Dependencies
+
+**What happens:** Service A imports Service B which imports Service A.
+**Why it's wrong:** Python module initialization order becomes fragile; hard to test in isolation; refactoring becomes brittle.
+**Do this instead:** Use dependency injection via FastAPI `Depends()` to inject services into route handlers. Define service interfaces (Protocols) in a contracts module and import those instead. Avoid importing concrete service classes at module level. Example: `src/trading_platform/api/dependencies.py` constructs services and injects them, not `src/trading_platform/api/routes/jobs.py` importing directly.
+
+### God Services
+
+**What happens:** A single service class grows to handle jobs, analytics, risk, and execution — one file with 1000+ lines.
+**Why it's wrong:** Violates single responsibility; makes testing harder; increases cognitive load; harder to reuse pieces.
+**Do this instead:** Separate concerns by domain (JobReadService handles queries, JobOrchestrationService handles mutations). Create thin orchestration services that compose smaller, focused services. Example: `src/trading_platform/services/job_reads.py` handles only queries; `src/trading_platform/orchestration/job_mutations.py` handles only mutations.
+
+### Silent Failures
+
+**What happens:** A service catches an exception, logs it, and returns a default value (e.g., empty list) instead of surfacing the error.
+**Why it's wrong:** Operator doesn't know what failed; silent data loss; hard to debug in production.
+**Do this instead:** Let exceptions propagate to the API layer where they're explicitly mapped to HTTP error codes with details. Use typed exception classes (subclass ValueError, KeyError, etc.) in orchestration and service layers. Example: `src/trading_platform/orchestration/job_mutations.py` raises `UnknownJobTypeForSubmissionError`, which the route handler catches and converts to 422.
 
 ## Error Handling
 
-**Strategy:** Layered error propagation with validation at boundaries:
+**Strategy:** Exceptions are raised in service and orchestration layers with specific exception types (dataclass-based ValueError subclasses). The API layer catches these and converts them to HTTP status codes with error details.
 
 **Patterns:**
-- Input validation: Pydantic models validate settings at load time; datetime/date args validated in CLI argument parsing
-- Business logic errors: Services raise `ValueError` (bad input), `LookupError` (not found), domain-specific exceptions
-- API errors: Route handlers catch exceptions, map to HTTP status codes (404 not found, 400 bad request, 503 service unavailable)
-- Database errors: Session scope context manager rolls back transaction on any exception; errors propagate up for caller handling
-- External API errors: `AlpacaClient` catches network errors, invalid credentials, API rate limits; logs and re-raises as service exception
+- **Type mismatch:** Raise `UnknownJobTypeError` (KeyError) from registry lookup failure
+- **Validation failure:** Raise `InvalidJobPayloadError` (ValueError) when job payload doesn't match spec
+- **State machine violation:** Raise `JobTerminalConflictError` when trying to cancel a terminal job
+- **Idempotency conflict:** Raise `IdempotencyConflictError` when same key used with different payload
+- **Missing target:** Raise `JobMutationNotFoundError` (LookupError) when job ID not found
 
 ## Cross-Cutting Concerns
 
-**Logging:** Structured JSON logging via `core/logging.py`. Every operation emits context dict with run_id, strategy_id, session_date, operation name. Elasticsearch-ready format.
+**Logging:** Structured JSON logging configured via `src/trading_platform/core/logging.py`. Every API route logs request entry/exit with context (job_id, user, environment). Worker logs job execution progress via periodic updates.
 
-**Validation:** Pydantic BaseModel for all settings and API payloads. SQLAlchemy constraints (NOT NULL, UNIQUE, FK) enforced at database. Strategy params validated in registry resolution.
+**Validation:** Payload validation happens twice: (1) Pydantic models at API boundary, (2) JobSubmissionSpec in registry before persistence. Database-level constraints enforce job_progress_percent [0-100] and enum values.
 
-**Authentication:** Not implemented (single_user operator_mode). Future: API could validate operator credentials before allowing control operations (enable/disable/kill-switch).
-
-**Transactions:** SQLAlchemy session-scope pattern ensures all database writes atomic. Paper order submission is NOT transactional across broker contact; instead relies on idempotency and reconciliation.
+**Authentication:** Not yet implemented. Current scope is single-user local system. Future expansion would add operator identity and audit trail.
 
 ---
 
-*Architecture analysis: 2026-07-07*
+*Architecture analysis: 2026-09-23*
