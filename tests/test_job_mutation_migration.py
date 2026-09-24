@@ -258,7 +258,7 @@ def test_phase18_migration_downgrade_and_reupgrade_preserve_jobs(
     migrated_job_mutation_db: str,
 ) -> None:
     config = build_alembic_config()
-    command.downgrade(config, "-1")
+    command.downgrade(config, "0018_phase17_job_framework")
     clear_settings_cache()
     clear_engine_cache()
 

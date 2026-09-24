@@ -959,6 +959,7 @@ def test_alembic_upgrade_creates_phase17_job_tables(migrated_database: str) -> N
         "worker_lost",
         "lease_expired",
         "cancellation_timeout",
+        "config_invalid",
     }
     assert enums["job_cancellation_cause"] == {
         "operator_request",
