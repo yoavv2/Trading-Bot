@@ -182,7 +182,21 @@ Plans:
   9. The Phase 18 registry tripwires (`test_default_registry_remains_empty_until_phase_19`, the `_PHASE19_OPERATION_TYPES` denylist, `test_phase18_diff_excludes_console_and_phase19_handler_registrations`) are deliberately replaced by a test pinning the exact registered Job-type set.
 
 **Out of scope**: every operation other than backtest; safety controls; retry; `scripts/` retirement; history view; JSON-Schema-driven form generation; SSE/WebSockets; auth; `submitted_by`/identity fields.
-**Plans**: TBD
+**Plans**: 12 plans
+
+Plans:
+- [ ] 19-01-PLAN.md — Migration 0020: strategy_runs.job_id FK+UNIQUE, config_invalid enum; migration tests [BLOCKING upgrade]
+- [ ] 19-02-PLAN.md — ORCH-07 mutation flag (default disabled) + 403 guard, reason in 422 body, render.yaml/.env.example
+- [ ] 19-03-PLAN.md — job_id threading in run_backtest; resources[] on Job detail; job_id on run reads
+- [ ] 19-04-PLAN.md — Job-type catalog GET /api/v1/job-types + registry catalog contract (ORCH-06)
+- [ ] 19-05-PLAN.md — run-jobs worker: BACKTEST-level boot, per-type mode preflight (config_invalid), compose switch (ORCH-05)
+- [ ] 19-06-PLAN.md — backtest submission spec + handler, registration, SC9 tripwire replacement
+- [ ] 19-07-PLAN.md — Production-path E2E: submit, worker, idempotency, cancellation outcomes
+- [ ] 19-08-PLAN.md — Console foundation: mutating client, polling, capability hook, D-14 label, lookup map 2, SC6 fences
+- [ ] 19-09-PLAN.md — Jobs list screen with filters, polling, New Job entry, nav link
+- [ ] 19-10-PLAN.md — Job logs tail, events panel, cancel confirmation dialog
+- [ ] 19-11-PLAN.md — New Job flow + backtest form, /strategy shortcut, run-header back-link
+- [ ] 19-12-PLAN.md — Job detail screen composition, SC6 test-only type test
 **UI hint**: yes
 
 ### Phase 20: Complete Operation Migration & Safety Controls
@@ -246,7 +260,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
-| 19. Job Operations Vertical Slice | v1.3 | 0/TBD | Not started | - |
+| 19. Job Operations Vertical Slice | v1.3 | 0/12 | Planned | - |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
