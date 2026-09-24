@@ -35,7 +35,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Job Operations UI
 
-- [ ] **JOBUI-01**: Operator can list Jobs in the console, filtered by status and job type, through a job-type-agnostic list view
+- [x] **JOBUI-01**: Operator can list Jobs in the console, filtered by status and job type, through a job-type-agnostic list view
 - [ ] **JOBUI-02**: Operator can view a generic Job detail: status, progress, failure reason/message and `outcome_uncertain`, dependencies/blocking Job, cancellation fields, `result_summary` rendered generically, and linked domain resources via a generic `resources[]` list (a `strategy_run` resource links to the existing run-detail page; persisted `strategy_runs.job_id` FK — Phase 19 CONTEXT D-01..D-06)
 - [ ] **JOBUI-03**: Operator can view a Job's structured logs (cursor-based tail) and lifecycle events
 - [ ] **JOBUI-04**: Operator can cancel a non-terminal Job from the console behind a confirmation; the UI labels the actual outcome (`CANCELLED`, or `FAILED`/`cancellation_timeout`) honestly
@@ -132,7 +132,7 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | ORCH-05 | Phase 19 | Complete |
 | ORCH-06 | Phase 19 | Complete |
 | ORCH-07 | Phase 19 | Complete |
-| JOBUI-01 | Phase 19 | Pending |
+| JOBUI-01 | Phase 19 | Complete |
 | JOBUI-02 | Phase 19 | Pending |
 | JOBUI-03 | Phase 19 | Pending |
 | JOBUI-04 | Phase 19 | Pending |

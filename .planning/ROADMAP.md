@@ -212,7 +212,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 19-09-PLAN.md — Jobs list screen with filters, polling, New Job entry, nav link
+- [x] 19-09-PLAN.md — Jobs list screen with filters, polling, New Job entry, nav link
 - [ ] 19-10-PLAN.md — Job logs tail, events panel, cancel confirmation dialog
 - [ ] 19-11-PLAN.md — New Job flow + backtest form, /strategy shortcut, run-header back-link
 
@@ -283,7 +283,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
-| 19. Job Operations Vertical Slice | v1.3 | 8/12 | In Progress | - |
+| 19. Job Operations Vertical Slice | v1.3 | 9/12 | In Progress | - |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 

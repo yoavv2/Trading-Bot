@@ -129,3 +129,11 @@ None - no external service configuration required.
 ---
 *Phase: 19-job-operations-vertical-slice*
 *Completed: 2026-09-24*
+
+## Self-Check: PASSED
+
+- All 7 created/modified files under `console/` and this SUMMARY.md confirmed present on disk.
+- All 3 commits (`2e67355`, `9267974`, `5e18a8e`) confirmed present in `git log --oneline --all`.
+- `npm test` (console/): 8 files / 75 tests passed.
+- `npx tsc --noEmit` (console/): clean.
+- `npm run lint` (console/): clean.
