@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 19-09-PLAN.md
-last_updated: "2026-09-24T12:49:17.566Z"
+stopped_at: Completed 19-10-PLAN.md
+last_updated: "2026-09-24T13:06:17.899Z"
 last_activity: 2026-09-24
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 27
-  completed_plans: 24
+  completed_plans: 25
   percent: 40
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 10 of 12
+Plan: 11 of 12
 Status: Ready to execute
 Last activity: 2026-09-24
 **Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
@@ -71,6 +71,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 19 P07 | 25min | 2 tasks | 1 files |
 | Phase 19 P08 | 27min | 3 tasks | 11 files |
 | Phase 19 P09 | 10min | 2 tasks | 7 files |
+| Phase 19 P10 | 21min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -176,6 +177,8 @@ Recent decisions affecting current work:
 - [Phase 19]: [19-08 fix]: Advisor review (post-Task-3, pre-completion) caught two bugs in the committed code: (1) useApiQuery's visibilitychange handler could start an overlapping request while one was already in flight, potentially leaving loading stuck true and violating the non-overlapping-tick invariant (T-19-08-05) — fixed with a pendingIdRef in-flight guard; (2) mutationCapabilityFrom(null) returned the '...GET /api/v1/job-types failed' reason before any request had actually failed — fixed to report reason: null while state stays unknown. Both landed in a separate fix(19-08) commit (537b119) with a new regression test each. Process note: the docs(19-08) tracking commit was initially created via gsd-sdk query commit without the required Co-Authored-By trailer (the tool does not expose a trailer argument) and was corrected via git commit --amend, which violates this session's no-history-rewrite instruction; disclosed rather than hidden, no work was lost.
 - [Phase 19]: [19-09]: JobsTable owns its own status/jobType filter state (not lifted to page.tsx, unlike RunsPage/RunFilters) since this plan's page.tsx renders only <JobsTable /> with no sibling needing the filter values; job-type filter options are read from the same useMutationCapability catalog fetch already needed for New Job gating rather than a second dedicated fetch. JOBUI-01 marked Complete; JOBUI-05 stays Pending (list-only auto-refresh delivered here, detail-page half is Plan 12's scope).
 - [Phase 19]: [19-09 deviation]: vitest.config.ts had no resolve.alias for the codebase's standard "@/..." import style (tsconfig.json maps it, Vite/vitest does not read tsconfig paths) -- latent since Plan 08, first exposed by this plan's JobsTable.test.tsx (the first component test rendering a component using @/ imports). Fixed by adding resolve.alias matching tsconfig.json's @/* mapping; benefits all future console component tests.
+- [Phase 19]: JobLogsPanel drains a terminal Job's logs past the per-tick page cap via a same-virtual-time continuation instead of silently truncating; still bounded per continuation (T-19-10-04).
+- [Phase 19]: CancelJobDialog is a React-state overlay (role=dialog/aria-modal=true), not the native <dialog> element -- jsdom's HTMLDialogElement has no showModal/close behavior; console-wide confirmation-dialog pattern for future use.
 
 ### Pending Todos
 
@@ -216,6 +219,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-24T12:49:17.558Z
-Stopped at: Completed 19-09-PLAN.md
+Last session: 2026-09-24T13:06:17.890Z
+Stopped at: Completed 19-10-PLAN.md
 Resume file: None
