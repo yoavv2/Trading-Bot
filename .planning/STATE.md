@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 19-04-PLAN.md
-last_updated: "2026-09-24T09:26:18.221Z"
+stopped_at: Completed 19-05-PLAN.md
+last_updated: "2026-09-24T11:43:57.235Z"
 last_activity: 2026-09-24
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 27
-  completed_plans: 19
+  completed_plans: 20
   percent: 40
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 5 of 12
+Plan: 6 of 12
 Status: Ready to execute
 Last activity: 2026-09-24
 **Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
@@ -66,6 +66,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 19 P02 | 25min | 2 tasks | 8 files |
 | Phase 19 P03 | 25min | 2 tasks | 5 files |
 | Phase 19 P04 | 25min | 2 tasks | 7 files |
+| Phase 19 P05 | 40min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -163,6 +164,8 @@ Recent decisions affecting current work:
 - [Phase 19]: 19-03's frontmatter lists requirements [OPS-01, JOBUI-02], but this plan ships only the service/API layer (job_id threading + resources[]) -- neither requirement's literal end-to-end/operator-visible text is satisfied. Both left Pending per the 19-01 precedent; mark OPS-01 complete once the backtest Job handler + worker wiring lands, and JOBUI-02 once the console Job-detail screen renders resources[].
 - [Phase 19]: [19-04]: ORCH-06 marked Complete -- its literal text (endpoint exists, lists every registered type with description + cancellation mode, enforcement test) is fully satisfied; requirement text does not require a populated production catalog and no later Phase 19 plan lists ORCH-06.
 - [Phase 19]: [19-04]: Job-type catalog metadata (description/cancellation_mode/submission_defaults) is a registration-time invariant enforced in JobRegistry.register; test_default_registry_types_all_appear_in_catalog is a vacuous pass today since build_default_registry() stays empty per this plan's explicit scope boundary.
+- [Phase 19]: [19-05]: preflight lives in jobs/runner.py via an injected JobPreflight callable owned by worker/commands/run_jobs.py -- the only shape satisfying test_run_jobs_is_a_thin_worker_loop_adapter's prohibition on JobStatus/select(/apply_job_transition in run_jobs.py; required_execution_mode stays a duck-typed getattr on JobHandler, not added to the frozen jobs/contracts.py Protocol
+- [Phase 19]: [19-05]: adapted tests/test_startup_validation.py::test_run_jobs_command_exits_before_worker_loop_constructed to D-22's BACKTEST-level boot -- an invalid PAPER config no longer exits run_jobs_command's startup gate, so the CFG-06 ordering proof now uses an unreachable-DB payload instead of empty broker keys
 
 ### Pending Todos
 
@@ -203,6 +206,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-24T09:26:18.211Z
-Stopped at: Completed 19-04-PLAN.md
+Last session: 2026-09-24T11:43:57.226Z
+Stopped at: Completed 19-05-PLAN.md
 Resume file: None

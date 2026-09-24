@@ -199,7 +199,7 @@ Plans:
 
 - [x] 19-03-PLAN.md — job_id threading in run_backtest; resources[] on Job detail; job_id on run reads
 - [x] 19-04-PLAN.md — Job-type catalog GET /api/v1/job-types + registry catalog contract (ORCH-06)
-- [ ] 19-05-PLAN.md — run-jobs worker: BACKTEST-level boot, per-type mode preflight (config_invalid), compose switch (ORCH-05)
+- [x] 19-05-PLAN.md — run-jobs worker: BACKTEST-level boot, per-type mode preflight (config_invalid), compose switch (ORCH-05)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -283,7 +283,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
-| 19. Job Operations Vertical Slice | v1.3 | 4/12 | In Progress | - |
+| 19. Job Operations Vertical Slice | v1.3 | 5/12 | In Progress | - |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
