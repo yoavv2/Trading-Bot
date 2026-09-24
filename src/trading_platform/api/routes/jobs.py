@@ -15,6 +15,7 @@ from trading_platform.api.dependencies import (
     get_job_orchestration_service,
     get_job_read_filters,
     get_job_read_service,
+    require_mutations_enabled,
     serialize_job_filters,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError
@@ -73,7 +74,7 @@ def _mutation_response(
     return JSONResponse(content=dict(reference), status_code=status_code, headers=headers)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_mutations_enabled)])
 def submit_job(
     request: SubmitJobRequest,
     orchestration: Annotated[JobOrchestrationService, Depends(get_job_orchestration_service)],
@@ -100,6 +101,7 @@ def submit_job(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "invalid_job_payload",
             job_type=exc.job_type,
+            reason=exc.reason,
         ) from exc
     except IdempotencyConflictError as exc:
         raise _error(
@@ -115,7 +117,7 @@ def submit_job(
     )
 
 
-@router.post("/{job_id}/cancel")
+@router.post("/{job_id}/cancel", dependencies=[Depends(require_mutations_enabled)])
 def cancel_job(
     job_id: UUID,
     request: CancelJobRequest,

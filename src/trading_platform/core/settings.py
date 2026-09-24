@@ -256,6 +256,17 @@ class ExecutionSettings(BaseModel):
     safety: ExecutionSafetySettings = ExecutionSafetySettings()
 
 
+class OrchestrationSettings(BaseModel):
+    """ORCH-07 / D-19: public-deploy mutation guard.
+
+    Every mutating Job route (submit, cancel) is disabled unless this flag is
+    explicitly set to True. Safe-by-default: an unconfigured deployment (no
+    env var, no .env) never accepts a mutating request.
+    """
+
+    mutations_enabled: bool = False
+
+
 class Settings(BaseModel):
     app: AppMetadata = AppMetadata()
     api: ApiSettings = ApiSettings()
@@ -269,6 +280,7 @@ class Settings(BaseModel):
     portfolio: PortfolioSettings = PortfolioSettings()
     broker: BrokerSettings = BrokerSettings()
     execution: ExecutionSettings = ExecutionSettings()
+    orchestration: OrchestrationSettings = OrchestrationSettings()
 
 
 class EnvironmentOverrides(BaseSettings):
@@ -291,6 +303,7 @@ class EnvironmentOverrides(BaseSettings):
     portfolio: PortfolioSettings = PortfolioSettings()
     broker: BrokerSettings = BrokerSettings()
     execution: ExecutionSettings = ExecutionSettings()
+    orchestration: OrchestrationSettings = OrchestrationSettings()
 
 
 def _resolve_path(raw_path: str | Path) -> Path:

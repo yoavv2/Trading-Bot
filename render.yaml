@@ -8,9 +8,12 @@
 # Free-tier caveats (accepted):
 #   - The web service sleeps after ~15 min idle; the first request after sleep
 #     is a slow cold start.
-#   - The service is PUBLIC and UNAUTHENTICATED. Every route is read-only (GET),
-#     so this is a data-disclosure risk, not a control/execution risk — but it is
-#     still not production-safe.
+#   - The service is PUBLIC and UNAUTHENTICATED. Mutating Job routes exist
+#     (POST /api/v1/jobs, POST /api/v1/jobs/{id}/cancel) but are disabled on
+#     this deployment by TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED=false
+#     and return 403 {"code": "mutations_disabled"} (ORCH-07). Every other
+#     route is read-only (GET), so the residual exposure is data disclosure,
+#     not control/execution — but this is still not production-safe.
 #
 # Setup: Render Dashboard -> New -> Blueprint -> connect this repo. Render reads
 # this file, then prompts for the four DB secrets below (sync: false). Paste the
@@ -58,6 +61,10 @@ services:
         sync: false
       - key: TRADING_PLATFORM_DATABASE__PASSWORD
         sync: false
+      # ORCH-07 / D-19: mutating Job routes are disabled by default; this
+      # deployment sets it explicitly rather than relying on the unset default.
+      - key: TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED
+        value: "false"
       # Polygon / Alpaca credentials are intentionally omitted: they are consumed
       # only by the worker at ingest/execution time. The read-only API does not
       # instantiate a market-data or broker client, so it does not need them.

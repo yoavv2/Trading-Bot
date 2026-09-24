@@ -53,6 +53,19 @@ def get_settings(request: Request) -> Settings:
     return settings
 
 
+def require_mutations_enabled(request: Request) -> None:
+    """ORCH-07 / D-19 guard: reject every mutating request unless explicitly enabled.
+
+    Attached as a route-decorator dependency (not a service-layer check) so it
+    resolves before header/path/body-schema validation on a disabled
+    deployment, and so Phase 20 can reuse it unchanged on the control-service
+    routes.
+    """
+
+    if not get_settings(request).orchestration.mutations_enabled:
+        raise HTTPException(status_code=403, detail={"code": "mutations_disabled"})
+
+
 def get_strategy_registry(request: Request) -> StrategyRegistry:
     return build_default_strategy_registry(get_settings(request))
 
