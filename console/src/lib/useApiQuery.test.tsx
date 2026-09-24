@@ -151,6 +151,53 @@ describe("useApiQuery polling (JOBUI-05)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not start an overlapping request on visibilitychange while one is already in flight, and loading still resolves", async () => {
+    setDocumentHidden(true);
+    let resolveFirst: (value: Response) => void = () => {};
+    const deferredFirst = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const responses: Array<Promise<Response>> = [deferredFirst];
+    const fetchMock = vi.fn().mockImplementation(() => {
+      if (responses.length > 0) {
+        return responses.shift() as Promise<Response>;
+      }
+      return Promise.resolve(jsonResponse(200, { status: "running" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() =>
+      useApiQuery<{ status: string }>("/api/v1/x", { pollIntervalMs: 1000 }),
+    );
+
+    // The mount fetch is in flight (unresolved) while the tab is hidden.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.loading).toBe(true);
+
+    setDocumentHidden(false);
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Becoming visible must NOT start a second overlapping request while
+    // the mount fetch is still pending.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      resolveFirst(jsonResponse(200, { status: "running" }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The in-flight request's own resolution clears loading and resumes
+    // the poll chain — no stuck "Refreshing…" state.
+    expect(result.current.loading).toBe(false);
+
+    await advance(1000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the previous result and keeps polling after a failed background tick", async () => {
     let call = 0;
     const fetchMock = vi.fn().mockImplementation(() => {
@@ -217,7 +264,7 @@ describe("mutationCapabilityFrom", () => {
     });
   });
 
-  it("returns unknown with the honest-unknown reason on a failed fetch or before any result exists", () => {
+  it("returns unknown with the honest-unknown reason on a confirmed failed fetch", () => {
     const failed: ApiResult<JobTypesCatalog> = {
       ok: false,
       endpoint: "/api/v1/job-types",
@@ -231,9 +278,12 @@ describe("mutationCapabilityFrom", () => {
       reason: "Mutation availability unknown — GET /api/v1/job-types failed",
       catalog: null,
     });
+  });
+
+  it("returns unknown with a null reason before any result exists (nothing has failed yet)", () => {
     expect(mutationCapabilityFrom(null)).toEqual({
       state: "unknown",
-      reason: "Mutation availability unknown — GET /api/v1/job-types failed",
+      reason: null,
       catalog: null,
     });
   });

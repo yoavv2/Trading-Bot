@@ -40,7 +40,8 @@ export type QueryState<T> = {
  * - A failed background tick keeps the last successful `result` and keeps
  *   polling; a successful tick replaces `result`.
  * - Paused while document.hidden is true; a visibilitychange to visible
- *   runs one immediate tick (if still active) and resumes the chain.
+ *   runs one immediate tick (if still active AND nothing is already in
+ *   flight) and resumes the chain.
  */
 export function useApiQuery<T>(
   endpoint: string,
@@ -52,6 +53,13 @@ export function useApiQuery<T>(
 
   const mountedRef = useRef(true);
   const requestIdRef = useRef(0);
+  // Id of the currently in-flight request (manual or background), or null
+  // when nothing is in flight. Lets the visibilitychange handler avoid
+  // starting a second overlapping request when one is already pending —
+  // that in-flight request's own guarded `.then()` already calls
+  // scheduleNextTick() once it resolves, which resumes polling now that
+  // the tab is visible again.
+  const pendingIdRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Callers pass a fresh inline options object on every render; keep the
@@ -112,10 +120,12 @@ export function useApiQuery<T>(
 
   const runBackgroundTick = useCallback(() => {
     const requestId = ++requestIdRef.current;
+    pendingIdRef.current = requestId;
     fetchApi<T>(endpoint).then((next) => {
       if (!mountedRef.current || requestId !== requestIdRef.current) {
         return;
       }
+      pendingIdRef.current = null;
       if (next.ok) {
         hasSuccessRef.current = true;
         lastSuccessDataRef.current = next.data;
@@ -130,12 +140,14 @@ export function useApiQuery<T>(
 
   const runFetch = useCallback(() => {
     const requestId = ++requestIdRef.current;
+    pendingIdRef.current = requestId;
     clearTimer();
     setLoading(true);
     fetchApi<T>(endpoint).then((next) => {
       if (!mountedRef.current || requestId !== requestIdRef.current) {
         return;
       }
+      pendingIdRef.current = null;
       setResult(next);
       setLoading(false);
       if (next.ok) {
@@ -180,7 +192,10 @@ export function useApiQuery<T>(
         clearTimer();
         return;
       }
-      if (isPollingActive()) {
+      // Do not start a second overlapping request if one (manual or
+      // background) is already in flight — its own guarded `.then()`
+      // calls scheduleNextTick() on resolve, which resumes the chain.
+      if (pendingIdRef.current === null && isPollingActive()) {
         tickRef.current();
       }
     }

@@ -17,15 +17,22 @@ export type MutationCapability = {
  * Pure mapping from a GET /api/v1/job-types ApiResult to the D-20/D-21
  * three-state mutation-capability signal. Exported separately from the
  * hook so the mapping itself is unit-testable without rendering a
- * component. `result === null` (still loading, nothing has resolved yet)
- * and a failed fetch both map to "unknown" — this hook never assumes
+ * component. Both `result === null` (still loading, nothing has resolved
+ * yet) and a failed fetch map to "unknown" — this hook never assumes
  * mutations are enabled absent a confirmed successful response, mirroring
- * KillSwitchBanner's honest-unknown pattern.
+ * KillSwitchBanner's honest-unknown pattern. The two cases carry different
+ * reasons: `result === null` has not actually failed anything yet, so its
+ * `reason` stays null (nothing to report) rather than stating a failure
+ * that has not happened; only a confirmed failed fetch gets the
+ * "...GET /api/v1/job-types failed" reason text.
  */
 export function mutationCapabilityFrom(
   result: ApiResult<JobTypesCatalog> | null,
 ): Omit<MutationCapability, "loading"> {
-  if (result === null || !result.ok) {
+  if (result === null) {
+    return { state: "unknown", reason: null, catalog: null };
+  }
+  if (!result.ok) {
     return {
       state: "unknown",
       reason: "Mutation availability unknown — GET /api/v1/job-types failed",
