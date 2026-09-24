@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { JobHeaderPanel } from "./JobHeaderPanel";
 import { JobProgressPanel } from "./JobProgressPanel";
 import type { JobDetail, JobTypesCatalog } from "../types";
@@ -112,8 +112,12 @@ describe("JobHeaderPanel — cancel trigger (D-21)", () => {
     const job = jobDetail({ status: "running" });
     render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
 
+    // The trigger renders disabled while the mutation-capability GET is in
+    // flight; wait for it to resolve rather than asserting on first paint.
     const button = await screen.findByRole("button", { name: "Cancel Job…" });
-    expect((button as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => {
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
 
     fireEvent.click(button);
     expect(screen.getByRole("dialog")).toBeTruthy();
@@ -135,11 +139,14 @@ describe("JobHeaderPanel — cancel trigger (D-21)", () => {
     const job = jobDetail({ status: "queued" });
     render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
 
-    const button = await screen.findByRole("button", { name: "Cancel Job…" });
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    // Wait for the resolved "disabled" state (the reason text) — the trigger
+    // is also disabled while the capability GET is still in flight, so
+    // asserting `disabled` on first paint would pass vacuously.
     expect(
-      screen.getByText("Mutations disabled on this deployment"),
+      await screen.findByText("Mutations disabled on this deployment"),
     ).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Cancel Job…" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
