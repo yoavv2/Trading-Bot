@@ -37,58 +37,68 @@ export function NewJobView({ jobType, initialParams, onNavigate }: NewJobViewPro
   if (!result) {
     return <p className="text-sm text-zinc-500">Loading…</p>;
   }
+
+  if (jobType !== null) {
+    // The unmapped-type fallback copy is static and does not depend on the
+    // catalog having loaded successfully -- check it before branching on
+    // result.ok so an unmapped type always renders the same way.
+    const FormComponent = JOB_TYPE_FORMS[jobType];
+    if (!FormComponent) {
+      return (
+        <div>
+          <p className="text-sm text-zinc-300">
+            {`No submission form is available for "${jobType}" yet.`}
+          </p>
+          <Link
+            href="/jobs"
+            className="mt-2 inline-block text-xs font-semibold text-sky-400 hover:underline"
+          >
+            Back to Jobs
+          </Link>
+        </div>
+      );
+    }
+
+    // D-21: a catalog fetch failure must not hide a registered form's
+    // submission control -- it stays visible but disabled, with the
+    // capability's honest "unknown" reason (mutationCapabilityFrom already
+    // derives that copy from a confirmed failed fetch). Only the type
+    // picker below (jobType === null) needs a successful catalog to render
+    // at all.
+    const catalogEntry = result.ok
+      ? result.data.items.find((item) => item.job_type === jobType)
+      : undefined;
+
+    return (
+      <FormComponent
+        catalogEntry={catalogEntry}
+        capability={capability}
+        initialParams={initialParams}
+        onNavigate={onNavigate}
+      />
+    );
+  }
+
   if (!result.ok) {
     return <ErrorState failure={result} />;
   }
 
-  const catalog = result.data;
-
-  if (jobType === null) {
-    return (
-      <div>
-        <h1 className="mb-4 text-xl font-semibold text-zinc-100">New Job</h1>
-        <ul className="space-y-3">
-          {catalog.items.map((item) => (
-            <li key={item.job_type}>
-              <Link
-                href={`/jobs/new?type=${encodeURIComponent(item.job_type)}`}
-                className="text-xs font-semibold text-sky-400 hover:underline"
-              >
-                {item.job_type}
-              </Link>
-              <p className="mt-1 text-sm text-zinc-400">{item.description}</p>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
-
-  const FormComponent = JOB_TYPE_FORMS[jobType];
-  if (!FormComponent) {
-    return (
-      <div>
-        <p className="text-sm text-zinc-300">
-          {`No submission form is available for "${jobType}" yet.`}
-        </p>
-        <Link
-          href="/jobs"
-          className="mt-2 inline-block text-xs font-semibold text-sky-400 hover:underline"
-        >
-          Back to Jobs
-        </Link>
-      </div>
-    );
-  }
-
-  const catalogEntry = catalog.items.find((item) => item.job_type === jobType);
-
   return (
-    <FormComponent
-      catalogEntry={catalogEntry}
-      capability={capability}
-      initialParams={initialParams}
-      onNavigate={onNavigate}
-    />
+    <div>
+      <h1 className="mb-4 text-xl font-semibold text-zinc-100">New Job</h1>
+      <ul className="space-y-3">
+        {result.data.items.map((item) => (
+          <li key={item.job_type}>
+            <Link
+              href={`/jobs/new?type=${encodeURIComponent(item.job_type)}`}
+              className="text-xs font-semibold text-sky-400 hover:underline"
+            >
+              {item.job_type}
+            </Link>
+            <p className="mt-1 text-sm text-zinc-400">{item.description}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

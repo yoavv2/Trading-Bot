@@ -60,12 +60,19 @@ const STRATEGIES_LIST = {
  * GET /api/v1/strategies (BacktestJobForm's own strategy select) are all
  * dispatched through this one stub.
  */
-function makeFetchRouter(options: { catalog?: JobTypesCatalog } = {}) {
+function makeFetchRouter(
+  options: { catalog?: JobTypesCatalog; jobTypesStatus?: number } = {},
+) {
   const catalog = options.catalog ?? CATALOG_ENABLED;
+  const jobTypesStatus = options.jobTypesStatus ?? 200;
   const fn = vi.fn().mockImplementation((input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/backend/api/v1/job-types")) {
-      return Promise.resolve(jsonResponse(200, catalog));
+      return Promise.resolve(
+        jobTypesStatus === 200
+          ? jsonResponse(200, catalog)
+          : jsonResponse(jobTypesStatus, { detail: "boom" }),
+      );
     }
     if (url.includes("/backend/api/v1/strategies/trend_following_daily")) {
       return Promise.resolve(jsonResponse(200, STRATEGY_DETAIL));
@@ -133,6 +140,22 @@ describe("NewJobView", () => {
     await flush();
 
     expect(screen.getByRole("button", { name: "Submit Backtest" })).toBeTruthy();
+  });
+
+  it("D-21: a catalog fetch failure keeps a mapped type's form visible, disabled with the honest-unknown reason", async () => {
+    const { fn } = makeFetchRouter({ jobTypesStatus: 500 });
+    vi.stubGlobal("fetch", fn);
+
+    render(
+      <NewJobView jobType="backtest" initialParams={{}} onNavigate={vi.fn()} />,
+    );
+    await flush();
+
+    const button = screen.getByRole("button", { name: "Submit Backtest" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText("Mutation availability unknown — GET /api/v1/job-types failed"),
+    ).toBeTruthy();
   });
 });
 
