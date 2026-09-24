@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 19-03-PLAN.md
-last_updated: "2026-09-24T09:13:45.215Z"
+stopped_at: Completed 19-04-PLAN.md
+last_updated: "2026-09-24T09:26:18.221Z"
 last_activity: 2026-09-24
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 27
-  completed_plans: 18
+  completed_plans: 19
   percent: 40
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 4 of 12
+Plan: 5 of 12
 Status: Ready to execute
 Last activity: 2026-09-24
 **Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
@@ -65,6 +65,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 19 P01 | 15min | 2 tasks | 6 files |
 | Phase 19 P02 | 25min | 2 tasks | 8 files |
 | Phase 19 P03 | 25min | 2 tasks | 5 files |
+| Phase 19 P04 | 25min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,8 @@ Recent decisions affecting current work:
 - [Phase 19]: [19-02]: ORCH-07 fully satisfied end-to-end by this plan (flag default-disabled, guard on every mutating route proven by a route-walk test, typed 403 + zero rows, render.yaml sets it disabled) -- marked Complete.
 - [Phase 19]: [19-03]: job_id kept an opaque uuid.UUID | None keyword on run_backtest/_create_backtest_run (no trading_platform.jobs import in backtesting.py); resources[] in JobReadService.get_job_detail is a single unfiltered select(StrategyRun).where(StrategyRun.job_id == job_uuid) query, never gated on Job status, so a linked run stays visible through every terminal Job state (D-05/D-13 read side).
 - [Phase 19]: 19-03's frontmatter lists requirements [OPS-01, JOBUI-02], but this plan ships only the service/API layer (job_id threading + resources[]) -- neither requirement's literal end-to-end/operator-visible text is satisfied. Both left Pending per the 19-01 precedent; mark OPS-01 complete once the backtest Job handler + worker wiring lands, and JOBUI-02 once the console Job-detail screen renders resources[].
+- [Phase 19]: [19-04]: ORCH-06 marked Complete -- its literal text (endpoint exists, lists every registered type with description + cancellation mode, enforcement test) is fully satisfied; requirement text does not require a populated production catalog and no later Phase 19 plan lists ORCH-06.
+- [Phase 19]: [19-04]: Job-type catalog metadata (description/cancellation_mode/submission_defaults) is a registration-time invariant enforced in JobRegistry.register; test_default_registry_types_all_appear_in_catalog is a vacuous pass today since build_default_registry() stays empty per this plan's explicit scope boundary.
 
 ### Pending Todos
 
@@ -200,6 +203,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-24T09:13:45.206Z
-Stopped at: Completed 19-03-PLAN.md
+Last session: 2026-09-24T09:26:18.211Z
+Stopped at: Completed 19-04-PLAN.md
 Resume file: None
