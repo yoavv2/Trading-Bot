@@ -143,19 +143,24 @@ Plans:
 Plans:
 
 **Wave 1**
+
 - [x] 18-01-PLAN.md — Durable endpoint-scoped Job mutation idempotency schema and migration proof (ORCH-03)
 - [x] 18-02-PLAN.md — Caller-session Job submission/cancellation primitives for atomic orchestration (ORCH-02, ORCH-03)
 
 **Wave 2** *(blocked on Wave 1)*
+
 - [x] 18-03-PLAN.md — Transport-independent orchestration service with race-safe replay, cancellation, and compact references (ORCH-03, ORCH-04)
 
 **Wave 3** *(blocked on Wave 2)*
+
 - [x] 18-04-PLAN.md — Thin idempotent Job submission/cancellation HTTP adapters and contract tests (ORCH-01, ORCH-03, ORCH-04)
 
 **Wave 4** *(blocked on Wave 3)*
+
 - [x] 18-05-PLAN.md — Remove direct mutating CLI paths and enforce adapter/application/domain boundaries (ORCH-01, ORCH-02)
 
 **Wave 5** *(blocked on Wave 4)*
+
 - [x] 18-06-PLAN.md — DB-ready API startup and test-only submit → execute → linked-observe E2E proof (ORCH-01–ORCH-04)
 
 **Post-phase hardening — Job framework race & test hardening** (completed 2026-07-22; PR #1, commit `2b88d49`; recorded under Phase 18, no separate phase, plans, or verification report). Closed the three pre-existing Phase 17 concurrency/test-harness concerns that Phase 18 verification listed as anti-patterns; no new requirements (hardens JOB-05, JOB-06):
@@ -185,18 +190,36 @@ Plans:
 **Plans**: 12 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 19-01-PLAN.md — Migration 0020: strategy_runs.job_id FK+UNIQUE, config_invalid enum; migration tests [BLOCKING upgrade]
 - [ ] 19-02-PLAN.md — ORCH-07 mutation flag (default disabled) + 403 guard, reason in 422 body, render.yaml/.env.example
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 19-03-PLAN.md — job_id threading in run_backtest; resources[] on Job detail; job_id on run reads
 - [ ] 19-04-PLAN.md — Job-type catalog GET /api/v1/job-types + registry catalog contract (ORCH-06)
 - [ ] 19-05-PLAN.md — run-jobs worker: BACKTEST-level boot, per-type mode preflight (config_invalid), compose switch (ORCH-05)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 19-06-PLAN.md — backtest submission spec + handler, registration, SC9 tripwire replacement
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 19-07-PLAN.md — Production-path E2E: submit, worker, idempotency, cancellation outcomes
 - [ ] 19-08-PLAN.md — Console foundation: mutating client, polling, capability hook, D-14 label, lookup map 2, SC6 fences
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 19-09-PLAN.md — Jobs list screen with filters, polling, New Job entry, nav link
 - [ ] 19-10-PLAN.md — Job logs tail, events panel, cancel confirmation dialog
 - [ ] 19-11-PLAN.md — New Job flow + backtest form, /strategy shortcut, run-header back-link
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 19-12-PLAN.md — Job detail screen composition, SC6 test-only type test
+
 **UI hint**: yes
 
 ### Phase 20: Complete Operation Migration & Safety Controls
