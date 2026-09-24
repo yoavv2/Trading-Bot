@@ -31,6 +31,7 @@ from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import Job, JobEvent, JobMutation, StrategyRun, StrategyRunType
 from trading_platform.db.session import session_scope
+from trading_platform.jobs.handlers import backtest as backtest_handler_module
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.worker.commands.run_jobs import run_jobs_command
 from trading_platform.worker.parser import build_parser
@@ -273,3 +274,114 @@ def test_backtest_payload_rejections_write_nothing(
         "reason": reason,
     }
     assert after == before
+
+
+# --- Task 2: queued and running cancellation outcomes (SC7) -----------------
+
+
+def test_cancel_queued_backtest_never_executes(job_operations_env: None) -> None:
+    with TestClient(create_app()) as client:
+        submitted = client.post(
+            "/api/v1/jobs",
+            headers={"Idempotency-Key": "e2e-cancel-queued"},
+            json={"job_type": "backtest", "payload": BACKTEST_PAYLOAD},
+        )
+        assert submitted.status_code == 202
+        body = submitted.json()
+        job_id = body["job_id"]
+        links = body["links"]
+
+        cancel_resp = client.post(
+            links["self"] + "/cancel",
+            headers={"Idempotency-Key": "cancel-queued"},
+            json={"reason": "  operator stop  "},
+        )
+        assert cancel_resp.status_code == 200
+        assert cancel_resp.json()["status"] == "cancelled"
+
+        _run_worker_once()
+
+        detail = client.get(links["self"]).json()
+        logs = client.get(links["logs"]).json()
+
+    assert detail["status"] == "cancelled"
+    assert detail["cancellation_cause"] == "operator_request"
+    assert detail["cancellation_reason"] == "operator stop"
+    assert detail["resources"] == []
+    assert detail["result_summary"] == {}
+    assert logs["items"] == []
+
+    with session_scope(load_settings()) as session:
+        linked_runs = session.scalar(
+            select(func.count())
+            .select_from(StrategyRun)
+            .where(StrategyRun.job_id == uuid.UUID(job_id))
+        )
+    assert linked_runs == 0
+
+
+def test_cancel_running_backtest_acknowledged_after_service(
+    job_operations_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SC7 running / D-12 / D-13: a cancel issued mid-``run_backtest`` lands the
+    Job CANCELLED at the post-call boundary while the linked run keeps its
+    real (SUCCEEDED) status."""
+
+    real_run_backtest = backtest_handler_module.run_backtest
+    job_id_holder: dict[str, str] = {}
+
+    with TestClient(create_app()) as client:
+
+        def _cancel_then_run(
+            strategy_id: str,
+            *,
+            from_date: Any,
+            to_date: Any,
+            trigger_source: str,
+            job_id: Any,
+            settings: Any = None,
+        ) -> Any:
+            assert str(job_id) == job_id_holder["job_id"]
+            cancel_resp = client.post(
+                f"/api/v1/jobs/{job_id_holder['job_id']}/cancel",
+                headers={"Idempotency-Key": "cancel-running"},
+                json={"reason": None},
+            )
+            assert cancel_resp.status_code == 200
+            assert cancel_resp.json()["status"] == "running"
+            return real_run_backtest(
+                strategy_id,
+                from_date=from_date,
+                to_date=to_date,
+                trigger_source=trigger_source,
+                job_id=job_id,
+                settings=settings,
+            )
+
+        monkeypatch.setattr(backtest_handler_module, "run_backtest", _cancel_then_run)
+
+        submitted = client.post(
+            "/api/v1/jobs",
+            headers={"Idempotency-Key": "e2e-cancel-running"},
+            json={"job_type": "backtest", "payload": BACKTEST_PAYLOAD},
+        )
+        assert submitted.status_code == 202
+        job_id_holder["job_id"] = submitted.json()["job_id"]
+
+        _run_worker_once()
+
+        detail = client.get(f"/api/v1/jobs/{job_id_holder['job_id']}").json()
+
+        assert detail["status"] == "cancelled"
+        assert detail["cancellation_cause"] == "operator_request"
+        assert detail["cancellation_requested_at"] is not None
+        assert detail["cancellation_acknowledged_at"] is not None
+        assert detail["result_summary"] == {}
+        assert len(detail["resources"]) == 1
+        run_resource = detail["resources"][0]
+        assert run_resource["status"] == "succeeded"
+
+        run_detail = client.get(f"/api/v1/runs/{run_resource['id']}").json()["run"]
+
+    assert run_detail["status"] == "succeeded"
+    assert run_detail["job_id"] == job_id_holder["job_id"]
