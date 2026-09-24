@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-trading_platform}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +15,25 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # One-shot schema migration (alembic assets are baked into the image). The
+  # api/worker `command` overrides the Dockerfile CMD that would otherwise run
+  # `alembic upgrade head`, so they wait for this to finish instead.
+  migrate:
+    build: .
+    restart: "no"
+    environment:
+      TRADING_PLATFORM_DATABASE__HOST: db
+      TRADING_PLATFORM_DATABASE__PORT: ${TRADING_PLATFORM_DATABASE__PORT:-5432}
+      TRADING_PLATFORM_DATABASE__NAME: ${POSTGRES_DB:-trading_platform}
+      TRADING_PLATFORM_DATABASE__USER: ${POSTGRES_USER:-trading_platform}
+      TRADING_PLATFORM_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
+      TRADING_PLATFORM_CONFIG_FILE: /app/config/app.yaml
+      TRADING_PLATFORM_STRATEGY_CONFIG_DIR: /app/config/strategies
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
 
   api:
     build: .
@@ -25,10 +44,12 @@ services:
       TRADING_PLATFORM_DATABASE__NAME: ${POSTGRES_DB:-trading_platform}
       TRADING_PLATFORM_DATABASE__USER: ${POSTGRES_USER:-trading_platform}
       TRADING_PLATFORM_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
+      TRADING_PLATFORM_CONFIG_FILE: /app/config/app.yaml
+      TRADING_PLATFORM_STRATEGY_CONFIG_DIR: /app/config/strategies
       TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED: "true"
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     command: ["uvicorn", "trading_platform.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -42,9 +63,11 @@ services:
       TRADING_PLATFORM_DATABASE__NAME: ${POSTGRES_DB:-trading_platform}
       TRADING_PLATFORM_DATABASE__USER: ${POSTGRES_USER:-trading_platform}
       TRADING_PLATFORM_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
+      TRADING_PLATFORM_CONFIG_FILE: /app/config/app.yaml
+      TRADING_PLATFORM_STRATEGY_CONFIG_DIR: /app/config/strategies
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "trading_platform.worker", "run-jobs"]
 
 volumes:

@@ -1,7 +1,13 @@
 FROM python:3.13-slim
 
+# The package is `pip install`ed into site-packages, so the settings loader's
+# default config path (derived from the installed package location) points
+# outside /app. Pin the config locations to the copied repo `config/` dir so
+# every entrypoint (api, worker, Render) boots without extra env wiring.
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TRADING_PLATFORM_CONFIG_FILE=/app/config/app.yaml \
+    TRADING_PLATFORM_STRATEGY_CONFIG_DIR=/app/config/strategies
 
 WORKDIR /app
 

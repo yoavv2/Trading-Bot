@@ -84,3 +84,74 @@ def test_render_disables_mutations() -> None:
             ):
                 found = True
     assert found, "no render.yaml service disables TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED"
+
+
+_CONFIG_ENV = {
+    "TRADING_PLATFORM_CONFIG_FILE": "/app/config/app.yaml",
+    "TRADING_PLATFORM_STRATEGY_CONFIG_DIR": "/app/config/strategies",
+}
+
+
+def _dockerfile_env() -> dict[str, str]:
+    """Collect `KEY=value` pairs from every (possibly line-continued) ENV instruction."""
+    text = (_ROOT / "Dockerfile").read_text().replace("\\\n", " ")
+    env: dict[str, str] = {}
+    for line in text.splitlines():
+        if line.startswith("ENV "):
+            for token in line[len("ENV ") :].split():
+                key, sep, value = token.partition("=")
+                if sep:
+                    env[key] = value
+    return env
+
+
+def test_dockerfile_copies_config_into_workdir() -> None:
+    lines = (_ROOT / "Dockerfile").read_text().splitlines()
+    assert "WORKDIR /app" in lines
+    assert "COPY config ./config" in lines
+
+
+def test_dockerfile_pins_config_locations() -> None:
+    # The package is installed into site-packages, so the loader's default
+    # config path would point outside /app; the image must pin it explicitly.
+    env = _dockerfile_env()
+    for key, value in _CONFIG_ENV.items():
+        assert env.get(key) == value, f"Dockerfile ENV {key} must be {value}"
+
+
+def test_compose_app_services_set_config_locations() -> None:
+    compose = _load_compose()
+    for service_name in ("api", "worker"):
+        environment = compose["services"][service_name]["environment"]
+        for key, value in _CONFIG_ENV.items():
+            assert environment.get(key) == value, (
+                f"docker-compose.yml service '{service_name}' must set {key}={value}"
+            )
+
+
+def test_render_sets_config_locations() -> None:
+    render = _load_render()
+    for service in render.get("services", []):
+        env = {v.get("key"): v.get("value") for v in service.get("envVars", [])}
+        for key, value in _CONFIG_ENV.items():
+            assert env.get(key) == value
+
+
+def test_config_env_paths_exist_in_repo() -> None:
+    # /app mirrors the repo root in the image, so the pinned paths must exist here.
+    for value in _CONFIG_ENV.values():
+        assert (_ROOT / Path(value).relative_to("/app")).exists(), value
+
+
+def test_compose_runs_migrations_before_app_services() -> None:
+    # api/worker `command` overrides the Dockerfile CMD (which migrates), so a
+    # fresh compose DB needs a one-shot migrate service gating both.
+    compose = _load_compose()
+    services = compose["services"]
+    assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]
+    for key, value in _CONFIG_ENV.items():
+        assert services["migrate"]["environment"].get(key) == value
+    for service_name in ("api", "worker"):
+        assert services[service_name]["depends_on"]["migrate"] == {
+            "condition": "service_completed_successfully"
+        }

@@ -116,9 +116,9 @@ This is the most complete development workflow right now because migrations and 
 
 ### Docker Compose Notes
 
-`docker compose up --build -d` starts the `db`, `api`, and `worker` services, but the current runtime image does not bundle the `alembic/` or `scripts/` directories. That means schema creation still needs to happen from the host repository before the API and worker are fully useful.
+`docker compose up --build -d` starts `db`, runs a one-shot `migrate` service (`alembic upgrade head`, using the migration assets baked into the image), then starts `api` and `worker` once migrations succeed. The image pins its config location via `TRADING_PLATFORM_CONFIG_FILE=/app/config/app.yaml` and `TRADING_PLATFORM_STRATEGY_CONFIG_DIR=/app/config/strategies`, because the installed package cannot locate the repo `config/` directory on its own.
 
-If you want a fully self-contained Docker workflow later, the image will need to include migration assets or a dedicated migration container.
+The `scripts/` directory is not bundled; run seeding and other scripts from the host repository. If host port 5432 is already in use (e.g. a native Postgres), set `POSTGRES_HOST_PORT` to publish the compose database on another port.
 
 ## Common Commands
 
