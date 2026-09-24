@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useApiQuery } from "@/lib/useApiQuery";
+import { useMutationCapability } from "@/lib/useMutationCapability";
 import { ErrorState } from "@/components/ErrorState";
 import { FetchMeta } from "@/components/FetchMeta";
 
@@ -64,6 +66,8 @@ function KeyValueSection({
  */
 export function StrategyOverviewPanel() {
   const { loading, result, refetch } = useApiQuery<StrategyDetail>("/api/v1/strategies/trend_following_daily");
+  const capability = useMutationCapability();
+  const strategyId = result?.ok ? result.data.strategy.strategy_id : null;
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
@@ -71,11 +75,36 @@ export function StrategyOverviewPanel() {
         <h2 className="text-sm font-semibold text-zinc-200">
           Strategy Overview
         </h2>
-        <FetchMeta
-          asOf={result?.asOf ?? null}
-          loading={loading}
-          onRefresh={refetch}
-        />
+        <div className="flex items-center gap-3">
+          {strategyId ? (
+            capability.state === "enabled" ? (
+              <Link
+                href={`/jobs/new?type=backtest&strategy_id=${encodeURIComponent(strategyId)}`}
+                className="rounded bg-sky-400 px-3 py-1 text-xs font-semibold text-zinc-950 hover:bg-sky-300"
+              >
+                Run backtest
+              </Link>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled
+                  className="rounded bg-sky-400 px-3 py-1 text-xs font-semibold text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Run backtest
+                </button>
+                {capability.reason ? (
+                  <span className="text-xs text-zinc-500">{capability.reason}</span>
+                ) : null}
+              </div>
+            )
+          ) : null}
+          <FetchMeta
+            asOf={result?.asOf ?? null}
+            loading={loading}
+            onRefresh={refetch}
+          />
+        </div>
       </div>
       <div className="mt-3">
         {!result ? (
