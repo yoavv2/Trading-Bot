@@ -42,7 +42,11 @@ from trading_platform.db.models import (  # noqa: E402
 )
 from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
 from trading_platform.jobs.contracts import JobContext  # noqa: E402
-from trading_platform.jobs.registry import InvalidJobPayloadError, JobRegistry
+from trading_platform.jobs.registry import (  # noqa: E402
+    InvalidJobPayloadError,
+    JobCancellationMode,
+    JobRegistry,
+)
 
 
 class _GuardProbeHandler:
@@ -54,11 +58,16 @@ class _GuardProbeHandler:
 
 class _GuardProbeSubmissionSpec:
     job_type = "mutation_guard_probe"
+    description = "Mutation guard probe submission spec."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         if payload != {"message": "hello"}:
             raise InvalidJobPayloadError(job_type=self.job_type, reason="message must be hello")
         return {"message": "hello"}
+
+    def submission_defaults(self) -> None:
+        return None
 
 
 def _registry() -> JobRegistry:
