@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 19-10-PLAN.md
-last_updated: "2026-09-24T13:06:17.899Z"
+stopped_at: Completed 19-11-PLAN.md
+last_updated: "2026-09-24T13:22:10.881Z"
 last_activity: 2026-09-24
 progress:
   total_phases: 5
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 11 of 12
+Plan: 12 of 12
 Status: Ready to execute
 Last activity: 2026-09-24
 **Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
@@ -72,6 +72,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 19 P08 | 27min | 3 tasks | 11 files |
 | Phase 19 P09 | 10min | 2 tasks | 7 files |
 | Phase 19 P10 | 21min | 2 tasks | 6 files |
+| Phase 19 P11 | ~35min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -179,6 +180,8 @@ Recent decisions affecting current work:
 - [Phase 19]: [19-09 deviation]: vitest.config.ts had no resolve.alias for the codebase's standard "@/..." import style (tsconfig.json maps it, Vite/vitest does not read tsconfig paths) -- latent since Plan 08, first exposed by this plan's JobsTable.test.tsx (the first component test rendering a component using @/ imports). Fixed by adding resolve.alias matching tsconfig.json's @/* mapping; benefits all future console component tests.
 - [Phase 19]: JobLogsPanel drains a terminal Job's logs past the per-tick page cap via a same-virtual-time continuation instead of silently truncating; still bounded per continuation (T-19-10-04).
 - [Phase 19]: CancelJobDialog is a React-state overlay (role=dialog/aria-modal=true), not the native <dialog> element -- jsdom's HTMLDialogElement has no showModal/close behavior; console-wide confirmation-dialog pattern for future use.
+- [Phase 19]: OPS-01 stays Pending: onNavigate targets /jobs/{job_id} but that route does not exist until Plan 12, and 19-07 recorded the close condition as the console plans landing AND being live-verified -- neither has happened yet.
+- [Phase 19]: BacktestJobForm declares its own local props type instead of importing JobSubmissionFormProps from jobTypeForms.ts, keeping map-1 import scoped to NewJobView.tsx only (structural D-17 grep/consoleBoundaries requirement); TypeScript still checks structural compatibility at the JOB_TYPE_FORMS assignment.
 
 ### Pending Todos
 
@@ -219,6 +222,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-24T13:06:17.890Z
-Stopped at: Completed 19-10-PLAN.md
+Last session: 2026-09-24T13:22:10.872Z
+Stopped at: Completed 19-11-PLAN.md
 Resume file: None
