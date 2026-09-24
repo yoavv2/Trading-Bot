@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 19-01-PLAN.md
-last_updated: "2026-09-24T08:51:43.925Z"
+stopped_at: Completed 19-02-PLAN.md
+last_updated: "2026-09-24T09:02:51.094Z"
 last_activity: 2026-09-24
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 27
-  completed_plans: 16
+  completed_plans: 17
   percent: 40
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 2 of 12
+Plan: 3 of 12
 Status: Ready to execute
 Last activity: 2026-09-24
 **Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
@@ -63,6 +63,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 18 P05 | 7min | 3 tasks | 6 files |
 | Phase 18 P06 | 20min | 3 tasks | 7 files |
 | Phase 19 P01 | 15min | 2 tasks | 6 files |
+| Phase 19 P02 | 25min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -154,6 +155,8 @@ Recent decisions affecting current work:
 - [Phase 19]: 19-01: Combined the D-22 enum-add and D-01 FK/UNIQUE column-add into a single migration file (0020) since the new enum value is never referenced in the same transaction; ADD VALUE IF NOT EXISTS keeps it idempotent and the enum downgrade stays a documented no-op (0016 precedent).
 - [Phase 19]: 19-01: Local trading_platform database was found stale at revision 0015 (Phase 8) before this plan; upgraded straight through to 0020 (head) as Task 2's [BLOCKING] apply-migration step required.
 - [Phase 19]: 19-01's frontmatter lists requirements [OPS-01, JOBUI-02], but the plan ships only the DB schema (strategy_runs.job_id FK/UNIQUE, JobFailureReason.CONFIG_INVALID) -- neither requirement's literal end-to-end/UI text is satisfied by schema alone. Both left Pending per the 17-01/17-04/17-05 precedent; mark each Complete at the plan that wires the handler/registry (OPS-01) or the resources[] API/UI (JOBUI-02).
+- [Phase 19]: [19-02]: require_mutations_enabled lives at the HTTP route-decorator dependency layer (api/dependencies.py), not inside JobOrchestrationService, so ordering is correct and Phase 20 control routes can reuse it unchanged.
+- [Phase 19]: [19-02]: ORCH-07 fully satisfied end-to-end by this plan (flag default-disabled, guard on every mutating route proven by a route-walk test, typed 403 + zero rows, render.yaml sets it disabled) -- marked Complete.
 
 ### Pending Todos
 
@@ -194,6 +197,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-24T08:48:56.115Z
-Stopped at: Completed 19-01-PLAN.md
+Last session: 2026-09-24T09:02:51.084Z
+Stopped at: Completed 19-02-PLAN.md
 Resume file: None

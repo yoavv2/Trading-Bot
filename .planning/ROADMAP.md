@@ -193,7 +193,7 @@ Plans:
 **Wave 1**
 
 - [x] 19-01-PLAN.md — Migration 0020: strategy_runs.job_id FK+UNIQUE, config_invalid enum; migration tests [BLOCKING upgrade]
-- [ ] 19-02-PLAN.md — ORCH-07 mutation flag (default disabled) + 403 guard, reason in 422 body, render.yaml/.env.example
+- [x] 19-02-PLAN.md — ORCH-07 mutation flag (default disabled) + 403 guard, reason in 422 body, render.yaml/.env.example
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -283,7 +283,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
-| 19. Job Operations Vertical Slice | v1.3 | 1/12 | In Progress | - |
+| 19. Job Operations Vertical Slice | v1.3 | 2/12 | In Progress | - |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
