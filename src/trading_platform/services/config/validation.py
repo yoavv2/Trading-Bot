@@ -122,3 +122,20 @@ def validate_config(
         raise ConfigValidationError(failures)
 
     return settings
+
+
+def config_failure_message(payload: dict[str, Any], *, mode: ExecutionMode) -> str | None:
+    """Return a secret-safe, field-naming failure message, or ``None`` when valid.
+
+    Calls `validate_config(payload, mode=mode)` and, on `ConfigValidationError`,
+    returns a message naming only the sorted, de-duplicated dotted field paths
+    that failed -- never the expected-shape text (which can embed pydantic's
+    echoed input) and never any configured value. Performs zero I/O, mirroring
+    this module's existing contract (see module docstring).
+    """
+    try:
+        validate_config(payload, mode=mode)
+    except ConfigValidationError as exc:
+        fields = sorted({field for field, _shape in exc.failures})
+        return f"Configuration invalid for {mode.value} mode: " + ", ".join(fields)
+    return None

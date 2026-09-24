@@ -163,10 +163,18 @@ def test_valid_passes_config_and_reachable_db_returns_settings() -> None:
 def test_run_jobs_command_exits_before_worker_loop_constructed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An invalid paper config exits at the retained worker gate before the
-    generic runner can claim or execute any Job."""
+    """D-22: `run-jobs` boots at BACKTEST level (empty broker credentials no
+    longer fail the gate), but an unreachable database still exits at the
+    retained gate before the generic runner can claim or execute any Job."""
     from trading_platform.worker.commands import run_jobs as run_jobs_commands
     from trading_platform.worker.parser import build_parser
+
+    payload = _refused_port_db_payload()
+
+    def _enforce_startup_config(**kwargs: object) -> Settings:
+        return enforce_startup_config(payload=payload, **kwargs)
+
+    monkeypatch.setattr(run_jobs_commands, "enforce_startup_config", _enforce_startup_config)
 
     called = {"value": False}
 

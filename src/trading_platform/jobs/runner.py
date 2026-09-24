@@ -26,6 +26,7 @@ from __future__ import annotations
 import signal
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
@@ -43,7 +44,7 @@ from trading_platform.jobs.cancellation import (
     sweep_cancellation_timeouts,
 )
 from trading_platform.jobs.context import DatabaseJobContext
-from trading_platform.jobs.contracts import JobCancelledError
+from trading_platform.jobs.contracts import JobCancelledError, JobHandler
 from trading_platform.jobs.dependencies import cascade_dependency_outcome
 from trading_platform.jobs.lifecycle import (
     IllegalJobTransition,
@@ -67,6 +68,15 @@ logger = get_logger(__name__)
 # whole assembled payload (T-17-09-01).
 _MAX_FAILURE_MESSAGE_CHARS = 2000
 
+# D-22: an optional, injected pre-dispatch check run after the handler is
+# resolved but before it executes. Returns a human-readable failure message
+# (landing the Job FAILED/config_invalid) or ``None`` when the handler may
+# proceed. Deliberately a plain callable, not an import from ``services.*``
+# -- this module stays free of domain/config imports (see module docstring);
+# the caller (``worker/commands/run_jobs.py``) owns building the closure that
+# actually reaches into ``services.config.validation``.
+JobPreflight = Callable[[JobHandler], str | None]
+
 
 def _job_emitted_external_side_effect_log(session: Session, *, job_id: uuid.UUID) -> bool:
     """D-03: true when the Job emitted at least one ``job_logs`` row whose
@@ -87,6 +97,7 @@ def execute_job(
     worker_id: str,
     registry: JobRegistry,
     settings: Settings | None = None,
+    preflight: JobPreflight | None = None,
 ) -> JobStatus:
     """Execute one claimed Job and land it on the correct terminal state.
 
@@ -99,6 +110,11 @@ def execute_job(
     Outcomes:
       - Unregistered ``job_type``: FAILED / ``HANDLER_ERROR``,
         ``outcome_uncertain=False`` -- nothing ran, so nothing is uncertain.
+      - ``preflight`` returns a failure message (D-22): FAILED /
+        ``CONFIG_INVALID``, ``outcome_uncertain=False`` -- runs after the
+        handler resolves but before any ``JobContext``/heartbeat exists, so
+        ``handler.run`` is never invoked and zero ``job_logs`` rows are
+        written for this attempt.
       - Normal handler return: SUCCEEDED at 100% progress with the handler's
         returned mapping persisted as ``result_summary``.
       - ``JobCancelledError``: CANCELLED via ``acknowledge_cancellation`` --
@@ -137,6 +153,33 @@ def execute_job(
             )
             cascade_dependency_outcome(session, terminal_job_id=job_id)
         return JobStatus.FAILED
+
+    if preflight is not None:
+        preflight_failure: str | None
+        try:
+            preflight_failure = preflight(handler)
+        except Exception as exc:
+            # Never surface the exception's own text (may embed secret
+            # values from a config payload) -- only its class name.
+            preflight_failure = f"Configuration preflight raised {type(exc).__name__}."
+        if preflight_failure is not None:
+            with session_scope(settings) as session:
+                apply_job_transition(
+                    session,
+                    job_id=job_id,
+                    request=JobTransitionRequest(
+                        event_type=JobEventType.FAILED,
+                        failure_reason=JobFailureReason.CONFIG_INVALID,
+                        failure_message=preflight_failure[:_MAX_FAILURE_MESSAGE_CHARS],
+                        outcome_uncertain=False,
+                    ),
+                )
+                cascade_dependency_outcome(session, terminal_job_id=job_id)
+            logger.warning(
+                "job_runner_config_invalid",
+                extra={"context": {"job_id": str(job_id), "job_type": job_type}},
+            )
+            return JobStatus.FAILED
 
     context = DatabaseJobContext(
         job_id=job_id, job_type=job_type, payload=payload, settings=settings
@@ -302,6 +345,7 @@ def run_worker_loop(
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     once: bool = False,
     settings: Settings | None = None,
+    preflight: JobPreflight | None = None,
 ) -> dict[str, Any]:
     """Poll, sweep, claim, and execute Jobs until told to stop.
 
@@ -374,6 +418,7 @@ def run_worker_loop(
                         worker_id=worker_id,
                         registry=registry,
                         settings=settings,
+                        preflight=preflight,
                     )
                     if status is JobStatus.SUCCEEDED:
                         succeeded += 1

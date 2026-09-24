@@ -13,14 +13,35 @@ import os
 import socket
 
 from trading_platform.core.logging import configure_logging, get_logger
+from trading_platform.core.settings import build_settings_payload
 from trading_platform.core.startup import enforce_startup_config
 from trading_platform.jobs.registry import build_default_registry
 from trading_platform.jobs.runner import run_worker_loop
-from trading_platform.services.config.validation import ExecutionMode
+from trading_platform.services.config.validation import ExecutionMode, config_failure_message
+
+
+def required_mode_preflight(handler: object) -> str | None:
+    """D-22: validate the config for a handler's declared ``ExecutionMode``.
+
+    Reads the handler's ``required_execution_mode`` attribute (duck-typed --
+    not part of the frozen ``JobHandler`` contract). A handler that declares
+    no valid ``ExecutionMode`` fails closed rather than running unchecked.
+    The settings payload is rebuilt on every call so validation happens
+    immediately before that handler runs, not once at boot.
+    """
+    mode = getattr(handler, "required_execution_mode", None)
+    if not isinstance(mode, ExecutionMode):
+        job_type = getattr(handler, "job_type", "unknown")
+        return f"Job type '{job_type}' declares no required_execution_mode."
+    return config_failure_message(build_settings_payload(), mode=mode)
 
 
 def run_jobs_command(args: argparse.Namespace) -> None:
-    settings = enforce_startup_config(mode=ExecutionMode.PAPER)
+    # D-22: base (BACKTEST-level) boot -- no broker credentials required to
+    # start the worker process. Each registered Job type's required mode is
+    # validated immediately before that handler dispatches, via
+    # `required_mode_preflight` below, not at boot.
+    settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
     configure_logging(settings.logging)
     logger = get_logger("trading_platform.worker")
 
@@ -36,6 +57,7 @@ def run_jobs_command(args: argparse.Namespace) -> None:
         max_jobs=args.max_jobs,
         once=args.once,
         settings=settings,
+        preflight=required_mode_preflight,
     )
 
     logger.info("worker_run_jobs_completed", extra={"context": report})
