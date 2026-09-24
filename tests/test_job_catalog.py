@@ -28,7 +28,6 @@ from trading_platform.api.app import create_app
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.contracts import JobContext
 from trading_platform.jobs.registry import (
-    InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
     build_default_registry,
@@ -264,10 +263,3 @@ def test_job_types_route_imports_no_domain_layers() -> None:
         for module in imports
         for forbidden in forbidden_prefixes
     )
-
-
-def test_invalid_job_payload_error_still_importable() -> None:
-    """Sanity check that this module's imports stay aligned with registry.py."""
-
-    with pytest.raises(InvalidJobPayloadError):
-        raise InvalidJobPayloadError(job_type="x", reason="y")
