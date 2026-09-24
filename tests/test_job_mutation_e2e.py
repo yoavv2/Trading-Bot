@@ -28,7 +28,6 @@ from trading_platform.jobs.registry import (  # noqa: E402
     InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
-    build_default_registry,
 )
 from trading_platform.jobs.runner import run_worker_loop  # noqa: E402
 
@@ -141,17 +140,6 @@ def test_submit_execute_and_observe_with_test_only_handler(
     handler = _Phase18E2EHandler()
     registry = JobRegistry()
     registry.register(handler, submission_spec=_Phase18E2ESubmissionSpec())
-
-    assert build_default_registry().list_job_types() == []
-    production_operations = {
-        "backtest",
-        "risk",
-        "paper",
-        "reconciliation",
-        "market-data",
-        "broker-order-lifecycle",
-    }
-    assert production_operations.isdisjoint(build_default_registry().list_job_types())
 
     app = create_app(job_registry=registry)
     with TestClient(app) as client:

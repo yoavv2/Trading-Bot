@@ -85,10 +85,10 @@ def test_registry_resolve_unknown_raises_typed_error() -> None:
         registry.resolve("missing_job")
 
 
-def test_build_default_registry_is_empty_in_phase_17() -> None:
+def test_build_default_registry_registers_backtest() -> None:
     registry = build_default_registry()
 
-    assert registry.list_job_types() == []
+    assert registry.list_job_types() == ["backtest"]
 
 
 def _string_constants(path: Path) -> set[str]:

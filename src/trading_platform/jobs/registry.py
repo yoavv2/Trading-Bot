@@ -148,10 +148,10 @@ class JobRegistry:
 def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     """Return the default ``JobRegistry`` for the running process.
 
-    Phase 17 ships zero domain handlers -- this function returns an empty
-    registry. Phase 19 registers the concrete operation handlers here
-    (backtest, risk evaluation, paper session, reconciliation,
-    market-data sync, broker sync, ...).
+    Phase 19 registers the first concrete operation handler here
+    (``backtest``). Phase 20 appends the remaining operations (risk
+    evaluation, paper session, reconciliation, market-data sync, broker
+    sync, ...) to this same function.
 
     JOB-03's extensibility contract: adding a new Job type means (1)
     writing a handler module implementing ``JobHandler`` and (2) appending
@@ -159,6 +159,18 @@ def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     Nothing under ``jobs/queue.py``, ``jobs/lifecycle.py``,
     ``jobs/runner.py``, ``jobs/dependencies.py``, or
     ``jobs/cancellation.py`` changes to add a Job type.
+
+    Handler/submission-spec modules live under ``jobs/handlers/`` and are
+    imported here, inside the function body rather than at module level --
+    those modules import ``InvalidJobPayloadError``/``JobCancellationMode``
+    from this module, so a top-of-file import here would be circular.
     """
-    _ = settings or load_settings()
-    return JobRegistry()
+    resolved = settings or load_settings()
+    registry = JobRegistry()
+
+    from trading_platform.jobs.handlers.backtest import BacktestJobHandler
+    from trading_platform.jobs.handlers.backtest_submission import BacktestSubmissionSpec
+
+    registry.register(BacktestJobHandler(settings=resolved), submission_spec=BacktestSubmissionSpec(resolved))
+
+    return registry

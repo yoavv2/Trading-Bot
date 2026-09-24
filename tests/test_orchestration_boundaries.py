@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,14 +25,18 @@ _SCHEMA_MUTATION_TARGETS = {
     "alembic.command.upgrade",
     "alembic.command.downgrade",
 }
-_PHASE19_OPERATION_TYPES = {
-    "backtest",
-    "risk",
-    "paper",
-    "reconciliation",
-    "market-data",
-    "broker-order-lifecycle",
-}
+# D-22 framework modules pinned free of domain imports -- see
+# test_job_framework_modules_import_no_domain_layers below.
+_JOB_FRAMEWORK_MODULES = (
+    "runner",
+    "queue",
+    "lifecycle",
+    "dependencies",
+    "cancellation",
+    "context",
+    "contracts",
+    "progress",
+)
 _RETAINED_CLI_COMMANDS = {
     "serve",
     "report-backtest",
@@ -233,10 +236,77 @@ def test_existing_service_boundary_stays_auto_scoped_and_strict() -> None:
     assert len(SERVICE_MODULES) >= 30
 
 
-def test_default_registry_remains_empty_until_phase_19() -> None:
+def test_default_registry_registers_exactly_the_phase19_job_types() -> None:
+    """SC9: the single pin replacing all five Phase 17/18 emptiness tripwires."""
+    from trading_platform.core.settings import load_settings
     from trading_platform.jobs.registry import build_default_registry
 
-    assert build_default_registry().list_job_types() == []
+    registry = build_default_registry(load_settings())
+
+    assert registry.list_job_types() == ["backtest"]
+    assert registry.resolve_submission_spec("backtest").job_type == "backtest"
+
+
+def test_job_framework_modules_import_no_domain_layers() -> None:
+    jobs_root = _ROOT / "src/trading_platform/jobs"
+    offenders: dict[str, set[str]] = {}
+    for module_name in _JOB_FRAMEWORK_MODULES:
+        path = jobs_root / f"{module_name}.py"
+        if not path.exists():
+            continue
+        imports = _module_imports(path)
+        forbidden = {
+            module
+            for module in imports
+            if module == "trading_platform.services"
+            or module.startswith("trading_platform.services.")
+            or module == "trading_platform.strategies"
+            or module.startswith("trading_platform.strategies.")
+        }
+        if forbidden:
+            offenders[module_name] = forbidden
+
+    assert not offenders, f"Job framework modules import domain layers: {offenders}"
+
+
+def test_default_registry_handlers_declare_execution_mode() -> None:
+    """D-22: every registered handler declares a real ExecutionMode."""
+    from trading_platform.core.settings import load_settings
+    from trading_platform.jobs.registry import build_default_registry
+    from trading_platform.services.config.validation import ExecutionMode
+
+    registry = build_default_registry(load_settings())
+
+    for job_type in registry.list_job_types():
+        handler = registry.resolve(job_type)
+        assert isinstance(handler.required_execution_mode, ExecutionMode)
+
+
+def test_job_context_protocol_is_frozen() -> None:
+    """D-03: JobContext's public member set must not silently grow."""
+    path = _ROOT / "src/trading_platform/jobs/contracts.py"
+    tree = ast.parse(path.read_text(), filename=str(path))
+    job_context = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "JobContext"
+    )
+    members = {
+        statement.name
+        for statement in job_context.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and not statement.name.startswith("_")
+    }
+
+    assert members == {
+        "job_id",
+        "job_type",
+        "payload",
+        "report_progress",
+        "log",
+        "is_cancellation_requested",
+        "raise_if_cancelled",
+    }
 
 
 def _runtime_python_files() -> tuple[Path, ...]:
@@ -329,59 +399,3 @@ def test_runtime_packages_forbid_schema_mutation_and_alembic_commands() -> None:
     assert not offenders, "Runtime schema mutation is Alembic-only:\n" + "\n".join(offenders)
 
 
-def _class_job_types(tree: ast.Module) -> dict[str, str]:
-    types: dict[str, str] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.ClassDef):
-            continue
-        for statement in node.body:
-            if (
-                isinstance(statement, ast.Assign)
-                and any(
-                    isinstance(target, ast.Name) and target.id == "job_type"
-                    for target in statement.targets
-                )
-                and isinstance(statement.value, ast.Constant)
-                and isinstance(statement.value.value, str)
-            ):
-                types[node.name] = statement.value.value
-    return types
-
-
-def _registered_operation_types(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(), filename=str(path))
-    class_types = _class_job_types(tree)
-    registered: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-            continue
-        if node.func.attr != "register":
-            continue
-        for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
-            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-                registered.add(argument.value)
-            if isinstance(argument, ast.Name) and argument.id in class_types:
-                registered.add(class_types[argument.id])
-            if isinstance(argument, ast.Call) and isinstance(argument.func, ast.Name):
-                if argument.func.id in class_types:
-                    registered.add(class_types[argument.func.id])
-    return registered.intersection(_PHASE19_OPERATION_TYPES)
-
-
-def test_phase18_diff_excludes_console_and_phase19_handler_registrations() -> None:
-    changed_paths = subprocess.run(
-        ["git", "diff", "--name-only", "f33e62c...HEAD"],
-        cwd=_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    console_paths = [path for path in changed_paths if path.startswith("console/")]
-    registrations = {
-        str(path.relative_to(_ROOT)): sorted(_registered_operation_types(path))
-        for path in _runtime_python_files()
-        if _registered_operation_types(path)
-    }
-
-    assert not console_paths, f"Phase 18 must not change console paths: {console_paths}"
-    assert not registrations, f"Phase 19 Job registrations found: {registrations}"
