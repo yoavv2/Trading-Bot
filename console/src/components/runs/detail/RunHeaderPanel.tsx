@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { ApiResult } from "@/lib/api";
 import { ErrorState } from "@/components/ErrorState";
 import { FetchMeta } from "@/components/FetchMeta";
@@ -17,6 +18,9 @@ export type RunSummary = {
   parameters_snapshot: Record<string, unknown>;
   result_summary: Record<string, unknown> | null;
   error_message: string | null;
+  // D-07: nullable back-link to the Job that created this run, added by
+  // Plan 03 (services/operator_reads.py's _serialize_run_summary).
+  job_id: string | null;
 };
 
 export type ArtifactCounts = {
@@ -122,6 +126,19 @@ function RunHeaderContent({ data }: { data: RunDetailResponse }) {
         <dd className="text-zinc-300">{run.completed_at ?? "—"}</dd>
         <dt className="text-zinc-500">Run ID</dt>
         <dd className="break-all text-zinc-300">{run.run_id}</dd>
+        {run.job_id ? (
+          <>
+            <dt className="text-zinc-500">Created by</dt>
+            <dd className="text-zinc-300">
+              <Link
+                href={`/jobs/${run.job_id}`}
+                className="text-xs font-semibold text-sky-400 hover:underline"
+              >
+                {`Job ${run.job_id}`}
+              </Link>
+            </dd>
+          </>
+        ) : null}
       </dl>
       <div className="flex flex-wrap gap-2">
         {ARTIFACT_CHIP_ORDER.map(({ key, label }) => (
