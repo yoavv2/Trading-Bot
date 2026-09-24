@@ -21,6 +21,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import select
@@ -32,6 +33,7 @@ from trading_platform.db.models import (
     JobEvent,
     JobLog,
     JobStatus,
+    StrategyRun,
 )
 from trading_platform.db.session import session_scope
 
@@ -39,6 +41,17 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 DEFAULT_LOG_PAGE_SIZE = 100
 MAX_LOG_PAGE_SIZE = 500
+
+
+class JobResourceKind(StrEnum):
+    """Closed vocabulary of resources a Job may link to (D-04).
+
+    Phase 19 defines exactly one member. Phase 20 extends this set; nothing
+    outside this module may add a member without a corresponding
+    resources[] entry builder here.
+    """
+
+    STRATEGY_RUN = "strategy_run"
 
 
 @dataclass(frozen=True)
@@ -104,6 +117,24 @@ class JobReadService:
                 if dependency_job.status != JobStatus.SUCCEEDED:
                     blocking_dependencies.append(entry)
 
+            # D-04/D-05: resources[] is derived at read time from the
+            # strategy_runs.job_id FK only -- never from logs, timestamps,
+            # or trigger_source -- and is not filtered by Job status, so a
+            # stuck, timed-out, or cancelled Job never hides its run (D-13).
+            linked_run = session.execute(
+                select(StrategyRun).where(StrategyRun.job_id == job_uuid)
+            ).scalar_one_or_none()
+            resources: list[dict[str, Any]] = []
+            if linked_run is not None:
+                resources.append(
+                    {
+                        "kind": JobResourceKind.STRATEGY_RUN.value,
+                        "id": str(linked_run.id),
+                        "status": linked_run.status.value,
+                        "links": {"self": f"/api/v1/runs/{linked_run.id}"},
+                    }
+                )
+
             detail = {
                 "id": str(job.id),
                 "job_type": job.job_type,
@@ -126,6 +157,7 @@ class JobReadService:
                 "root_cause_job_id": _uuid_value(job.root_cause_job_id),
                 "dependencies": dependencies,
                 "blocking_dependencies": blocking_dependencies,
+                "resources": resources,
             }
 
         return detail
