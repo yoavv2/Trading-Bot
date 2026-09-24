@@ -40,10 +40,10 @@ key-decisions:
 patterns-established:
   - "Native-enum extension migrations stay a documented no-op on downgrade (PostgreSQL cannot drop a single enum value without a full type rewrite) — second instance of this pattern after 0016."
 
-requirements-completed: [OPS-01, JOBUI-02]
+requirements-completed: []  # Plan frontmatter lists [OPS-01, JOBUI-02], but this plan ships only the schema (strategy_runs.job_id FK/UNIQUE, JobFailureReason.CONFIG_INVALID). OPS-01's own text requires the backtest Job type "proven end-to-end Console -> HTTP -> Job -> worker -> existing backtest service"; JOBUI-02 requires the resources[] field on the Job detail API and console rendering. Neither is schema alone. Left Pending per the 17-01 precedent -- see "Requirements Frontmatter Discrepancy" below.
 
 # Metrics
-duration: ~15min
+duration: ~12min
 completed: 2026-09-24
 ---
 
@@ -53,9 +53,9 @@ completed: 2026-09-24
 
 ## Performance
 
-- **Duration:** ~15 min
-- **Started:** 2026-09-24T08:41:02Z (per STATE.md session start)
-- **Completed:** 2026-09-24T08:45:22Z
+- **Duration:** ~12 min (approximate — precise `PLAN_START_EPOCH` not captured at session start; bounded by STATE.md's session-start timestamp and this summary's finalization)
+- **Started:** 2026-09-24T08:41:02Z (STATE.md session-start timestamp)
+- **Completed:** 2026-09-24T08:53:00Z
 - **Tasks:** 2
 - **Files modified:** 6 (2 created, 4 modified)
 
@@ -87,9 +87,25 @@ Each task was committed atomically:
 - Used the plan-specified constraint names via `op.f()` (`fk_strategy_runs_job_id_jobs`, `uq_strategy_runs_job_id`), which match the NAMING_CONVENTION-derived names the ORM's `unique=True`/`ForeignKey(...)` declaration produces automatically — verified by `test_orm_metadata_matches_migration`.
 - Discovered the local `trading_platform` database was at revision `0015` (Phase 8) rather than head before this plan ran; treated bringing it to head as in-scope per Task 2's explicit `[BLOCKING] Apply the migration` instruction rather than a separate deviation.
 
+## Requirements Frontmatter Discrepancy
+
+This plan's frontmatter declares `requirements: [OPS-01, JOBUI-02]`, but `requirements mark-complete` was deliberately NOT run for either ID — both remain `Pending` in REQUIREMENTS.md.
+
+- **OPS-01** ("Operator can run a backtest from the UI — `backtest` is the first registered production Job type, proven end-to-end Console -> HTTP -> Job -> worker -> existing backtest service") needs the handler, registry registration, worker wiring, submission form, and E2E proof — none of which this plan touches. This plan only adds the DB column the handler will later write to.
+- **JOBUI-02** ("Operator can view a generic Job detail... linked domain resources via a generic `resources[]` list... persisted `strategy_runs.job_id` FK") — the persisted FK half (D-01) is done, but the `resources[]` field on `GET /api/v1/jobs/{job_id}` (D-04/D-05) and its console rendering are unbuilt.
+
+Per the 17-01/17-04/17-05 precedent recorded across Phase 17 (frontmatter lists a requirement, plan ships only the schema/foundation slice, requirement stays Pending until the plan that delivers the actual behavior), both IDs are left Pending here. Mark each Complete at the Phase 19 plan that actually wires the handler/registry (OPS-01) and the `resources[]` API/UI (JOBUI-02).
+
 ## Deviations from Plan
 
-None - plan executed exactly as written. The local-database staleness (revision 0015 instead of 0019) was already anticipated by the plan's Task 2 `[BLOCKING]` step ("run `python scripts/migrate.py upgrade head`... Type checks passing is not evidence the migration works — this step is mandatory"), so bringing it to head is the plan's own instruction, not an unplanned fix.
+**1. [Process] Requirements mark-complete deliberately skipped for OPS-01/JOBUI-02**
+- **Found during:** Post-Task-2, before running `requirements mark-complete` per the state_updates protocol step.
+- **Issue:** The plan's own frontmatter lists both IDs, and the generic executor protocol says to mark all frontmatter-listed requirement IDs complete. Doing so here would overclaim — see "Requirements Frontmatter Discrepancy" above.
+- **Fix:** Left both Pending in REQUIREMENTS.md; recorded the discrepancy via `state add-decision` and in this SUMMARY, matching the established Phase 16/17 convention for this exact situation.
+- **Files modified:** None (REQUIREMENTS.md untouched).
+- **Verification:** `grep -n "OPS-01\|JOBUI-02" .planning/REQUIREMENTS.md` still shows `Pending` for both after this plan.
+
+Otherwise: the plan's code/test/migration scope was executed exactly as written. The local-database staleness (revision 0015 instead of 0019) was already anticipated by the plan's Task 2 `[BLOCKING]` step ("run `python scripts/migrate.py upgrade head`... Type checks passing is not evidence the migration works — this step is mandatory"), so bringing it to head is the plan's own instruction, not an unplanned fix.
 
 ## Issues Encountered
 None.
