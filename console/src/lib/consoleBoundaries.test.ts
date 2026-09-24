@@ -66,8 +66,9 @@ describe("SC6: no raw fetch( outside src/lib/api.ts", () => {
 // Job list/detail/log/event UI scope (D-17): everything under
 // components/jobs/ except the per-job-type submission forms under
 // components/jobs/new/, plus the Job list page and the Job detail route
-// segment. None of this exists yet (Plans 09-12) — every assertion below
-// passes vacuously today and starts enforcing the moment those files land.
+// segment. Non-vacuous as of Plan 12 (see the "D-17 scan non-vacuity"
+// describe block below, which asserts the expected file list is both
+// present on disk and included in this scan).
 const JOB_UI_EXACT_FILES = ["app/jobs/page.tsx"];
 const JOB_UI_INCLUDE_PREFIXES = ["components/jobs/", "app/jobs/[jobId]/"];
 const JOB_UI_EXCLUDE_PREFIX = "components/jobs/new/";
@@ -157,5 +158,81 @@ describe("resourceHref (lookup map 2)", () => {
 
   it("returns null for an unrecognized resource kind", () => {
     expect(resourceHref("future_kind", "abc-123")).toBeNull();
+  });
+});
+
+// Non-vacuity for the D-17 Job UI scope (Plan 12): every file this phase's
+// list/detail/log/event/cancel UI actually shipped must exist on disk and
+// be picked up by isJobUiFile's scan -- otherwise the describe block above
+// would keep passing vacuously even if a future edit narrowed the scan to
+// miss real files. Paths are relative to console/src (toPosixRelative's
+// output), matching ALL_SOURCE_FILES/jobUiFiles exactly.
+const EXPECTED_JOB_UI_FILES = [
+  "app/jobs/page.tsx",
+  "app/jobs/[jobId]/page.tsx",
+  "components/jobs/JobsTable.tsx",
+  "components/jobs/JobFilters.tsx",
+  "components/jobs/CancelJobDialog.tsx",
+  "components/jobs/detail/JobDetailView.tsx",
+  "components/jobs/detail/JobHeaderPanel.tsx",
+  "components/jobs/detail/JobProgressPanel.tsx",
+  "components/jobs/detail/JobResourcesPanel.tsx",
+  "components/jobs/detail/JobResultSummaryPanel.tsx",
+  "components/jobs/detail/JobLogsPanel.tsx",
+  "components/jobs/detail/JobEventsPanel.tsx",
+];
+
+describe("D-17 scan non-vacuity (Plan 12)", () => {
+  const jobUiRelPaths = new Set(
+    ALL_SOURCE_FILES.filter((absPath) => isJobUiFile(toPosixRelative(absPath))).map(
+      toPosixRelative,
+    ),
+  );
+
+  it("every expected Job UI file exists on disk and is included in the scanned set", () => {
+    for (const relPath of EXPECTED_JOB_UI_FILES) {
+      const absPath = join(SRC_ROOT, relPath);
+      expect(statSync(absPath).isFile()).toBe(true);
+      expect(jobUiRelPaths.has(relPath)).toBe(true);
+    }
+  });
+});
+
+describe("Single-lookup-map discipline (D-17) — non-vacuity", () => {
+  it("JOB_TYPE_FORMS is declared exactly once, in src/lib/jobTypeForms.ts", () => {
+    const pattern = /\b(const|let|var)\s+JOB_TYPE_FORMS\b/;
+    const declaredIn: string[] = [];
+    for (const absPath of ALL_SOURCE_FILES) {
+      const content = readFileSync(absPath, "utf8");
+      if (pattern.test(content)) {
+        declaredIn.push(toPosixRelative(absPath));
+      }
+    }
+    expect(declaredIn).toEqual(["lib/jobTypeForms.ts"]);
+  });
+
+  it("the only non-test file importing jobTypeForms is components/jobs/new/NewJobView.tsx", () => {
+    const importPattern = /from\s+["'][^"']*jobTypeForms["']/;
+    const importers: string[] = [];
+    for (const absPath of ALL_SOURCE_FILES) {
+      const content = readFileSync(absPath, "utf8");
+      if (importPattern.test(content)) {
+        importers.push(toPosixRelative(absPath));
+      }
+    }
+    expect(importers).toEqual(["components/jobs/new/NewJobView.tsx"]);
+  });
+});
+
+describe("T-19-12-01: no non-test console file uses dangerouslySetInnerHTML", () => {
+  it("scans every non-test file under console/src", () => {
+    const violations: string[] = [];
+    for (const absPath of ALL_SOURCE_FILES) {
+      const content = readFileSync(absPath, "utf8");
+      if (content.includes("dangerouslySetInnerHTML")) {
+        violations.push(toPosixRelative(absPath));
+      }
+    }
+    expect(violations).toEqual([]);
   });
 });
