@@ -9,10 +9,23 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.jobs.contracts import JobHandler
+
+
+class JobCancellationMode(StrEnum):
+    """Closed vocabulary describing how a public Job type acknowledges cancellation.
+
+    Cooperative cancellation is acknowledged at handler step boundaries
+    (Phase 17 D-08) -- every Phase 19 Job type uses ``STEP_BOUNDARY``. Phase
+    20 is expected to add further values (e.g. "before broker submission")
+    as new operation types with different cancellation semantics register.
+    """
+
+    STEP_BOUNDARY = "step_boundary"
 
 
 @dataclass(frozen=True)
@@ -41,9 +54,19 @@ class JobSubmissionSpec(Protocol):
     """Transport-neutral validation and normalization for a public Job type."""
 
     job_type: str
+    description: str
+    cancellation_mode: JobCancellationMode
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         """Return normalized JSON-safe payload or raise ``InvalidJobPayloadError``."""
+
+    def submission_defaults(self) -> Mapping[str, Any] | None:
+        """Return console pre-fill defaults, computed at read time (D-10).
+
+        Returns ``None`` when defaults are unavailable (e.g. no prior
+        session data to derive them from). Must not mutate any state --
+        this is called on every catalog read (``GET /api/v1/job-types``),
+        including reads that never lead to a submission."""
 
 
 class JobRegistry:
@@ -74,6 +97,24 @@ class JobRegistry:
                 "Submission specification job type must match its handler: "
                 f"'{submission_spec.job_type}' != '{job_type}'."
             )
+        if submission_spec is not None:
+            description = getattr(submission_spec, "description", None)
+            if not isinstance(description, str) or not (1 <= len(description.strip()) <= 200):
+                raise ValueError(
+                    f"Job type '{job_type}': submission spec 'description' must be a "
+                    "nonblank string of at most 200 characters."
+                )
+            cancellation_mode = getattr(submission_spec, "cancellation_mode", None)
+            if not isinstance(cancellation_mode, JobCancellationMode):
+                raise ValueError(
+                    f"Job type '{job_type}': submission spec 'cancellation_mode' must be "
+                    "a JobCancellationMode member."
+                )
+            if not callable(getattr(submission_spec, "submission_defaults", None)):
+                raise ValueError(
+                    f"Job type '{job_type}': submission spec must define a callable "
+                    "'submission_defaults' method."
+                )
         self._handlers[job_type] = handler
         if submission_spec is not None:
             self._submission_specs[job_type] = submission_spec

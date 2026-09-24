@@ -24,7 +24,11 @@ from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import Job, JobEvent, JobMutation, JobStatus
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.jobs.contracts import JobContext
-from trading_platform.jobs.registry import InvalidJobPayloadError, JobRegistry
+from trading_platform.jobs.registry import (
+    InvalidJobPayloadError,
+    JobCancellationMode,
+    JobRegistry,
+)
 from trading_platform.orchestration.job_mutations import (
     IdempotencyConflictError,
     InvalidCancellationReasonError,
@@ -46,12 +50,17 @@ class _ProbeHandler:
 
 class _ProbeSubmissionSpec:
     job_type = _ProbeHandler.job_type
+    description = "Probe submission spec for orchestration service invariants."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         message = payload.get("message")
         if message not in {"hello", "again"}:
             raise InvalidJobPayloadError(job_type=self.job_type, reason="message is not accepted")
         return {"message": message}
+
+    def submission_defaults(self) -> None:
+        return None
 
 
 def _registry(*, with_spec: bool = True) -> JobRegistry:

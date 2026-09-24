@@ -26,6 +26,7 @@ from trading_platform.db.session import clear_engine_cache, session_scope  # noq
 from trading_platform.jobs.contracts import JobContext  # noqa: E402
 from trading_platform.jobs.registry import (  # noqa: E402
     InvalidJobPayloadError,
+    JobCancellationMode,
     JobRegistry,
 )
 
@@ -45,6 +46,9 @@ class _OtherProbeHandler:
 
 
 class _ProbeSubmissionSpec:
+    description = "Probe submission spec for HTTP mutation contract tests."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
+
     def __init__(self, job_type: str) -> None:
         self.job_type = job_type
 
@@ -52,6 +56,9 @@ class _ProbeSubmissionSpec:
         if payload != {"message": "hello"}:
             raise InvalidJobPayloadError(job_type=self.job_type, reason="message must be hello")
         return {"message": "hello"}
+
+    def submission_defaults(self) -> None:
+        return None
 
 
 def _registry() -> JobRegistry:

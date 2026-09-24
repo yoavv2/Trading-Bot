@@ -26,6 +26,7 @@ from trading_platform.db.session import clear_engine_cache, session_scope  # noq
 from trading_platform.jobs.contracts import JobContext  # noqa: E402
 from trading_platform.jobs.registry import (  # noqa: E402
     InvalidJobPayloadError,
+    JobCancellationMode,
     JobRegistry,
     build_default_registry,
 )
@@ -52,6 +53,8 @@ class _Phase18E2EHandler:
 
 class _Phase18E2ESubmissionSpec:
     job_type = "phase18_e2e_probe"
+    description = "Phase 18 end-to-end probe submission spec."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         if payload == {"message": "hello"}:
@@ -61,6 +64,9 @@ class _Phase18E2ESubmissionSpec:
         raise InvalidJobPayloadError(
             job_type=self.job_type, reason="payload must be exactly message=hello"
         )
+
+    def submission_defaults(self) -> None:
+        return None
 
 
 def _admin_connection_settings() -> dict[str, str]:
