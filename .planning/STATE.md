@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 19-02-PLAN.md
-last_updated: "2026-09-24T09:02:51.094Z"
+stopped_at: Completed 19-03-PLAN.md
+last_updated: "2026-09-24T09:13:45.215Z"
 last_activity: 2026-09-24
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 27
-  completed_plans: 17
+  completed_plans: 18
   percent: 40
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 3 of 12
+Plan: 4 of 12
 Status: Ready to execute
 Last activity: 2026-09-24
 **Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
@@ -64,6 +64,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 18 P06 | 20min | 3 tasks | 7 files |
 | Phase 19 P01 | 15min | 2 tasks | 6 files |
 | Phase 19 P02 | 25min | 2 tasks | 8 files |
+| Phase 19 P03 | 25min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -157,6 +158,8 @@ Recent decisions affecting current work:
 - [Phase 19]: 19-01's frontmatter lists requirements [OPS-01, JOBUI-02], but the plan ships only the DB schema (strategy_runs.job_id FK/UNIQUE, JobFailureReason.CONFIG_INVALID) -- neither requirement's literal end-to-end/UI text is satisfied by schema alone. Both left Pending per the 17-01/17-04/17-05 precedent; mark each Complete at the plan that wires the handler/registry (OPS-01) or the resources[] API/UI (JOBUI-02).
 - [Phase 19]: [19-02]: require_mutations_enabled lives at the HTTP route-decorator dependency layer (api/dependencies.py), not inside JobOrchestrationService, so ordering is correct and Phase 20 control routes can reuse it unchanged.
 - [Phase 19]: [19-02]: ORCH-07 fully satisfied end-to-end by this plan (flag default-disabled, guard on every mutating route proven by a route-walk test, typed 403 + zero rows, render.yaml sets it disabled) -- marked Complete.
+- [Phase 19]: [19-03]: job_id kept an opaque uuid.UUID | None keyword on run_backtest/_create_backtest_run (no trading_platform.jobs import in backtesting.py); resources[] in JobReadService.get_job_detail is a single unfiltered select(StrategyRun).where(StrategyRun.job_id == job_uuid) query, never gated on Job status, so a linked run stays visible through every terminal Job state (D-05/D-13 read side).
+- [Phase 19]: 19-03's frontmatter lists requirements [OPS-01, JOBUI-02], but this plan ships only the service/API layer (job_id threading + resources[]) -- neither requirement's literal end-to-end/operator-visible text is satisfied. Both left Pending per the 19-01 precedent; mark OPS-01 complete once the backtest Job handler + worker wiring lands, and JOBUI-02 once the console Job-detail screen renders resources[].
 
 ### Pending Todos
 
@@ -197,6 +200,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-24T09:02:51.084Z
-Stopped at: Completed 19-02-PLAN.md
+Last session: 2026-09-24T09:13:45.206Z
+Stopped at: Completed 19-03-PLAN.md
 Resume file: None
