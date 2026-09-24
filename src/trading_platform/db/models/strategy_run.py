@@ -56,6 +56,12 @@ class StrategyRun(TimestampedModel, Base):
         ForeignKey("strategies.id", ondelete="CASCADE"),
         nullable=False,
     )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
     run_type: Mapped[StrategyRunType] = mapped_column(
         Enum(
             StrategyRunType,

@@ -53,6 +53,7 @@ class JobFailureReason(StrEnum):
     WORKER_LOST = "worker_lost"
     LEASE_EXPIRED = "lease_expired"
     CANCELLATION_TIMEOUT = "cancellation_timeout"
+    CONFIG_INVALID = "config_invalid"
 
 
 class JobCancellationCause(StrEnum):
