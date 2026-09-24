@@ -119,7 +119,12 @@ def migrated_job_mutation_api_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[st
 
 
 @pytest.fixture()
-def client(migrated_job_mutation_api_db: str) -> Iterator[TestClient]:
+def client(
+    migrated_job_mutation_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    # ORCH-07 / D-19: mutations default disabled; Phase 18 HTTP tests enable
+    # the flag explicitly so their submit/cancel expectations stay accurate.
+    monkeypatch.setenv("TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED", "true")
     clear_settings_cache()
     app = create_app()
     app.state.job_registry = _registry()
@@ -229,6 +234,7 @@ def test_submit_rejections_are_typed_and_write_nothing(client: TestClient) -> No
     assert invalid_payload.json()["detail"] == {
         "code": "invalid_job_payload",
         "job_type": _ProbeHandler.job_type,
+        "reason": "message must be hello",
     }
     assert _counts() == (0, 0, 0)
 

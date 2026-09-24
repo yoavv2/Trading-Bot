@@ -96,6 +96,9 @@ def migrated_job_mutation_e2e_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[st
         pytest.fail(f"PostgreSQL is required for Job mutation E2E tests: {exc}")
 
     _set_database_env(monkeypatch, database_name)
+    # ORCH-07 / D-19: mutations default disabled; this E2E proof enables the
+    # flag explicitly so its submit/cancel expectations stay accurate.
+    monkeypatch.setenv("TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED", "true")
     clear_settings_cache()
     clear_engine_cache()
     command.upgrade(build_alembic_config(), "head")
@@ -155,6 +158,7 @@ def test_submit_execute_and_observe_with_test_only_handler(
         assert rejected.json()["detail"] == {
             "code": "invalid_job_payload",
             "job_type": handler.job_type,
+            "reason": "message must be hello",
         }
         assert _counts() == (0, 0, 0)
 
