@@ -507,6 +507,7 @@ def _serialize_run_summary(strategy_run: StrategyRun, strategy: Strategy) -> dic
         "run_type": strategy_run.run_type.value,
         "status": strategy_run.status.value,
         "trigger_source": strategy_run.trigger_source,
+        "job_id": str(strategy_run.job_id) if strategy_run.job_id is not None else None,
         "as_of_session": as_of_session,
         "started_at": strategy_run.started_at.isoformat(),
         "completed_at": _dt_value(strategy_run.completed_at),

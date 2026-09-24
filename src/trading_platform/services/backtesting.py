@@ -109,8 +109,17 @@ def run_backtest(
     trigger_source: str = "backtest_script",
     settings: Settings | None = None,
     registry: StrategyRegistry | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> BacktestRunReport:
-    """Execute a deterministic daily-bar backtest and persist all artifacts."""
+    """Execute a deterministic daily-bar backtest and persist all artifacts.
+
+    ``job_id`` is an opaque originating-Job identifier (D-02): when provided,
+    it is written on ``StrategyRun.job_id`` in the same transaction that
+    creates the run, so the link exists from the moment the run exists and
+    survives every later state. This module stays free of any Job-framework
+    import -- the caller (a Job handler) owns that dependency, not this
+    service.
+    """
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
     strategy = resolved_registry.resolve(strategy_id)
@@ -121,6 +130,7 @@ def run_backtest(
         trigger_source=trigger_source,
         from_date=from_date,
         to_date=to_date,
+        job_id=job_id,
     )
 
     _update_backtest_run(
@@ -179,11 +189,13 @@ def _create_backtest_run(
     trigger_source: str,
     from_date: date,
     to_date: date,
+    job_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     with session_scope(settings) as session:
         strategy_record = ensure_strategy_record(session, metadata)
         strategy_run = StrategyRun(
             strategy_id=strategy_record.id,
+            job_id=job_id,
             run_type=StrategyRunType.BACKTEST,
             status=StrategyRunStatus.PENDING,
             trigger_source=trigger_source,
