@@ -208,7 +208,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 19-07-PLAN.md — Production-path E2E: submit, worker, idempotency, cancellation outcomes
-- [ ] 19-08-PLAN.md — Console foundation: mutating client, polling, capability hook, D-14 label, lookup map 2, SC6 fences
+- [x] 19-08-PLAN.md — Console foundation: mutating client, polling, capability hook, D-14 label, lookup map 2, SC6 fences
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -283,7 +283,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
-| 19. Job Operations Vertical Slice | v1.3 | 7/12 | In Progress | - |
+| 19. Job Operations Vertical Slice | v1.3 | 8/12 | In Progress | - |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 

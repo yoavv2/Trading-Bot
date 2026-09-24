@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 19-07-PLAN.md
-last_updated: "2026-09-24T12:11:43.905Z"
+stopped_at: Completed 19-08-PLAN.md
+last_updated: "2026-09-24T12:30:45.616Z"
 last_activity: 2026-09-24
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 27
-  completed_plans: 22
+  completed_plans: 23
   percent: 40
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 8 of 12
+Plan: 9 of 12
 Status: Ready to execute
 Last activity: 2026-09-24
 **Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
@@ -69,6 +69,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 19 P05 | 40min | 2 tasks | 6 files |
 | Phase 19 P06 | 35min | 3 tasks | 8 files |
 | Phase 19 P07 | 25min | 2 tasks | 1 files |
+| Phase 19 P08 | 55min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -170,6 +171,7 @@ Recent decisions affecting current work:
 - [Phase 19]: [19-05]: adapted tests/test_startup_validation.py::test_run_jobs_command_exits_before_worker_loop_constructed to D-22's BACKTEST-level boot -- an invalid PAPER config no longer exits run_jobs_command's startup gate, so the CFG-06 ordering proof now uses an unreachable-DB payload instead of empty broker keys
 - [Phase 19]: 19-06: backtest registered as first production Job type (BacktestSubmissionSpec D-08/D-09/D-10, BacktestJobHandler D-11/D-12/D-13/D-16/D-06/D-22); SC9 registry-emptiness tripwires (5 sites, 3 files) replaced by one exact-set pin plus D-22/D-03 boundary tests. OPS-01 left Pending -- registration/handler layer only, no Console UI path yet (19-07 scope).
 - [Phase 19]: [19-07]: tests/test_job_operations_e2e.py (9 tests) proves OPS-01's backend vertical slice against the production Job registry (no test-only handler override) -- SC1 submit->run-jobs->observe, SC2 idempotent replay (1 StrategyRun), SC7 queued+running cancellation outcomes (D-12/D-13), D-09 typed HTTP rejections write zero rows, D-10 catalog defaults. — Job.result_summary defaults to {} not None (non-nullable JSON column) and GET /api/v1/runs/{id} nests under response['run'] -- both corrected in test assertions against the actual schema/API shape. OPS-01 and JOBUI-04 left Pending: both require an operator-visible Console/UI path this backend-only plan does not touch; close once the Phase 19 console plans land.
+- [Phase 19]: [19-08]: Shipped console Job primitives only (types.ts, mutating submitJob/cancelJob client at the sole fetch site, useApiQuery polling, useMutationCapability, jobStatus/cancellationLabel/resourceRoutes helpers, SC6/D-17 structural enforcement test) — JOBUI-01/02/04/05 all stay Pending since no operator-visible Job screen exists yet (Plans 09-12 build it on top of these primitives). eslint-config-next 16 ships a new react-hooks/refs rule forbidding ref writes during render; useApiQuery's latest-options/tick-function ref updates were moved into declaration-ordered no-dependency-array useEffect calls to satisfy it, with zero behavior change (all 8 polling tests unchanged).
 
 ### Pending Todos
 
@@ -210,6 +212,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-24T12:11:43.897Z
-Stopped at: Completed 19-07-PLAN.md
+Last session: 2026-09-24T12:30:45.606Z
+Stopped at: Completed 19-08-PLAN.md
 Resume file: None
