@@ -76,7 +76,7 @@ Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-
 
 - [x] **Phase 17: Job Framework** - Generic DB-backed job queue: closed lifecycle enum, restart-safe persistence, registry-based extensibility, import-boundary enforcement, dependencies, cancellation, progress and structured logs. (completed 2026-07-20)
 - [x] **Phase 18: Orchestration Surface** - Idempotent Job submit/cancel HTTP endpoints, transport-agnostic Job observation, worker CLI reduced to thin adapters. (completed 2026-07-21; ORCH-01/02 Partial — `scripts/` bypass not covered, closes in Phase 20; post-phase race/test hardening completed 2026-07-22 in PR #1 / `2b88d49`)
-- [ ] **Phase 19: Job Operations Vertical Slice** - Backtest as the first real production Job, production worker wiring, generic Job list/detail/progress/logs/events/cancel UI, minimal submission UI, end-to-end Console → HTTP → Job → Worker → Service proof.
+- [x] **Phase 19: Job Operations Vertical Slice** - Backtest as the first real production Job, production worker wiring, generic Job list/detail/progress/logs/events/cancel UI, minimal submission UI, end-to-end Console → HTTP → Job → Worker → Service proof. (completed 2026-09-24)
 - [ ] **Phase 20: Complete Operation Migration & Safety Controls** - Remaining operations as Jobs, synchronous kill-switch/strategy controls, operator retry with lineage, retirement of every mutation bypass with boundary enforcement.
 - [ ] **Phase 21: Operations History & Polish** - Unified operational history and global failure visibility built from existing Job/event/control audit data; operational UX cleanup; then v1.3 closes.
 
@@ -218,7 +218,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 19-12-PLAN.md — Job detail screen composition, SC6 test-only type test
+- [x] 19-12-PLAN.md — Job detail screen composition, SC6 test-only type test
 
 **UI hint**: yes
 
@@ -283,7 +283,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
-| 19. Job Operations Vertical Slice | v1.3 | 11/12 | In Progress | - |
+| 19. Job Operations Vertical Slice | v1.3 | 12/12 | In Progress | - |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
