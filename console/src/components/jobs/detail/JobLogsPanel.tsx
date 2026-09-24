@@ -33,10 +33,23 @@ export function JobLogsPanel({ jobId, jobIsTerminal }: JobLogsPanelProps) {
   const [follow, setFollow] = useState(true);
 
   const cursorRef = useRef<number | null>(null);
-  const lastSequenceRef = useRef(0);
+  // -1 (not 0): the backend numbers JobLog.sequence from 1, but this
+  // sentinel makes the dedupe filter (`sequence > lastSequenceRef.current`)
+  // correct even if that numbering were ever 0-based.
+  const lastSequenceRef = useRef(-1);
   const hasEverSucceededRef = useRef(false);
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
+  // A pending final-fetch request (terminal transition) that arrived while
+  // a tick was already in flight -- consumed at the end of that tick
+  // instead of starting a second, overlapping request.
+  const finalFetchPendingRef = useRef(false);
+  // Incremented every time the mount/jobId-change effect (re-)initializes
+  // local state; runTick captures it at start and bails after every await
+  // if it no longer matches, so a stale in-flight request from a prior
+  // jobId can never append to (or move the cursor of) a different Job's
+  // panel.
+  const genRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const jobIsTerminalRef = useRef(jobIsTerminal);
   const prevTerminalRef = useRef(jobIsTerminal);
@@ -76,6 +89,7 @@ export function JobLogsPanel({ jobId, jobIsTerminal }: JobLogsPanelProps) {
   }, [clearTimer]);
 
   const runTick = useCallback(async () => {
+    const gen = genRef.current;
     inFlightRef.current = true;
     let hasMore = true;
     let pagesFetched = 0;
@@ -90,7 +104,10 @@ export function JobLogsPanel({ jobId, jobIsTerminal }: JobLogsPanelProps) {
       );
       pagesFetched += 1;
 
-      if (!mountedRef.current) {
+      if (!mountedRef.current || gen !== genRef.current) {
+        // Unmounted, or a newer jobId has since reset local state --
+        // this response belongs to a stale request; discard it rather
+        // than appending to (or moving the cursor of) the wrong Job.
         inFlightRef.current = false;
         return;
       }
@@ -123,10 +140,34 @@ export function JobLogsPanel({ jobId, jobIsTerminal }: JobLogsPanelProps) {
     }
 
     inFlightRef.current = false;
-    if (mountedRef.current) {
-      setFetchedOnce(true);
-      scheduleNextTick();
+    if (!mountedRef.current || gen !== genRef.current) {
+      return;
     }
+    setFetchedOnce(true);
+
+    if (finalFetchPendingRef.current) {
+      // A terminal transition arrived mid-tick and was deferred rather
+      // than starting an overlapping request; honor it now with a fresh
+      // fetch instead of trusting this tick's already-stale snapshot.
+      finalFetchPendingRef.current = false;
+      void tickRef.current();
+      return;
+    }
+
+    if (hasMore && jobIsTerminalRef.current) {
+      // The Job is terminal (no further poll will ever be scheduled) but
+      // this tick hit the per-tick page cap before has_more went false --
+      // continue draining immediately rather than silently truncating a
+      // finished Job's log tail. Still bounded to MAX_PAGES_PER_TICK per
+      // continuation, so a runaway/buggy has_more can only ever fetch in
+      // finite (if repeated) chunks, never in a single unbounded loop.
+      timerRef.current = setTimeout(() => {
+        void tickRef.current();
+      }, 0);
+      return;
+    }
+
+    scheduleNextTick();
   }, [jobId, scheduleNextTick]);
 
   useEffect(() => {
@@ -136,9 +177,11 @@ export function JobLogsPanel({ jobId, jobIsTerminal }: JobLogsPanelProps) {
   // Initial fetch on mount / jobId change.
   useEffect(() => {
     mountedRef.current = true;
+    genRef.current += 1;
     hasEverSucceededRef.current = false;
+    finalFetchPendingRef.current = false;
     cursorRef.current = null;
-    lastSequenceRef.current = 0;
+    lastSequenceRef.current = -1;
     // Deliberate: this hand-rolled tail (no SWR/TanStack per plan scope)
     // resets its local state and kicks off an immediate in-flight fetch on
     // mount/jobId change; runTick always resolves fetchedOnce via its own
@@ -156,11 +199,19 @@ export function JobLogsPanel({ jobId, jobIsTerminal }: JobLogsPanelProps) {
 
   // A non-terminal -> terminal transition runs one final fetch, then the
   // scheduler above naturally stops (jobIsTerminalRef is already true by
-  // the time scheduleNextTick runs, per effect declaration order).
+  // the time scheduleNextTick runs, per effect declaration order). If a
+  // tick is already in flight when the transition happens, defer to
+  // finalFetchPendingRef instead of starting a second, overlapping
+  // request -- runTick consumes the flag with a fresh fetch once it
+  // finishes.
   useEffect(() => {
     if (!prevTerminalRef.current && jobIsTerminal) {
       clearTimer();
-      void tickRef.current();
+      if (inFlightRef.current) {
+        finalFetchPendingRef.current = true;
+      } else {
+        void tickRef.current();
+      }
     }
     prevTerminalRef.current = jobIsTerminal;
   }, [jobIsTerminal, clearTimer]);

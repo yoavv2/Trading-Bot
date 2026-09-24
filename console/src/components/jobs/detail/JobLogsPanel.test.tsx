@@ -81,9 +81,9 @@ describe("JobLogsPanel", () => {
     expect(calls[1]).toContain("after_sequence=2");
     const rows = screen.getAllByTestId("log-line");
     expect(rows.length).toBe(3);
-    expect(screen.getByText("line 1")).toBeTruthy();
-    expect(screen.getByText("line 2")).toBeTruthy();
-    expect(screen.getByText("line 3")).toBeTruthy();
+    expect(rows[0].textContent).toContain("line 1");
+    expect(rows[1].textContent).toContain("line 2");
+    expect(rows[2].textContent).toContain("line 3");
   });
 
   it("has_more true on the first page triggers an immediate second request without advancing timers", async () => {
@@ -159,5 +159,126 @@ describe("JobLogsPanel", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getByText(payload)).toBeTruthy();
+  });
+
+  it("continues draining past the per-tick page cap when the Job is terminal, instead of silently truncating the tail", async () => {
+    const pages: JobLogsPage[] = [];
+    for (let sequence = 1; sequence <= 25; sequence += 1) {
+      pages.push(
+        logsPage({
+          items: [logLine(sequence)],
+          count: 1,
+          next_after_sequence: sequence,
+          has_more: sequence < 25,
+        }),
+      );
+    }
+    const { fn, calls } = makeLogsFetch(pages);
+    vi.stubGlobal("fetch", fn);
+
+    render(<JobLogsPanel jobId="job-1" jobIsTerminal={true} />);
+    // First tick drains 20 pages synchronously (bounded, T-19-10-04); the
+    // page cap is hit with has_more still true, so a same-virtual-time
+    // continuation (setTimeout 0) drains the remaining 5 -- both resolve
+    // within a single advance(0) flush.
+    await advance(0);
+
+    expect(calls.length).toBe(25);
+    expect(screen.getAllByTestId("log-line").length).toBe(25);
+
+    await advance(10000);
+    expect(calls.length).toBe(25);
+  });
+
+  it("discards a stale in-flight response after jobId changes, never appending it to the new Job's panel", async () => {
+    let resolveFirst: (value: Response) => void = () => {};
+    const firstPromise = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const calls: string[] = [];
+    const fn = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push(url);
+      if (calls.length === 1) {
+        return firstPromise;
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(
+            logsPage({ items: [logLine(9)], count: 1, next_after_sequence: 9 }),
+          ),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fn);
+
+    const { rerender } = render(
+      <JobLogsPanel jobId="job-1" jobIsTerminal={true} />,
+    );
+    await advance(0); // job-1's fetch is in flight, deliberately unresolved
+
+    rerender(<JobLogsPanel jobId="job-2" jobIsTerminal={true} />);
+    await advance(0); // job-2's own fetch resolves
+
+    expect(screen.getAllByTestId("log-line").length).toBe(1);
+    expect(screen.getByText("line 9")).toBeTruthy();
+
+    resolveFirst(
+      new Response(
+        JSON.stringify(
+          logsPage({ items: [logLine(1)], count: 1, next_after_sequence: 1 }),
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    await advance(0);
+
+    expect(screen.queryByText("line 1")).toBeNull();
+    expect(screen.getAllByTestId("log-line").length).toBe(1);
+  });
+
+  it("defers a terminal transition instead of overlapping an in-flight tick, then fetches once more and stops", async () => {
+    let resolvePending: (value: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      resolvePending = resolve;
+    });
+    const calls: string[] = [];
+    const fn = vi.fn().mockImplementation(() => {
+      calls.push("call");
+      if (calls.length === 1) {
+        return pending;
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(logsPage()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fn);
+
+    const { rerender } = render(
+      <JobLogsPanel jobId="job-1" jobIsTerminal={false} />,
+    );
+    await advance(0); // first tick in flight, not yet resolved
+
+    rerender(<JobLogsPanel jobId="job-1" jobIsTerminal={true} />);
+    await advance(0); // transition deferred -- no overlapping request yet
+
+    expect(calls.length).toBe(1);
+
+    resolvePending(
+      new Response(JSON.stringify(logsPage()), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await advance(0); // the deferred final fetch now runs
+
+    expect(calls.length).toBe(2);
+
+    await advance(10000);
+    expect(calls.length).toBe(2);
   });
 });
