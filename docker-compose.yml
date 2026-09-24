@@ -25,6 +25,7 @@ services:
       TRADING_PLATFORM_DATABASE__NAME: ${POSTGRES_DB:-trading_platform}
       TRADING_PLATFORM_DATABASE__USER: ${POSTGRES_USER:-trading_platform}
       TRADING_PLATFORM_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:-trading_platform}
+      TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED: "true"
     depends_on:
       db:
         condition: service_healthy
@@ -44,7 +45,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["python", "-m", "trading_platform.worker", "serve", "--interval-seconds", "30"]
+    command: ["python", "-m", "trading_platform.worker", "run-jobs"]
 
 volumes:
   postgres_data:
