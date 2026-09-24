@@ -29,7 +29,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **ORCH-03**: Every Job mutation handled through `JobOrchestrationService` (submit, cancel, and — from Phase 20 — retry) is idempotent by `Idempotency-Key` — resubmitting the same operation with the same key returns the existing Job reference (Phase 18 replay contract) instead of executing twice. *(Scope: Job mutations only. Immediate safety controls are idempotent by explicit target state under CTRL-01/CTRL-02 and do not use `Idempotency-Key`.)*
 - [x] **ORCH-04**: Submitting an operation returns a Job reference whose state, progress, and logs the console observes via API reads — transport-agnostic, no architectural dependency on polling vs push
 - [ ] **ORCH-05**: The production worker process runs the Job runner — the compose worker service command is `run-jobs`, and no deploy configuration starts the placeholder `serve` loop (config-parsing test)
-- [ ] **ORCH-06**: A read-only job-type catalog endpoint lists every registered Job type with a description and its cancellation mode; an enforcement test asserts every registered type appears in it. No JSON-Schema-to-form generation is required
+- [x] **ORCH-06**: A read-only job-type catalog endpoint lists every registered Job type with a description and its cancellation mode; an enforcement test asserts every registered type appears in it. No JSON-Schema-to-form generation is required
 - [x] **ORCH-07**: A configuration flag disables all mutating routes; when disabled they return a typed 403 and write zero rows, and the public `render.yaml` deploy sets it disabled. No authentication is introduced
 - [ ] **ORCH-08**: Exactly one mutation path per operation class — every mutating `scripts/*.py`, dead `worker/commands/*` function, and mutating/dead Makefile target is removed; a boundary test fails if any script, worker command, or Makefile target invokes a mutating domain service outside a Job handler or `OperatorControlService`, with a pinned exemption list limited to deployment tooling (`migrate`, `seed`) and read/report paths. **Unresolved classification items (Phase 20 must decide from actual behavior, default is NOT exemption):** `scripts/dry_run.py` and `scripts/generate_signals.py` — inspect whether each performs a state-changing/manual operation; if mutating, migrate to a Job or retire; only if genuinely read-only or development-only, add to the pinned exemption list with the reason
 
@@ -130,7 +130,7 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | ORCH-03 | Phase 18 (Job mutations; retry extends it in Phase 20) | Complete |
 | ORCH-04 | Phase 18 | Complete |
 | ORCH-05 | Phase 19 | Pending |
-| ORCH-06 | Phase 19 | Pending |
+| ORCH-06 | Phase 19 | Complete |
 | ORCH-07 | Phase 19 | Complete |
 | JOBUI-01 | Phase 19 | Pending |
 | JOBUI-02 | Phase 19 | Pending |
