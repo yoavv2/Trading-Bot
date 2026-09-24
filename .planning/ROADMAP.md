@@ -203,7 +203,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 19-06-PLAN.md — backtest submission spec + handler, registration, SC9 tripwire replacement
+- [x] 19-06-PLAN.md — backtest submission spec + handler, registration, SC9 tripwire replacement
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -283,7 +283,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 16. Analytics & Charting | v1.2 | 3/3 | Complete | 2026-07-09 |
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
-| 19. Job Operations Vertical Slice | v1.3 | 5/12 | In Progress | - |
+| 19. Job Operations Vertical Slice | v1.3 | 6/12 | In Progress | - |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
