@@ -14,7 +14,7 @@ Build a trustworthy, auditable trading platform that can reproducibly validate a
 
 **Goal (re-scoped 2026-09-23):** Every existing long-running operation executes as a Job that the operator submits, observes, cancels, and retries from generic Job surfaces in the console; immediate safety controls work from the console without depending on the worker; and exactly one mutation path exists per operation class — no `scripts/`, CLI, or Makefile bypasses.
 
-**Current state:** Phases 17 and 18 complete — restart-safe Job framework, idempotent HTTP submit/cancel surface, and post-Phase-18 framework race/test hardening (PR #1). A 2026-09-23 audit found the surface not yet usable in production: the Job registry is intentionally empty, the compose worker runs the placeholder `serve` loop instead of `run-jobs`, the console is GET-only, the kill switch has no supported trip/reset path, and mutating `scripts/*.py` still call domain services directly (ORCH-01/02 Partial). Remaining: Phase 19 (Job Operations Vertical Slice — backtest end-to-end + generic Job UI), Phase 20 (Complete Operation Migration & Safety Controls), Phase 21 (Operations History & Polish), then v1.3 closes.
+**Current state:** Phases 17, 18 and 19 complete. Phase 19 (Job Operations Vertical Slice, 2026-09-26) proved the first production path end to end: `backtest` is the first registered production Job type; the compose worker runs `run-jobs` with config preflight; a read-only job-type catalog (`GET /api/v1/job-types`); an ORCH-07 mutation flag (typed 403, zero writes, disabled on the public `render.yaml` deploy); and generic, job-type-agnostic console Job list/detail/progress/logs/events/cancel UI plus a minimal backtest submission form. Human UAT passed 4/4, and the compose image config-path crash was fixed along the way. Remaining gaps from the 2026-09-23 audit: the kill switch has no supported trip/reset path, and mutating `scripts/*.py` still call domain services directly (ORCH-01/02 Partial). Remaining: Phase 20 (Complete Operation Migration & Safety Controls), Phase 21 (Operations History & Polish), then v1.3 closes.
 
 **Architecture invariants:**
 
@@ -29,7 +29,6 @@ Build a trustworthy, auditable trading platform that can reproducibly validate a
 9. **Audit from existing records** — every Job and safety-control change is inspectable (timestamp, operation type, parameters, resulting Job or control record, outcome) from the existing Job/JobEvent/JobMutation and control audit records. Single operator: no identity/actor schema is added until a concrete requirement needs it.
 
 **Target features (remaining):**
-- Phase 19: backtest as the first production Job, production worker wiring, job-type catalog, public-deploy mutation guard, generic Job list/detail/progress/logs/events/cancel UI, minimal backtest submission form
 - Phase 20: risk evaluation, paper session, reconciliation, `ingest-bars`, `sync-symbol-metadata`, `sync-market-sessions`, broker order-lifecycle sync as Jobs; synchronous kill-switch and strategy controls; operator retry with lineage; typed domain-conflict failures; retirement of every mutation bypass with boundary enforcement
 - Phase 21: unified operational history and global failure indicator from existing audit data; operational UX cleanup
 
@@ -610,4 +609,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-23 — v1.3 re-scoped after repository audit (two mutation paths, vertical-slice Phase 19, scheduling and identity groundwork deferred, next milestone Strategy Lab)*
+*Last updated: 2026-09-26 — Phase 19 complete (backtest end to end Console → HTTP → Job → worker → service; generic Job UI; ORCH-05/06/07, JOBUI-01..05, OPS-01 complete)*
