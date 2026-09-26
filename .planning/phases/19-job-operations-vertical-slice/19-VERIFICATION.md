@@ -1,8 +1,8 @@
 ---
 phase: 19-job-operations-vertical-slice
 verified: 2026-09-24T19:09:43Z
-status: human_needed
-score: 9/9 roadmap success criteria verified (automated + static evidence); OPS-01's console-inclusive claim requires live human walkthrough
+status: passed
+score: 9/9 roadmap success criteria verified; human UAT 4/4 passed (19-HUMAN-UAT.md), which closes OPS-01's console-inclusive claim
 overrides_applied: 0
 human_verification:
   - test: "Live submit: docker compose up -d (worker command run-jobs, mutations_enabled=true per compose), open console against the running API, navigate to /jobs/new?type=backtest, confirm from_date/to_date are pre-filled from catalog submission_defaults, submit the form."
@@ -134,3 +134,25 @@ The phase is withheld from a clean `passed` only because `OPS-01`'s own requirem
 
 _Verified: 2026-09-24T19:09:43Z_
 _Verifier: Claude (gsd-verifier)_
+
+## Human Verification Resolution (2026-09-26)
+
+Human UAT is complete in `19-HUMAN-UAT.md`: **4/4 passed**, and gaps G-01..G-03 are resolved. Status moved from `human_needed` to `passed`.
+
+| Test | Result | Evidence |
+|------|--------|----------|
+| 1. Live console submit | PASS | Job 5b86f5f3… submitted from /jobs/new?type=backtest → QUEUED → RUNNING → SUCCEEDED via `run-jobs` |
+| 2. Live Job detail / terminal refresh | PASS | Progress, logs, and events (incl. `succeeded`) updated without reload; auto-refresh stopped at terminal; result_summary has run_id; strategy_run 2b260e0d… links to /runs/{id} with the "Created by Job" back-link (after G-01) |
+| 3. Queued cancellation | PASS | Job f530a8c0…: 'Cancelled before start — never executed'; started_at NULL, 0 runs, 0 logs, result_summary {} |
+| 4. Mutations-disabled posture | PASS | Against the compose API: Submit and Cancel disabled with the reason; POST submit/cancel → 403 `mutations_disabled`, zero writes |
+
+Gaps found during UAT (details in 19-HUMAN-UAT.md):
+- **G-01** /runs/[runId] reload loop: a corrupted persistent Turbopack dev cache (environmental), proven by A/B/A cache swap. Page-level regression test added (80ad973).
+- **G-02** compose api/worker config-path crash: `PROJECT_ROOT` resolved into site-packages inside the image. Fixed in 066c365 (Dockerfile/compose config pins + migrate service), with 6 contract tests.
+- **G-03** Test 4 first attempt hit a host API on 127.0.0.1:8000 instead of the compose API: test setup, no defect.
+
+**Scope caveat.** Tests 1–3 ran against host processes (host API + `run-jobs` + Homebrew Postgres), because a host uvicorn held 127.0.0.1:8000. The compose stack was verified at boot level (migrate → 0020, api /health + /ready 200, worker `run-jobs` up, 0 restarts) and for Test 4 enforcement, but no backtest was executed inside compose (its DB is unseeded). OPS-01's literal text (Console → HTTP → Job → worker → backtest service) is met by the host-process run. ORCH-05's compose-worker command is pinned by tests/test_deploy_config.py.
+
+**Code review follow-through.** WR-01 (blank result-summary panel for non-succeeded Jobs) was observed as cosmetic in Test 3. WR-02 (events-panel terminal-edge race) did not show up in Test 2. WR-01..05 remain open and advisory (19-REVIEW.md).
+
+**Final gate on main @ post-UAT:** backend `pytest` 595 passed; console `vitest` 130 passed; `tsc --noEmit` and lint clean.
