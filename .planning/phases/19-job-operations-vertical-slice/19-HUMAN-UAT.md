@@ -3,7 +3,7 @@ status: partial
 phase: 19-job-operations-vertical-slice
 source: [19-VERIFICATION.md]
 started: 2026-09-24T20:33:18Z
-updated: 2026-09-26T08:55:00Z
+updated: 2026-09-26T09:40:00Z
 ---
 
 ## Current Test
@@ -30,14 +30,14 @@ result: [pending]
 ### 4. Mutations-disabled posture
 Steps: set TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED=false, restart the API, open /jobs/new and a non-terminal Job's detail page.
 expected: Submit and Cancel controls disabled with 'Mutations disabled on this deployment' visible; direct POST /api/v1/jobs returns 403 {"detail": {"code": "mutations_disabled"}}.
-result: [pending]
+result: pass — verified against the compose API (MUTATIONS_ENABLED=false), after G-03 showed the first attempt hit a different API. /jobs/new?type=backtest: Submit Backtest disabled=true (opacity 0.5, not-allowed cursor), "Mutations disabled on this deployment" visible. QUEUED Job 42d7a874…: Cancel Job… disabled=true with the same reason. Direct POST /api/v1/jobs → 403 {"detail":{"code":"mutations_disabled"}}; direct POST /api/v1/jobs/{id}/cancel → 403 mutations_disabled, job stayed queued. The fixture job was created via JobOrchestrationService in-container with the compose worker stopped, then cancelled; the worker was restarted.
 
 ## Summary
 
 total: 4
-passed: 2
+passed: 3
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 
@@ -62,3 +62,13 @@ verification: `docker compose down` → rebuild → `docker compose up -d db api
 regression: tests/test_deploy_config.py adds 6 contract tests (Dockerfile ENV pins, config COPY into WORKDIR, compose api/worker env, render.yaml parity, pinned paths exist in repo, migrate gates api/worker). Against the pre-fix Dockerfile/compose, 3 fail. Full suite: 595 passed.
 why_missed: no test built or ran the image. test_deploy_config.py only parsed compose/render YAML for commands. Phase 19 UAT ran host processes, where `parents[3]` is the repo root. Render sets the variables explicitly.
 note: the compose DB has no seeded strategy row or bars (seed/ingest scripts are not in the image). That's enough for Test 3 (queued cancel); a successful backtest under compose would need seeding.
+
+### G-03 — Test 4 first attempt showed Submit enabled with MUTATIONS_ENABLED=false (resolved: test setup, no defect)
+status: resolved
+found_in: Test 4
+symptom: after `docker compose up -d --force-recreate api` with MUTATIONS_ENABLED=false (confirmed via `docker compose exec api env`), /jobs/new?type=backtest still showed Submit Backtest enabled and no "Mutations disabled on this deployment".
+root_cause: two APIs were listening on port 8000. A host `uvicorn` process (started 2026-09-26 12:04 local, mutations enabled, Homebrew DB) held 127.0.0.1:8000, and the compose API was published on *:8000 (IPv6). The console proxy target `TRADING_CONSOLE_API_BASE_URL=http://127.0.0.1:8000` and host curl requests went to the host process, which correctly reported `mutations_enabled: true`. Not a console or API bug: the console reads `/api/v1/job-types` live on every mount (`cache: "no-store"`, no build-time state), so a hard reload could not change the result.
+evidence: the same moment, three views: via 127.0.0.1:8000 (host API) → mutations_enabled true, and POST accepted 202; inside the container → mutations_enabled false and POST 403 with 0 rows; console pointed at the container → correct disabled posture for both Submit and Cancel.
+side_effect: the 202 probe created job 4a792bc2… in the Homebrew DB via the host API; it was cancelled immediately (never ran).
+fix: none in code. Setup rule for compose-based UAT: stop any host `uvicorn`/API on :8000 before testing the compose stack (check with `lsof -nP -iTCP:8000 -sTCP:LISTEN`).
+regression: existing component tests already pin the posture (JobHeaderPanel "disables the Cancel Job… trigger with the D-21 reason when mutations are disabled"; NewJobView/StrategyOverviewPanel disabled-reason tests; tests/test_mutation_guard.py for the 403). No new test, since there's no code defect to pin.
