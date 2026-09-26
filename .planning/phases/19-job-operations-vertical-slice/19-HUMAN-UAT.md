@@ -1,14 +1,14 @@
 ---
-status: partial
+status: complete
 phase: 19-job-operations-vertical-slice
 source: [19-VERIFICATION.md]
 started: 2026-09-24T20:33:18Z
-updated: 2026-09-26T09:40:00Z
+updated: 2026-09-26T10:30:00Z
 ---
 
 ## Current Test
 
-Test 3 — queued cancellation (not started; unblocked by G-02 fix)
+[testing complete — 4/4 passed; G-01..G-03 resolved]
 
 ## Tests
 
@@ -25,7 +25,8 @@ result: pass — Job detail behaviour all as expected. Clicking the strategy_run
 ### 3. Queued cancellation via the console
 Steps: `docker compose stop worker`, submit a new backtest, click "Cancel Job…" and confirm, then restart the worker.
 expected: Job lands CANCELLED with header 'Cancelled before start — never executed'; Result summary panel blank or empty-state (WR-01, cosmetic); after worker restart the Job stays CANCELLED and no strategy_run is created.
-result: [pending]
+result: pass — human UAT, Job f530a8c0-9965-437e-b57c-754f39ee1ada. Submitted via the console and stayed QUEUED; Cancel Job… was confirmed → CANCELLED with 'Cancelled before start — never executed'. Started empty, no linked resources, empty result summary, no logs, and still CANCELLED with nothing executed after the worker restart. DB record (read-only check): status=cancelled, cancellation_cause=operator_request, started_at=NULL, result_summary={}, 0 strategy_runs, 0 job_logs.
+note: the console proxy reached the host API on 127.0.0.1:8000 (same environment as G-03), so this job lives in the host/Homebrew DB. The compose `stop worker`/`start worker` therefore didn't touch its DB, and no host worker was running. The "worker restart leaves it CANCELLED" leg rests on the automated E2E, tests/test_job_operations_e2e.py (SC7 queued cancellation runs the worker after cancel and asserts the Job stays CANCELLED with no strategy_run).
 
 ### 4. Mutations-disabled posture
 Steps: set TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED=false, restart the API, open /jobs/new and a non-terminal Job's detail page.
@@ -35,9 +36,9 @@ result: pass — verified against the compose API (MUTATIONS_ENABLED=false), aft
 ## Summary
 
 total: 4
-passed: 3
+passed: 4
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 
