@@ -43,7 +43,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Operation Triggers
 
-- [ ] **OPS-01**: Operator can run a backtest from the UI — `backtest` is the first registered production Job type, proven end-to-end Console → HTTP → Job → worker → existing backtest service
+- [x] **OPS-01**: Operator can run a backtest from the UI — `backtest` is the first registered production Job type, proven end-to-end Console → HTTP → Job → worker → existing backtest service
 - [ ] **OPS-02**: Operator can run a risk evaluation from the UI as a registered Job
 - [ ] **OPS-03**: Operator can run a paper trading session from the UI as a registered Job; it is cancellable only before broker submission begins, and the catalog states this
 - [ ] **OPS-04**: Operator can run reconciliation from the UI as a registered Job
@@ -137,7 +137,7 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | JOBUI-03 | Phase 19 | Complete |
 | JOBUI-04 | Phase 19 | Complete |
 | JOBUI-05 | Phase 19 | Complete |
-| OPS-01 | Phase 19 | Pending |
+| OPS-01 | Phase 19 | Complete |
 | OPS-02 | Phase 20 | Pending |
 | OPS-03 | Phase 20 | Pending |
 | OPS-04 | Phase 20 | Pending |

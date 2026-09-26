@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
-status: verifying
-stopped_at: Completed 19-12-PLAN.md
-last_updated: "2026-09-24T15:03:54.745Z"
+status: ready_to_plan
+stopped_at: Phase 19 complete (12/12) — ready to discuss Phase 20
+last_updated: 2026-09-26T09:23:48.873Z
 last_activity: 2026-09-24
 progress:
   total_phases: 5
@@ -21,17 +21,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-23)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 19 — job-operations-vertical-slice
+**Current focus:** Phase 20 — complete operation migration & safety controls
 
 ## Current Position
 
-Phase: 19 (job-operations-vertical-slice) — EXECUTING
-Plan: 12 of 12
-Status: Phase complete — ready for verification
-Last activity: 2026-09-24
-**Progress (v1.3):** [████░░░░░░] 40% — 2 of 5 phases complete (17, 18); 19, 20, 21 not started
+Phase: 20
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-26
+**Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
 
-v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase race/test hardening done) → 19 → 20 → 21 → close v1.3. Scheduling deferred. Next milestone direction: Strategy Research / Strategy Lab.
+v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase race/test hardening done) → 19 ✓ → 20 → 21 → close v1.3. Scheduling deferred. Next milestone direction: Strategy Research / Strategy Lab.
 
 ## Performance Metrics
 
@@ -41,7 +41,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 
 **Velocity:**
 
-- Total plans completed: 63 (v1.0: 16, v1.1: 14, v1.2: 10)
+- Total plans completed: 75 (v1.0: 16, v1.1: 14, v1.2: 10)
 - Average duration: ~7 min (v1.0); v1.1 Phase 7 ranged 3-138 min per plan, Phase 8-01: ~15 min, 08-02: ~15 min, 08-03: ~10 min, 08-04: ~25 min, 08-05: ~20 min, 09-01: ~30 min, 09-02: ~20 min, 09-03: ~35 min, 09-04: ~25 min, 10-05: ~35 min, 10-06: ~20 min, 11-01: ~10 min, 11-02: ~15 min, 11-03: single session, 12-01: ~15 min; v1.2 Phase 13-01: 6 min, 13-02: ~20 min, 13-03: 16 min, 13-04: 25 min, 14-02: 12 min, 14-03: ~10 min, 14-04: ~20 min, 15-01: ~20 min, 15-02: ~15 min, 15-03: single checkpoint session, 16-02: ~15 min, 16-01: ~9 min, 16-03: single checkpoint session
 - Total execution time: -
 
