@@ -39,6 +39,10 @@ Out of scope (roadmap-fixed):
 - **D-03:** "Before broker submission begins" is interpreted as "before the Job starts running". `run_paper_session` performs reconciliation, corrections and submission inside one call, so no meaningful pre-submission checkpoint exists without entering the domain service, which invariant 6 forbids.
   - The catalog description states: cancellable only while queued; once running, the session runs to completion.
   - The OPS-03 test proves that a cancel request after the Job starts running is rejected and does not interrupt submission.
+- **D-03a:** Console: on a RUNNING Job whose type's catalog `cancellation_mode` is queued-only, the Cancel control is **disabled** with the inline reason "Not cancellable once running".
+  - The check is driven by the catalog `cancellation_mode`, never by `job_type`, so P19 D-17's map discipline holds.
+  - The P19 D-14 label function stays generic.
+  - If a stale view still sends the cancel, the API's 409 is surfaced as that same message.
 
 ### Domain conflicts (OPS-08)
 - **D-04:** Add one closed `JobFailureReason` value `domain_conflict`. Handlers translate a small, explicit set of typed domain exceptions into it; today that set is only `ConcurrentRunLockedError`.
@@ -74,7 +78,8 @@ Out of scope (roadmap-fixed):
   - P19 D-02: `job_id` is written in the same transaction that creates the run, and services accept an opaque originating `job_id`.
   - P19 D-07: "Created by Job" back-link.
   - P19 D-11: `trigger_source = "job"`. The paper session's internal reconciliation run may derive its trigger_source as today.
-  - The P19 D-06 test generalizes: any id that appears in `result_summary` must appear in `resources[]`.
+  - The P19 D-06 test generalizes: every run this Job **created**, as reported by the handler under an explicit produced-run-ids key in `result_summary`, appears in `resources[]`.
+  - Referenced inputs are not resources. For example, the paper session's `source_risk_run_id` belongs to a risk-evaluation run whose `job_id` points at a different Job.
 
 ### Safety controls API (CTRL-01/02)
 - **D-10:** Endpoints use **PUT by target state**:
@@ -119,7 +124,10 @@ Out of scope (roadmap-fixed):
   - It needs DB-only config (no broker creds).
   - There is **no** reset, enable or disable CLI.
   - It is pinned by name in the boundary exemption list. The test asserts no other script, worker command or Makefile target calls an `OperatorControlService` mutator, and that no reset CLI exists.
-  - REQUIREMENTS.md ORCH-01 and ORCH-08 and ROADMAP Phase 20 SC6 were amended during this discussion to name this exemption. No planner action is needed on the wording.
+  - These docs were amended during this discussion to name this exemption. No planner action is needed on the wording:
+    - REQUIREMENTS.md: ORCH-01, ORCH-08 and the milestone scope rule;
+    - ROADMAP Phase 20 SC6;
+    - PROJECT.md: invariant 1 and the milestone goal.
 
 ### Operator retry (OPS-07)
 - **D-16:** `POST /api/v1/jobs/{job_id}/retry`, idempotent by `Idempotency-Key` under the P18 contract:
