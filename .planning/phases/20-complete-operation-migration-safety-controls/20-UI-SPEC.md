@@ -2,6 +2,7 @@
 phase: 20
 slug: complete-operation-migration-safety-controls
 status: approved
+reviewed_at: 2026-09-27
 shadcn_initialized: false
 preset: none
 created: 2026-09-27
@@ -110,6 +111,7 @@ This is a closed 2-value switch on the catalog's `cancellation_mode` field, neve
 | Element | Copy |
 |---------|------|
 | Primary CTA — 7 new submission forms (pattern: `Submit {Job Type Label}`, Title Case, matches Phase 19's `Submit Backtest` precedent) | `Submit Risk Evaluation`, `Submit Paper Session`, `Submit Reconciliation`, `Submit Ingest Bars`, `Submit Sync Symbol Metadata`, `Submit Sync Market Sessions`, `Submit Broker Order Sync` |
+| `symbols` field helper text — empty state (`ingest-bars`, `sync-symbol-metadata` forms) | `At least one symbol is required` (12px, `text-zinc-400`, rendered below the field only while the normalized list is empty; the submit button stays disabled in that state). Normalization + wire shape: see the `submission_defaults` note in Component & Interaction Notes |
 | Console shortcuts (deep-link into a prefilled form, D-18 pattern) | `/strategy`: `Evaluate risk` (next to existing `Run backtest`) → `/jobs/new?type=risk-evaluation&strategy_id=…`. `/paper`: `Run paper session` → `/jobs/new?type=paper-session&strategy_id=…`; `Run reconciliation` → `/jobs/new?type=reconciliation&strategy_id=…`; `Sync broker orders` → `/jobs/new?type=broker-order-sync&strategy_id=…`. `ingest-bars`/`sync-symbol-metadata`/`sync-market-sessions` have **no** screen shortcut — discoverable only via the generic `/jobs/new` catalog picker (no existing screen owns market-data operations). These shortcuts live on `/strategy`/`/paper`, not inside the job-type-agnostic Job UI scope, so hardcoding a job-type string there does not touch D-17 discipline |
 | Primary CTA — Retry (Job detail, FAILED/CANCELLED only) | `Retry` (trigger, opens confirmation dialog) |
 | Retry confirmation dialog | Heading: `Retry Job {job_type} · {job_id short form}`. Body: `This creates a new Job with the same type and payload, linked to this one.` Below the body, the Job's `payload` renders generically as a `dl` key/value list (`Object.entries(job.payload)`, nested values `JSON.stringify`'d) — same generic pattern as `result_summary` (JOBUI-02 precedent), never job-type-specific. Confirm button: `Retry Job` (accent style — constructive, not destructive). Dismiss button: **`Close`** (not `Cancel` — `Cancel` is deliberately avoided here because the same screen already has an unrelated `Cancel Job…` control; `Close` is unambiguous, mirroring the Phase 19 `Keep Job` precedent of picking a dialog-specific, non-overloaded label) |
@@ -224,7 +226,7 @@ The 7 new forms register in the **existing single** `job_type → form component
 | `paper-session` | `strategy_id`; `as_of_session` (pre-filled); `risk_run_id` (**optional**, nullable) | Strategy `<select>`; date `<input type="date">`; text `<input>` labeled `Risk run ID (optional)` with helper text `Leave blank to use the latest succeeded risk evaluation.` When left blank, the submitted payload includes the key with value `null` (`{..., risk_run_id: null}`) — never omitted, per the strict `extra="forbid"` schema and a stable idempotency fingerprint |
 | `reconciliation` | `strategy_id`; `as_of_session` (pre-filled) | Strategy `<select>` + date `<input type="date">` |
 | `broker-order-sync` | `strategy_id`; `as_of_session` (pre-filled) | Strategy `<select>` + date `<input type="date">` |
-| `ingest-bars` | `from_date`; `to_date`; `symbols` (pre-filled: configured universe, normalized upper-case/deduped/sorted, transmitted as a comma-separated string per the `submission_defaults` note above) | Two date `<input type="date">`; `symbols` as a single comma-separated text `<input>` |
+| `ingest-bars` | `from_date`; `to_date`; `symbols` (pre-filled: configured universe, normalized upper-case/deduped/sorted, default delivered as a comma-separated string for the text field; **submitted as `string[]`** per the `submission_defaults` note above) | Two date `<input type="date">`; `symbols` as a single comma-separated text `<input>` |
 | `sync-symbol-metadata` | `symbols` (pre-filled, same normalization/transport) | Comma-separated text `<input>`, same widget as `ingest-bars` |
 | `sync-market-sessions` | `from_date`; `to_date` | Two date `<input type="date">` |
 
@@ -244,4 +246,4 @@ Three of the seven new types (`sync-symbol-metadata`, `sync-market-sessions`, `b
 - [x] Dimension 5 Spacing: PASS
 - [x] Dimension 6 Registry Safety: PASS
 
-**Approval:** approved 2026-09-27 (checker pass 2, after 1 revision)
+**Approval:** approved 2026-09-27 (checker pass 3; post-pass-2 recs #1 symbols wire shape and #4 /controls unknown-state folded in and re-verified)
