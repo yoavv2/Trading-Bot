@@ -202,6 +202,13 @@ Out of scope (roadmap-fixed):
 
   The final worker DISPATCH is `report-backtest`, `report-strategy-analytics`, `operator-status`, `run-jobs`, `kill-switch-trip`.
 
+### Read-path purity for D-29 exemptions (amended 2026-09-27, during plan-phase)
+- **D-31:** The D-29 read-only verification found writes. `export_backtest_report.py` and `report_strategy_analytics.py` both reach `materialize_backtest_report` → `_upsert_backtest_metric`. `operator_status.py` reaches `OperatorControlService.get_strategy_state` → `ensure_strategy_record` (upsert + flush). The same upsert also runs under `GET /api/v1/analytics/strategies/{id}`. The operator chose to make these read paths genuinely read-only rather than retire the scripts or loosen the exemption:
+  - Split `materialize_backtest_report` into a pure compute/serialize read function, which never calls `session.add`, `flush` or `commit`, and a separate persist step. The `BacktestMetric` upsert moves to backtest Job completion (inside the backtest Job handler/service path), so the metric row is still written exactly once per successful backtest run. Report scripts, `StrategyAnalyticsService` and the analytics GET route use only the pure function.
+  - `get_strategy_state` (and `load_strategy_control_state` where it serves read/report callers) uses a plain `select`. When no `Strategy` row exists, it returns registry-default control state and does not insert. Mutating callers such as enable/disable and the paper submission path keep using `ensure_strategy_record`.
+  - D-29's dispositions and kept Makefile targets are unchanged, and the stated reasons are now literally true. The boundary test's pinned mutating-entry-point set includes `_upsert_backtest_metric`/the persist step and `ensure_strategy_record`. A test proves the three exempt scripts and the analytics GET route perform zero DB writes, for example via a session flush/commit spy or a row-count/`updated_at` invariance check.
+  - Any repo-wide AST/boundary scan excludes `.claude/worktrees/`, which holds a stale copy of `src/`.
+
 ### Claude's Discretion
 - Exact Job type names (market-data names are fixed), the new cancellation-mode enum name, and the typed error code strings (`job_not_cancellable_running`, `reconciliation_required`, retry-exists, etc.).
 - The mechanism by which a handler signals `domain_conflict` to the runner without `jobs/` importing domain code.
