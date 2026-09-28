@@ -2,6 +2,13 @@ import type { ComponentType } from "react";
 import type { JobTypeCatalogItem } from "../components/jobs/types";
 import type { MutationCapability } from "./useMutationCapability";
 import { BacktestJobForm } from "../components/jobs/new/BacktestJobForm";
+import { BrokerOrderSyncJobForm } from "../components/jobs/new/BrokerOrderSyncJobForm";
+import { IngestBarsJobForm } from "../components/jobs/new/IngestBarsJobForm";
+import { PaperSessionJobForm } from "../components/jobs/new/PaperSessionJobForm";
+import { ReconciliationJobForm } from "../components/jobs/new/ReconciliationJobForm";
+import { RiskEvaluationJobForm } from "../components/jobs/new/RiskEvaluationJobForm";
+import { SyncMarketSessionsJobForm } from "../components/jobs/new/SyncMarketSessionsJobForm";
+import { SyncSymbolMetadataJobForm } from "../components/jobs/new/SyncSymbolMetadataJobForm";
 
 /**
  * D-17 lookup map (1): job_type -> submission form component. This is the
@@ -23,4 +30,11 @@ export const JOB_TYPE_FORMS: Readonly<
   Record<string, ComponentType<JobSubmissionFormProps>>
 > = {
   backtest: BacktestJobForm,
+  "broker-order-sync": BrokerOrderSyncJobForm,
+  "ingest-bars": IngestBarsJobForm,
+  "paper-session": PaperSessionJobForm,
+  "reconciliation": ReconciliationJobForm,
+  "risk-evaluation": RiskEvaluationJobForm,
+  "sync-market-sessions": SyncMarketSessionsJobForm,
+  "sync-symbol-metadata": SyncSymbolMetadataJobForm,
 };
