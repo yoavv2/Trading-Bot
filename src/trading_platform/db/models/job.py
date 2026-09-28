@@ -54,6 +54,8 @@ class JobFailureReason(StrEnum):
     LEASE_EXPIRED = "lease_expired"
     CANCELLATION_TIMEOUT = "cancellation_timeout"
     CONFIG_INVALID = "config_invalid"
+    DOMAIN_CONFLICT = "domain_conflict"
+    """Typed domain conflict translated by a handler (D-04)."""
 
 
 class JobCancellationCause(StrEnum):
@@ -158,6 +160,12 @@ class Job(TimestampedModel, Base):
         Uuid(as_uuid=True),
         ForeignKey("jobs.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    retry_of_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
     )
 
     progress_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)

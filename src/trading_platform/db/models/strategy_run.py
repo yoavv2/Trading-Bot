@@ -60,7 +60,7 @@ class StrategyRun(TimestampedModel, Base):
         Uuid(as_uuid=True),
         ForeignKey("jobs.id", ondelete="SET NULL"),
         nullable=True,
-        unique=True,
+        index=True,
     )
     run_type: Mapped[StrategyRunType] = mapped_column(
         Enum(
