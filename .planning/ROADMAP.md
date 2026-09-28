@@ -245,7 +245,7 @@ Plans:
 **Wave 1**
 
 - [x] 20-01-PLAN.md — Migration 0021 + models: domain_conflict, non-unique strategy_runs.job_id, market_data_ingestion_runs.job_id, UNIQUE jobs.retry_of_job_id; submit_job lineage
-- [ ] 20-02-PLAN.md — D-31 read-path purity: pure backtest report builder + metric persist at completion, pure strategy-control-state read, zero-write proof
+- [x] 20-02-PLAN.md — D-31 read-path purity: pure backtest report builder + metric persist at completion, pure strategy-control-state read, zero-write proof
 - [ ] 20-03-PLAN.md — Shared strict payload validators; symbol-metadata sync extracted to services; calendar.sync_market_sessions
 
 **Wave 2**
@@ -334,7 +334,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
-| 20. Complete Operation Migration & Safety Controls | v1.3 | 1/24 | In Progress | - |
+| 20. Complete Operation Migration & Safety Controls | v1.3 | 2/24 | In Progress | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
 ---

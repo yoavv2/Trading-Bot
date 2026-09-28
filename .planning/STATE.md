@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-01-PLAN.md
-last_updated: "2026-09-28T07:37:47.104Z"
+stopped_at: Completed 20-02-PLAN.md
+last_updated: "2026-09-28T07:54:42.315Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 28
-  percent: 55
+  completed_plans: 29
+  percent: 57
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 2 of 24
+Plan: 3 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -75,6 +75,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 19 P11 | ~35min | 3 tasks | 9 files |
 | Phase 19 P12 | 25min | 3 tasks | 9 files |
 | Phase 20 P01 | 30min | 2 tasks | 7 files |
+| Phase 20 P02 | 15min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -186,6 +187,7 @@ Recent decisions affecting current work:
 - [Phase 19]: BacktestJobForm declares its own local props type instead of importing JobSubmissionFormProps from jobTypeForms.ts, keeping map-1 import scoped to NewJobView.tsx only (structural D-17 grep/consoleBoundaries requirement); TypeScript still checks structural compatibility at the JOB_TYPE_FORMS assignment.
 - [Phase 19]: Job detail screen (/jobs/{id}) composed from Plan 08/10 primitives; SC6 proven with a test-only Job type through list+detail — Completes the Phase 19 Job operations vertical slice UI; JOBUI-02/03/04/05 all become code-complete
 - [Phase 20]: 20-01: Migration 0021 lands domain_conflict, non-unique strategy_runs.job_id, market_data_ingestion_runs.job_id FK, jobs.retry_of_job_id UNIQUE, and submit_job(retry_of_job_id=...); OPS-07/OPS-08/OPS-05 left Pending (schema spine only, no handler/runner/console behavior yet)
+- [Phase 20]: 20-02: backtest_reporting split into a pure build_backtest_report read plus persist_backtest_metrics (called once at backtest SUCCEEDED, same transaction); OperatorControlService.get_strategy_state is now a plain select returning a registry-default StrategyControlState(status=active, updated_at=None) on an empty strategies table, with ensure_strategy_state/ensure_strategy_control_state preserving get-or-create for submit_orders.py's mutating call sites. tests/test_read_path_purity.py proves zero writes at runtime (engine + session spies) for export_backtest_report.py, report_strategy_analytics.py, operator_status.py, and the analytics GET route. ORCH-08 stays Pending -- this plan makes the D-29 exemption reasons literally true but does not remove mutating scripts or ship the boundary test itself (Plan 23's scope).
 
 ### Pending Todos
 
@@ -226,6 +228,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T07:37:47.095Z
-Stopped at: Completed 20-01-PLAN.md
+Last session: 2026-09-28T07:54:42.306Z
+Stopped at: Completed 20-02-PLAN.md
 Resume file: None
