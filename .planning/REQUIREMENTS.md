@@ -54,8 +54,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Operational Control
 
-- [ ] **CTRL-01**: Operator can enable/disable the strategy from the UI through a synchronous HTTP control endpoint (Console → HTTP → `OperatorControlService`) that is idempotent by explicit target state — requesting the current state returns it unchanged and records the existing changed/unchanged audit semantics (`OPERATOR_CONTROL` run + `ExecutionEvent`); no `Idempotency-Key`, no Job, no worker dependency
-- [ ] **CTRL-02**: Operator can trip/reset the kill switch from the UI behind an explicit confirmation through a synchronous HTTP control endpoint (Console → HTTP → `OperatorControlService`) that is idempotent by explicit target state — e.g. "trip" when already tripped returns the current state and records the existing changed/unchanged audit semantics; no `Idempotency-Key`, no Job; it succeeds with no worker process running
+- [x] **CTRL-01**: Operator can enable/disable the strategy from the UI through a synchronous HTTP control endpoint (Console → HTTP → `OperatorControlService`) that is idempotent by explicit target state — requesting the current state returns it unchanged and records the existing changed/unchanged audit semantics (`OPERATOR_CONTROL` run + `ExecutionEvent`); no `Idempotency-Key`, no Job, no worker dependency
+- [x] **CTRL-02**: Operator can trip/reset the kill switch from the UI behind an explicit confirmation through a synchronous HTTP control endpoint (Console → HTTP → `OperatorControlService`) that is idempotent by explicit target state — e.g. "trip" when already tripped returns the current state and records the existing changed/unchanged audit semantics; no `Idempotency-Key`, no Job; it succeeds with no worker process running
 
 ### Audit & Operational Status
 
@@ -145,8 +145,8 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | OPS-06 | Phase 20 | Complete |
 | OPS-07 | Phase 20 | Complete |
 | OPS-08 | Phase 20 | Complete |
-| CTRL-01 | Phase 20 | Pending |
-| CTRL-02 | Phase 20 | Pending |
+| CTRL-01 | Phase 20 | Complete |
+| CTRL-02 | Phase 20 | Complete |
 | ORCH-08 | Phase 20 | Pending |
 | AUD-01 | Phase 21 | Pending |
 | AUD-02 | Phase 21 | Pending |

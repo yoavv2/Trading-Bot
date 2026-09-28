@@ -4,13 +4,13 @@ milestone: v1.3
 milestone_name: Operator Platform
 status: executing
 stopped_at: Completed 20-22-PLAN.md
-last_updated: "2026-09-28T19:24:30.472Z"
+last_updated: "2026-09-28T19:27:25.102Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 49
+  completed_plans: 50
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 23 of 24
+Plan: 24 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -95,6 +95,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P19 | 25min | 2 tasks | 1 files |
 | Phase 20 P20 | 30min | 2 tasks | 1 files |
 | Phase 20 P22 | 15min | 2 tasks | 7 files |
+| Phase 20 P23 | 15min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -239,6 +240,7 @@ Recent decisions affecting current work:
 - [Phase 20]: 20-20: queued paper-session cancel pins HTTP 200 (shipped route); D-19 lift predicate proven with earlier/other-strategy/cancelled negatives; OPS-03/07/08 closed
 - [Phase 20]: 20-21: market-data E2E fakes Polygon only at the service seam (FakePolygonClient in services.ingestion, fetch_ticker_overview in symbol_metadata_sync); OPS-05 closed by proving all three separate types through create_app -> POST /api/v1/jobs -> run-jobs --once; ORCH-02 left to 20-24.
 - [Phase 20]: 20-22: /controls page is a use-client component (renderAction is a function prop); Strategy section reads DB control state; CTRL-01/02 left open for 20-23
+- [Phase 20]: 20-23: banner armed/tripped share one JSX tree with isTripped as prop so trigger stays mounted (20-18 constraint); CTRL-01/02 closed
 
 ### Pending Todos
 
@@ -279,6 +281,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T19:24:25.990Z
+Last session: 2026-09-28T19:27:21.056Z
 Stopped at: Completed 20-22-PLAN.md
 Resume file: None
