@@ -4,8 +4,8 @@ milestone: v1.3
 milestone_name: Operator Platform
 status: executing
 stopped_at: Phase 20 UI-SPEC approved
-last_updated: "2026-09-28T06:57:29.686Z"
-last_activity: 2026-09-28 -- Phase 20 planning complete
+last_updated: "2026-09-28T07:14:34.224Z"
+last_activity: 2026-09-28 -- Phase 20 execution started
 progress:
   total_phases: 5
   completed_phases: 3
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-23)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 20 — complete operation migration & safety controls
+**Current focus:** Phase 20 — complete-operation-migration-safety-controls
 
 ## Current Position
 
-Phase: 20
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-28 -- Phase 20 planning complete
+Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
+Plan: 1 of 24
+Status: Executing Phase 20
+Last activity: 2026-09-28 -- Phase 20 execution started
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
 
 v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase race/test hardening done) → 19 ✓ → 20 → 21 → close v1.3. Scheduling deferred. Next milestone direction: Strategy Research / Strategy Lab.
