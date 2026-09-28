@@ -16,6 +16,7 @@ import os
 import sys
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
@@ -32,6 +33,7 @@ from trading_platform.core.settings import clear_settings_cache, load_settings  
 from trading_platform.db.models import (  # noqa: E402
     Job,
     JobStatus,
+    MarketDataIngestionRun,
     Strategy,
     StrategyRun,
     StrategyRunStatus,
@@ -142,7 +144,13 @@ def _seed_strategy(session) -> Strategy:
     return strategy
 
 
-def _seed_linked_run(session, *, job: Job, status: StrategyRunStatus) -> StrategyRun:
+def _seed_linked_run(
+    session,
+    *,
+    job: Job,
+    status: StrategyRunStatus,
+    started_at: datetime | None = None,
+) -> StrategyRun:
     strategy = _seed_strategy(session)
     strategy_run = StrategyRun(
         strategy_id=strategy.id,
@@ -150,14 +158,44 @@ def _seed_linked_run(session, *, job: Job, status: StrategyRunStatus) -> Strateg
         run_type=StrategyRunType.BACKTEST,
         status=status,
         trigger_source="job",
+        **({"started_at": started_at} if started_at is not None else {}),
     )
     session.add(strategy_run)
     session.flush()
     return strategy_run
 
 
+def _seed_linked_ingestion_run(
+    session,
+    *,
+    job: Job,
+    status: str = "succeeded",
+    started_at: datetime | None = None,
+) -> MarketDataIngestionRun:
+    run = MarketDataIngestionRun(
+        job_id=job.id,
+        provider="polygon",
+        from_date=datetime(2024, 1, 1, tzinfo=UTC).date(),
+        to_date=datetime(2024, 1, 2, tzinfo=UTC).date(),
+        adjusted=True,
+        status=status,
+        symbols_requested=["AAPL"],
+        symbols_failed=[],
+        bars_upserted=1,
+        page_count=1,
+        trigger_source="job",
+        started_at=started_at or datetime.now(UTC),
+    )
+    session.add(run)
+    session.flush()
+    return run
+
+
 def test_resource_kind_enum_is_closed() -> None:
-    assert {member.value for member in JobResourceKind} == {"strategy_run"}
+    assert {member.value for member in JobResourceKind} == {
+        "strategy_run",
+        "market_data_ingestion_run",
+    }
 
 
 def test_detail_resources_empty_without_linked_run(migrated_job_resources_db: str) -> None:
@@ -234,7 +272,7 @@ def test_job_detail_http_includes_resources(migrated_job_resources_db: str) -> N
     settings = load_settings()
 
     with session_scope(settings) as session:
-        job = _seed_job(session, status=JobStatus.SUCCEEDED)
+        job = _seed_job(session, status=JobStatus.SUCCEEDED, payload={"strategy_id": "trend_following_daily"})
         run = _seed_linked_run(session, job=job, status=StrategyRunStatus.SUCCEEDED)
         job_id = str(job.id)
         run_id = str(run.id)
@@ -252,3 +290,117 @@ def test_job_detail_http_includes_resources(migrated_job_resources_db: str) -> N
             "links": {"self": f"/api/v1/runs/{run_id}"},
         }
     ]
+    assert body["payload"] == {"strategy_id": "trend_following_daily"}
+    assert body["retry_of_job_id"] is None
+    assert body["retried_as_job_id"] is None
+
+
+def test_detail_resources_multiple_linked_strategy_runs_ordered(
+    migrated_job_resources_db: str,
+) -> None:
+    """D-07/D-08: a Job linked to 2 StrategyRuns (e.g. a paper session's internal
+    reconciliation + execution runs) returns 2 resources[] entries, ordered by
+    (started_at, id), and never raises MultipleResultsFound (Pitfall 1)."""
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        job = _seed_job(session, status=JobStatus.SUCCEEDED)
+        earlier_run = _seed_linked_run(
+            session,
+            job=job,
+            status=StrategyRunStatus.SUCCEEDED,
+            started_at=datetime(2024, 1, 5, 10, 0, tzinfo=UTC),
+        )
+        later_run = _seed_linked_run(
+            session,
+            job=job,
+            status=StrategyRunStatus.SUCCEEDED,
+            started_at=datetime(2024, 1, 5, 11, 0, tzinfo=UTC),
+        )
+        job_id = str(job.id)
+        earlier_id = str(earlier_run.id)
+        later_id = str(later_run.id)
+
+    detail = JobReadService(settings).get_job_detail(job_id)
+
+    assert [entry["id"] for entry in detail["resources"]] == [earlier_id, later_id]
+    assert {entry["kind"] for entry in detail["resources"]} == {"strategy_run"}
+
+
+def test_detail_resources_market_data_ingestion_run(migrated_job_resources_db: str) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        job = _seed_job(session, status=JobStatus.SUCCEEDED, job_type="ingest-bars")
+        run = _seed_linked_ingestion_run(session, job=job, status="succeeded")
+        job_id = str(job.id)
+        run_id = str(run.id)
+
+    detail = JobReadService(settings).get_job_detail(job_id)
+
+    assert detail["resources"] == [
+        {
+            "kind": "market_data_ingestion_run",
+            "id": run_id,
+            "status": "succeeded",
+            "links": {},
+        }
+    ]
+
+
+def test_detail_resources_mixed_kinds_strategy_run_first(
+    migrated_job_resources_db: str,
+) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        job = _seed_job(session, status=JobStatus.SUCCEEDED)
+        strategy_run = _seed_linked_run(session, job=job, status=StrategyRunStatus.SUCCEEDED)
+        ingestion_run = _seed_linked_ingestion_run(session, job=job, status="succeeded")
+        job_id = str(job.id)
+        strategy_run_id = str(strategy_run.id)
+        ingestion_run_id = str(ingestion_run.id)
+
+    detail = JobReadService(settings).get_job_detail(job_id)
+
+    assert [entry["kind"] for entry in detail["resources"]] == [
+        "strategy_run",
+        "market_data_ingestion_run",
+    ]
+    assert [entry["id"] for entry in detail["resources"]] == [
+        strategy_run_id,
+        ingestion_run_id,
+    ]
+
+
+def test_detail_payload_and_retry_lineage(migrated_job_resources_db: str) -> None:
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        parent = _seed_job(
+            session,
+            status=JobStatus.FAILED,
+            payload={"strategy_id": "trend_following_daily", "as_of_session": "2024-01-05"},
+        )
+        session.flush()
+        child = _seed_job(
+            session,
+            status=JobStatus.QUEUED,
+            payload={"strategy_id": "trend_following_daily", "as_of_session": "2024-01-05"},
+            retry_of_job_id=parent.id,
+        )
+        parent_id = str(parent.id)
+        child_id = str(child.id)
+
+    parent_detail = JobReadService(settings).get_job_detail(parent_id)
+    child_detail = JobReadService(settings).get_job_detail(child_id)
+
+    assert parent_detail["payload"] == {
+        "strategy_id": "trend_following_daily",
+        "as_of_session": "2024-01-05",
+    }
+    assert parent_detail["retry_of_job_id"] is None
+    assert parent_detail["retried_as_job_id"] == child_id
+
+    assert child_detail["retry_of_job_id"] == parent_id
+    assert child_detail["retried_as_job_id"] is None

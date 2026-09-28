@@ -33,6 +33,7 @@ from trading_platform.db.models import (
     JobEvent,
     JobLog,
     JobStatus,
+    MarketDataIngestionRun,
     StrategyRun,
 )
 from trading_platform.db.session import session_scope
@@ -46,12 +47,13 @@ MAX_LOG_PAGE_SIZE = 500
 class JobResourceKind(StrEnum):
     """Closed vocabulary of resources a Job may link to (D-04).
 
-    Phase 19 defines exactly one member. Phase 20 extends this set; nothing
-    outside this module may add a member without a corresponding
-    resources[] entry builder here.
+    Phase 19 defined exactly one member. Phase 20 adds
+    market_data_ingestion_run; nothing outside this module may add a member
+    without a resources[] builder here.
     """
 
     STRATEGY_RUN = "strategy_run"
+    MARKET_DATA_INGESTION_RUN = "market_data_ingestion_run"
 
 
 @dataclass(frozen=True)
@@ -117,23 +119,61 @@ class JobReadService:
                 if dependency_job.status != JobStatus.SUCCEEDED:
                     blocking_dependencies.append(entry)
 
-            # D-04/D-05: resources[] is derived at read time from the
-            # strategy_runs.job_id FK only -- never from logs, timestamps,
-            # or trigger_source -- and is not filtered by Job status, so a
-            # stuck, timed-out, or cancelled Job never hides its run (D-13).
-            linked_run = session.execute(
-                select(StrategyRun).where(StrategyRun.job_id == job_uuid)
-            ).scalar_one_or_none()
-            resources: list[dict[str, Any]] = []
-            if linked_run is not None:
-                resources.append(
-                    {
-                        "kind": JobResourceKind.STRATEGY_RUN.value,
-                        "id": str(linked_run.id),
-                        "status": linked_run.status.value,
-                        "links": {"self": f"/api/v1/runs/{linked_run.id}"},
-                    }
+            # D-04/D-05/D-07/D-08: resources[] is derived at read time from
+            # the strategy_runs.job_id / market_data_ingestion_runs.job_id
+            # FKs only -- never from logs, timestamps, or trigger_source --
+            # and is not filtered by Job status, so a stuck, timed-out, or
+            # cancelled Job never hides its run(s) (D-13). A Job may now link
+            # more than one StrategyRun (e.g. a paper session's internal
+            # reconciliation + execution runs), so this is a loop over
+            # .scalars().all() rather than a single-row lookup (Pitfall 1).
+            linked_runs = (
+                session.execute(
+                    select(StrategyRun)
+                    .where(StrategyRun.job_id == job_uuid)
+                    .order_by(StrategyRun.started_at.asc(), StrategyRun.id.asc())
                 )
+                .scalars()
+                .all()
+            )
+            linked_ingestion_runs = (
+                session.execute(
+                    select(MarketDataIngestionRun)
+                    .where(MarketDataIngestionRun.job_id == job_uuid)
+                    .order_by(
+                        MarketDataIngestionRun.started_at.asc(),
+                        MarketDataIngestionRun.id.asc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            resources: list[dict[str, Any]] = [
+                {
+                    "kind": JobResourceKind.STRATEGY_RUN.value,
+                    "id": str(run.id),
+                    "status": run.status.value,
+                    "links": {"self": f"/api/v1/runs/{run.id}"},
+                }
+                for run in linked_runs
+            ]
+            resources.extend(
+                {
+                    "kind": JobResourceKind.MARKET_DATA_INGESTION_RUN.value,
+                    "id": str(run.id),
+                    "status": run.status,
+                    "links": {},
+                }
+                for run in linked_ingestion_runs
+            )
+
+            # D-20: payload plus retry lineage, derived at read time.
+            # retried_as_job_id is the reverse of retry_of_job_id -- the
+            # UNIQUE constraint on retry_of_job_id (0021) guarantees at most
+            # one match.
+            retried_as_job_id = session.execute(
+                select(Job.id).where(Job.retry_of_job_id == job_uuid)
+            ).scalar()
 
             detail = {
                 "id": str(job.id),
@@ -146,6 +186,9 @@ class JobReadService:
                 "failure_message": job.failure_message,
                 "outcome_uncertain": job.outcome_uncertain,
                 "result_summary": job.result_summary,
+                "payload": job.payload,
+                "retry_of_job_id": _uuid_value(job.retry_of_job_id),
+                "retried_as_job_id": _uuid_value(retried_as_job_id),
                 "progress": _serialize_progress(job),
                 "cancellation_requested_by": job.cancellation_requested_by,
                 "cancellation_reason": job.cancellation_reason,
