@@ -4,7 +4,7 @@ milestone: v1.3
 milestone_name: Operator Platform
 status: executing
 stopped_at: Completed 20-07-PLAN.md
-last_updated: "2026-09-28T09:40:41.273Z"
+last_updated: "2026-09-28T09:41:46.206Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
@@ -201,6 +201,7 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-06]: Control mutation clients (tripKillSwitch/resetKillSwitch/enableStrategy/disableStrategy) send no Idempotency-Key header, per D-10, structurally distinct from Job mutation clients
 - [Phase 20]: [20-07]: RiskEvaluationSubmissionSpec/Handler/RiskEvaluationJobForm shipped test-first; OPS-02 left Pending in REQUIREMENTS.md since build_default_registry registration (Plan 16) and the E2E vertical-slice test (Plan 19) are still outstanding, per the 19-01/19-03/19-06/19-07 precedent.
 - [Phase 20]: [20-07]: Mapped the plan's 'as_of_session as int' rejection example to invalid_date (payload_fields.parse_iso_date raises INVALID_DATE for any non-str/non-date input), using strategy_id=123 for the invalid_field_type test case instead, matching the backtest_submission.py precedent rather than bending the validator to the plan's prose.
+- [Phase 20]: [20-07]: The docs(20-07) tracking commit (664c297) was created via gsd-sdk query commit, which does not expose a trailer argument, so it lacks the session's required Co-Authored-By trailer. Per the 19-08 precedent (amending to add it was later judged a rule violation), this was NOT fixed via git commit --amend -- disclosed here instead, no work lost, all four task-level commits (de2e364, deb1367, cf43582, 2b12b4f) plus the SUMMARY commits do carry the trailer since those were created directly with git commit.
 
 ### Pending Todos
 
