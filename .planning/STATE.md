@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-07-PLAN.md
-last_updated: "2026-09-28T09:41:46.206Z"
+stopped_at: Completed 20-08-PLAN.md
+last_updated: "2026-09-28T09:57:21.654Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 34
+  completed_plans: 35
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 8 of 24
+Plan: 9 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -81,6 +81,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P05 | ~40min | 2 tasks | 6 files |
 | Phase 20 P06 | 22min | 3 tasks | 8 files |
 | Phase 20 P07 | ~25min | 2 tasks | 5 files |
+| Phase 20 P08 | ~20min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -202,6 +203,8 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-07]: RiskEvaluationSubmissionSpec/Handler/RiskEvaluationJobForm shipped test-first; OPS-02 left Pending in REQUIREMENTS.md since build_default_registry registration (Plan 16) and the E2E vertical-slice test (Plan 19) are still outstanding, per the 19-01/19-03/19-06/19-07 precedent.
 - [Phase 20]: [20-07]: Mapped the plan's 'as_of_session as int' rejection example to invalid_date (payload_fields.parse_iso_date raises INVALID_DATE for any non-str/non-date input), using strategy_id=123 for the invalid_field_type test case instead, matching the backtest_submission.py precedent rather than bending the validator to the plan's prose.
 - [Phase 20]: [20-07]: The docs(20-07) tracking commit (664c297) was created via gsd-sdk query commit, which does not expose a trailer argument, so it lacks the session's required Co-Authored-By trailer. Per the 19-08 precedent (amending to add it was later judged a rule violation), this was NOT fixed via git commit --amend -- disclosed here instead, no work lost, all four task-level commits (de2e364, deb1367, cf43582, 2b12b4f) plus the SUMMARY commits do carry the trailer since those were created directly with git commit.
+- [Phase 20]: [20-08]: reconciliation.py's module docstring avoided the literal substrings raise_if_cancelled/apply_reconciliation_corrections (reworded to describe the same absence in prose) so the plan's own pinned acceptance-criteria grep held against comments, not only removed code -- same class of grep-vs-docstring conflict as 20-03.
+- [Phase 20]: [20-08]: test_handler_declares_paper_mode does not assert required_mode_preflight(...) is None like the BACKTEST-mode 20-07/19-06 precedent tests -- PAPER mode needs real broker.alpaca credentials, unconfigured in this dev/CI environment (confirmed via the pre-existing test_paper_mode_job_fails_config_invalid_before_dispatch), so the test pins only the declared required_execution_mode plus an environment-independent either/or check on the preflight message.
 
 ### Pending Todos
 
@@ -242,6 +245,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T09:40:41.262Z
-Stopped at: Completed 20-07-PLAN.md
+Last session: 2026-09-28T09:57:21.645Z
+Stopped at: Completed 20-08-PLAN.md
 Resume file: None
