@@ -40,10 +40,18 @@ class JobDomainConflictError(Exception):
     handler-layer translation module (``jobs/handlers/domain_conflicts.py``)
     catches the typed domain exception and raises this framework-owned
     signal instead.
+
+    ``outcome_uncertain`` is the raiser's explicit claim about whether an
+    external side effect (e.g. a broker order) may already have happened
+    before the conflict fired. It defaults to ``True`` (the safe direction:
+    D-19's reconcile-first retry block engages); a translator asserts
+    ``False`` only for a conflict it knows precedes every external side
+    effect. The runner records exactly this claim and never guesses one.
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, outcome_uncertain: bool = True) -> None:
         self.message = message
+        self.outcome_uncertain = outcome_uncertain
         super().__init__(message)
 
 

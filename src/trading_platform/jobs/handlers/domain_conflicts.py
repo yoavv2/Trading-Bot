@@ -18,7 +18,18 @@ from contextlib import contextmanager
 from trading_platform.jobs.contracts import JobDomainConflictError
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
 
-DOMAIN_CONFLICT_EXCEPTIONS: tuple[type[Exception], ...] = (ConcurrentRunLockedError,)
+# Each translated exception carries an explicit ``outcome_uncertain`` claim
+# (OPS-08/D-19). ``ConcurrentRunLockedError`` is raised when
+# ``run_paper_order_submission``'s advisory lock is denied, which precedes any
+# broker order submission (LOCK-01): earlier steps of a paper session
+# (reconciliation run, local sync-failure corrections, broker reads) may have
+# run, but none submits to the broker, so the outcome is certain. Adding a
+# member here forces that decision to be made consciously.
+DOMAIN_CONFLICT_OUTCOME_UNCERTAIN: dict[type[Exception], bool] = {
+    ConcurrentRunLockedError: False,
+}
+
+DOMAIN_CONFLICT_EXCEPTIONS: tuple[type[Exception], ...] = tuple(DOMAIN_CONFLICT_OUTCOME_UNCERTAIN)
 
 
 @contextmanager
@@ -32,4 +43,11 @@ def translate_domain_conflicts() -> Iterator[None]:
     try:
         yield
     except DOMAIN_CONFLICT_EXCEPTIONS as exc:
-        raise JobDomainConflictError(f"Domain conflict: {exc}") from exc
+        outcome_uncertain = next(
+            uncertain
+            for exception_type, uncertain in DOMAIN_CONFLICT_OUTCOME_UNCERTAIN.items()
+            if isinstance(exc, exception_type)
+        )
+        raise JobDomainConflictError(
+            f"Domain conflict: {exc}", outcome_uncertain=outcome_uncertain
+        ) from exc

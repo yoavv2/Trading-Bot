@@ -227,6 +227,7 @@ def execute_job(
 
     outcome_kind: str
     failure_message: str | None = None
+    domain_conflict_outcome_uncertain = True
     result: Mapping[str, Any] | None = None
 
     try:
@@ -242,6 +243,7 @@ def execute_job(
         except JobDomainConflictError as exc:
             outcome_kind = "domain_conflict"
             failure_message = exc.message[:_MAX_FAILURE_MESSAGE_CHARS]
+            domain_conflict_outcome_uncertain = exc.outcome_uncertain
             logger.warning(
                 "job_runner_domain_conflict",
                 extra={"context": {"job_id": str(job_id), "job_type": job_type}},
@@ -313,14 +315,11 @@ def execute_job(
             return JobStatus.CANCELLED
 
         if outcome_kind == "domain_conflict":
-            # OPS-08/D-04: outcome_uncertain is pinned False -- the only
-            # translated conflict (ConcurrentRunLockedError) is raised when
-            # run_paper_order_submission's advisory lock is denied, which
-            # precedes any broker order submission (LOCK-01). Earlier steps
-            # of a paper session (reconciliation run, local sync-failure
-            # corrections, broker reads) may already have run; none of them
-            # submits to the broker, so a lock conflict never forces a
-            # reconcile-first retry block (D-19).
+            # OPS-08/D-04: the runner is domain-agnostic (JOB-04); it records
+            # the raiser's explicit outcome_uncertain claim (see
+            # JobDomainConflictError) instead of assuming one. The translator
+            # owns the claim -- ConcurrentRunLockedError asserts False because
+            # its lock denial precedes any broker submission (LOCK-01).
             with session_scope(settings) as session:
                 apply_job_transition(
                     session,
@@ -329,7 +328,7 @@ def execute_job(
                         event_type=JobEventType.FAILED,
                         failure_reason=JobFailureReason.DOMAIN_CONFLICT,
                         failure_message=failure_message,
-                        outcome_uncertain=False,
+                        outcome_uncertain=domain_conflict_outcome_uncertain,
                     ),
                 )
                 cascade_dependency_outcome(session, terminal_job_id=job_id)

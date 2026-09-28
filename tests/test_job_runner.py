@@ -166,7 +166,16 @@ class _DomainConflictHandler:
         self._message = message
 
     def run(self, context: JobContext) -> Mapping[str, Any]:
-        raise JobDomainConflictError(self._message)
+        raise JobDomainConflictError(self._message, outcome_uncertain=False)
+
+
+class _UncertainDomainConflictHandler:
+    """Raises a conflict without asserting certainty (the safe default)."""
+
+    job_type = "phase20_runner_uncertain_domain_conflict"
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        raise JobDomainConflictError("conflict of unknown certainty")
 
 
 class _ExternalThenDomainConflictHandler:
@@ -181,7 +190,7 @@ class _ExternalThenDomainConflictHandler:
             event_code="external_broker_call_started",
             message="calling an external broker",
         )
-        raise JobDomainConflictError(self._message)
+        raise JobDomainConflictError(self._message, outcome_uncertain=False)
 
 
 class _CancellationObservingHandler:
@@ -418,6 +427,27 @@ def test_domain_conflict_lands_on_failed_with_domain_conflict_reason(
             .count()
         )
     assert terminal_events == 1
+
+
+def test_domain_conflict_without_certainty_claim_lands_outcome_uncertain(
+    migrated_job_runner_db: str,
+) -> None:
+    """WR-A-05: the runner records the raiser's claim; a conflict that does not
+    assert certainty defaults to uncertain so D-19's retry block engages."""
+
+    load_settings()
+    handler = _UncertainDomainConflictHandler()
+    job_id = _submit(handler.job_type)
+
+    with session_scope() as session:
+        claim_next_job(session, worker_id="worker-1")
+
+    status = execute_job(job_id=job_id, worker_id="worker-1", registry=_registry(handler))
+    assert status is JobStatus.FAILED
+
+    job = _get_job(job_id)
+    assert job.failure_reason is JobFailureReason.DOMAIN_CONFLICT
+    assert job.outcome_uncertain is True
 
 
 def test_domain_conflict_after_external_log_still_forces_outcome_certain(

@@ -21,6 +21,7 @@ import pytest
 from trading_platform.jobs.contracts import JobContext, JobDomainConflictError, JobHandler
 from trading_platform.jobs.handlers.domain_conflicts import (
     DOMAIN_CONFLICT_EXCEPTIONS,
+    DOMAIN_CONFLICT_OUTCOME_UNCERTAIN,
     translate_domain_conflicts,
 )
 from trading_platform.jobs.registry import (
@@ -224,10 +225,14 @@ def test_job_domain_conflict_error_message_and_str() -> None:
     exc = JobDomainConflictError("x")
     assert exc.message == "x"
     assert str(exc) == "x"
+    # WR-A-05: absent an explicit claim, the outcome is uncertain (safe default).
+    assert exc.outcome_uncertain is True
 
 
 def test_domain_conflict_exceptions_is_the_closed_tuple() -> None:
     assert DOMAIN_CONFLICT_EXCEPTIONS == (ConcurrentRunLockedError,)
+    # Every translated exception carries an explicit certainty decision.
+    assert set(DOMAIN_CONFLICT_OUTCOME_UNCERTAIN) == set(DOMAIN_CONFLICT_EXCEPTIONS)
 
 
 def test_translate_domain_conflicts_translates_concurrent_run_locked_error() -> None:
@@ -240,6 +245,9 @@ def test_translate_domain_conflicts_translates_concurrent_run_locked_error() -> 
     assert "trend_following_daily" in exc_info.value.message
     assert "2024-01-05" in exc_info.value.message
     assert exc_info.value.__cause__ is original
+    # WR-A-05: the translator, not the runner, asserts certainty -- the lock
+    # denial precedes any broker submission (LOCK-01).
+    assert exc_info.value.outcome_uncertain is False
 
 
 def test_translate_domain_conflicts_passes_through_other_exceptions() -> None:
