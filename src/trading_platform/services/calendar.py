@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import exchange_calendars as xcals
 import pandas as pd
@@ -14,6 +15,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from trading_platform.db.models.market_session import MarketSession
+from trading_platform.db.session import session_scope
+
+if TYPE_CHECKING:
+    from trading_platform.core.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -175,3 +180,55 @@ def get_persisted_sessions(
         .order_by(MarketSession.session_date)
     ).scalars().all()
     return list(rows)
+
+
+# ---------------------------------------------------------------------------
+# Job-callable session-opening wrapper (OPS-05)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MarketSessionSyncResult:
+    """Outcome of one ``sync_market_sessions`` call."""
+
+    exchange: str
+    from_date: date
+    to_date: date
+    sessions_upserted: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "exchange": self.exchange,
+            "from_date": self.from_date.isoformat(),
+            "to_date": self.to_date.isoformat(),
+            "sessions_upserted": self.sessions_upserted,
+        }
+
+
+def sync_market_sessions(
+    *,
+    from_date: date,
+    to_date: date,
+    settings: Settings,
+) -> MarketSessionSyncResult:
+    """Open a session and upsert XNYS sessions for [from_date, to_date].
+
+    ``JobHandler`` implementations may only import ``services.*``
+    (``jobs/contracts.py``), never ``db.session`` directly -- this wraps
+    ``upsert_market_sessions`` (which takes a caller-owned ``Session``) the
+    same way ``worker/commands/ingest.py::run_sync_sessions`` did, moved one
+    layer down so the ``sync-market-sessions`` Job handler stays inside that
+    contract. ``session_scope`` is imported at module level (no import cycle:
+    ``db/session.py`` only imports ``core.settings``).
+    """
+
+    exchange = settings.market_data.calendar.exchange
+    with session_scope(settings) as db_session:
+        count = upsert_market_sessions(db_session, from_date, to_date, exchange)
+
+    return MarketSessionSyncResult(
+        exchange=exchange,
+        from_date=from_date,
+        to_date=to_date,
+        sessions_upserted=count,
+    )
