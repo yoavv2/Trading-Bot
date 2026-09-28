@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -26,14 +27,23 @@ from scripts.migrate import build_alembic_config  # noqa: E402
 from trading_platform.api.app import create_app  # noqa: E402
 from trading_platform.core.settings import clear_settings_cache, load_settings  # noqa: E402
 from trading_platform.db.models import (  # noqa: E402
+    GLOBAL_KILL_SWITCH_NAME,
     ExecutionEvent,
     Job,
     KillSwitchState,
+    Strategy,
     StrategyRun,
     StrategyRunType,
+    StrategyStatus,
     SystemControl,
 )
-from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
+from trading_platform.db.session import (  # noqa: E402
+    clear_engine_cache,
+    get_session_factory,
+    session_scope,
+)
+from trading_platform.services.bootstrap import ensure_strategy_record  # noqa: E402
+from trading_platform.services.operator_controls import OperatorControlService  # noqa: E402
 
 _KNOWN_STRATEGY_ID = "trend_following_daily"
 
@@ -385,3 +395,118 @@ def test_get_strategy_control_status_performs_zero_writes(client: TestClient) ->
     assert response.status_code == 200
     assert response.json()["updated_at"] is None
     assert writes == []
+
+
+# ---------------------------------------------------------------------------
+# WR-B-02: row locking and the first-use ensure race
+# ---------------------------------------------------------------------------
+
+
+def _run_in_thread(target: Any) -> tuple[threading.Thread, dict[str, Any]]:
+    outcome: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            outcome["result"] = target()
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the test
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    return thread, outcome
+
+
+def test_kill_switch_mutator_serializes_on_the_control_row(client: TestClient) -> None:
+    """WR-B-02: a concurrent mutator waits for the row lock and then reports
+    `changed: False` against the state the other writer committed."""
+    settings = load_settings()
+    service = OperatorControlService(settings=settings)
+    holder = get_session_factory(settings)()
+    try:
+        control = holder.execute(
+            select(SystemControl)
+            .where(SystemControl.name == GLOBAL_KILL_SWITCH_NAME)
+            .with_for_update()
+        ).scalar_one()
+        control.state = KillSwitchState.TRIPPED
+        holder.flush()
+
+        thread, outcome = _run_in_thread(
+            lambda: service.trip_kill_switch(reason="race", actor="pytest", trigger_source="pytest")
+        )
+        thread.join(timeout=1.0)
+        assert thread.is_alive(), "mutator must block on the locked control row"
+        holder.commit()
+    finally:
+        holder.close()
+    thread.join(timeout=15)
+
+    assert "error" not in outcome, outcome.get("error")
+    report = outcome["result"]
+    assert report.previous_state == "tripped"
+    assert report.changed is False
+
+
+def test_strategy_mutator_serializes_on_the_strategy_row(client: TestClient) -> None:
+    settings = load_settings()
+    service = OperatorControlService(settings=settings)
+    service.ensure_strategy_state(_KNOWN_STRATEGY_ID)
+    holder = get_session_factory(settings)()
+    try:
+        record = holder.execute(
+            select(Strategy)
+            .where(Strategy.strategy_id == _KNOWN_STRATEGY_ID)
+            .with_for_update()
+        ).scalar_one()
+        record.status = StrategyStatus.DISABLED
+        holder.flush()
+
+        thread, outcome = _run_in_thread(
+            lambda: service.disable_strategy(
+                _KNOWN_STRATEGY_ID, reason="race", actor="pytest", trigger_source="pytest"
+            )
+        )
+        thread.join(timeout=1.0)
+        assert thread.is_alive(), "mutator must block on the locked strategy row"
+        holder.commit()
+    finally:
+        holder.close()
+    thread.join(timeout=15)
+
+    assert "error" not in outcome, outcome.get("error")
+    report = outcome["result"]
+    assert report.previous_status == "disabled"
+    assert report.changed is False
+
+
+def test_concurrent_first_use_strategy_ensure_does_not_raise(client: TestClient) -> None:
+    """WR-B-02: losing the first-use INSERT race must be recovered (no
+    IntegrityError, no 500), then act on the winner's committed row."""
+    settings = load_settings()
+    service = OperatorControlService(settings=settings)
+    metadata = service.registry.resolve(_KNOWN_STRATEGY_ID).metadata
+    with session_scope(settings) as session:
+        for existing in session.execute(select(Strategy)).scalars():
+            session.delete(existing)
+
+    holder = get_session_factory(settings)()
+    try:
+        ensure_strategy_record(holder, metadata)  # winner: INSERT, uncommitted
+        holder.flush()
+
+        thread, outcome = _run_in_thread(
+            lambda: service.enable_strategy(
+                _KNOWN_STRATEGY_ID, reason="race", actor="pytest", trigger_source="pytest"
+            )
+        )
+        thread.join(timeout=1.0)
+        assert thread.is_alive(), "loser must wait on the winner's unique-key INSERT"
+        holder.commit()
+    finally:
+        holder.close()
+    thread.join(timeout=15)
+
+    assert "error" not in outcome, outcome.get("error")
+    assert outcome["result"].changed is False
+    with session_scope(settings) as session:
+        assert len(session.execute(select(Strategy)).scalars().all()) == 1

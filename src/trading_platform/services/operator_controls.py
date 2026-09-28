@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from trading_platform.core.logging import emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
@@ -239,7 +241,7 @@ class OperatorControlService:
         metadata = self.registry.resolve(strategy_id).metadata
         changed_at = datetime.now(UTC)
         with session_scope(self.settings) as session:
-            strategy_record = ensure_strategy_record(session, metadata)
+            strategy_record = _ensure_locked_strategy_record(session, metadata)
             previous_status = strategy_record.status
             changed = previous_status != target_status
 
@@ -387,8 +389,8 @@ class OperatorControlService:
         metadata = self.registry.resolve(_DEFAULT_KILL_SWITCH_STRATEGY_ID).metadata
         changed_at = datetime.now(UTC)
         with session_scope(self.settings) as session:
-            strategy_record = ensure_strategy_record(session, metadata)
-            control = _load_global_kill_switch(session)
+            strategy_record = _ensure_audit_strategy_record(session, metadata)
+            control = _load_global_kill_switch(session, for_update=True)
             previous_state = control.state
             changed = previous_state != target_state
 
@@ -579,10 +581,44 @@ def render_kill_switch_report(
     return "\n".join(lines)
 
 
-def _load_global_kill_switch(session) -> SystemControl:
-    control = session.execute(
-        select(SystemControl).where(SystemControl.name == GLOBAL_KILL_SWITCH_NAME)
-    ).scalar_one_or_none()
+def _ensure_locked_strategy_record(session: Session, metadata: Any) -> Strategy:
+    """Race-safe get-or-create of the strategy row, returned row-locked.
+
+    Two concurrent first-use callers both see "no row" and both INSERT; the
+    loser hits the unique ``strategy_id`` constraint. The insert runs in a
+    SAVEPOINT so that loss is recovered by re-selecting the winner's row
+    instead of surfacing an ``IntegrityError``. The row is then re-read
+    ``FOR UPDATE`` so ``previous_status``/``changed`` reflect the state after
+    any concurrent mutator has committed.
+    """
+    try:
+        with session.begin_nested():
+            strategy_record = ensure_strategy_record(session, metadata)
+    except IntegrityError:
+        strategy_record = session.execute(
+            select(Strategy).where(Strategy.strategy_id == metadata.strategy_id)
+        ).scalar_one()
+    session.refresh(strategy_record, with_for_update=True)
+    return strategy_record
+
+
+def _ensure_audit_strategy_record(session: Session, metadata: Any) -> Strategy:
+    """Strategy row used only as the audit run's FK (no status is read)."""
+    try:
+        with session.begin_nested():
+            return ensure_strategy_record(session, metadata)
+    except IntegrityError:
+        return session.execute(
+            select(Strategy).where(Strategy.strategy_id == metadata.strategy_id)
+        ).scalar_one()
+
+
+def _load_global_kill_switch(session: Session, *, for_update: bool = False) -> SystemControl:
+    """Load the kill-switch row; mutators pass ``for_update`` to serialize."""
+    statement = select(SystemControl).where(SystemControl.name == GLOBAL_KILL_SWITCH_NAME)
+    if for_update:
+        statement = statement.with_for_update()
+    control = session.execute(statement).scalar_one_or_none()
     if control is None:
         raise LookupError(
             f"Missing global kill switch row '{GLOBAL_KILL_SWITCH_NAME}'; "
