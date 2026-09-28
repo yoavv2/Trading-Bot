@@ -19,6 +19,7 @@ from trading_platform.jobs.cancellation import JobNotCancellableError, request_c
 from trading_platform.jobs.dependencies import submit_job
 from trading_platform.jobs.registry import (
     InvalidJobPayloadError,
+    JobCancellationMode,
     JobRegistry,
     UnknownJobTypeError,
 )
@@ -116,6 +117,14 @@ class InvalidCancellationReasonError(ValueError):
     def __init__(self, *, reason: str) -> None:
         self.reason = reason
         super().__init__("Cancellation reason must be at most 500 characters after trimming.")
+
+
+class JobNotCancellableRunningError(ValueError):
+    """Raised when a RUNNING Job's type is cancellable only while queued (D-02)."""
+
+    def __init__(self, *, job_id: UUID) -> None:
+        self.job_id = job_id
+        super().__init__("Job is running and its type is cancellable only while queued.")
 
 
 def _relative_links(job_id: UUID) -> dict[str, str]:
@@ -297,6 +306,23 @@ class JobOrchestrationService:
             job = self._require_job(session, job_id, lock=True)
             if job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED):
                 raise JobTerminalConflictError(job_id=job_id, status=job.status.value)
+
+            if job.status is JobStatus.RUNNING:
+                # D-02: a RUNNING Job whose type is cancellable only while
+                # queued is rejected here, before session.begin_nested(), so a
+                # rejected cancel writes zero rows (no JobMutation, no
+                # cancellation_requested_at, no JobEvent). This check runs
+                # against the same row-locked `job` object acquired above, so
+                # the claim/cancel race (claim_next_job vs. this cancel) is
+                # serialized by the row lock rather than racing independently.
+                # An unregistered job_type is NOT treated as queued-only --
+                # the cooperative request path below still applies to it.
+                try:
+                    spec = self._registry.resolve_submission_spec(job.job_type)
+                except UnknownJobTypeError:
+                    spec = None
+                if spec is not None and spec.cancellation_mode is JobCancellationMode.QUEUED_ONLY:
+                    raise JobNotCancellableRunningError(job_id=job_id)
 
             try:
                 with session.begin_nested():

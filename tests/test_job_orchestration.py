@@ -24,6 +24,7 @@ from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import Job, JobEvent, JobMutation, JobStatus
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.jobs.contracts import JobContext
+from trading_platform.jobs.queue import claim_next_job
 from trading_platform.jobs.registry import (
     InvalidJobPayloadError,
     JobCancellationMode,
@@ -34,6 +35,7 @@ from trading_platform.orchestration.job_mutations import (
     InvalidCancellationReasonError,
     InvalidIdempotencyKeyError,
     JobMutationNotFoundError,
+    JobNotCancellableRunningError,
     JobOrchestrationService,
     JobTerminalConflictError,
     MissingIdempotencyKeyError,
@@ -67,6 +69,35 @@ def _registry(*, with_spec: bool = True) -> JobRegistry:
     registry = JobRegistry()
     registry.register(_ProbeHandler(), submission_spec=_ProbeSubmissionSpec() if with_spec else None)
     return registry
+
+
+class _QueuedOnlyHandler:
+    job_type = "phase20_10_queued_only_probe"
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        return {"message": "done"}
+
+
+class _QueuedOnlySpec:
+    job_type = _QueuedOnlyHandler.job_type
+    description = "Queued-only-cancellable probe submission spec for D-02 invariants."
+    cancellation_mode = JobCancellationMode.QUEUED_ONLY
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        return dict(payload)
+
+    def submission_defaults(self) -> None:
+        return None
+
+
+def _registry_with_queued_only() -> JobRegistry:
+    registry = _registry()
+    registry.register(_QueuedOnlyHandler(), submission_spec=_QueuedOnlySpec())
+    return registry
+
+
+def _service_with_queued_only() -> JobOrchestrationService:
+    return JobOrchestrationService(load_settings(), _registry_with_queued_only())
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -231,9 +262,9 @@ def test_concurrent_same_key_submission_has_one_persisted_mutation() -> None:
     assert _counts() == (1, 1, 1)
 
 
-def _seed_job(*, status: JobStatus) -> uuid.UUID:
+def _seed_job(*, status: JobStatus, job_type: str = _ProbeHandler.job_type) -> uuid.UUID:
     with session_scope(load_settings()) as session:
-        job = Job(job_type=_ProbeHandler.job_type, payload={"message": "hello"}, status=status)
+        job = Job(job_type=job_type, payload={"message": "hello"}, status=status)
         session.add(job)
         session.flush()
         return job.id
@@ -342,3 +373,128 @@ def test_concurrent_changed_submission_rolls_back_the_losing_candidate() -> None
     assert sum(isinstance(result, IdempotencyConflictError) for result in results) == 1
     assert sum(not isinstance(result, Exception) for result in results) == 1
     assert _counts() == (1, 1, 1)
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_cancel_running_queued_only_job_is_rejected_before_begin_nested() -> None:
+    job_id = _seed_job(status=JobStatus.RUNNING, job_type=_QueuedOnlyHandler.job_type)
+    service = _service_with_queued_only()
+    before = _counts()
+
+    with pytest.raises(JobNotCancellableRunningError) as exc_info:
+        service.cancel(job_id=job_id, reason=None, idempotency_key="queued-only-running")
+
+    assert exc_info.value.job_id == job_id
+    assert _counts() == before
+    with session_scope(load_settings()) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is JobStatus.RUNNING
+        assert job.cancellation_requested_at is None
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_cancel_queued_queued_only_job_still_transitions_to_cancelled() -> None:
+    job_id = _seed_job(status=JobStatus.QUEUED, job_type=_QueuedOnlyHandler.job_type)
+    service = _service_with_queued_only()
+
+    result = service.cancel(job_id=job_id, reason=None, idempotency_key="queued-only-queued")
+
+    assert result.reference.status == "cancelled"
+    with session_scope(load_settings()) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.status is JobStatus.CANCELLED
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_cancel_running_step_boundary_job_remains_cooperative_alongside_queued_only_type() -> None:
+    job_id = _seed_job(status=JobStatus.RUNNING, job_type=_ProbeHandler.job_type)
+    service = _service_with_queued_only()
+
+    result = service.cancel(job_id=job_id, reason="stop", idempotency_key="step-boundary-running")
+
+    assert result.reference.status == "running"
+    with session_scope(load_settings()) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.cancellation_requested_at is not None
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_cancel_running_unregistered_job_type_is_not_treated_as_queued_only() -> None:
+    job_id = _seed_job(status=JobStatus.RUNNING, job_type="totally_unregistered_job_type")
+    service = _service_with_queued_only()
+
+    result = service.cancel(job_id=job_id, reason=None, idempotency_key="unregistered-running")
+
+    assert result.reference.status == "running"
+    with session_scope(load_settings()) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        assert job.cancellation_requested_at is not None
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_cancel_race_against_claim_resolves_to_exactly_one_outcome() -> None:
+    """D-02: a cancel racing a worker claim on the same QUEUED queued-only Job
+    resolves, in each of 10 barrier-synchronized iterations, to exactly one of
+    {CANCELLED and unclaimed, RUNNING and rejected} -- never RUNNING with
+    cancellation_requested_at set.
+    """
+
+    service = _service_with_queued_only()
+
+    for iteration in range(10):
+        job_id = _seed_job(status=JobStatus.QUEUED, job_type=_QueuedOnlyHandler.job_type)
+        barrier = threading.Barrier(2)
+        results: dict[str, object] = {}
+
+        def do_claim() -> None:
+            barrier.wait(timeout=5)
+            with session_scope(load_settings()) as session:
+                claimed = claim_next_job(session, worker_id="race-worker")
+            results["claimed"] = claimed
+
+        def do_cancel() -> None:
+            barrier.wait(timeout=5)
+            try:
+                service.cancel(
+                    job_id=job_id,
+                    reason=None,
+                    idempotency_key=f"race-key-{iteration}",
+                )
+                results["cancel_outcome"] = "accepted"
+            except JobNotCancellableRunningError:
+                results["cancel_outcome"] = "rejected"
+
+        threads = [threading.Thread(target=do_claim), threading.Thread(target=do_cancel)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        assert all(not thread.is_alive() for thread in threads)
+
+        with session_scope(load_settings()) as session:
+            job = session.get(Job, job_id)
+            assert job is not None
+            final_status = job.status
+            cancellation_requested_at = job.cancellation_requested_at
+
+        claimed = results.get("claimed")
+        cancel_outcome = results.get("cancel_outcome")
+
+        cancelled_and_unclaimed = final_status is JobStatus.CANCELLED and claimed is None
+        running_and_rejected = (
+            final_status is JobStatus.RUNNING
+            and cancel_outcome == "rejected"
+            and cancellation_requested_at is None
+        )
+        assert cancelled_and_unclaimed or running_and_rejected, (
+            iteration,
+            final_status,
+            claimed,
+            cancel_outcome,
+            cancellation_requested_at,
+        )
+        assert not (final_status is JobStatus.RUNNING and cancellation_requested_at is not None)
