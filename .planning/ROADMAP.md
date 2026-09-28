@@ -276,7 +276,7 @@ Plans:
 
 - [x] 20-16-PLAN.md — Register 7 types + console form map; pin per-type registry contract
 - [x] 20-17-PLAN.md — Job detail retry UI, lineage, queued-only cancel gating
-- [ ] 20-18-PLAN.md — Control UI kit: shared confirmation dialog, triggers, sync events, status badge
+- [x] 20-18-PLAN.md — Control UI kit: shared confirmation dialog, triggers, sync events, status badge
 
 **Wave 7**
 
@@ -334,7 +334,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
-| 20. Complete Operation Migration & Safety Controls | v1.3 | 17/24 | In Progress | - |
+| 20. Complete Operation Migration & Safety Controls | v1.3 | 18/24 | In Progress | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
 ---
