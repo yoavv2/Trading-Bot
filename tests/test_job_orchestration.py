@@ -30,6 +30,7 @@ from trading_platform.jobs.registry import (
     InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
+    build_default_registry,
 )
 from trading_platform.orchestration.job_mutations import (
     RETRY_ENDPOINT_ID,
@@ -698,6 +699,58 @@ def test_retry_rejects_invalid_stored_payload_and_writes_nothing() -> None:
 
     assert exc_info.value.job_id == job_id
     assert exc_info.value.reason == "message is not accepted"
+    assert _counts() == before
+
+
+_OUT_OF_CALENDAR_DATES = ["2000-01-03", "0001-01-01"]
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+@pytest.mark.parametrize("as_of_session", _OUT_OF_CALENDAR_DATES)
+def test_submit_out_of_calendar_as_of_session_is_typed_rejection_and_writes_nothing(
+    as_of_session: str,
+) -> None:
+    """CR-A-01: a session-scoped payload dated outside the exchange calendar's
+    window is a typed ``InvalidJobPayloadError`` (422), never an untyped
+    calendar exception (500)."""
+
+    settings = load_settings()
+    service = JobOrchestrationService(settings, build_default_registry(settings))
+
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        service.submit(
+            job_type="risk-evaluation",
+            payload={"strategy_id": "trend_following_daily", "as_of_session": as_of_session},
+            idempotency_key=f"out-of-calendar-{as_of_session}",
+        )
+
+    assert exc_info.value.reason == "as_of_session_out_of_calendar_range"
+    assert _counts() == (0, 0, 0)
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+@pytest.mark.parametrize("as_of_session", _OUT_OF_CALENDAR_DATES)
+def test_retry_out_of_calendar_stored_payload_is_typed_422_and_writes_nothing(
+    as_of_session: str,
+) -> None:
+    """CR-A-01 / D-18: a stored session payload that has fallen out of the
+    calendar's rolling window is a typed retry rejection, not an untyped
+    exception."""
+
+    settings = load_settings()
+    service = JobOrchestrationService(settings, build_default_registry(settings))
+    job_id = _seed_job(
+        status=JobStatus.FAILED,
+        job_type="risk-evaluation",
+        payload={"strategy_id": "trend_following_daily", "as_of_session": as_of_session},
+    )
+    before = _counts()
+
+    with pytest.raises(InvalidRetryPayloadError) as exc_info:
+        service.retry(job_id=job_id, idempotency_key=f"retry-out-of-calendar-{as_of_session}")
+
+    assert exc_info.value.job_id == job_id
+    assert exc_info.value.reason == "as_of_session_out_of_calendar_range"
     assert _counts() == before
 
 

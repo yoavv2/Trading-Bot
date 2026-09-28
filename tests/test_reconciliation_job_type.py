@@ -70,6 +70,7 @@ def test_rejection_enum_is_closed() -> None:
         "unknown_strategy_id",
         "as_of_session_in_future",
         "as_of_session_not_trading_session",
+        "as_of_session_out_of_calendar_range",
     }
 
 
@@ -110,6 +111,16 @@ def test_rejection_enum_is_closed() -> None:
             {**_VALID_PAYLOAD, "as_of_session": "2024-01-06"},
             ReconciliationPayloadRejection.AS_OF_SESSION_NOT_TRADING_SESSION,
             id="as_of_session_not_trading_session",
+        ),
+        pytest.param(
+            {**_VALID_PAYLOAD, "as_of_session": "2000-01-03"},
+            ReconciliationPayloadRejection.AS_OF_SESSION_OUT_OF_CALENDAR_RANGE,
+            id="as_of_session_out_of_calendar_range_2000-01-03",
+        ),
+        pytest.param(
+            {**_VALID_PAYLOAD, "as_of_session": "0001-01-01"},
+            ReconciliationPayloadRejection.AS_OF_SESSION_OUT_OF_CALENDAR_RANGE,
+            id="as_of_session_out_of_calendar_range_0001-01-01",
         ),
     ],
 )

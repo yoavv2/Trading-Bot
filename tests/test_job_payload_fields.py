@@ -60,6 +60,7 @@ def test_payload_field_rejection_is_closed() -> None:
         "unknown_strategy_id",
         "as_of_session_in_future",
         "as_of_session_not_trading_session",
+        "as_of_session_out_of_calendar_range",
         "from_date_after_to_date",
         "to_date_in_future",
         "empty_symbols",
@@ -197,6 +198,25 @@ def test_require_trading_session_not_future_rejects_non_session_date() -> None:
     assert (
         exc_info.value.reason
         == pf.PayloadFieldRejection.AS_OF_SESSION_NOT_TRADING_SESSION.value
+    )
+
+
+@pytest.mark.parametrize("out_of_window", [date(2000, 1, 3), date(1, 1, 1)])
+def test_require_trading_session_not_future_rejects_out_of_calendar_range(
+    out_of_window: date,
+) -> None:
+    """CR-A-01: dates outside exchange_calendars' rolling window raise
+    ``DateOutOfBounds``/``OverflowError`` inside the calendar; the helper must
+    surface a typed rejection instead."""
+
+    settings = load_settings()
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        pf.require_trading_session_not_future(
+            settings, _clock_2026_01_06, out_of_window, job_type="test"
+        )
+    assert (
+        exc_info.value.reason
+        == pf.PayloadFieldRejection.AS_OF_SESSION_OUT_OF_CALENDAR_RANGE.value
     )
 
 

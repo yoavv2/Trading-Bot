@@ -51,6 +51,7 @@ class RiskEvaluationPayloadRejection(StrEnum):
     UNKNOWN_STRATEGY_ID = "unknown_strategy_id"
     AS_OF_SESSION_IN_FUTURE = "as_of_session_in_future"
     AS_OF_SESSION_NOT_TRADING_SESSION = "as_of_session_not_trading_session"
+    AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
 
 
 def _default_clock() -> datetime:

@@ -57,6 +57,7 @@ class PayloadFieldRejection(StrEnum):
     UNKNOWN_STRATEGY_ID = "unknown_strategy_id"
     AS_OF_SESSION_IN_FUTURE = "as_of_session_in_future"
     AS_OF_SESSION_NOT_TRADING_SESSION = "as_of_session_not_trading_session"
+    AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
     FROM_DATE_AFTER_TO_DATE = "from_date_after_to_date"
     TO_DATE_IN_FUTURE = "to_date_in_future"
     EMPTY_SYMBOLS = "empty_symbols"
@@ -176,7 +177,8 @@ def require_trading_session_not_future(
     or before the exchange-local date of the injected clock. Never
     substitutes a default -- callers pre-fill via
     ``latest_completed_session_default`` separately. The future check runs
-    first, then the trading-session check."""
+    first, then the trading-session check. A date outside the exchange
+    calendar's supported window is rejected with its own closed reason."""
 
     today = exchange_today(settings, clock)
     if as_of_session > today:
@@ -184,7 +186,18 @@ def require_trading_session_not_future(
             job_type=job_type,
             reason=PayloadFieldRejection.AS_OF_SESSION_IN_FUTURE.value,
         )
-    if not is_trading_session(as_of_session, settings.market_data.calendar.exchange):
+    try:
+        is_session = is_trading_session(as_of_session, settings.market_data.calendar.exchange)
+    except (ValueError, OverflowError) as exc:
+        # exchange_calendars only knows a rolling window of sessions;
+        # outside it ``is_session`` raises ``DateOutOfBounds`` (a
+        # ``ValueError``) or, for absurd years, ``OverflowError``. Both must
+        # surface as a typed rejection (D-25), never an untyped exception.
+        raise InvalidJobPayloadError(
+            job_type=job_type,
+            reason=PayloadFieldRejection.AS_OF_SESSION_OUT_OF_CALENDAR_RANGE.value,
+        ) from exc
+    if not is_session:
         raise InvalidJobPayloadError(
             job_type=job_type,
             reason=PayloadFieldRejection.AS_OF_SESSION_NOT_TRADING_SESSION.value,

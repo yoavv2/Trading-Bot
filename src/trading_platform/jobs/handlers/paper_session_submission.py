@@ -68,6 +68,7 @@ class PaperSessionPayloadRejection(StrEnum):
     UNKNOWN_STRATEGY_ID = "unknown_strategy_id"
     AS_OF_SESSION_IN_FUTURE = "as_of_session_in_future"
     AS_OF_SESSION_NOT_TRADING_SESSION = "as_of_session_not_trading_session"
+    AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
     INVALID_RISK_RUN_ID = "invalid_risk_run_id"
     RISK_RUN_NOT_ELIGIBLE = "risk_run_not_eligible"
 
