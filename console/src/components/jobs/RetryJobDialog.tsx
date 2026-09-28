@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { retryJob } from "@/lib/api";
 import { newIdempotencyKey } from "@/lib/idempotencyKey";
+import { useDialogFocus } from "@/lib/useDialogFocus";
 import type { JobDetail } from "./types";
 
 type RetryJobDialogProps = {
@@ -14,6 +15,7 @@ type RetryJobDialogProps = {
 };
 
 const HEADING_ID = "retry-job-dialog-heading";
+const BODY_ID = "retry-job-dialog-body";
 
 /**
  * Renders a payload value generically: a plain string/number/boolean value
@@ -49,6 +51,8 @@ export function RetryJobDialog({
 
   const idempotencyKeyRef = useRef<string>("");
   const wasOpenRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -59,6 +63,10 @@ export function RetryJobDialog({
     }
     wasOpenRef.current = open;
   }, [open]);
+
+  // WR-C-05: focus the safe Close button on open (not the confirm action, so
+  // a stray Enter cannot create a Job), Tab trap, restore focus on close.
+  useDialogFocus(open, panelRef, closeRef);
 
   useEffect(() => {
     if (!open) {
@@ -101,15 +109,18 @@ export function RetryJobDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80">
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={HEADING_ID}
-        className="w-full max-w-md rounded border border-zinc-800 bg-zinc-900 p-6"
+        aria-describedby={BODY_ID}
+        tabIndex={-1}
+        className="w-full max-w-md rounded border border-zinc-800 bg-zinc-900 p-6 focus:outline-none"
       >
         <h2 id={HEADING_ID} className="text-sm font-semibold text-zinc-100">
           {`Retry Job ${job.job_type} · ${shortId}`}
         </h2>
-        <p className="mt-3 text-sm text-zinc-300">
+        <p id={BODY_ID} className="mt-3 text-sm text-zinc-300">
           This creates a new Job with the same type and payload, linked to
           this one.
         </p>
@@ -134,11 +145,14 @@ export function RetryJobDialog({
         ) : null}
 
         {errorMessage ? (
-          <p className="mt-3 text-xs text-red-400">{errorMessage}</p>
+          <p role="alert" className="mt-3 text-xs text-red-400">
+            {errorMessage}
+          </p>
         ) : null}
 
         <div className="mt-4 flex justify-end gap-2">
           <button
+            ref={closeRef}
             type="button"
             onClick={onClose}
             className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800"

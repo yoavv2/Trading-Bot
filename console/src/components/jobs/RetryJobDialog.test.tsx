@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RetryJobDialog } from "./RetryJobDialog";
@@ -378,5 +379,73 @@ describe("WR-C-08: RetryJobDialog idempotency key", () => {
     expect(calls[0].headers["Idempotency-Key"]).toBe(
       calls[1].headers["Idempotency-Key"],
     );
+  });
+});
+
+describe("WR-C-05: RetryJobDialog accessibility", () => {
+  function Harness({ onChanged = vi.fn() }: { onChanged?: () => void }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          opener
+        </button>
+        <RetryJobDialog
+          open={open}
+          job={jobDetail()}
+          onClose={() => setOpen(false)}
+          onChanged={onChanged}
+          onNavigate={vi.fn()}
+        />
+      </>
+    );
+  }
+
+  it("focuses the Close button on open, restores focus to the opener on close", () => {
+    render(<Harness />);
+    const opener = screen.getByRole("button", { name: "opener" });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const close = screen.getByRole("button", { name: "Close" });
+    expect(document.activeElement).toBe(close);
+
+    fireEvent.click(close);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("traps Tab inside the dialog in both directions", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+    const close = screen.getByRole("button", { name: "Close" });
+    const retry = screen.getByRole("button", { name: "Retry Job" });
+
+    retry.focus();
+    expect(fireEvent.keyDown(document, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(close);
+
+    close.focus();
+    expect(fireEvent.keyDown(document, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(retry);
+  });
+
+  it("announces a failure via role=alert and describes the dialog by its body copy", async () => {
+    const { fn } = makeRetryFetch([
+      { status: 409, body: { detail: { code: "retry_exists" } } },
+    ]);
+    vi.stubGlobal("fetch", fn);
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+
+    const describedBy = screen.getByRole("dialog").getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toContain(
+      "This creates a new Job with the same type and payload",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
+    await flush();
+
+    expect(screen.getByRole("alert").textContent).toBe("This Job already has a retry.");
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ControlConfirmDialog } from "./ControlConfirmDialog";
@@ -416,6 +416,148 @@ describe("ControlConfirmDialog", () => {
       const onOutcomeUncertain = vi.fn();
       await submitWith(failure(422), onOutcomeUncertain);
       expect(onOutcomeUncertain).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("WR-C-05: accessibility", () => {
+    function Harness({
+      onConfirm = vi.fn(),
+    }: {
+      onConfirm?: (reason: string) => Promise<ChangedResult>;
+    }) {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            opener
+          </button>
+          <ControlConfirmDialog
+            open={open}
+            actionLabel="Reset Kill Switch"
+            currentState="TRIPPED"
+            targetState="ARMED"
+            requiresTypedConfirmation="RESET"
+            onConfirm={onConfirm}
+            onClose={() => setOpen(false)}
+          />
+        </>
+      );
+    }
+
+    it("moves focus to the reason field on open and restores it to the opener on close", () => {
+      render(<Harness />);
+      const opener = screen.getByRole("button", { name: "opener" });
+      opener.focus();
+      fireEvent.click(opener);
+
+      expect(document.activeElement).toBe(screen.getByLabelText("Reason"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Keep Current State" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(document.activeElement).toBe(opener);
+    });
+
+    it("traps Tab and Shift+Tab inside the dialog", () => {
+      render(<Harness />);
+      fireEvent.click(screen.getByRole("button", { name: "opener" }));
+
+      // Enable the confirm button so every control is focusable.
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+      fireEvent.change(screen.getByLabelText("Type RESET to confirm"), {
+        target: { value: "RESET" },
+      });
+      const dismiss = screen.getByRole("button", { name: "Keep Current State" });
+      const confirm = screen.getByRole("button", { name: "Reset Kill Switch" });
+      const reason = screen.getByLabelText("Reason");
+
+      confirm.focus();
+      const forward = fireEvent.keyDown(document, { key: "Tab" });
+      expect(forward).toBe(false); // default prevented
+      expect(document.activeElement).toBe(reason);
+
+      reason.focus();
+      const backward = fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+      expect(backward).toBe(false);
+      expect(document.activeElement).toBe(confirm);
+
+      // Focus that escaped the dialog is pulled back in.
+      screen.getByRole("button", { name: "opener" }).focus();
+      fireEvent.keyDown(document, { key: "Tab" });
+      expect(document.activeElement).toBe(reason);
+      expect(dismiss).toBeTruthy();
+    });
+
+    it("leaves Tab between inner controls alone", () => {
+      render(<Harness />);
+      fireEvent.click(screen.getByRole("button", { name: "opener" }));
+      screen.getByLabelText("Reason").focus();
+      const notPrevented = fireEvent.keyDown(document, { key: "Tab" });
+      expect(notPrevented).toBe(true);
+    });
+
+    it("announces a failed request via role=alert", async () => {
+      const onConfirm = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        code: "invalid_control_reason",
+        message: "Reason is required and must be 500 characters or fewer.",
+        detail: null,
+      });
+      render(<Harness onConfirm={onConfirm} />);
+      fireEvent.click(screen.getByRole("button", { name: "opener" }));
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+      fireEvent.change(screen.getByLabelText("Type RESET to confirm"), {
+        target: { value: "RESET" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Reset Kill Switch" }));
+      await flush();
+
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Reason is required and must be 500 characters or fewer.",
+      );
+    });
+
+    it("announces the unchanged notice via role=alert and moves focus to Close", async () => {
+      const onConfirm = vi.fn().mockResolvedValue({
+        ok: true,
+        data: { changed: false },
+        replayed: false,
+        status: 200,
+      });
+      render(<Harness onConfirm={onConfirm} />);
+      fireEvent.click(screen.getByRole("button", { name: "opener" }));
+      fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+      fireEvent.change(screen.getByLabelText("Type RESET to confirm"), {
+        target: { value: "RESET" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Reset Kill Switch" }));
+      await flush();
+
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Already ARMED — no change (recorded)",
+      );
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
+    });
+
+    it("ties the body copy and helper texts to the dialog and fields via aria-describedby", () => {
+      render(<Harness />);
+      fireEvent.click(screen.getByRole("button", { name: "opener" }));
+
+      const describedText = (element: HTMLElement) =>
+        (element.getAttribute("aria-describedby") ?? "")
+          .split(" ")
+          .map((id) => document.getElementById(id)?.textContent)
+          .join(" ");
+
+      expect(describedText(screen.getByRole("dialog"))).toBe(
+        "Current state: TRIPPED. This will change it to: ARMED.",
+      );
+      expect(describedText(screen.getByLabelText("Reason"))).toBe(
+        "Required, up to 500 characters",
+      );
+      expect(describedText(screen.getByLabelText("Type RESET to confirm"))).toBe(
+        "Resetting the kill switch allows trading to resume.",
+      );
     });
   });
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { isOutcomeUncertain, type MutationResult } from "@/lib/api";
+import { useDialogFocus } from "@/lib/useDialogFocus";
 
 type ControlConfirmDialogProps = {
   open: boolean;
@@ -21,8 +22,11 @@ type ControlConfirmDialogProps = {
 };
 
 const HEADING_ID = "control-confirm-dialog-heading";
+const BODY_ID = "control-confirm-dialog-body";
 const REASON_FIELD_ID = "control-confirm-dialog-reason";
+const REASON_HELP_ID = "control-confirm-dialog-reason-help";
 const TYPED_FIELD_ID = "control-confirm-dialog-typed-confirmation";
+const TYPED_HELP_ID = "control-confirm-dialog-typed-confirmation-help";
 const MAX_REASON_LENGTH = 500;
 
 /**
@@ -64,6 +68,9 @@ export function ControlConfirmDialog({
   const [unchanged, setUnchanged] = useState(false);
 
   const wasOpenRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const dismissRef = useRef<HTMLButtonElement>(null);
   // Bumped on every open/close transition so a response that lands after the
   // dialog was closed or re-opened can be recognized as belonging to a
   // previous opening (WR-C-01).
@@ -82,6 +89,17 @@ export function ControlConfirmDialog({
     }
     wasOpenRef.current = open;
   }, [open]);
+
+  // WR-C-05: focus into the reason field on open, Tab trap, restore on close.
+  useDialogFocus(open, panelRef, reasonRef);
+
+  // The unchanged notice removes the reason field (and the confirm button the
+  // operator just pressed); move focus to the Close button so it is not lost.
+  useEffect(() => {
+    if (open && unchanged) {
+      dismissRef.current?.focus();
+    }
+  }, [open, unchanged]);
 
   useEffect(() => {
     if (!open) {
@@ -149,15 +167,27 @@ export function ControlConfirmDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80">
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={HEADING_ID}
-        className="w-full max-w-md rounded border border-zinc-800 bg-zinc-900 p-6"
+        aria-describedby={BODY_ID}
+        tabIndex={-1}
+        className="w-full max-w-md rounded border border-zinc-800 bg-zinc-900 p-6 focus:outline-none"
       >
         <h2 id={HEADING_ID} className="text-sm font-semibold text-zinc-100">
           {actionLabel}
         </h2>
-        <p className="mt-3 text-sm text-zinc-300">{bodyCopy}</p>
+        <p
+          // Re-keyed so the unchanged notice mounts as a fresh alert region
+          // (a role added to an existing node is not reliably announced).
+          key={unchanged ? "unchanged" : "prompt"}
+          id={BODY_ID}
+          role={unchanged ? "alert" : undefined}
+          className="mt-3 text-sm text-zinc-300"
+        >
+          {bodyCopy}
+        </p>
 
         {!unchanged ? (
           <>
@@ -167,12 +197,14 @@ export function ControlConfirmDialog({
               </label>
               <textarea
                 id={REASON_FIELD_ID}
+                ref={reasonRef}
+                aria-describedby={REASON_HELP_ID}
                 value={reason}
                 rows={3}
                 onChange={(event) => setReason(event.target.value)}
                 className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 p-2 text-sm text-zinc-200"
               />
-              <p className="mt-1 text-xs text-zinc-500">
+              <p id={REASON_HELP_ID} className="mt-1 text-xs text-zinc-500">
                 Required, up to 500 characters
               </p>
             </div>
@@ -185,11 +217,12 @@ export function ControlConfirmDialog({
                 <input
                   id={TYPED_FIELD_ID}
                   type="text"
+                  aria-describedby={TYPED_HELP_ID}
                   value={typedValue}
                   onChange={(event) => setTypedValue(event.target.value)}
                   className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 p-2 text-sm text-zinc-200"
                 />
-                <p className="mt-1 text-xs text-zinc-500">
+                <p id={TYPED_HELP_ID} className="mt-1 text-xs text-zinc-500">
                   Resetting the kill switch allows trading to resume.
                 </p>
               </div>
@@ -198,11 +231,14 @@ export function ControlConfirmDialog({
         ) : null}
 
         {errorMessage ? (
-          <p className="mt-3 text-xs text-red-400">{errorMessage}</p>
+          <p role="alert" className="mt-3 text-xs text-red-400">
+            {errorMessage}
+          </p>
         ) : null}
 
         <div className="mt-4 flex justify-end gap-2">
           <button
+            ref={dismissRef}
             type="button"
             onClick={onClose}
             disabled={submitting}
