@@ -173,6 +173,7 @@ const EXPECTED_JOB_UI_FILES = [
   "components/jobs/JobsTable.tsx",
   "components/jobs/JobFilters.tsx",
   "components/jobs/CancelJobDialog.tsx",
+  "components/jobs/RetryJobDialog.tsx",
   "components/jobs/detail/JobDetailView.tsx",
   "components/jobs/detail/JobHeaderPanel.tsx",
   "components/jobs/detail/JobProgressPanel.tsx",
