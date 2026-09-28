@@ -87,12 +87,24 @@ export async function fetchApi<T>(endpoint: string): Promise<ApiResult<T>> {
 }
 
 /**
+ * Fallback copy for a control-route rejection whose `detail` is not a
+ * `{code: string, ...}` object the console recognizes (e.g. an array-shaped
+ * pydantic validation error, or an unmapped string). Declared once here and
+ * referenced by both the `invalid_control_request` map entry and
+ * `controlErrorMessage`'s own fallback, so the literal string appears
+ * exactly once in this file.
+ */
+const CONTROL_REQUEST_REJECTED_COPY =
+  "Request rejected — check the input and try again.";
+
+/**
  * Closed map of typed mutation error codes (Job POST routes, plus the
  * Phase 20 retry/control routes) to the exact UI-SPEC copy for that code.
  * Each entry is a function of the response's `detail` object so codes that
  * carry extra fields (job_type, reason, status, job_id, strategy_id) can
- * interpolate them. Keys are the fourteen codes `api/routes/jobs.py`
- * (submit/cancel/retry) can raise via `_error(...)`.
+ * interpolate them. Keys are the eighteen codes `api/routes/jobs.py`
+ * (submit/cancel/retry) and the `api/routes/controls.py` mutation routes
+ * can raise via their `_error(...)`-style helpers.
  */
 export const MUTATION_ERROR_COPY: Readonly<
   Record<string, (detail: Record<string, unknown> | null) => string>
@@ -140,6 +152,16 @@ export const MUTATION_ERROR_COPY: Readonly<
         : "the original payload is no longer valid";
     return `This Job can no longer be retried: ${reason}.`;
   },
+  strategy_not_found: (detail) => {
+    const strategyId =
+      detail && typeof detail.strategy_id === "string" ? detail.strategy_id : "unknown";
+    return `Strategy ${strategyId} was not found.`;
+  },
+  invalid_control_target: () =>
+    "Invalid target state — this is a console bug, not an operator error. Reload the page and try again.",
+  invalid_control_reason: () =>
+    "Reason is required and must be 500 characters or fewer.",
+  invalid_control_request: () => CONTROL_REQUEST_REJECTED_COPY,
 };
 
 /**
@@ -279,5 +301,168 @@ export function retryJob(
     {},
     idempotencyKey,
     { job_id: jobId },
+  );
+}
+
+/** Read-model response of GET /api/v1/controls/strategies/{id} (D-31, read-only). */
+export type StrategyControlState = {
+  strategy_id: string;
+  status: "enabled" | "disabled";
+  updated_at: string | null;
+};
+
+/** Response body of PUT /api/v1/controls/kill-switch. */
+export type KillSwitchControlResponse = {
+  state: "tripped" | "armed";
+  changed: boolean;
+  run_id: string;
+};
+
+/** Response body of PUT /api/v1/controls/strategies/{id}. */
+export type StrategyControlResponse = {
+  strategy_id: string;
+  status: "enabled" | "disabled";
+  changed: boolean;
+  run_id: string;
+};
+
+/**
+ * Maps a control-route rejection's raw `detail` value to UI-SPEC copy
+ * (D-10/D-11/D-14, Amendment 2026-09-28 #3-4). An object carrying a string
+ * `code` uses the shared MUTATION_ERROR_COPY table; a plain string is
+ * rendered verbatim (the existing 404 pattern for some control errors);
+ * any other shape (e.g. an array-shaped pydantic validation error) falls
+ * back to the defensive copy. Never throws.
+ */
+export function controlErrorMessage(detail: unknown): string {
+  if (
+    detail &&
+    typeof detail === "object" &&
+    !Array.isArray(detail) &&
+    typeof (detail as { code?: unknown }).code === "string"
+  ) {
+    const code = (detail as { code: string }).code;
+    return mutationErrorMessage(code, detail as Record<string, unknown>);
+  }
+  if (typeof detail === "string") {
+    return detail;
+  }
+  return CONTROL_REQUEST_REJECTED_COPY;
+}
+
+/**
+ * Shared PUT implementation for the control mutation routes (D-10):
+ * idempotent by explicit target state, so unlike `postJson` it sends no
+ * `Idempotency-Key` and always reports `replayed: false` on success. Never
+ * throws.
+ */
+async function putJson<T>(
+  endpoint: string,
+  body: unknown,
+): Promise<MutationResult<T>> {
+  let response: Response;
+  try {
+    response = await fetch(`/backend${endpoint}`, {
+      method: "PUT",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return {
+      ok: false,
+      status: null,
+      code: null,
+      message: `${endpoint} is unreachable (network or proxy failure)`,
+      detail: null,
+    };
+  }
+
+  const status = response.status;
+
+  if (response.ok) {
+    let data: T;
+    try {
+      data = (await response.json()) as T;
+    } catch {
+      data = null as T;
+    }
+    return {
+      ok: true,
+      data,
+      replayed: false,
+      status,
+    };
+  }
+
+  let parsedBody: unknown = null;
+  try {
+    parsedBody = await response.json();
+  } catch {
+    parsedBody = null;
+  }
+
+  const rawDetail =
+    parsedBody && typeof parsedBody === "object" && "detail" in parsedBody
+      ? (parsedBody as { detail?: unknown }).detail
+      : null;
+
+  const detail: Record<string, unknown> | null =
+    rawDetail && typeof rawDetail === "object" && !Array.isArray(rawDetail)
+      ? (rawDetail as Record<string, unknown>)
+      : null;
+
+  const code = detail && typeof detail.code === "string" ? detail.code : null;
+
+  return {
+    ok: false,
+    status,
+    code,
+    message: controlErrorMessage(rawDetail ?? null),
+    detail,
+  };
+}
+
+/** Trips the kill switch (D-10). Sends no Idempotency-Key. */
+export function tripKillSwitch(
+  reason: string,
+): Promise<MutationResult<KillSwitchControlResponse>> {
+  return putJson<KillSwitchControlResponse>("/api/v1/controls/kill-switch", {
+    state: "tripped",
+    reason,
+  });
+}
+
+/** Resets (arms) the kill switch (D-10/D-14). Sends no Idempotency-Key. */
+export function resetKillSwitch(
+  reason: string,
+): Promise<MutationResult<KillSwitchControlResponse>> {
+  return putJson<KillSwitchControlResponse>("/api/v1/controls/kill-switch", {
+    state: "armed",
+    reason,
+  });
+}
+
+/** Enables `strategyId` (D-10). Sends no Idempotency-Key. */
+export function enableStrategy(
+  strategyId: string,
+  reason: string,
+): Promise<MutationResult<StrategyControlResponse>> {
+  return putJson<StrategyControlResponse>(
+    `/api/v1/controls/strategies/${encodeURIComponent(strategyId)}`,
+    { status: "enabled", reason },
+  );
+}
+
+/** Disables `strategyId` (D-10). Sends no Idempotency-Key. */
+export function disableStrategy(
+  strategyId: string,
+  reason: string,
+): Promise<MutationResult<StrategyControlResponse>> {
+  return putJson<StrategyControlResponse>(
+    `/api/v1/controls/strategies/${encodeURIComponent(strategyId)}`,
+    { status: "disabled", reason },
   );
 }
