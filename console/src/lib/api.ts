@@ -377,14 +377,30 @@ export type StrategyControlResponse = {
 };
 
 /**
+ * Copy for a control-route failure that carries no recognized `{code}` and
+ * arrived as a 5xx / proxy error (WR-C-04). UI-SPEC's literal "Request
+ * rejected" row was written for 4xx validation shapes; telling an operator
+ * their input is wrong while the API is down (e.g. a Trip attempt during an
+ * outage) is misleading, and the request may not have been processed.
+ */
+function controlOutageMessage(status: number): string {
+  return `Operation failed (HTTP ${status}). The change may not have been applied — reload to verify the current state, then try again; if it persists, check the API logs.`;
+}
+
+/**
  * Maps a control-route rejection's raw `detail` value to UI-SPEC copy
  * (D-10/D-11/D-14, Amendment 2026-09-28 #3-4). An object carrying a string
- * `code` uses the shared MUTATION_ERROR_COPY table; a plain string is
- * rendered verbatim (the existing 404 pattern for some control errors);
- * any other shape (e.g. an array-shaped pydantic validation error) falls
- * back to the defensive copy. Never throws.
+ * `code` uses the shared MUTATION_ERROR_COPY table (checked first, so a typed
+ * 5xx such as a 503 keeps its own copy); a plain string is rendered verbatim
+ * (the existing 404 pattern for some control errors); any other shape falls
+ * back to the outage copy when the HTTP `status` is 5xx and to the defensive
+ * "Request rejected" copy otherwise (e.g. an array-shaped pydantic 4xx).
+ * Never throws.
  */
-export function controlErrorMessage(detail: unknown): string {
+export function controlErrorMessage(
+  detail: unknown,
+  status?: number | null,
+): string {
   if (
     detail &&
     typeof detail === "object" &&
@@ -396,6 +412,9 @@ export function controlErrorMessage(detail: unknown): string {
   }
   if (typeof detail === "string") {
     return detail;
+  }
+  if (typeof status === "number" && status >= 500) {
+    return controlOutageMessage(status);
   }
   return CONTROL_REQUEST_REJECTED_COPY;
 }
@@ -473,7 +492,7 @@ async function putJson<T>(
     ok: false,
     status,
     code,
-    message: controlErrorMessage(rawDetail ?? null),
+    message: controlErrorMessage(rawDetail ?? null, status),
     detail,
   };
 }

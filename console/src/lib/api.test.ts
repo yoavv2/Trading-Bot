@@ -802,3 +802,75 @@ describe("WR-C-03: a 2xx response with an unreadable or wrongly shaped body is a
     expect(isOutcomeUncertain(failure(422))).toBe(false);
   });
 });
+
+describe("WR-C-04: control-route 5xx / non-JSON failures are not reported as an input problem", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const OUTAGE_COPY = (status: number) =>
+    `Operation failed (HTTP ${status}). The change may not have been applied — reload to verify the current state, then try again; if it persists, check the API logs.`;
+  const REJECTED_COPY = "Request rejected — check the input and try again.";
+
+  it("a 502 with an HTML body shows the outage copy, not 'Request rejected'", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse(502, "<html>Bad Gateway</html>")));
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(502);
+      expect(result.message).toBe(OUTAGE_COPY(502));
+    }
+  });
+
+  it("a 500 JSON body with no detail shows the outage copy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(500, { error: "boom" })));
+
+    const result = await disableStrategy("x", "r");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(OUTAGE_COPY(500));
+    }
+  });
+
+  it("a recognized code wins over the outage copy even on a 5xx", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(503, { detail: { code: "mutations_disabled" } })),
+    );
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("Mutations disabled on this deployment");
+    }
+  });
+
+  it("a 4xx array-shaped body still shows the unchanged 'Request rejected' copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(422, { detail: [{ loc: ["body"], msg: "bad" }] })),
+    );
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(REJECTED_COPY);
+    }
+  });
+
+  it("a 4xx non-JSON body still shows the unchanged 'Request rejected' copy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse(400, "bad request")));
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(REJECTED_COPY);
+    }
+  });
+});
