@@ -380,3 +380,58 @@ describe("BacktestJobForm", () => {
     ).toBeTruthy();
   });
 });
+
+describe("WR-C-08: BacktestJobForm idempotency key", () => {
+  it("mounts and submits with a UUID-shaped key when crypto.randomUUID is unavailable, generating nothing during render", async () => {
+    const jobReference = { ...JOB_REFERENCE_BASE, job_id: "job-f" };
+    const { fn, calls } = makeFetchRouter([{ status: 202, body: jobReference }]);
+    vi.stubGlobal("fetch", fn);
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.forEach((_, index) => {
+          bytes[index] = (index * 31 + 7) % 256;
+        });
+        return bytes;
+      },
+    });
+
+    render(
+      <BacktestJobForm
+        catalogEntry={CATALOG_ENTRY_WITH_DEFAULTS}
+        capability={CAPABILITY_ENABLED}
+        initialParams={{ strategy_id: "trend_following_daily" }}
+        onNavigate={vi.fn()}
+      />,
+    );
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit Backtest" }));
+    await flush();
+
+    expect(calls[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it("does not call crypto.randomUUID while rendering", async () => {
+    const { fn } = makeFetchRouter([]);
+    vi.stubGlobal("fetch", fn);
+
+    const { rerender } = render(
+      <BacktestJobForm
+        catalogEntry={CATALOG_ENTRY_WITH_DEFAULTS}
+        capability={CAPABILITY_ENABLED}
+        initialParams={{}}
+        onNavigate={vi.fn()}
+      />,
+    );
+    rerender(
+      <BacktestJobForm
+        catalogEntry={CATALOG_ENTRY_WITH_DEFAULTS}
+        capability={CAPABILITY_ENABLED}
+        initialParams={{}}
+        onNavigate={vi.fn()}
+      />,
+    );
+    await flush();
+    expect(uuidCounter).toBe(0);
+  });
+});

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useApiQuery } from "@/lib/useApiQuery";
 import { submitJob } from "@/lib/api";
+import { newIdempotencyKey } from "@/lib/idempotencyKey";
 import type { JobTypeCatalogItem } from "../types";
 import type { MutationCapability } from "@/lib/useMutationCapability";
 
@@ -67,7 +68,8 @@ export function BacktestJobForm({
 
   // One Idempotency-Key per form instance (T-19-11-02); rotated only when
   // the attempted payload changes from the previous attempt.
-  const keyRef = useRef<string>(crypto.randomUUID());
+  // Generated lazily on first submit, never during render (WR-C-08).
+  const keyRef = useRef<string | null>(null);
   const lastAttemptRef = useRef<string | null>(null);
 
   const strategies = strategiesResult?.ok
@@ -93,17 +95,19 @@ export function BacktestJobForm({
     };
     const payloadString = JSON.stringify(payload);
     if (
-      lastAttemptRef.current !== null &&
-      lastAttemptRef.current !== payloadString
+      keyRef.current === null ||
+      (lastAttemptRef.current !== null &&
+        lastAttemptRef.current !== payloadString)
     ) {
-      keyRef.current = crypto.randomUUID();
+      keyRef.current = newIdempotencyKey();
     }
+    const idempotencyKey = keyRef.current;
     lastAttemptRef.current = payloadString;
 
     setSubmitting(true);
     const result = await submitJob(
       { job_type: "backtest", payload },
-      keyRef.current,
+      idempotencyKey,
     );
     setSubmitting(false);
 

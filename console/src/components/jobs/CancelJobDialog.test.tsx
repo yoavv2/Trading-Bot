@@ -309,3 +309,34 @@ describe("CancelJobDialog", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("WR-C-08: CancelJobDialog idempotency key", () => {
+  it("opens without throwing when crypto.randomUUID is unavailable and sends a UUID-shaped key", async () => {
+    const { fn, calls } = makeCancelFetch([{ status: 200, body: REFERENCE }]);
+    vi.stubGlobal("fetch", fn);
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.forEach((_, index) => {
+          bytes[index] = (index * 31 + 7) % 256;
+        });
+        return bytes;
+      },
+    });
+
+    render(
+      <CancelJobDialog
+        jobId={REFERENCE.job_id}
+        jobType="probe_type"
+        jobStatus="queued"
+        open={true}
+        onClose={vi.fn()}
+        onCancelled={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Job" }));
+    await flush();
+
+    expect(calls[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});

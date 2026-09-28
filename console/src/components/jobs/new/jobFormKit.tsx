@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useApiQuery } from "@/lib/useApiQuery";
 import { submitJob } from "@/lib/api";
+import { newIdempotencyKey } from "@/lib/idempotencyKey";
 import type { MutationCapability } from "@/lib/useMutationCapability";
 
 /**
@@ -44,21 +45,26 @@ export function useJobFormSubmission({
   const [submitting, setSubmitting] = useState(false);
   const [outcome, setOutcome] = useState<JobFormOutcome>({ kind: "idle" });
 
-  const keyRef = useRef<string>(crypto.randomUUID());
+  // Generated lazily on first submit, never during render (WR-C-08): a
+  // render-time call re-evaluates on every render and, on insecure contexts
+  // without crypto.randomUUID, would throw and unmount the page.
+  const keyRef = useRef<string | null>(null);
   const lastAttemptRef = useRef<string | null>(null);
 
   async function submit(payload: Record<string, unknown>) {
     const payloadString = JSON.stringify(payload);
     if (
-      lastAttemptRef.current !== null &&
-      lastAttemptRef.current !== payloadString
+      keyRef.current === null ||
+      (lastAttemptRef.current !== null &&
+        lastAttemptRef.current !== payloadString)
     ) {
-      keyRef.current = crypto.randomUUID();
+      keyRef.current = newIdempotencyKey();
     }
+    const idempotencyKey = keyRef.current;
     lastAttemptRef.current = payloadString;
 
     setSubmitting(true);
-    const result = await submitJob({ job_type: jobType, payload }, keyRef.current);
+    const result = await submitJob({ job_type: jobType, payload }, idempotencyKey);
     setSubmitting(false);
 
     if (result.ok) {

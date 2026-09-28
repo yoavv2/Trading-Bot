@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cancelJob } from "@/lib/api";
+import { newIdempotencyKey } from "@/lib/idempotencyKey";
 import type { JobReference } from "./types";
 
 type CancelJobDialogProps = {
@@ -44,7 +45,7 @@ export function CancelJobDialog({
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      idempotencyKeyRef.current = crypto.randomUUID();
+      idempotencyKeyRef.current = newIdempotencyKey();
       setReason("");
       setErrorMessage(null);
       setSubmitting(false);

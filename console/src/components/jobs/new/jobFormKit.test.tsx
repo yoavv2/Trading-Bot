@@ -294,3 +294,42 @@ describe("parseSymbolsInput", () => {
     expect(SYMBOLS_EMPTY_HELP).toBe("At least one symbol is required");
   });
 });
+
+describe("WR-C-08: idempotency key generation", () => {
+  it("does not generate a key on render or re-render, only once on first submit", async () => {
+    const jobReference = { ...JOB_REFERENCE_BASE, job_id: "job-k" };
+    const { fn } = makeFetchRouter([{ status: 202, body: jobReference }]);
+    vi.stubGlobal("fetch", fn);
+
+    const { rerender } = render(
+      <TestForm payload={{ strategy_id: "s1" }} onNavigate={vi.fn()} />,
+    );
+    rerender(<TestForm payload={{ strategy_id: "s1" }} onNavigate={vi.fn()} />);
+    rerender(<TestForm payload={{ strategy_id: "s1" }} onNavigate={vi.fn()} />);
+    expect(uuidCounter).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit Risk Evaluation" }));
+    await flush();
+    expect(uuidCounter).toBe(1);
+  });
+
+  it("mounts and submits with a UUID-shaped key when crypto.randomUUID is unavailable", async () => {
+    const jobReference = { ...JOB_REFERENCE_BASE, job_id: "job-f" };
+    const { fn, calls } = makeFetchRouter([{ status: 202, body: jobReference }]);
+    vi.stubGlobal("fetch", fn);
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.forEach((_, index) => {
+          bytes[index] = (index * 31 + 7) % 256;
+        });
+        return bytes;
+      },
+    });
+
+    render(<TestForm payload={{ strategy_id: "s1" }} onNavigate={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Submit Risk Evaluation" }));
+    await flush();
+
+    expect(calls[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});

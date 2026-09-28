@@ -341,3 +341,42 @@ describe("RetryJobDialog", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("WR-C-08: RetryJobDialog idempotency key", () => {
+  it("opens without throwing when crypto.randomUUID is unavailable and reuses one UUID-shaped key across attempts", async () => {
+    const { fn, calls } = makeRetryFetch([
+      { networkError: true },
+      { status: 202, body: REFERENCE },
+    ]);
+    vi.stubGlobal("fetch", fn);
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.forEach((_, index) => {
+          bytes[index] = (index * 31 + 7) % 256;
+        });
+        return bytes;
+      },
+    });
+
+    render(
+      <RetryJobDialog
+        open={true}
+        job={jobDetail()}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
+    await flush();
+
+    expect(calls.length).toBe(2);
+    expect(calls[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(calls[0].headers["Idempotency-Key"]).toBe(
+      calls[1].headers["Idempotency-Key"],
+    );
+  });
+});

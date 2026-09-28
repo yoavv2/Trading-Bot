@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { retryJob } from "@/lib/api";
+import { newIdempotencyKey } from "@/lib/idempotencyKey";
 import type { JobDetail } from "./types";
 
 type RetryJobDialogProps = {
@@ -51,7 +52,7 @@ export function RetryJobDialog({
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      idempotencyKeyRef.current = crypto.randomUUID();
+      idempotencyKeyRef.current = newIdempotencyKey();
       setReplayed(false);
       setErrorMessage(null);
       setSubmitting(false);
