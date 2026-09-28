@@ -51,7 +51,7 @@ async def _read_body(request: Request, allowed_keys: set[str]) -> dict[str, Any]
 
     try:
         parsed = json.loads(await request.body())
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_request") from exc
     if not isinstance(parsed, dict) or not set(parsed).issubset(allowed_keys):
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_request")
@@ -74,7 +74,7 @@ async def set_kill_switch(
 ) -> dict[str, Any]:
     body = await _read_body(request, {"state", "reason"})
     target_state = body.get("state")
-    if target_state not in _KILL_SWITCH_TARGETS:
+    if not isinstance(target_state, str) or target_state not in _KILL_SWITCH_TARGETS:
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_target")
     reason = _validate_reason(body.get("reason"))
 
@@ -104,7 +104,7 @@ async def set_strategy_status(
         ) from exc
 
     target_status = body.get("status")
-    if target_status not in _STRATEGY_STATUS_TARGETS:
+    if not isinstance(target_status, str) or target_status not in _STRATEGY_STATUS_TARGETS:
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_target")
     reason = _validate_reason(body.get("reason"))
 

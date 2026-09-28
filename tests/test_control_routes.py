@@ -117,7 +117,7 @@ def _audit_counts() -> tuple[int, int, int]:
         )
 
 
-def _put_kill_switch(client: TestClient, body: Any, *, raw: str | None = None) -> Any:
+def _put_kill_switch(client: TestClient, body: Any, *, raw: str | bytes | None = None) -> Any:
     if raw is not None:
         return client.put(
             "/api/v1/controls/kill-switch",
@@ -128,7 +128,7 @@ def _put_kill_switch(client: TestClient, body: Any, *, raw: str | None = None) -
 
 
 def _put_strategy(
-    client: TestClient, strategy_id: str, body: Any, *, raw: str | None = None
+    client: TestClient, strategy_id: str, body: Any, *, raw: str | bytes | None = None
 ) -> Any:
     if raw is not None:
         return client.put(
@@ -195,6 +195,33 @@ def test_disable_strategy_is_idempotent_by_target_state_and_audited(client: Test
     assert after_second == (before[0] + 2, before[1] + 2, before[2])
 
 
+def test_enable_strategy_after_disable_is_idempotent_by_target_state_and_audited(
+    client: TestClient,
+) -> None:
+    _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "disabled", "reason": "maintenance"})
+    before = _audit_counts()
+
+    enabled = _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "enabled", "reason": "all clear"})
+    assert enabled.status_code == 200
+    body = enabled.json()
+    assert body == {
+        "strategy_id": _KNOWN_STRATEGY_ID,
+        "status": "enabled",
+        "changed": True,
+        "run_id": body["run_id"],
+    }
+
+    after_first = _audit_counts()
+    assert after_first == (before[0] + 1, before[1] + 1, before[2])
+
+    repeated = _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "enabled", "reason": "still up"})
+    assert repeated.status_code == 200
+    assert repeated.json()["changed"] is False
+
+    after_second = _audit_counts()
+    assert after_second == (before[0] + 2, before[1] + 2, before[2])
+
+
 def test_set_strategy_status_unknown_strategy_returns_404_with_zero_writes(
     client: TestClient,
 ) -> None:
@@ -214,16 +241,19 @@ def test_set_strategy_status_unknown_strategy_returns_404_with_zero_writes(
     [
         ({}, None, "invalid_control_target"),
         ({"state": "on", "reason": "x"}, None, "invalid_control_target"),
+        ({"state": ["tripped"], "reason": "x"}, None, "invalid_control_target"),
+        ({"state": {}, "reason": "x"}, None, "invalid_control_target"),
         ({"state": "tripped"}, None, "invalid_control_reason"),
         ({"state": "tripped", "reason": "   "}, None, "invalid_control_reason"),
         ({"state": "tripped", "reason": "x" * 501}, None, "invalid_control_reason"),
         ({"state": "tripped", "reason": "x", "extra": 1}, None, "invalid_control_request"),
         (None, "[]", "invalid_control_request"),
         (None, "not json", "invalid_control_request"),
+        (None, b"\xff\xfe not valid utf-8", "invalid_control_request"),
     ],
 )
 def test_kill_switch_rejections_are_typed_dicts_with_zero_writes(
-    client: TestClient, body: Any, raw: str | None, expected_code: str
+    client: TestClient, body: Any, raw: str | bytes | None, expected_code: str
 ) -> None:
     before = _audit_counts()
     response = _put_kill_switch(client, body, raw=raw)
@@ -240,16 +270,19 @@ def test_kill_switch_rejections_are_typed_dicts_with_zero_writes(
     [
         ({}, None, "invalid_control_target"),
         ({"status": "on", "reason": "x"}, None, "invalid_control_target"),
+        ({"status": ["disabled"], "reason": "x"}, None, "invalid_control_target"),
+        ({"status": {}, "reason": "x"}, None, "invalid_control_target"),
         ({"status": "disabled"}, None, "invalid_control_reason"),
         ({"status": "disabled", "reason": "   "}, None, "invalid_control_reason"),
         ({"status": "disabled", "reason": "x" * 501}, None, "invalid_control_reason"),
         ({"status": "disabled", "reason": "x", "extra": 1}, None, "invalid_control_request"),
         (None, "[]", "invalid_control_request"),
         (None, "not json", "invalid_control_request"),
+        (None, b"\xff\xfe not valid utf-8", "invalid_control_request"),
     ],
 )
 def test_strategy_status_rejections_are_typed_dicts_with_zero_writes(
-    client: TestClient, body: Any, raw: str | None, expected_code: str
+    client: TestClient, body: Any, raw: str | bytes | None, expected_code: str
 ) -> None:
     before = _audit_counts()
     response = _put_strategy(client, _KNOWN_STRATEGY_ID, body, raw=raw)
