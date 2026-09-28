@@ -286,4 +286,40 @@ def test_every_mutating_route_requires_mutation_guard() -> None:
             path = getattr(candidate, "path", "?")
             assert guarded, f"Route {methods} {path} is missing require_mutations_enabled"
 
-    assert checked >= 2
+    # D-12: the mutating surface is pinned to exactly five routes (POST
+    # /api/v1/jobs, /{job_id}/cancel, /{job_id}/retry, PUT
+    # /api/v1/controls/kill-switch, /api/v1/controls/strategies/{id}).
+    assert checked == 5
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/v1/jobs/not-a-real-job-id/retry"),
+        ("PUT", "/api/v1/controls/kill-switch"),
+        ("PUT", "/api/v1/controls/strategies/not-a-real-strategy-id"),
+    ],
+)
+def test_new_phase20_routes_rejected_when_mutations_disabled(
+    migrated_mutation_guard_db: str,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+) -> None:
+    """D-12: retry and both control routes are guarded exactly like submit/
+    cancel -- 403 before header/path/body validation, with zero writes."""
+
+    monkeypatch.setenv("TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED", "false")
+    clear_settings_cache()
+    app = create_app()
+    app.state.job_registry = _registry()
+    before = _counts()
+
+    with TestClient(app) as client:
+        # No Idempotency-Key header, and a malformed body -- proves the
+        # guard precedes both header and body/path validation.
+        response = client.request(method, path, json={"not": "a-valid-target"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {"code": "mutations_disabled"}
+    assert _counts() == before

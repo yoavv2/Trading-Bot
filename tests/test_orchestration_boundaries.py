@@ -183,9 +183,12 @@ def _effective_routes() -> dict[str, set[str]]:
     return routes
 
 
-def test_api_route_modules_have_only_the_two_job_mutation_decorators() -> None:
+def test_api_route_modules_declare_only_allowlisted_mutation_decorators() -> None:
+    """D-12: the exact five-route mutating-surface allowlist, replacing the
+    P18/P19 "exactly two" pin now that CTRL-01/02 and OPS-07 add three more."""
+
     routes_dir = _ROOT / "src/trading_platform/api/routes"
-    mutation_decorators: set[tuple[str, str]] = set()
+    mutation_decorators: set[tuple[str, str, str]] = set()
     for path in routes_dir.glob("*.py"):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
@@ -200,12 +203,20 @@ def test_api_route_modules_have_only_the_two_job_mutation_decorators() -> None:
                     continue
                 route_path = decorator.args[0].value if decorator.args else ""
                 assert isinstance(route_path, str)
-                mutation_decorators.add((decorator.func.attr.upper(), route_path))
+                mutation_decorators.add((path.name, decorator.func.attr.upper(), route_path))
 
-    assert mutation_decorators == {("POST", ""), ("POST", "/{job_id}/cancel")}
+    assert mutation_decorators == {
+        ("jobs.py", "POST", ""),
+        ("jobs.py", "POST", "/{job_id}/cancel"),
+        ("jobs.py", "POST", "/{job_id}/retry"),
+        ("controls.py", "PUT", "/kill-switch"),
+        ("controls.py", "PUT", "/strategies/{strategy_id}"),
+    }
 
 
-def test_runtime_application_has_exactly_two_mutating_job_routes() -> None:
+def test_runtime_application_mutating_routes_are_exactly_the_allowlist() -> None:
+    """D-12: the exact five (method, path) pairs the runtime application serves."""
+
     routes = _effective_routes()
     mutations = {
         (method, path)
@@ -216,7 +227,77 @@ def test_runtime_application_has_exactly_two_mutating_job_routes() -> None:
     assert mutations == {
         ("POST", "/api/v1/jobs"),
         ("POST", "/api/v1/jobs/{job_id}/cancel"),
+        ("POST", "/api/v1/jobs/{job_id}/retry"),
+        ("PUT", "/api/v1/controls/kill-switch"),
+        ("PUT", "/api/v1/controls/strategies/{strategy_id}"),
     }
+
+
+def test_every_allowlisted_route_declares_the_mutation_guard() -> None:
+    """D-12: every route in the five-route allowlist carries
+    require_mutations_enabled -- not just "every mutating route" generically
+    (that's test_mutation_guard.py::test_every_mutating_route_requires_mutation_guard),
+    but a route-by-route proof scoped to this exact set."""
+
+    from trading_platform.api.app import create_app
+    from trading_platform.api.dependencies import require_mutations_enabled
+
+    allowlist = {
+        ("POST", "/api/v1/jobs"),
+        ("POST", "/api/v1/jobs/{job_id}/cancel"),
+        ("POST", "/api/v1/jobs/{job_id}/retry"),
+        ("PUT", "/api/v1/controls/kill-switch"),
+        ("PUT", "/api/v1/controls/strategies/{strategy_id}"),
+    }
+
+    app = create_app()
+    found: set[tuple[str, str]] = set()
+    for route in app.routes:
+        candidates = (
+            route.effective_candidates() if hasattr(route, "effective_candidates") else [route]
+        )
+        for candidate in candidates:
+            path = str(getattr(candidate, "path", ""))
+            methods = set(getattr(candidate, "methods", set()) or set())
+            dependant = getattr(candidate, "dependant", None)
+            if dependant is None:
+                continue
+            for method in methods:
+                key = (method, path)
+                if key not in allowlist:
+                    continue
+                found.add(key)
+                guarded = any(
+                    dependency.call is require_mutations_enabled
+                    for dependency in dependant.dependencies
+                )
+                assert guarded, f"Route {key} is missing require_mutations_enabled"
+
+    assert found == allowlist
+
+
+def test_control_route_adapter_imports_only_allowed_layers() -> None:
+    imports = _module_imports(_ROOT / "src/trading_platform/api/routes/controls.py")
+
+    assert not any(
+        module == forbidden or module.startswith(f"{forbidden}.")
+        for module in imports
+        for forbidden in (
+            "sqlalchemy",
+            "trading_platform.db",
+            "trading_platform.worker",
+            "trading_platform.jobs",
+            "trading_platform.orchestration",
+        )
+    )
+    assert imports.intersection({"trading_platform.services.operator_controls"}) == {
+        "trading_platform.services.operator_controls"
+    }
+    assert not any(
+        module.startswith("trading_platform.services.")
+        and module != "trading_platform.services.operator_controls"
+        for module in imports
+    )
 
 
 def test_job_route_adapter_imports_only_allowed_layers() -> None:
@@ -234,6 +315,16 @@ def test_job_route_adapter_imports_only_allowed_layers() -> None:
     assert not any(
         module.startswith("trading_platform.services.")
         and module != "trading_platform.services.job_reads"
+        for module in imports
+    )
+    # OPS-03/OPS-07: jobs.py may reach into jobs.registry for
+    # JobRegistry/UnknownJobTypeError (cancellation_mode/retry_blocked
+    # composition) but no other jobs/ submodule.
+    assert imports.intersection({"trading_platform.jobs.registry"}) == {
+        "trading_platform.jobs.registry"
+    }
+    assert not any(
+        module.startswith("trading_platform.jobs.") and module != "trading_platform.jobs.registry"
         for module in imports
     )
 
