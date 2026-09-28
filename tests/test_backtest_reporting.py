@@ -20,7 +20,7 @@ from alembic import command
 from scripts.migrate import build_alembic_config
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import BacktestMetric
+from trading_platform.db.models import BacktestMetric, StrategyRun, StrategyRunStatus
 from trading_platform.db.models.daily_bar import DailyBar as DailyBarModel
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
@@ -349,6 +349,40 @@ def test_failed_backtest_persists_no_metrics(
     with session_scope(settings) as session:
         metric_count = session.execute(select(BacktestMetric)).scalars().all()
     assert len(metric_count) == 0
+
+
+def test_metric_persistence_failure_lands_run_on_failed_status(
+    migrated_reporting_db: str,
+    strategy_config_override: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure inside persist_backtest_metrics (called from the SUCCEEDED
+    branch of _update_backtest_run) must not leave the run stuck RUNNING --
+    it must land the run on FAILED with zero backtest_metrics rows, the same
+    as an _execute_backtest_run failure (regression guard for D-31)."""
+    _seed_market_data(_trading_fixture())
+    settings = load_settings()
+
+    def _raise_persist(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("forced metric persistence failure")
+
+    monkeypatch.setattr(backtesting_module, "persist_backtest_metrics", _raise_persist)
+
+    with pytest.raises(RuntimeError, match="forced metric persistence failure"):
+        run_backtest(
+            "trend_following_daily",
+            from_date=date(2024, 1, 2),
+            to_date=date(2024, 1, 10),
+            settings=settings,
+            trigger_source="pytest",
+        )
+
+    with session_scope(settings) as session:
+        strategy_run = session.execute(select(StrategyRun)).scalar_one()
+        metric_rows = session.execute(select(BacktestMetric)).scalars().all()
+
+    assert strategy_run.status == StrategyRunStatus.FAILED
+    assert len(metric_rows) == 0
 
 
 def test_reporting_handles_no_trade_runs_without_divide_by_zero(

@@ -247,6 +247,26 @@ def test_ensure_strategy_control_state_preserves_get_or_create(
     assert after["strategies"] == 1
 
 
+def test_write_spy_detects_writes(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    """Positive control: proves write_spy actually fires on a real write,
+    so every spy.is_empty assertion above is evidence of purity rather than
+    a listener that is attached wrong or never dispatched (advisor review)."""
+    settings = load_settings()
+    assert _row_counts(settings)["strategies"] == 0
+
+    with write_spy() as spy:
+        ensure_strategy_control_state("trend_following_daily", settings=settings)
+
+    assert any(
+        statement.lstrip().upper().startswith("INSERT") for statement in spy.statements
+    )
+    assert spy.flushes
+    assert not spy.is_empty
+
+
 def test_read_functions_contain_no_write_calls() -> None:
     build_source = inspect.getsource(build_backtest_report)
     for forbidden in ("_upsert_backtest_metric", "session.add", ".flush(", "commit"):

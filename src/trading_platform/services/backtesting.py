@@ -156,6 +156,21 @@ def run_backtest(
             from_date=from_date,
             to_date=to_date,
         )
+        # The SUCCEEDED update is inside this same try/except (not a bare
+        # trailing call) because it now also runs persist_backtest_metrics
+        # in the same transaction (D-31): if metric computation or the
+        # flush raises, that transaction rolls back entirely (RUNNING is
+        # never overwritten with a partial SUCCEEDED), and this except
+        # block still lands the run on a durable FAILED state with zero
+        # backtest_metrics rows, exactly like an _execute_backtest_run
+        # failure.
+        return _update_backtest_run(
+            resolved_settings,
+            run_id,
+            status=StrategyRunStatus.SUCCEEDED,
+            completed_at=datetime.now(UTC),
+            result_summary=summary,
+        )
     except Exception as exc:
         _update_backtest_run(
             resolved_settings,
@@ -173,14 +188,6 @@ def run_backtest(
             },
         )
         raise
-
-    return _update_backtest_run(
-        resolved_settings,
-        run_id,
-        status=StrategyRunStatus.SUCCEEDED,
-        completed_at=datetime.now(UTC),
-        result_summary=summary,
-    )
 
 
 def _create_backtest_run(
