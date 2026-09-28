@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, f
 from trading_platform.core.settings import load_settings
 from trading_platform.jobs.handlers import payload_fields as pf
 from trading_platform.jobs.registry import InvalidJobPayloadError
+from trading_platform.services.calendar import get_calendar
 
 
 class _SampleSymbolsPayload(BaseModel):
@@ -63,6 +64,7 @@ def test_payload_field_rejection_is_closed() -> None:
         "as_of_session_out_of_calendar_range",
         "from_date_after_to_date",
         "to_date_in_future",
+        "date_range_out_of_calendar_range",
         "empty_symbols",
         "invalid_symbol",
         "too_many_symbols",
@@ -247,6 +249,35 @@ def test_require_date_range_accepts_valid_range() -> None:
     settings = load_settings()
     pf.require_date_range(
         settings, _clock_2026_01_06, date(2026, 1, 1), date(2026, 1, 5), job_type="test"
+    )
+
+
+def test_require_date_range_within_calendar_accepts_window_edges() -> None:
+    settings = load_settings()
+    calendar = get_calendar(settings.market_data.calendar.exchange)
+    pf.require_date_range_within_calendar(
+        settings,
+        calendar.first_session.date(),
+        calendar.first_session.date(),
+        job_type="test",
+    )
+
+
+@pytest.mark.parametrize("from_date", [date(2000, 1, 3), date(1, 1, 1)])
+def test_require_date_range_within_calendar_rejects_pre_window_from_date(
+    from_date: date,
+) -> None:
+    """WR-A-03: a pre-window ``from_date`` would raise ``DateOutOfBounds`` /
+    ``OverflowError`` inside the run-time calendar sync; reject it at submit."""
+
+    settings = load_settings()
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        pf.require_date_range_within_calendar(
+            settings, from_date, date(2024, 1, 10), job_type="test"
+        )
+    assert (
+        exc_info.value.reason
+        == pf.PayloadFieldRejection.DATE_RANGE_OUT_OF_CALENDAR_RANGE.value
     )
 
 

@@ -60,6 +60,7 @@ class PayloadFieldRejection(StrEnum):
     AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
     FROM_DATE_AFTER_TO_DATE = "from_date_after_to_date"
     TO_DATE_IN_FUTURE = "to_date_in_future"
+    DATE_RANGE_OUT_OF_CALENDAR_RANGE = "date_range_out_of_calendar_range"
     EMPTY_SYMBOLS = "empty_symbols"
     INVALID_SYMBOL = "invalid_symbol"
     TOO_MANY_SYMBOLS = "too_many_symbols"
@@ -230,6 +231,28 @@ def require_date_range(
         )
 
 
+def require_date_range_within_calendar(
+    settings: Settings,
+    from_date: date,
+    to_date: date,
+    *,
+    job_type: str,
+) -> None:
+    """Reject a range that falls outside the exchange calendar's supported
+    window (``first_session``..``last_session``). Job types whose handler
+    resolves sessions from the calendar (``sync-market-sessions``) call this
+    after ``require_date_range`` so an out-of-window range is a typed
+    submit-time rejection (D-25) rather than a run-time
+    ``DateOutOfBounds``/``OverflowError`` on the Job."""
+
+    calendar = get_calendar(settings.market_data.calendar.exchange)
+    if from_date < calendar.first_session.date() or to_date > calendar.last_session.date():
+        raise InvalidJobPayloadError(
+            job_type=job_type,
+            reason=PayloadFieldRejection.DATE_RANGE_OUT_OF_CALENDAR_RANGE.value,
+        )
+
+
 def latest_completed_session_default(settings: Settings) -> date | None:
     """Read-only ``submission_defaults()`` helper -- the same "latest
     completed session" query ``BacktestSubmissionSpec.submission_defaults``
@@ -260,6 +283,7 @@ __all__ = [
     "normalize_symbols",
     "parse_iso_date",
     "require_date_range",
+    "require_date_range_within_calendar",
     "require_registered_strategy",
     "require_trading_session_not_future",
 ]

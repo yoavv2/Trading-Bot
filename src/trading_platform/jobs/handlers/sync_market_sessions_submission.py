@@ -3,7 +3,8 @@
 
 Validation is strict and typed: unknown payload keys, a missing required
 field, a wrong-typed/malformed date, an inverted date range, and a
-``to_date`` in the future each raise a typed ``InvalidJobPayloadError`` with
+``to_date`` in the future, and a range outside the exchange calendar's
+supported window each raise a typed ``InvalidJobPayloadError`` with
 a stable, closed rejection reason. ``sync-market-sessions`` is its own Job
 type with its own spec and handler -- neither this module nor its handler
 carries a mode/behavior flag field (OPS-05). Nothing is ever defaulted
@@ -33,6 +34,7 @@ from trading_platform.jobs.handlers.payload_fields import (
     map_validation_error,
     parse_iso_date,
     require_date_range,
+    require_date_range_within_calendar,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
 
@@ -60,6 +62,7 @@ class SyncMarketSessionsPayloadRejection(StrEnum):
     INVALID_DATE = "invalid_date"
     FROM_DATE_AFTER_TO_DATE = "from_date_after_to_date"
     TO_DATE_IN_FUTURE = "to_date_in_future"
+    DATE_RANGE_OUT_OF_CALENDAR_RANGE = "date_range_out_of_calendar_range"
 
 
 def _default_clock() -> datetime:
@@ -110,6 +113,12 @@ class SyncMarketSessionsSubmissionSpec:
         require_date_range(
             self._settings,
             self._clock,
+            from_date,
+            to_date,
+            job_type=SYNC_MARKET_SESSIONS_JOB_TYPE,
+        )
+        require_date_range_within_calendar(
+            self._settings,
             from_date,
             to_date,
             job_type=SYNC_MARKET_SESSIONS_JOB_TYPE,

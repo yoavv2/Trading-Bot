@@ -53,6 +53,7 @@ def test_rejection_enum_is_closed() -> None:
         "invalid_date",
         "from_date_after_to_date",
         "to_date_in_future",
+        "date_range_out_of_calendar_range",
     }
 
 
@@ -124,6 +125,16 @@ def test_invalid_field_type_member_is_map_validation_error_fallback() -> None:
             {"from_date": "2026-01-01", "to_date": "2026-01-10"},
             SyncMarketSessionsPayloadRejection.TO_DATE_IN_FUTURE,
             id="to_date_in_future",
+        ),
+        pytest.param(
+            {"from_date": "2006-09-27", "to_date": "2024-01-10"},
+            SyncMarketSessionsPayloadRejection.DATE_RANGE_OUT_OF_CALENDAR_RANGE,
+            id="from_date_before_calendar_window",
+        ),
+        pytest.param(
+            {"from_date": "0001-01-01", "to_date": "2024-01-10"},
+            SyncMarketSessionsPayloadRejection.DATE_RANGE_OUT_OF_CALENDAR_RANGE,
+            id="from_date_year_one",
         ),
     ],
 )
