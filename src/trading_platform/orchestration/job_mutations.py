@@ -499,6 +499,20 @@ class JobOrchestrationService:
                 return existing
 
             original = self._require_job(session, job_id, lock=True)
+
+            # A concurrent same-key retry may have committed while this
+            # request waited on the row lock above; the pre-lock replay
+            # check cannot see it. Re-check under the lock so the loser
+            # replays (D-16) instead of hitting retry_exists (409).
+            existing = self._existing_outcome(
+                session,
+                endpoint_id=RETRY_ENDPOINT_ID,
+                key=key,
+                fingerprint=fingerprint,
+            )
+            if existing is not None:
+                return existing
+
             if original.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
                 raise JobNotRetryableError(job_id=job_id, status=original.status.value)
 

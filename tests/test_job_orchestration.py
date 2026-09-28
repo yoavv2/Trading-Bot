@@ -689,6 +689,38 @@ def test_concurrent_fresh_key_retries_create_exactly_one_retry_job() -> None:
 
 
 @pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_retry_same_key_that_commits_while_waiting_on_row_lock_replays() -> None:
+    """WR-A-01 / D-16: a same-key retry whose pre-lock replay check missed a
+    concurrently committed retry must replay (200) once it holds the row lock,
+    not raise ``RetryAlreadyExistsError`` (409)."""
+
+    service = _service()
+    failed_id = _seed_job(status=JobStatus.FAILED, payload={"message": "hello"})
+    first = service.retry(job_id=failed_id, idempotency_key="racing-key")
+    assert first.created is True
+
+    real_existing_outcome = service._existing_outcome
+    calls = {"count": 0}
+
+    def blind_first_lookup(*args: Any, **kwargs: Any) -> Any:
+        # Simulates the pre-lock replay check running before the winner
+        # committed: the first lookup sees nothing.
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
+        return real_existing_outcome(*args, **kwargs)
+
+    before = _counts()
+    with mock.patch.object(service, "_existing_outcome", side_effect=blind_first_lookup):
+        second = service.retry(job_id=failed_id, idempotency_key="racing-key")
+
+    assert second.replayed is True
+    assert second.created is False
+    assert second.reference.job_id == first.reference.job_id
+    assert _counts() == before
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
 def test_retry_rejects_invalid_stored_payload_and_writes_nothing() -> None:
     service = _service()
     job_id = _seed_job(status=JobStatus.FAILED, payload={"message": "not-accepted"})
