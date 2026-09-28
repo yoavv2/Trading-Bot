@@ -96,12 +96,14 @@ class StrategyAnalyticsService(AnalyticsService):
                 "strategy": {
                     "strategy_id": strategy_id,
                     "display_name": strategy_record.display_name if strategy_record is not None else metadata.display_name,
+                    # No DB row: report the same default the pure read
+                    # (OperatorControlService.get_strategy_state) and the
+                    # mutating get-or-create (ensure_strategy_record) use, so
+                    # every surface agrees on the execution-gating flag.
                     "status": (
                         strategy_record.status.value
                         if strategy_record is not None
                         else StrategyStatus.ACTIVE.value
-                        if metadata.enabled
-                        else StrategyStatus.DISABLED.value
                     ),
                     "version": strategy_record.version if strategy_record is not None else metadata.version,
                 },

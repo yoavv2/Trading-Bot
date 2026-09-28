@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import sys
 from datetime import date
 from decimal import Decimal
@@ -31,6 +32,7 @@ from trading_platform.db.models import (  # noqa: E402
 )
 from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
 from trading_platform.services.alpaca import BrokerAccountSnapshot  # noqa: E402
+from trading_platform.services.analytics import StrategyAnalyticsService  # noqa: E402
 from trading_platform.services.execution import (  # noqa: E402
     run_paper_order_submission,
     sync_paper_state,
@@ -350,3 +352,37 @@ def test_kill_switch_trip_with_no_anchor_row_and_no_registry_entry_is_typed(
     with session_scope(settings) as session:
         assert session.execute(select(SystemControl)).scalar_one().state == KillSwitchState.ARMED
         assert session.execute(select(StrategyRun)).first() is None
+
+
+def test_config_disabled_strategy_with_no_db_row_has_one_default_status_everywhere(
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WR-B-06: the pure control read, the analytics summary and the mutating
+    get-or-create all agree for a strategy configured `enabled: false` that has
+    no `strategies` row yet."""
+    from types import SimpleNamespace
+
+    from trading_platform.strategies.registry import build_default_registry
+
+    settings = load_settings()
+    real = build_default_registry(settings).resolve("trend_following_daily")
+    disabled_metadata = dataclasses.replace(real.metadata, enabled=False)
+    registry = StrategyRegistry()
+    registry.register(SimpleNamespace(strategy_id="trend_following_daily", metadata=disabled_metadata))
+    monkeypatch.setattr(
+        "trading_platform.services.analytics.build_default_registry", lambda _settings=None: registry
+    )
+
+    control_read = OperatorControlService(settings=settings, registry=registry).get_strategy_state(
+        "trend_following_daily"
+    )
+    analytics_status = StrategyAnalyticsService(settings).summarize_strategy(
+        strategy_id="trend_following_daily"
+    )["strategy"]["status"]
+    with session_scope(settings) as session:
+        assert session.execute(select(Strategy)).first() is None  # both reads wrote nothing
+    ensured = OperatorControlService(settings=settings, registry=registry).ensure_strategy_state(
+        "trend_following_daily"
+    )
+
+    assert control_read.status == analytics_status == ensured.status
