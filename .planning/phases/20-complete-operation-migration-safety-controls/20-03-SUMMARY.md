@@ -136,6 +136,20 @@ None - no external service configuration required.
 - FOUND commit c064a38 (Task 2)
 - FOUND commit 743b86c (fix)
 
+## Process Note
+
+The state/roadmap metadata commit (`fe1834d`, `docs(20-03): complete
+shared-payload-validators-and-service-extraction plan`) was created via
+`gsd-sdk query commit`, which does not expose a trailer argument, so it
+landed without the required `Co-Authored-By: Claude Sonnet 5
+<noreply@anthropic.com>` trailer this session's instructions require on
+every commit. Per this session's explicit no-history-rewrite/no-amend
+instruction, `fe1834d` was left as-is rather than amended (the 19-08
+precedent in STATE.md notes that amending to fix exactly this class of
+issue itself violates the no-rewrite rule). Disclosed here rather than
+hidden; no work was lost. This addendum commit and all commits after it use
+plain `git commit` with the trailer included directly.
+
 ---
 *Phase: 20-complete-operation-migration-safety-controls*
 *Completed: 2026-09-28*
