@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-05-PLAN.md
-last_updated: "2026-09-28T08:58:46.268Z"
+stopped_at: Completed 20-06-PLAN.md
+last_updated: "2026-09-28T09:20:55.867Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 32
+  completed_plans: 33
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 6 of 24
+Plan: 7 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -79,6 +79,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P03 | 15min | 2 tasks | 5 files |
 | Phase 20 P04 | 20min | 2 tasks | 6 files |
 | Phase 20 P05 | ~40min | 2 tasks | 6 files |
+| Phase 20 P06 | 22min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -195,6 +196,8 @@ Recent decisions affecting current work:
 - [Phase 20]: 20-04: QUEUED_ONLY cancellation mode, JobDomainConflictError translated from ConcurrentRunLockedError via jobs/handlers/domain_conflicts.py, and registry.retry_prerequisite_for/register() validation for the optional D-19 spec attribute; runner.py pins outcome_uncertain False on the domain_conflict path since the lock-denial conflict always precedes any broker order submission (LOCK-01). OPS-08/OPS-03/OPS-07 stay Pending -- mechanism only, no handler raises it yet (Plan 16).
 - [Phase 20]: [20-05]: OPS-02, OPS-04, OPS-05, OPS-07 stay Pending in REQUIREMENTS.md -- this plan ships only the job_reads read-model fix/extension and the job_id threading the later handler plans consume; no Job handler/type is registered here and no operator-visible Job path exists yet (17-01/19-01/19-03/20-01 precedent)
 - [Phase 20]: [20-05]: apply_reconciliation_corrections left unchanged -- direct read confirmed it creates no StrategyRun, so per orchestrator decision 4 it takes no job_id parameter
+- [Phase 20]: [20-06]: OPS-07/CTRL-01/CTRL-02/OPS-03 stay Pending: 20-06 shipped only the console contract layer (types.ts, api.ts clients, jobFormKit); no operator-visible Retry/control UI exists yet
+- [Phase 20]: [20-06]: Control mutation clients (tripKillSwitch/resetKillSwitch/enableStrategy/disableStrategy) send no Idempotency-Key header, per D-10, structurally distinct from Job mutation clients
 
 ### Pending Todos
 
@@ -235,6 +238,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T08:58:46.259Z
-Stopped at: Completed 20-05-PLAN.md
+Last session: 2026-09-28T09:20:55.858Z
+Stopped at: Completed 20-06-PLAN.md
 Resume file: None

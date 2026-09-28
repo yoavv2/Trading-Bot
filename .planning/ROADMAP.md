@@ -252,7 +252,7 @@ Plans:
 
 - [x] 20-04-PLAN.md — Framework: QUEUED_ONLY cancellation mode, JobDomainConflictError + runner domain_conflict branch, D-19 retry-prerequisite declaration
 - [x] 20-05-PLAN.md — Read model (multi-run resources, market-data kind, payload + retry lineage) + job_id threading for risk/reconciliation/ingestion
-- [ ] 20-06-PLAN.md — Console contract layer: Job detail types, retry + control clients, error copy, shared job-form kit
+- [x] 20-06-PLAN.md — Console contract layer: Job detail types, retry + control clients, error copy, shared job-form kit
 
 **Wave 3**
 
@@ -334,7 +334,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
-| 20. Complete Operation Migration & Safety Controls | v1.3 | 5/24 | In Progress | - |
+| 20. Complete Operation Migration & Safety Controls | v1.3 | 6/24 | In Progress | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
 ---
