@@ -22,6 +22,7 @@ from trading_platform.db.models import (
     Symbol,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services.backtest_reporting import persist_backtest_metrics
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.market_data_access import (
     bars_for_session_date,
@@ -242,6 +243,8 @@ def _update_backtest_run(
             strategy_run.completed_at = completed_at
 
         session.flush()
+        if status is StrategyRunStatus.SUCCEEDED:
+            persist_backtest_metrics(session, strategy_run)
         session.refresh(strategy_run)
         strategy = strategy_run.strategy
 

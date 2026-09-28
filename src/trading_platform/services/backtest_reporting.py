@@ -50,13 +50,16 @@ class BacktestExportManifest:
         }
 
 
-def materialize_backtest_report(
+def build_backtest_report(
     *,
     run_id: str | None = None,
     strategy_id: str = "trend_following_daily",
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Load a persisted backtest run, refresh its metrics row, and serialize a report."""
+    """Pure read: loads a persisted backtest run and serializes a report.
+
+    Never calls session.add, flush, commit or any persist helper (D-31).
+    """
     resolved_settings = settings or load_settings()
 
     with session_scope(resolved_settings) as session:
@@ -68,7 +71,6 @@ def materialize_backtest_report(
             trades=trade_rows["models"],
             equity_snapshots=equity_rows["models"],
         )
-        _upsert_backtest_metric(session, strategy_run.id, metrics)
 
         return {
             "run_id": str(strategy_run.id),
@@ -83,6 +85,18 @@ def materialize_backtest_report(
             "trades": trade_rows["serialized"],
             "equity_curve": equity_rows["serialized"],
         }
+
+
+def persist_backtest_metrics(session, strategy_run: StrategyRun) -> BacktestMetric:
+    """The single BacktestMetric write path (D-31); called once at backtest completion inside the SUCCEEDED transaction."""
+    trade_rows = _load_trade_rows(session, strategy_run.id)
+    equity_rows = _load_equity_rows(session, strategy_run.id)
+    metrics = _compute_metrics(
+        strategy_run=strategy_run,
+        trades=trade_rows["models"],
+        equity_snapshots=equity_rows["models"],
+    )
+    return _upsert_backtest_metric(session, strategy_run.id, metrics)
 
 
 def render_backtest_summary(
@@ -156,7 +170,7 @@ def export_backtest_report(
 ) -> BacktestExportManifest:
     """Write a rendered summary plus CSV exports for trades and equity history."""
     resolved_settings = settings or load_settings()
-    report = materialize_backtest_report(
+    report = build_backtest_report(
         run_id=run_id,
         strategy_id=strategy_id,
         settings=resolved_settings,

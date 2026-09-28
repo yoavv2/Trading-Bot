@@ -26,7 +26,7 @@ from trading_platform.db.models import (
     StrategyStatus,
 )
 from trading_platform.db.session import session_scope
-from trading_platform.services.backtest_reporting import materialize_backtest_report
+from trading_platform.services.backtest_reporting import build_backtest_report
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.registry import UnknownStrategyError, build_default_registry
 
@@ -120,7 +120,7 @@ class StrategyAnalyticsService(AnalyticsService):
         run_id: str | None,
     ) -> dict[str, Any] | None:
         try:
-            report = materialize_backtest_report(
+            report = build_backtest_report(
                 run_id=run_id,
                 strategy_id=strategy_id,
                 settings=self.settings,
