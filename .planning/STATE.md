@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-12-PLAN.md
-last_updated: "2026-09-28T14:50:44.186Z"
+stopped_at: Completed 20-13-PLAN.md
+last_updated: "2026-09-28T15:13:53.583Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 39
+  completed_plans: 40
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 13 of 24
+Plan: 14 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -86,6 +86,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P10 | 25min | 2 tasks | 2 files |
 | Phase 20 P11 | ~30min | 2 tasks | 5 files |
 | Phase 20 P12 | 10min | 2 tasks | 13 files |
+| Phase 20 P13 | ~35min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -215,6 +216,8 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-10]: cancel() rejects a RUNNING queued-only Job before begin_nested(), checked against the row-locked object so the claim/cancel race is serialized by the row lock; retry()/retry_block() ship as the sole D-16..D-20 retry mechanism -- OPS-03/OPS-07 stay Pending since the API route and console UI (20-13, 20-17, 20-20) haven't landed yet.
 - [Phase 20-11]: sync_paper_state takes no job_id/trigger_source params and takes no lock/creates no run, so BrokerOrderSyncJobHandler needs no translate_domain_conflicts() wrap, unlike the reconciliation/paper-session siblings; OPS-06 stays Pending (spec+handler+unit tests+unwired form only) matching the 20-08/20-09 registry-registration precedent.
 - [Phase 20-12]: ORCH-01/ORCH-08 left un-marked despite being listed in plan 20-12's frontmatter requirements -- 20-24 is the explicitly-designated plan that closes both with exact-set AST literals over the final state (scripts/ + Makefile cleanup is out of 20-12's scope).
+- [Phase 20]: [20-13]: CTRL-01/CTRL-02/OPS-03/OPS-07 all left Pending in REQUIREMENTS.md -- this plan ships only the HTTP mechanism (control routes, retry route, queued-only cancel mapping, job-detail composition); console wiring and production Job-type registration are later plans' scope (20-16..20-23), confirmed by grepping every 20-*-PLAN.md frontmatter requirements field so none is orphaned.
+- [Phase 20]: [20-13]: Verified the console wire contract (console/src/lib/api.ts, 20-06) before finalizing -- typed clients and MUTATION_ERROR_COPY already matched this plan's exact error codes and response shapes, zero server-side changes needed to align.
 
 ### Pending Todos
 
@@ -255,6 +258,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T14:50:44.177Z
-Stopped at: Completed 20-12-PLAN.md
+Last session: 2026-09-28T15:13:53.574Z
+Stopped at: Completed 20-13-PLAN.md
 Resume file: None
