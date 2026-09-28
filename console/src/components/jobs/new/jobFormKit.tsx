@@ -136,25 +136,53 @@ type StrategiesResponse = {
   strategies: StrategyListItem[];
 };
 
+const NO_STRATEGIES: StrategyListItem[] = [];
+
 /**
- * Shared Strategy <select>, same fetch/classes/option markup as
- * BacktestJobForm.tsx, parameterized only by the field id so each new form
- * can namespace its own label `htmlFor`.
+ * Strategy selection state shared by the four strategy-bearing forms
+ * (WR-C-07). `strategy_id` is seeded from the arbitrary `?strategy_id=`
+ * deep-link text (trimmed), and the strategies list is fetched once here.
+ * `validStrategyId` is the selected id only when it is exactly one of the
+ * loaded options, else null -- forms must gate `canSubmit` on it and submit
+ * it (never the raw state), so the select can never display the placeholder
+ * while the form submits a hidden, unverified id. While the list is loading
+ * or failed, the seed is retained (the deep link is not lost) but is not
+ * submittable.
+ */
+export function useStrategySelection(seed: string | undefined): {
+  strategyId: string;
+  setStrategyId: (value: string) => void;
+  strategies: StrategyListItem[];
+  validStrategyId: string | null;
+} {
+  const { result } = useApiQuery<StrategiesResponse>("/api/v1/strategies");
+  const [strategyId, setStrategyId] = useState((seed ?? "").trim());
+  const strategies = result?.ok ? result.data.strategies : NO_STRATEGIES;
+  const validStrategyId = strategies.some(
+    (strategy) => strategy.strategy_id === strategyId,
+  )
+    ? strategyId
+    : null;
+  return { strategyId, setStrategyId, strategies, validStrategyId };
+}
+
+/**
+ * Shared Strategy <select>, same classes/option markup as
+ * BacktestJobForm.tsx, parameterized by the field id so each new form can
+ * namespace its own label `htmlFor`. Presentational: the options and the
+ * value come from `useStrategySelection`.
  */
 export function StrategySelectField({
   id,
   value,
+  strategies,
   onChange,
 }: {
   id: string;
   value: string;
+  strategies: StrategyListItem[];
   onChange: (value: string) => void;
 }) {
-  const { result: strategiesResult } = useApiQuery<StrategiesResponse>(
-    "/api/v1/strategies",
-  );
-  const strategies = strategiesResult?.ok ? strategiesResult.data.strategies : [];
-
   return (
     <div>
       <label htmlFor={id} className="block text-xs text-zinc-500">

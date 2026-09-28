@@ -5,6 +5,7 @@ import {
   JobFormFooter,
   StrategySelectField,
   useJobFormSubmission,
+  useStrategySelection,
 } from "./jobFormKit";
 import type { JobTypeCatalogItem } from "../types";
 import type { MutationCapability } from "@/lib/useMutationCapability";
@@ -39,9 +40,8 @@ export function BrokerOrderSyncJobForm({
   initialParams,
   onNavigate,
 }: BrokerOrderSyncJobFormProps) {
-  const [strategyId, setStrategyId] = useState(
-    initialParams.strategy_id ?? "",
-  );
+  const { strategyId, setStrategyId, strategies, validStrategyId } =
+    useStrategySelection(initialParams.strategy_id);
   const [asOfSession, setAsOfSession] = useState(
     catalogEntry?.submission_defaults?.as_of_session ?? "",
   );
@@ -52,7 +52,7 @@ export function BrokerOrderSyncJobForm({
   });
 
   const canSubmit =
-    strategyId.trim().length > 0 &&
+    validStrategyId !== null &&
     asOfSession.length > 0 &&
     capability.state === "enabled";
 
@@ -60,7 +60,7 @@ export function BrokerOrderSyncJobForm({
     if (!canSubmit) {
       return;
     }
-    void submit({ strategy_id: strategyId, as_of_session: asOfSession });
+    void submit({ strategy_id: validStrategyId, as_of_session: asOfSession });
   }
 
   return (
@@ -68,6 +68,7 @@ export function BrokerOrderSyncJobForm({
       <StrategySelectField
         id="broker-order-sync-strategy-id"
         value={strategyId}
+        strategies={strategies}
         onChange={setStrategyId}
       />
 

@@ -5,6 +5,7 @@ import {
   useJobFormSubmission,
   JobFormFooter,
   StrategySelectField,
+  useStrategySelection,
   parseSymbolsInput,
   SYMBOLS_EMPTY_HELP,
 } from "./jobFormKit";
@@ -265,12 +266,23 @@ describe("JobFormFooter", () => {
 });
 
 describe("StrategySelectField", () => {
-  it("renders a Strategy label/select fed by useApiQuery(/api/v1/strategies)", async () => {
+  it("renders a Strategy label/select fed by useStrategySelection(/api/v1/strategies)", async () => {
     const { fn } = makeFetchRouter([]);
     vi.stubGlobal("fetch", fn);
     const onChange = vi.fn();
 
-    render(<StrategySelectField id="rf-strategy-id" value="" onChange={onChange} />);
+    function Harness() {
+      const { strategyId, strategies } = useStrategySelection(undefined);
+      return (
+        <StrategySelectField
+          id="rf-strategy-id"
+          value={strategyId}
+          strategies={strategies}
+          onChange={onChange}
+        />
+      );
+    }
+    render(<Harness />);
     await flush();
 
     fireEvent.change(screen.getByLabelText("Strategy"), {
