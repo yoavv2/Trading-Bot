@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { MutationResult } from "@/lib/api";
+import { isOutcomeUncertain, type MutationResult } from "@/lib/api";
 
 type ControlConfirmDialogProps = {
   open: boolean;
@@ -12,6 +12,12 @@ type ControlConfirmDialogProps = {
   onConfirm: (reason: string) => Promise<MutationResult<{ changed: boolean }>>;
   onClose: () => void;
   onDone?: () => void;
+  /**
+   * Fired on a failure that may still have been applied server-side
+   * (transport failure, 5xx, unreadable 2xx) so the displays can re-verify
+   * the true state instead of keeping the pre-mutation snapshot (WR-C-02).
+   */
+  onOutcomeUncertain?: () => void;
 };
 
 const HEADING_ID = "control-confirm-dialog-heading";
@@ -37,7 +43,8 @@ const MAX_REASON_LENGTH = 500;
  * button, and switches the dismiss label to "Close"; an error keeps the
  * dialog open with the mapped message shown and the form still editable.
  * `onDone` fires after every successful (ok: true) response, whether or
- * not the state actually changed, but never on error.
+ * not the state actually changed, but never on error. `onOutcomeUncertain`
+ * fires only for failures that may have been applied anyway.
  */
 export function ControlConfirmDialog({
   open,
@@ -48,6 +55,7 @@ export function ControlConfirmDialog({
   onConfirm,
   onClose,
   onDone,
+  onOutcomeUncertain,
 }: ControlConfirmDialogProps) {
   const [reason, setReason] = useState("");
   const [typedValue, setTypedValue] = useState("");
@@ -109,6 +117,9 @@ export function ControlConfirmDialog({
     setSubmitting(true);
     setErrorMessage(null);
     const result = await onConfirm(trimmedReason);
+    if (!result.ok && isOutcomeUncertain(result)) {
+      onOutcomeUncertain?.();
+    }
     if (opening !== openingRef.current) {
       // The dialog was closed or re-opened while the request was in flight:
       // do not write this outcome into the new opening's state, but still let

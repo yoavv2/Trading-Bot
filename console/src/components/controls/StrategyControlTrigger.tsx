@@ -65,6 +65,7 @@ export function StrategyControlTrigger({
         }
         onClose={() => setOpenedAsEnabled(null)}
         onDone={() => dispatchControlChanged("strategy")}
+        onOutcomeUncertain={() => dispatchControlChanged("strategy")}
       />
     </div>
   );

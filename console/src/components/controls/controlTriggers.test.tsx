@@ -337,3 +337,55 @@ describe("useStrategyControlState", () => {
     expect(getCallsAfter.length).toBeGreaterThan(countBefore);
   });
 });
+
+describe("WR-C-02: triggers re-verify state after an ambiguous control failure", () => {
+  async function tripWith(putResponse: { status: number; body: unknown }, domainEvent: string) {
+    stubControlFetch({ putResponse });
+    const handler = vi.fn();
+    window.addEventListener(domainEvent, handler);
+    render(<KillSwitchControlTrigger isTripped={false} />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+    await flush();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+    const buttons = screen.getAllByRole("button", { name: "Trip Kill Switch" });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await flush();
+    window.removeEventListener(domainEvent, handler);
+    return handler;
+  }
+
+  it("kill switch: a 500 dispatches killswitch:changed so displays re-verify", async () => {
+    const handler = await tripWith(
+      { status: 500, body: { detail: { code: "internal_error" } } },
+      KILL_SWITCH_CHANGED_EVENT,
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("kill switch: a definitive 422 rejection does not dispatch", async () => {
+    const handler = await tripWith(
+      { status: 422, body: { detail: { code: "invalid_control_reason" } } },
+      KILL_SWITCH_CHANGED_EVENT,
+    );
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("strategy: a 503 dispatches strategy:changed", async () => {
+    stubControlFetch({
+      putResponse: { status: 503, body: { detail: { code: "control_write_failed" } } },
+    });
+    const handler = vi.fn();
+    window.addEventListener(STRATEGY_CHANGED_EVENT, handler);
+    render(<StrategyControlTrigger strategyId="trend_following_daily" enabled={true} />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Disable Strategy" }));
+    await flush();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+    const buttons = screen.getAllByRole("button", { name: "Disable Strategy" });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await flush();
+    window.removeEventListener(STRATEGY_CHANGED_EVENT, handler);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});

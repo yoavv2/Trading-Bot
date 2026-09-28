@@ -70,6 +70,7 @@ export function KillSwitchControlTrigger({
         }
         onClose={() => setOpenedAsTripped(null)}
         onDone={() => dispatchControlChanged("killswitch")}
+        onOutcomeUncertain={() => dispatchControlChanged("killswitch")}
       />
     </div>
   );

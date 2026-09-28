@@ -368,6 +368,57 @@ describe("ControlConfirmDialog", () => {
     });
   });
 
+  describe("WR-C-02: re-verification after an ambiguous control failure", () => {
+    async function submitWith(result: ChangedResult, onOutcomeUncertain: () => void, onDone = vi.fn()) {
+      render(
+        <ControlConfirmDialog
+          open={true}
+          actionLabel="Trip Kill Switch"
+          currentState="ARMED"
+          targetState="TRIPPED"
+          onConfirm={vi.fn().mockResolvedValue(result)}
+          onClose={vi.fn()}
+          onDone={onDone}
+          onOutcomeUncertain={onOutcomeUncertain}
+        />,
+      );
+      fireEvent.change(screen.getByLabelText("Reason"), {
+        target: { value: "drill" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+      await flush();
+    }
+
+    const failure = (status: number | null): ChangedResult => ({
+      ok: false,
+      status,
+      code: null,
+      message: "failed",
+      detail: null,
+    });
+
+    it("calls onOutcomeUncertain (not onDone) after a transport failure", async () => {
+      const onOutcomeUncertain = vi.fn();
+      const onDone = vi.fn();
+      await submitWith(failure(null), onOutcomeUncertain, onDone);
+      expect(onOutcomeUncertain).toHaveBeenCalledTimes(1);
+      expect(onDone).not.toHaveBeenCalled();
+      expect(screen.getByText("failed")).toBeTruthy();
+    });
+
+    it("calls onOutcomeUncertain after a 5xx", async () => {
+      const onOutcomeUncertain = vi.fn();
+      await submitWith(failure(503), onOutcomeUncertain);
+      expect(onOutcomeUncertain).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not call onOutcomeUncertain after a definitive 4xx rejection", async () => {
+      const onOutcomeUncertain = vi.fn();
+      await submitWith(failure(422), onOutcomeUncertain);
+      expect(onOutcomeUncertain).not.toHaveBeenCalled();
+    });
+  });
+
   it("renders nothing when open is false", () => {
     render(
       <ControlConfirmDialog
