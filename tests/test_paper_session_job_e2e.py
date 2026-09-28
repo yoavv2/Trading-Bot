@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -39,6 +39,8 @@ from tests.test_paper_execution import FakeBrokerClient, FakeExecutionService
 from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
+    Job,
+    JobStatus,
     RiskEvent,
     StrategyRun,
     StrategyRunStatus,
@@ -49,6 +51,7 @@ from trading_platform.db.session import session_scope
 from trading_platform.jobs.handlers import paper_session as paper_session_handler_module
 from trading_platform.services.alpaca import BrokerAccountSnapshot
 from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.concurrency_guard import session_run_lock
 from trading_platform.services.execution import submit_orders as submit_orders_module
 from trading_platform.services.reconciliation import report as reconciliation_report_module
 from trading_platform.strategies.registry import build_default_registry
@@ -102,9 +105,7 @@ class BrokerFakes:
 
     def build_state_client(self, _alpaca_settings: Any = None) -> FakeBrokerClient:
         self.state_clients_built += 1
-        return FakeBrokerClient(
-            orders=[], fills=[], positions=[], account=_empty_account()
-        )
+        return FakeBrokerClient(orders=[], fills=[], positions=[], account=_empty_account())
 
     def build_execution_service(self, _alpaca_settings: Any = None) -> FakeExecutionService:
         return self.execution
@@ -135,7 +136,10 @@ def _seed_approved_risk_run(session_date: date = SESSION_DATE) -> None:
         )
         session.add(risk_run)
         session.flush()
-        for symbol, price, quantity in ((aapl, "120.000000", "10.000000"), (msft, "300.000000", "5.000000")):
+        for symbol, price, quantity in (
+            (aapl, "120.000000", "10.000000"),
+            (msft, "300.000000", "5.000000"),
+        ):
             session.add(
                 RiskEvent(
                     strategy_run_id=risk_run.id,
@@ -373,3 +377,165 @@ def test_blocked_session_is_succeeded_with_action(paper_jobs_env: BrokerFakes) -
     assert len(detail["resources"]) == 1
     assert detail["resources"][0]["id"] == detail["result_summary"]["execution_run_id"]
     assert detail["result_summary"]["reconciliation_run_id"] is None
+
+
+# --- Task 2: domain conflict (SC3) and the D-19 reconcile-first cycle --------
+
+
+def test_lock_conflict_lands_as_domain_conflict(paper_jobs_env: BrokerFakes) -> None:
+    """SC3/OPS-08/D-04: while another holder owns the (strategy, session)
+    submission lock the Job fails with the dedicated domain_conflict reason
+    -- not handler_error -- with no broker submission, and the failure is
+    not outcome-uncertain, so retry is not reconcile-gated."""
+
+    settings = load_settings()
+
+    with TestClient(create_app()) as client:
+        submitted = _submit(client, "e2e-paper-lock-conflict")
+        assert submitted.status_code == 202
+        job_id = submitted.json()["job_id"]
+
+        with session_run_lock(
+            strategy_id=STRATEGY_ID, session_date=SESSION_DATE, settings=settings
+        ):
+            _run_worker_once()
+            detail = client.get(f"/api/v1/jobs/{job_id}").json()
+
+        assert detail["status"] == "failed"
+        assert detail["failure_reason"] == "domain_conflict"
+        assert detail["outcome_uncertain"] is False
+        assert STRATEGY_ID in detail["failure_message"]
+        assert AS_OF_SESSION in detail["failure_message"]
+        assert detail["retry_blocked"] is None
+
+        # The internal reconciliation run was created before the submission
+        # lock was denied; the paper_execution run never was.
+        assert len(detail["resources"]) == 1
+        resource = detail["resources"][0]
+        assert resource["kind"] == "strategy_run"
+        run = client.get(f"/api/v1/runs/{resource['id']}").json()["run"]
+        assert run["run_type"] == "reconciliation"
+        assert run["job_id"] == job_id
+
+        # No reconcile-first block: the lock is released, retry is accepted.
+        retry = client.post(
+            f"/api/v1/jobs/{job_id}/retry", headers={"Idempotency-Key": "retry-after-lock"}
+        )
+        assert retry.status_code == 202, retry.text
+
+    assert paper_jobs_env.execution.submitted_intents == []
+
+
+def _completed_at(job_id: str) -> datetime:
+    with session_scope(load_settings()) as session:
+        job = session.execute(select(Job).where(Job.id == job_id)).scalar_one()
+        assert job.completed_at is not None
+        return job.completed_at
+
+
+def _insert_succeeded_reconciliation_row(*, strategy_id: str, completed_at: datetime) -> None:
+    """Direct Job row: the API cannot produce a reconciliation Job for a
+    strategy the registry does not know, so the different-strategy decoy is
+    inserted straight into ``jobs`` (the D-19 predicate reads only that table)."""
+
+    with session_scope(load_settings()) as session:
+        session.add(
+            Job(
+                job_type="reconciliation",
+                payload={"strategy_id": strategy_id, "as_of_session": AS_OF_SESSION},
+                status=JobStatus.SUCCEEDED,
+                started_at=completed_at - timedelta(seconds=1),
+                completed_at=completed_at,
+            )
+        )
+
+
+def test_uncertain_failure_requires_later_reconciliation_before_retry(
+    paper_jobs_env: BrokerFakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-19/T-20-20-02: a paper-session that fails after its external marker
+    is outcome-uncertain and cannot be retried until a SUCCEEDED
+    reconciliation Job for the SAME strategy completes AFTER the failure."""
+
+    expected_block = {
+        "code": "reconciliation_required",
+        "required_job_type": "reconciliation",
+        "strategy_id": STRATEGY_ID,
+    }
+
+    def _submission_explodes(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("simulated failure after the broker session started")
+
+    monkeypatch.setattr(submit_orders_module, "run_paper_order_submission", _submission_explodes)
+
+    with TestClient(create_app()) as client:
+        # A reconciliation that succeeded BEFORE the failure must not count.
+        early = _submit_and_run(
+            client, "e2e-recon-early", job_type="reconciliation", payload=RECONCILIATION_PAYLOAD
+        )
+        assert early["status"] == "succeeded", early["failure_message"]
+
+        failed = _submit_and_run(client, "e2e-paper-uncertain")
+        failed_id = failed["id"]
+        assert failed["status"] == "failed"
+        assert failed["failure_reason"] == "handler_error"
+        assert failed["outcome_uncertain"] is True
+        assert "external_broker_session_started" in _log_codes(client, failed_id)
+        assert failed["retry_blocked"] == expected_block
+        assert paper_jobs_env.execution.submitted_intents == []
+
+        def _assert_still_blocked(key: str) -> None:
+            assert client.get(f"/api/v1/jobs/{failed_id}").json()["retry_blocked"] == expected_block
+            blocked = client.post(
+                f"/api/v1/jobs/{failed_id}/retry", headers={"Idempotency-Key": key}
+            )
+            assert blocked.status_code == 409
+            assert blocked.json()["detail"] == expected_block
+            # The rejected retry created nothing.
+            assert client.get(f"/api/v1/jobs/{failed_id}").json()["retried_as_job_id"] is None
+
+        _assert_still_blocked("retry-blocked-early-recon")
+
+        # A SUCCEEDED reconciliation for a DIFFERENT strategy, completed
+        # after the failure, does not lift the block.
+        _insert_succeeded_reconciliation_row(
+            strategy_id="some_other_strategy",
+            completed_at=_completed_at(failed_id) + timedelta(minutes=1),
+        )
+        _assert_still_blocked("retry-blocked-other-strategy")
+
+        # A reconciliation for the same strategy that never ran (cancelled
+        # while queued) does not lift the block either.
+        queued = _submit(
+            client, "e2e-recon-cancelled", job_type="reconciliation", payload=RECONCILIATION_PAYLOAD
+        )
+        assert queued.status_code == 202
+        cancelled = client.post(
+            queued.json()["links"]["self"] + "/cancel",
+            headers={"Idempotency-Key": "cancel-recon-lift-attempt"},
+            json={"reason": "never ran"},
+        )
+        assert cancelled.status_code == 200
+        _run_worker_once()
+        _assert_still_blocked("retry-blocked-cancelled-recon")
+
+        # Reconcile first: a later SUCCEEDED reconciliation for the same
+        # strategy lifts the block and the retry is accepted.
+        later = _submit_and_run(
+            client, "e2e-recon-lift", job_type="reconciliation", payload=RECONCILIATION_PAYLOAD
+        )
+        assert later["status"] == "succeeded", later["failure_message"]
+
+        lifted = client.get(f"/api/v1/jobs/{failed_id}").json()
+        assert lifted["retry_blocked"] is None
+
+        retry = client.post(
+            f"/api/v1/jobs/{failed_id}/retry", headers={"Idempotency-Key": "retry-after-recon"}
+        )
+        assert retry.status_code == 202, retry.text
+        retry_detail = client.get(f"/api/v1/jobs/{retry.json()['job_id']}").json()
+
+    assert retry_detail["retry_of_job_id"] == failed_id
+    assert retry_detail["job_type"] == "paper-session"
+    assert retry_detail["payload"] == failed["payload"]
+    assert retry_detail["status"] == "queued"
