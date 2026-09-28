@@ -94,9 +94,12 @@ def test_registry_resolve_unknown_raises_typed_error() -> None:
 
 
 def test_build_default_registry_registers_backtest() -> None:
+    """Phase 20 (Plan 16) registers seven more job types alongside
+    backtest; the exact 8-type set is pinned by
+    test_orchestration_boundaries.py::test_default_registry_registers_exactly_the_phase20_job_types."""
     registry = build_default_registry()
 
-    assert registry.list_job_types() == ["backtest"]
+    assert "backtest" in registry.list_job_types()
 
 
 def _string_constants(path: Path) -> set[str]:

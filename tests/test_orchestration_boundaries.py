@@ -373,15 +373,126 @@ def test_existing_service_boundary_stays_auto_scoped_and_strict() -> None:
     assert len(SERVICE_MODULES) >= 30
 
 
-def test_default_registry_registers_exactly_the_phase19_job_types() -> None:
-    """SC9: the single pin replacing all five Phase 17/18 emptiness tripwires."""
+def test_default_registry_registers_exactly_the_phase20_job_types() -> None:
+    """SC1: the single pin replacing all five Phase 17/18 emptiness tripwires,
+    extended in Phase 20 (Plan 16) to the full eight-type registry."""
     from trading_platform.core.settings import load_settings
     from trading_platform.jobs.registry import build_default_registry
 
     registry = build_default_registry(load_settings())
 
-    assert registry.list_job_types() == ["backtest"]
-    assert registry.resolve_submission_spec("backtest").job_type == "backtest"
+    assert registry.list_job_types() == [
+        "backtest",
+        "broker-order-sync",
+        "ingest-bars",
+        "paper-session",
+        "reconciliation",
+        "risk-evaluation",
+        "sync-market-sessions",
+        "sync-symbol-metadata",
+    ]
+    for job_type in registry.list_job_types():
+        assert registry.resolve_submission_spec(job_type).job_type == job_type
+
+
+def test_default_registry_cancellation_modes_are_pinned() -> None:
+    """D-01: the registered cancellation_mode map is exact."""
+    from trading_platform.core.settings import load_settings
+    from trading_platform.jobs.registry import build_default_registry
+
+    registry = build_default_registry(load_settings())
+
+    expected = {
+        "paper-session": "queued_only",
+        "reconciliation": "queued_only",
+        "broker-order-sync": "queued_only",
+        "backtest": "step_boundary",
+        "risk-evaluation": "step_boundary",
+        "ingest-bars": "step_boundary",
+        "sync-symbol-metadata": "step_boundary",
+        "sync-market-sessions": "step_boundary",
+    }
+    actual = {
+        job_type: registry.resolve_submission_spec(job_type).cancellation_mode.value
+        for job_type in registry.list_job_types()
+    }
+    assert actual == expected
+
+
+def test_default_registry_execution_modes_are_pinned() -> None:
+    """D-22 (P19): the registered required_execution_mode map is exact."""
+    from trading_platform.core.settings import load_settings
+    from trading_platform.jobs.registry import build_default_registry
+    from trading_platform.services.config.validation import ExecutionMode
+
+    registry = build_default_registry(load_settings())
+
+    expected = {
+        "paper-session": ExecutionMode.PAPER,
+        "reconciliation": ExecutionMode.PAPER,
+        "broker-order-sync": ExecutionMode.PAPER,
+        "backtest": ExecutionMode.BACKTEST,
+        "risk-evaluation": ExecutionMode.BACKTEST,
+        "ingest-bars": ExecutionMode.BACKTEST,
+        "sync-symbol-metadata": ExecutionMode.BACKTEST,
+        "sync-market-sessions": ExecutionMode.BACKTEST,
+    }
+    actual = {
+        job_type: registry.resolve(job_type).required_execution_mode
+        for job_type in registry.list_job_types()
+    }
+    assert actual == expected
+
+
+def test_default_registry_retry_prerequisites_are_pinned() -> None:
+    """D-19: the retry_prerequisite_for map is exact, and every declared
+    prerequisite is itself a registered job type."""
+    from trading_platform.core.settings import load_settings
+    from trading_platform.jobs.registry import build_default_registry, retry_prerequisite_for
+
+    registry = build_default_registry(load_settings())
+
+    expected = {
+        "backtest": None,
+        "broker-order-sync": "reconciliation",
+        "ingest-bars": None,
+        "paper-session": "reconciliation",
+        "reconciliation": None,
+        "risk-evaluation": None,
+        "sync-market-sessions": None,
+        "sync-symbol-metadata": None,
+    }
+    actual = {
+        job_type: retry_prerequisite_for(registry.resolve_submission_spec(job_type))
+        for job_type in registry.list_job_types()
+    }
+    assert actual == expected
+    for prerequisite in actual.values():
+        if prerequisite is not None:
+            assert prerequisite in registry.list_job_types()
+
+
+def test_market_data_specs_have_no_mode_flags() -> None:
+    """OPS-05: no market-data submission spec's payload model accepts a
+    mode/behavior flag -- each spec's payload model field set is pinned."""
+    from trading_platform.jobs.handlers import (
+        ingest_bars_submission,
+        sync_market_sessions_submission,
+        sync_symbol_metadata_submission,
+    )
+
+    assert set(ingest_bars_submission._IngestBarsPayload.model_fields) == {
+        "from_date",
+        "to_date",
+        "symbols",
+    }
+    assert set(sync_symbol_metadata_submission._SyncSymbolMetadataPayload.model_fields) == {
+        "symbols"
+    }
+    assert set(sync_market_sessions_submission._SyncMarketSessionsPayload.model_fields) == {
+        "from_date",
+        "to_date",
+    }
 
 
 def test_job_framework_modules_import_no_domain_layers() -> None:

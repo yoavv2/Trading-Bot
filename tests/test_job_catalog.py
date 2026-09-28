@@ -188,6 +188,42 @@ def test_default_registry_types_all_appear_in_catalog() -> None:
     assert catalog_types == set(registry.list_job_types())
 
 
+def test_production_registry_catalog_lists_all_eight_types() -> None:
+    """D-03/OPS-03: GET /api/v1/job-types returns 8 items over the production
+    default registry; every description is nonblank; cancellation_mode
+    values match the D-01 map; the paper-session item's description
+    documents its queued_only cancellation behavior."""
+
+    settings = Settings()
+    registry = build_default_registry(settings)
+    client = _build_client(registry, mutations_enabled=True)
+
+    response = client.get("/api/v1/job-types")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 8
+
+    expected_cancellation_modes = {
+        "paper-session": "queued_only",
+        "reconciliation": "queued_only",
+        "broker-order-sync": "queued_only",
+        "backtest": "step_boundary",
+        "risk-evaluation": "step_boundary",
+        "ingest-bars": "step_boundary",
+        "sync-symbol-metadata": "step_boundary",
+        "sync-market-sessions": "step_boundary",
+    }
+    by_job_type = {item["job_type"]: item for item in items}
+    assert set(by_job_type) == set(expected_cancellation_modes)
+    for job_type, item in by_job_type.items():
+        assert item["description"].strip()
+        assert item["cancellation_mode"] == expected_cancellation_modes[job_type]
+
+    assert "Cancellable only while queued" in by_job_type["paper-session"]["description"]
+    assert by_job_type["paper-session"]["cancellation_mode"] == "queued_only"
+
+
 def test_register_rejects_incomplete_catalog_metadata() -> None:
     class _BlankDescriptionSpec:
         job_type = _ProbeHandler.job_type

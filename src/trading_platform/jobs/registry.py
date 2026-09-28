@@ -170,15 +170,15 @@ class JobRegistry:
 def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     """Return the default ``JobRegistry`` for the running process.
 
-    Phase 19 registers the first concrete operation handler here
+    Phase 19 registered the first concrete operation handler here
     (``backtest``). Phase 20 (Plan 16) appends the remaining seven
-    registrations (risk evaluation, paper session, reconciliation,
-    ingest-bars, sync-symbol-metadata, sync-market-sessions, broker-order
-    sync) to this same function -- not this plan's scope.
+    registrations -- broker-order-sync, ingest-bars, paper-session,
+    reconciliation, risk-evaluation, sync-market-sessions, and
+    sync-symbol-metadata -- for eight total registered Job types.
 
     JOB-03's extensibility contract: adding a new Job type means (1)
     writing a handler module implementing ``JobHandler`` and (2) appending
-    one ``registry.register(SomeHandler(...))`` call to this function.
+    one call to this function's ``register`` method on the registry.
     Nothing under ``jobs/queue.py``, ``jobs/lifecycle.py``,
     ``jobs/runner.py``, ``jobs/dependencies.py``, or
     ``jobs/cancellation.py`` changes to add a Job type.
@@ -193,7 +193,65 @@ def build_default_registry(settings: Settings | None = None) -> JobRegistry:
 
     from trading_platform.jobs.handlers.backtest import BacktestJobHandler
     from trading_platform.jobs.handlers.backtest_submission import BacktestSubmissionSpec
+    from trading_platform.jobs.handlers.broker_order_sync import BrokerOrderSyncJobHandler
+    from trading_platform.jobs.handlers.broker_order_sync_submission import (
+        BrokerOrderSyncSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.ingest_bars import IngestBarsJobHandler
+    from trading_platform.jobs.handlers.ingest_bars_submission import IngestBarsSubmissionSpec
+    from trading_platform.jobs.handlers.paper_session import PaperSessionJobHandler
+    from trading_platform.jobs.handlers.paper_session_submission import (
+        PaperSessionSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.reconciliation import ReconciliationJobHandler
+    from trading_platform.jobs.handlers.reconciliation_submission import (
+        ReconciliationSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.risk_evaluation import RiskEvaluationJobHandler
+    from trading_platform.jobs.handlers.risk_evaluation_submission import (
+        RiskEvaluationSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.sync_market_sessions import (
+        SyncMarketSessionsJobHandler,
+    )
+    from trading_platform.jobs.handlers.sync_market_sessions_submission import (
+        SyncMarketSessionsSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.sync_symbol_metadata import (
+        SyncSymbolMetadataJobHandler,
+    )
+    from trading_platform.jobs.handlers.sync_symbol_metadata_submission import (
+        SyncSymbolMetadataSubmissionSpec,
+    )
 
     registry.register(BacktestJobHandler(settings=resolved), submission_spec=BacktestSubmissionSpec(resolved))
+    registry.register(
+        BrokerOrderSyncJobHandler(settings=resolved),
+        submission_spec=BrokerOrderSyncSubmissionSpec(resolved),
+    )
+    registry.register(
+        IngestBarsJobHandler(settings=resolved),
+        submission_spec=IngestBarsSubmissionSpec(resolved),
+    )
+    registry.register(
+        PaperSessionJobHandler(settings=resolved),
+        submission_spec=PaperSessionSubmissionSpec(resolved),
+    )
+    registry.register(
+        ReconciliationJobHandler(settings=resolved),
+        submission_spec=ReconciliationSubmissionSpec(resolved),
+    )
+    registry.register(
+        RiskEvaluationJobHandler(settings=resolved),
+        submission_spec=RiskEvaluationSubmissionSpec(resolved),
+    )
+    registry.register(
+        SyncMarketSessionsJobHandler(settings=resolved),
+        submission_spec=SyncMarketSessionsSubmissionSpec(resolved),
+    )
+    registry.register(
+        SyncSymbolMetadataJobHandler(settings=resolved),
+        submission_spec=SyncSymbolMetadataSubmissionSpec(resolved),
+    )
 
     return registry

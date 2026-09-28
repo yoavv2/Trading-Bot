@@ -204,9 +204,10 @@ def test_job_types_catalog_lists_backtest_with_defaults(job_operations_env: None
     assert response.status_code == 200
     body = response.json()
     assert body["mutations_enabled"] is True
-    assert len(body["items"]) == 1
-    entry = body["items"][0]
-    assert entry["job_type"] == "backtest"
+    # Phase 20 (Plan 16) registers seven more job types in the production
+    # registry; the 8-item catalog count is pinned by test_job_catalog.py
+    # instead of here.
+    entry = next(item for item in body["items"] if item["job_type"] == "backtest")
     assert entry["cancellation_mode"] == "step_boundary"
     assert entry["description"]
     assert set(entry["submission_defaults"]) == {"from_date", "to_date"}
