@@ -26,6 +26,7 @@ from trading_platform.services.job_reads import (
     MAX_LOG_PAGE_SIZE as JOB_MAX_LOG_PAGE_SIZE,
 )
 from trading_platform.services.job_reads import JobReadFilters, JobReadService
+from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.base import StrategyMetadata
 from trading_platform.strategies.registry import (
@@ -79,6 +80,10 @@ def get_job_registry(request: Request) -> JobRegistry:
 
 def get_job_orchestration_service(request: Request) -> JobOrchestrationService:
     return JobOrchestrationService(get_settings(request), get_job_registry(request))
+
+
+def get_operator_control_service(request: Request) -> OperatorControlService:
+    return OperatorControlService(settings=get_settings(request))
 
 
 def get_strategy_analytics_service(request: Request) -> StrategyAnalyticsService:

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 
 from trading_platform.api.routes.analytics import router as analytics_router
+from trading_platform.api.routes.controls import router as controls_router
 from trading_platform.api.routes.health import router as health_router
 from trading_platform.api.routes.job_types import router as job_types_router
 from trading_platform.api.routes.jobs import router as jobs_router
@@ -73,6 +74,7 @@ def create_app(*, job_registry: JobRegistry | None = None) -> FastAPI:
     app.include_router(job_types_router)
     app.include_router(operations_router)
     app.include_router(system_router)
+    app.include_router(controls_router)
     return app
 
 
