@@ -7,6 +7,7 @@ import sys
 import threading
 import uuid
 from collections.abc import Iterator, Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -21,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.migrate import build_alembic_config
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import Job, JobEvent, JobMutation, JobStatus
+from trading_platform.db.models import Job, JobDependency, JobEvent, JobMutation, JobStatus
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.jobs.contracts import JobContext
 from trading_platform.jobs.queue import claim_next_job
@@ -31,14 +32,19 @@ from trading_platform.jobs.registry import (
     JobRegistry,
 )
 from trading_platform.orchestration.job_mutations import (
+    RETRY_ENDPOINT_ID,
     IdempotencyConflictError,
     InvalidCancellationReasonError,
     InvalidIdempotencyKeyError,
+    InvalidRetryPayloadError,
     JobMutationNotFoundError,
     JobNotCancellableRunningError,
+    JobNotRetryableError,
     JobOrchestrationService,
     JobTerminalConflictError,
     MissingIdempotencyKeyError,
+    RetryAlreadyExistsError,
+    RetryBlockedError,
     UnknownJobTypeForSubmissionError,
 )
 
@@ -98,6 +104,39 @@ def _registry_with_queued_only() -> JobRegistry:
 
 def _service_with_queued_only() -> JobOrchestrationService:
     return JobOrchestrationService(load_settings(), _registry_with_queued_only())
+
+
+_PREREQUISITE_JOB_TYPE = "phase20_10_prereq_probe"
+
+
+class _RetryProbeHandler:
+    job_type = "phase20_10_retry_probe"
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        return {"message": "done"}
+
+
+class _RetryProbeSubmissionSpec:
+    job_type = _RetryProbeHandler.job_type
+    description = "Retry probe submission spec declaring a D-19 retry prerequisite."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
+    retry_prerequisite_job_type = _PREREQUISITE_JOB_TYPE
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        return dict(payload)
+
+    def submission_defaults(self) -> None:
+        return None
+
+
+def _registry_with_retry_prerequisite() -> JobRegistry:
+    registry = _registry()
+    registry.register(_RetryProbeHandler(), submission_spec=_RetryProbeSubmissionSpec())
+    return registry
+
+
+def _service_with_retry_prerequisite() -> JobOrchestrationService:
+    return JobOrchestrationService(load_settings(), _registry_with_retry_prerequisite())
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -262,9 +301,22 @@ def test_concurrent_same_key_submission_has_one_persisted_mutation() -> None:
     assert _counts() == (1, 1, 1)
 
 
-def _seed_job(*, status: JobStatus, job_type: str = _ProbeHandler.job_type) -> uuid.UUID:
+def _seed_job(
+    *,
+    status: JobStatus,
+    job_type: str = _ProbeHandler.job_type,
+    payload: Mapping[str, Any] | None = None,
+    completed_at: datetime | None = None,
+    outcome_uncertain: bool = False,
+) -> uuid.UUID:
     with session_scope(load_settings()) as session:
-        job = Job(job_type=job_type, payload={"message": "hello"}, status=status)
+        job = Job(
+            job_type=job_type,
+            payload=dict(payload) if payload is not None else {"message": "hello"},
+            status=status,
+            completed_at=completed_at,
+            outcome_uncertain=outcome_uncertain,
+        )
         session.add(job)
         session.flush()
         return job.id
@@ -498,3 +550,264 @@ def test_cancel_race_against_claim_resolves_to_exactly_one_outcome() -> None:
             cancellation_requested_at,
         )
         assert not (final_status is JobStatus.RUNNING and cancellation_requested_at is not None)
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+@pytest.mark.parametrize("original_status", [JobStatus.FAILED, JobStatus.CANCELLED])
+def test_retry_failed_and_cancelled_originals_create_linked_queued_job(
+    original_status: JobStatus,
+) -> None:
+    service = _service()
+    original_id = _seed_job(status=original_status, payload={"message": "hello"})
+
+    retried = service.retry(job_id=original_id, idempotency_key="retry-key")
+
+    assert retried.created is True
+    assert retried.replayed is False
+    assert retried.reference.status == "queued"
+    new_job_id = uuid.UUID(retried.reference.job_id)
+
+    with session_scope(load_settings()) as session:
+        new_job = session.get(Job, new_job_id)
+        assert new_job is not None
+        assert new_job.job_type == _ProbeHandler.job_type
+        assert new_job.payload == {"message": "hello"}
+        assert new_job.retry_of_job_id == original_id
+        assert new_job.status is JobStatus.QUEUED
+        dependency_count = session.scalar(
+            select(func.count()).select_from(JobDependency).where(JobDependency.job_id == new_job_id)
+        )
+        assert dependency_count == 0
+        mutation = session.execute(
+            select(JobMutation).where(
+                JobMutation.endpoint_id == RETRY_ENDPOINT_ID,
+                JobMutation.idempotency_key == "retry-key",
+            )
+        ).scalar_one()
+        assert mutation.job_id == new_job_id
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_retry_chain_links_to_immediate_parent_not_root() -> None:
+    service = _service()
+    a_id = _seed_job(status=JobStatus.FAILED, payload={"message": "hello"})
+
+    retried_b = service.retry(job_id=a_id, idempotency_key="retry-a")
+    b_id = uuid.UUID(retried_b.reference.job_id)
+
+    with session_scope(load_settings()) as session:
+        job_b = session.get(Job, b_id)
+        assert job_b is not None
+        job_b.status = JobStatus.FAILED
+        job_b.completed_at = datetime.now(UTC)
+
+    retried_c = service.retry(job_id=b_id, idempotency_key="retry-b")
+    c_id = uuid.UUID(retried_c.reference.job_id)
+
+    with session_scope(load_settings()) as session:
+        job_c = session.get(Job, c_id)
+        assert job_c is not None
+        assert job_c.retry_of_job_id == b_id
+        assert job_c.retry_of_job_id != a_id
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_retry_replay_same_key_and_conflict_on_different_target() -> None:
+    service = _service()
+    failed_id = _seed_job(status=JobStatus.FAILED, payload={"message": "hello"})
+    other_failed_id = _seed_job(status=JobStatus.FAILED, payload={"message": "hello"})
+
+    created = service.retry(job_id=failed_id, idempotency_key="shared-retry-key")
+    replayed = service.retry(job_id=failed_id, idempotency_key="shared-retry-key")
+    assert replayed.replayed is True
+    assert replayed.reference.job_id == created.reference.job_id
+
+    with pytest.raises(IdempotencyConflictError) as exc_info:
+        service.retry(job_id=other_failed_id, idempotency_key="shared-retry-key")
+    assert exc_info.value.original_job_id == created.reference.job_id
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+@pytest.mark.parametrize("status", [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.SUCCEEDED])
+def test_retry_rejects_non_terminal_original_and_writes_nothing(status: JobStatus) -> None:
+    service = _service()
+    job_id = _seed_job(status=status, payload={"message": "hello"})
+    before = _counts()
+
+    with pytest.raises(JobNotRetryableError) as exc_info:
+        service.retry(job_id=job_id, idempotency_key=f"retry-{status.value}")
+
+    assert exc_info.value.status == status.value
+    assert _counts() == before
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_retry_second_fresh_key_retry_conflicts_with_existing_retry() -> None:
+    service = _service()
+    failed_id = _seed_job(status=JobStatus.FAILED, payload={"message": "hello"})
+
+    first = service.retry(job_id=failed_id, idempotency_key="first-retry-key")
+
+    with pytest.raises(RetryAlreadyExistsError) as exc_info:
+        service.retry(job_id=failed_id, idempotency_key="second-retry-key")
+
+    assert exc_info.value.job_id == failed_id
+    assert exc_info.value.existing_retry_job_id == uuid.UUID(first.reference.job_id)
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_concurrent_fresh_key_retries_create_exactly_one_retry_job() -> None:
+    failed_id = _seed_job(status=JobStatus.FAILED, payload={"message": "hello"})
+    barrier = threading.Barrier(2)
+    results: list[object] = []
+
+    def do_retry(key: str) -> None:
+        barrier.wait(timeout=5)
+        try:
+            results.append(_service().retry(job_id=failed_id, idempotency_key=key))
+        except Exception as exc:  # pragma: no cover - assertion below reports unexpected failures
+            results.append(exc)
+
+    threads = [
+        threading.Thread(target=do_retry, args=("concurrent-retry-a",)),
+        threading.Thread(target=do_retry, args=("concurrent-retry-b",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(not thread.is_alive() for thread in threads)
+    assert sum(isinstance(result, RetryAlreadyExistsError) for result in results) == 1
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+
+    with session_scope(load_settings()) as session:
+        retry_count = session.scalar(
+            select(func.count()).select_from(Job).where(Job.retry_of_job_id == failed_id)
+        )
+    assert retry_count == 1
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_retry_rejects_invalid_stored_payload_and_writes_nothing() -> None:
+    service = _service()
+    job_id = _seed_job(status=JobStatus.FAILED, payload={"message": "not-accepted"})
+    before = _counts()
+
+    with pytest.raises(InvalidRetryPayloadError) as exc_info:
+        service.retry(job_id=job_id, idempotency_key="retry-invalid-payload")
+
+    assert exc_info.value.job_id == job_id
+    assert exc_info.value.reason == "message is not accepted"
+    assert _counts() == before
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_retry_unregistered_job_type_raises_and_writes_nothing() -> None:
+    service = _service()
+    job_id = _seed_job(status=JobStatus.FAILED, job_type="totally_unregistered_job_type")
+    before = _counts()
+
+    with pytest.raises(UnknownJobTypeForSubmissionError) as exc_info:
+        service.retry(job_id=job_id, idempotency_key="retry-unregistered")
+
+    assert exc_info.value.job_type == "totally_unregistered_job_type"
+    assert _counts() == before
+
+
+def _d19_time(offset_seconds: int) -> datetime:
+    return datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=offset_seconds)
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+@pytest.mark.parametrize(
+    ("case", "expect_blocked"),
+    [
+        ("no_prerequisite_job", True),
+        ("prerequisite_succeeded_same_strategy_completed_later", False),
+        ("prerequisite_succeeded_other_strategy", True),
+        ("prerequisite_succeeded_completed_earlier", True),
+        ("prerequisite_failed", True),
+        ("original_not_uncertain", False),
+        ("original_cancelled", False),
+        ("spec_without_prerequisite", False),
+    ],
+)
+def test_retry_block_d19_matrix(case: str, expect_blocked: bool) -> None:
+    """D-19/D-20: retry_block()/retry() agree on the reconcile-first predicate,
+    reading only the jobs table."""
+
+    service = _service_with_retry_prerequisite()
+    base_completed_at = _d19_time(1_000)
+
+    if case == "spec_without_prerequisite":
+        original_id = _seed_job(
+            status=JobStatus.FAILED,
+            job_type=_ProbeHandler.job_type,
+            payload={"message": "hello", "strategy_id": "strat-a"},
+            completed_at=base_completed_at,
+            outcome_uncertain=True,
+        )
+    else:
+        original_status = JobStatus.CANCELLED if case == "original_cancelled" else JobStatus.FAILED
+        outcome_uncertain = case != "original_not_uncertain"
+        original_id = _seed_job(
+            status=original_status,
+            job_type=_RetryProbeHandler.job_type,
+            payload={"message": "hello", "strategy_id": "strat-a"},
+            completed_at=base_completed_at,
+            outcome_uncertain=outcome_uncertain,
+        )
+
+        if case == "prerequisite_succeeded_same_strategy_completed_later":
+            _seed_job(
+                status=JobStatus.SUCCEEDED,
+                job_type=_PREREQUISITE_JOB_TYPE,
+                payload={"strategy_id": "strat-a"},
+                completed_at=base_completed_at + timedelta(seconds=60),
+            )
+        elif case == "prerequisite_succeeded_other_strategy":
+            _seed_job(
+                status=JobStatus.SUCCEEDED,
+                job_type=_PREREQUISITE_JOB_TYPE,
+                payload={"strategy_id": "strat-b"},
+                completed_at=base_completed_at + timedelta(seconds=60),
+            )
+        elif case == "prerequisite_succeeded_completed_earlier":
+            _seed_job(
+                status=JobStatus.SUCCEEDED,
+                job_type=_PREREQUISITE_JOB_TYPE,
+                payload={"strategy_id": "strat-a"},
+                completed_at=base_completed_at - timedelta(seconds=60),
+            )
+        elif case == "prerequisite_failed":
+            _seed_job(
+                status=JobStatus.FAILED,
+                job_type=_PREREQUISITE_JOB_TYPE,
+                payload={"strategy_id": "strat-a"},
+                completed_at=base_completed_at + timedelta(seconds=60),
+                outcome_uncertain=True,
+            )
+        # "no_prerequisite_job" and "original_not_uncertain"/"original_cancelled"
+        # seed no prerequisite Job row.
+
+    block = service.retry_block(job_id=original_id)
+
+    if expect_blocked:
+        assert block is not None
+        assert block.code == "reconciliation_required"
+        assert block.required_job_type == _PREREQUISITE_JOB_TYPE
+        assert block.strategy_id == "strat-a"
+        with pytest.raises(RetryBlockedError) as exc_info:
+            service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
+        assert exc_info.value.block == block
+    else:
+        assert block is None
+        result = service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
+        assert result.created is True
+
+
+@pytest.mark.usefixtures("migrated_job_orchestration_db")
+def test_retry_block_missing_job_raises() -> None:
+    service = _service_with_retry_prerequisite()
+    with pytest.raises(JobMutationNotFoundError):
+        service.retry_block(job_id=uuid.uuid4())

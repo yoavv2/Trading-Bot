@@ -1,4 +1,10 @@
-"""Transport-independent idempotent Job submission and cancellation."""
+"""Transport-independent idempotent Job submission, cancellation, and retry.
+
+Operator retry (D-16..D-20) is exposed exclusively through
+``JobOrchestrationService.retry()``: no other function in this codebase
+submits a Job with ``retry_of_job_id`` set, so no automatic retry path
+exists anywhere else (D-17).
+"""
 
 from __future__ import annotations
 
@@ -22,15 +28,20 @@ from trading_platform.jobs.registry import (
     JobCancellationMode,
     JobRegistry,
     UnknownJobTypeError,
+    retry_prerequisite_for,
 )
 
 SUBMIT_ENDPOINT_ID = "POST:/api/v1/jobs"
 CANCEL_ENDPOINT_ID = "POST:/api/v1/jobs/{job_id}/cancel"
+RETRY_ENDPOINT_ID = "POST:/api/v1/jobs/{job_id}/retry"
 LOCAL_OPERATOR = "local_operator"
 MAX_IDEMPOTENCY_KEY_LENGTH = 255
 MAX_CANCELLATION_REASON_LENGTH = 500
 IDEMPOTENCY_CONFLICT_CODE = "idempotency_key_conflict"
 INVALID_JOB_PAYLOAD_CODE = "invalid_job_payload"
+RETRY_BLOCKED_CODE = "reconciliation_required"
+JOB_MUTATION_ENDPOINT_KEY_CONSTRAINT = "uq_job_mutations_endpoint_key"
+JOB_RETRY_LINEAGE_CONSTRAINT = "uq_jobs_retry_of_job_id"
 
 
 @dataclass(frozen=True)
@@ -127,6 +138,61 @@ class JobNotCancellableRunningError(ValueError):
         super().__init__("Job is running and its type is cancellable only while queued.")
 
 
+class JobNotRetryableError(ValueError):
+    """Raised when retry targets a Job that is not FAILED or CANCELLED (D-17)."""
+
+    def __init__(self, *, job_id: UUID, status: str) -> None:
+        self.job_id = job_id
+        self.status = status
+        super().__init__(f"Job '{job_id}' is not retryable from status '{status}'.")
+
+
+class RetryAlreadyExistsError(ValueError):
+    """Raised when a Job already has a retry linked via ``retry_of_job_id`` (D-17)."""
+
+    def __init__(self, *, job_id: UUID, existing_retry_job_id: UUID) -> None:
+        self.job_id = job_id
+        self.existing_retry_job_id = existing_retry_job_id
+        super().__init__(f"Job '{job_id}' already has a retry: '{existing_retry_job_id}'.")
+
+
+@dataclass(frozen=True)
+class RetryBlock:
+    """D-19: the reconcile-first block preventing retry of an uncertain FAILED Job."""
+
+    code: str
+    required_job_type: str
+    strategy_id: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "code": self.code,
+            "required_job_type": self.required_job_type,
+            "strategy_id": self.strategy_id,
+        }
+
+
+class RetryBlockedError(ValueError):
+    """Raised when D-19's reconcile-first predicate blocks a retry."""
+
+    def __init__(self, *, job_id: UUID, block: RetryBlock) -> None:
+        self.job_id = job_id
+        self.block = block
+        super().__init__(
+            f"Job '{job_id}' retry is blocked pending a successful '{block.required_job_type}' "
+            f"Job for strategy '{block.strategy_id}'."
+        )
+
+
+class InvalidRetryPayloadError(ValueError):
+    """Raised when the stored payload fails D-18 revalidation against the current spec."""
+
+    def __init__(self, *, job_id: UUID, reason: str) -> None:
+        self.job_id = job_id
+        self.reason = reason
+        super().__init__(f"Job '{job_id}' cannot be retried: {reason}")
+
+
 def _relative_links(job_id: UUID) -> dict[str, str]:
     root = f"/api/v1/jobs/{job_id}"
     return {
@@ -153,9 +219,9 @@ def _request_fingerprint(material: Mapping[str, Any], *, job_type: str) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _is_named_uniqueness_error(exc: IntegrityError) -> bool:
+def _is_named_uniqueness_error(exc: IntegrityError, *, constraint_name: str) -> bool:
     diagnostic = getattr(exc.orig, "diag", None)
-    return getattr(diagnostic, "constraint_name", None) == "uq_job_mutations_endpoint_key"
+    return getattr(diagnostic, "constraint_name", None) == constraint_name
 
 
 class JobOrchestrationService:
@@ -257,7 +323,7 @@ class JobOrchestrationService:
                     )
                     session.flush()
             except IntegrityError as exc:
-                if not _is_named_uniqueness_error(exc):
+                if not _is_named_uniqueness_error(exc, constraint_name=JOB_MUTATION_ENDPOINT_KEY_CONSTRAINT):
                     raise
                 existing = self._existing_outcome(
                     session,
@@ -345,7 +411,7 @@ class JobOrchestrationService:
                     )
                     session.flush()
             except IntegrityError as exc:
-                if not _is_named_uniqueness_error(exc):
+                if not _is_named_uniqueness_error(exc, constraint_name=JOB_MUTATION_ENDPOINT_KEY_CONSTRAINT):
                     raise
                 existing = self._existing_outcome(
                     session,
@@ -363,6 +429,144 @@ class JobOrchestrationService:
 
             return MutationResult(
                 reference=self._reference(self._require_job(session, job_id)),
+                replayed=False,
+                created=True,
+            )
+
+    def _retry_block_for(self, session: Any, job: Job) -> RetryBlock | None:
+        """D-19: reconcile-first predicate, reading only the ``jobs`` table.
+
+        Returns ``None`` unless ``job`` is FAILED with ``outcome_uncertain``
+        True, its type declares a ``retry_prerequisite_job_type``, and no Job
+        of that prerequisite type has SUCCEEDED for the same ``strategy_id``
+        with a later ``completed_at``.
+        """
+
+        if job.status is not JobStatus.FAILED or not job.outcome_uncertain:
+            return None
+
+        try:
+            spec = self._registry.resolve_submission_spec(job.job_type)
+        except UnknownJobTypeError:
+            return None
+
+        prerequisite = retry_prerequisite_for(spec)
+        if prerequisite is None:
+            return None
+
+        strategy_id = job.payload.get("strategy_id") if isinstance(job.payload, Mapping) else None
+
+        satisfied = session.execute(
+            select(Job.id)
+            .where(
+                Job.job_type == prerequisite,
+                Job.status == JobStatus.SUCCEEDED,
+                Job.completed_at > job.completed_at,
+                Job.payload["strategy_id"].as_string() == strategy_id,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if satisfied is not None:
+            return None
+
+        return RetryBlock(code=RETRY_BLOCKED_CODE, required_job_type=prerequisite, strategy_id=strategy_id)
+
+    def retry_block(self, *, job_id: UUID) -> RetryBlock | None:
+        """Read-only D-19/D-20 query: the current reconcile-first block for ``job_id``, or None."""
+
+        with session_scope(self._settings) as session:
+            job = self._require_job(session, job_id)
+            return self._retry_block_for(session, job)
+
+    def retry(self, *, job_id: UUID, idempotency_key: str | None) -> MutationResult:
+        """Retry a FAILED or CANCELLED Job exactly once per endpoint/key identity (D-16..D-19).
+
+        No other function in this codebase submits a Job with
+        ``retry_of_job_id`` set -- this method is the sole retry path (D-17).
+        """
+
+        key = self._validate_idempotency_key(idempotency_key)
+        fingerprint = _request_fingerprint({"job_id": str(job_id)}, job_type="retry")
+
+        with session_scope(self._settings) as session:
+            existing = self._existing_outcome(
+                session,
+                endpoint_id=RETRY_ENDPOINT_ID,
+                key=key,
+                fingerprint=fingerprint,
+            )
+            if existing is not None:
+                return existing
+
+            original = self._require_job(session, job_id, lock=True)
+            if original.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
+                raise JobNotRetryableError(job_id=job_id, status=original.status.value)
+
+            existing_retry_id = session.execute(
+                select(Job.id).where(Job.retry_of_job_id == job_id)
+            ).scalar_one_or_none()
+            if existing_retry_id is not None:
+                raise RetryAlreadyExistsError(job_id=job_id, existing_retry_job_id=existing_retry_id)
+
+            try:
+                spec = self._registry.resolve_submission_spec(original.job_type)
+            except UnknownJobTypeError as exc:
+                raise UnknownJobTypeForSubmissionError(job_type=original.job_type) from exc
+
+            block = self._retry_block_for(session, original)
+            if block is not None:
+                raise RetryBlockedError(job_id=job_id, block=block)
+
+            try:
+                spec.validate_payload(original.payload)
+            except InvalidJobPayloadError as exc:
+                raise InvalidRetryPayloadError(job_id=job_id, reason=exc.reason) from exc
+
+            # D-18: the stored payload is only ever revalidated, never
+            # modified -- the new Job's payload is a verbatim copy.
+            retry_payload = dict(original.payload)
+
+            try:
+                with session.begin_nested():
+                    new_job_id = submit_job(
+                        job_type=original.job_type,
+                        payload=retry_payload,
+                        retry_of_job_id=job_id,
+                        session=session,
+                    )
+                    session.add(
+                        JobMutation(
+                            endpoint_id=RETRY_ENDPOINT_ID,
+                            idempotency_key=key,
+                            request_fingerprint=fingerprint,
+                            job_id=new_job_id,
+                        )
+                    )
+                    session.flush()
+            except IntegrityError as exc:
+                if _is_named_uniqueness_error(exc, constraint_name=JOB_MUTATION_ENDPOINT_KEY_CONSTRAINT):
+                    existing = self._existing_outcome(
+                        session,
+                        endpoint_id=RETRY_ENDPOINT_ID,
+                        key=key,
+                        fingerprint=fingerprint,
+                    )
+                    if existing is None:  # pragma: no cover - protects against a malformed constraint error
+                        raise
+                    return existing
+                if _is_named_uniqueness_error(exc, constraint_name=JOB_RETRY_LINEAGE_CONSTRAINT):
+                    winning_retry_id = session.execute(
+                        select(Job.id).where(Job.retry_of_job_id == job_id)
+                    ).scalar_one_or_none()
+                    if winning_retry_id is None:  # pragma: no cover - protects against a malformed constraint error
+                        raise
+                    raise RetryAlreadyExistsError(
+                        job_id=job_id, existing_retry_job_id=winning_retry_id
+                    ) from exc
+                raise
+
+            return MutationResult(
+                reference=self._reference(self._require_job(session, new_job_id)),
                 replayed=False,
                 created=True,
             )
