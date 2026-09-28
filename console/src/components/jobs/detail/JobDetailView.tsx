@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useApiQuery } from "@/lib/useApiQuery";
 import { isTerminalJobStatus } from "@/lib/jobStatus";
 import { ErrorState } from "@/components/ErrorState";
@@ -27,6 +28,7 @@ type JobDetailViewProps = {
  * composition -- every panel renders generically off JobDetail.
  */
 export function JobDetailView({ jobId }: JobDetailViewProps) {
+  const router = useRouter();
   const endpoint = `/api/v1/jobs/${encodeURIComponent(jobId)}`;
   const { loading, result, refetch, polling } = useApiQuery<JobDetail>(endpoint, {
     pollIntervalMs: 3000,
@@ -56,7 +58,11 @@ export function JobDetailView({ jobId }: JobDetailViewProps) {
         <ErrorState failure={result} title="Failed to load Job" />
       ) : job ? (
         <>
-          <JobHeaderPanel job={job} onChanged={refetch} />
+          <JobHeaderPanel
+            job={job}
+            onChanged={refetch}
+            onNavigate={(href) => router.push(href)}
+          />
           <JobProgressPanel progress={job.progress} status={job.status} />
           <JobResourcesPanel resources={job.resources} status={job.status} />
           <JobResultSummaryPanel

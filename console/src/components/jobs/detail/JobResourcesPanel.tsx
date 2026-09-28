@@ -25,7 +25,7 @@ export function JobResourcesPanel({ resources, status }: JobResourcesPanelProps)
           <p className="text-zinc-500">
             {isTerminalJobStatus(status)
               ? "This Job produced no linked resources."
-              : "No linked resources yet. This panel updates automatically once the Job's run starts."}
+              : "No linked resources yet. This panel updates automatically if the Job's run creates one."}
           </p>
         ) : (
           <ul className="space-y-1 text-xs">
