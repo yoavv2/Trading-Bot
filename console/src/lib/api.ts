@@ -181,6 +181,53 @@ export function mutationErrorMessage(
 }
 
 /**
+ * True when a failed mutation may nonetheless have been applied server-side:
+ * a transport failure (`status === null`), a 5xx, or an unreadable 2xx (the
+ * response, not the write, was lost). Callers use it to re-verify displayed
+ * state instead of trusting the pre-mutation snapshot (WR-C-02/WR-C-03).
+ */
+export function isOutcomeUncertain(
+  result: Extract<MutationResult<unknown>, { ok: false }>,
+): boolean {
+  return result.status === null || result.status >= 500 || result.status < 300;
+}
+
+/**
+ * Failure result for a 2xx whose body is unparseable or not the expected
+ * shape (WR-C-03). The mutation most likely committed, so this is reported as
+ * a failure with the (2xx) status preserved -- `isOutcomeUncertain` is true --
+ * rather than as `ok: true` with data the caller would dereference.
+ */
+function unreadableSuccess(
+  endpoint: string,
+  status: number,
+): Extract<MutationResult<never>, { ok: false }> {
+  return {
+    ok: false,
+    status,
+    code: null,
+    message: `${endpoint} returned an unreadable response. Reload and verify the current state.`,
+    detail: null,
+  };
+}
+
+function isJobReferenceBody(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    typeof (data as { job_id?: unknown }).job_id === "string"
+  );
+}
+
+function hasBooleanChanged(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    typeof (data as { changed?: unknown }).changed === "boolean"
+  );
+}
+
+/**
  * Shared POST implementation for the Job mutation routes. Never throws.
  * `detailDefaults` seeds the error `detail` object with caller-known fields
  * (e.g. the Job id being cancelled) that the server does not always echo
@@ -216,15 +263,18 @@ async function postJson<T>(
   const status = response.status;
 
   if (response.ok) {
-    let data: T;
+    let data: unknown;
     try {
-      data = (await response.json()) as T;
+      data = await response.json();
     } catch {
-      data = null as T;
+      return unreadableSuccess(endpoint, status);
+    }
+    if (!isJobReferenceBody(data)) {
+      return unreadableSuccess(endpoint, status);
     }
     return {
       ok: true,
-      data,
+      data: data as T,
       replayed: response.headers.get("Idempotency-Replayed") === "true",
       status,
     };
@@ -383,15 +433,18 @@ async function putJson<T>(
   const status = response.status;
 
   if (response.ok) {
-    let data: T;
+    let data: unknown;
     try {
-      data = (await response.json()) as T;
+      data = await response.json();
     } catch {
-      data = null as T;
+      return unreadableSuccess(endpoint, status);
+    }
+    if (!hasBooleanChanged(data)) {
+      return unreadableSuccess(endpoint, status);
     }
     return {
       ok: true,
-      data,
+      data: data as T,
       replayed: false,
       status,
     };

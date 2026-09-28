@@ -8,6 +8,7 @@ import {
   resetKillSwitch,
   enableStrategy,
   disableStrategy,
+  isOutcomeUncertain,
 } from "./api";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -725,5 +726,79 @@ describe("control mutations (tripKillSwitch/resetKillSwitch/enableStrategy/disab
     if (!result.ok) {
       expect(result.status).toBeNull();
     }
+  });
+});
+
+describe("WR-C-03: a 2xx response with an unreadable or wrongly shaped body is a failure", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const UNREADABLE_SUFFIX = "returned an unreadable response. Reload and verify the current state.";
+
+  it("putJson: a 200 with a non-JSON body resolves ok:false with unreadable-response copy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse(200, "<html>proxy</html>")));
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(200);
+      expect(result.code).toBeNull();
+      expect(result.message).toBe(`/api/v1/controls/kill-switch ${UNREADABLE_SUFFIX}`);
+      expect(isOutcomeUncertain(result)).toBe(true);
+    }
+  });
+
+  it("putJson: a 200 JSON body without a boolean `changed` resolves ok:false", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { state: "tripped" })));
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain(UNREADABLE_SUFFIX);
+    }
+  });
+
+  it("putJson: a well-formed 200 body is still ok:true", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { state: "tripped", changed: false, run_id: "r" })),
+    );
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("postJson: a 202 with a non-JSON body resolves ok:false instead of ok:true with null data", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(textResponse(202, "accepted")));
+
+    const result = await submitJob({ job_type: "backtest", payload: {} }, "key-1");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(`/api/v1/jobs ${UNREADABLE_SUFFIX}`);
+    }
+  });
+
+  it("postJson: a 202 JSON body without a job_id resolves ok:false", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(202, {})));
+
+    const result = await retryJob("job-1", "key-1");
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("isOutcomeUncertain is true for transport failures, 5xx and unreadable 2xx, false for typed 4xx", () => {
+    const failure = (status: number | null) =>
+      ({ ok: false, status, code: null, message: "m", detail: null }) as const;
+    expect(isOutcomeUncertain(failure(null))).toBe(true);
+    expect(isOutcomeUncertain(failure(500))).toBe(true);
+    expect(isOutcomeUncertain(failure(503))).toBe(true);
+    expect(isOutcomeUncertain(failure(200))).toBe(true);
+    expect(isOutcomeUncertain(failure(409))).toBe(false);
+    expect(isOutcomeUncertain(failure(422))).toBe(false);
   });
 });
