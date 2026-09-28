@@ -6,6 +6,7 @@ import os
 import sys
 import uuid
 from collections.abc import Iterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,55 @@ class _ProbeSubmissionSpec:
         return None
 
 
+class _QueuedOnlyHandler:
+    job_type = "phase20_queued_only_probe"
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        return {"message": "done"}
+
+
+class _QueuedOnlySubmissionSpec:
+    job_type = _QueuedOnlyHandler.job_type
+    description = "Queued-only cancellation probe submission spec."
+    cancellation_mode = JobCancellationMode.QUEUED_ONLY
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        if payload != {"message": "hello"}:
+            raise InvalidJobPayloadError(job_type=self.job_type, reason="message must be hello")
+        return {"message": "hello"}
+
+    def submission_defaults(self) -> None:
+        return None
+
+
+_RETRY_PREREQUISITE_JOB_TYPE = "phase20_reconciliation_probe"
+
+
+class _RetryPrerequisiteHandler:
+    job_type = "phase20_retry_prereq_probe"
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        return {"message": "done"}
+
+
+class _RetryPrerequisiteSubmissionSpec:
+    """D-19: declares a retry_prerequisite_job_type so retry_block()/retry()
+    apply the reconcile-first block for a FAILED, outcome_uncertain Job."""
+
+    job_type = _RetryPrerequisiteHandler.job_type
+    description = "Retry-prerequisite probe submission spec."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
+    retry_prerequisite_job_type = _RETRY_PREREQUISITE_JOB_TYPE
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not isinstance(payload, Mapping) or "strategy_id" not in payload:
+            raise InvalidJobPayloadError(job_type=self.job_type, reason="strategy_id is required")
+        return dict(payload)
+
+    def submission_defaults(self) -> None:
+        return None
+
+
 def _registry() -> JobRegistry:
     registry = JobRegistry()
     registry.register(_ProbeHandler(), submission_spec=_ProbeSubmissionSpec(_ProbeHandler.job_type))
@@ -68,6 +118,8 @@ def _registry() -> JobRegistry:
         _OtherProbeHandler(),
         submission_spec=_ProbeSubmissionSpec(_OtherProbeHandler.job_type),
     )
+    registry.register(_QueuedOnlyHandler(), submission_spec=_QueuedOnlySubmissionSpec())
+    registry.register(_RetryPrerequisiteHandler(), submission_spec=_RetryPrerequisiteSubmissionSpec())
     return registry
 
 
@@ -148,9 +200,22 @@ def _counts() -> tuple[int, int, int]:
         )
 
 
-def _seed_job(*, status: JobStatus) -> Job:
+def _seed_job(
+    *,
+    status: JobStatus,
+    job_type: str = _ProbeHandler.job_type,
+    payload: dict[str, object] | None = None,
+    completed_at: datetime | None = None,
+    outcome_uncertain: bool = False,
+) -> Job:
     with session_scope(load_settings()) as session:
-        job = Job(job_type=_ProbeHandler.job_type, payload={"message": "hello"}, status=status)
+        job = Job(
+            job_type=job_type,
+            payload=payload if payload is not None else {"message": "hello"},
+            status=status,
+            completed_at=completed_at,
+            outcome_uncertain=outcome_uncertain,
+        )
         session.add(job)
         session.flush()
         session.expunge(job)
@@ -349,3 +414,261 @@ def test_cancel_rejections_and_endpoint_scoped_keys_preserve_row_counts(client: 
     )
     assert cancel.status_code == 200
     assert _counts()[1] == 2
+
+
+def test_cancel_running_queued_only_job_returns_409_and_writes_nothing(
+    client: TestClient,
+) -> None:
+    running = _seed_job(status=JobStatus.RUNNING, job_type=_QueuedOnlyHandler.job_type)
+    before = _counts()
+
+    response = client.post(
+        f"/api/v1/jobs/{running.id}/cancel",
+        headers={"Idempotency-Key": "queued-only-cancel"},
+        json={"reason": "attempted stop"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "job_not_cancellable_running",
+        "job_id": str(running.id),
+    }
+    assert _counts() == before
+    with session_scope(load_settings()) as session:
+        persisted = session.get(Job, running.id)
+        assert persisted is not None
+        assert persisted.status == JobStatus.RUNNING
+        assert persisted.cancellation_requested_at is None
+
+
+def test_retry_creates_new_job_and_replays_exact_request(client: TestClient) -> None:
+    failed = _seed_job(status=JobStatus.FAILED)
+
+    created = client.post(
+        f"/api/v1/jobs/{failed.id}/retry",
+        headers={"Idempotency-Key": "retry-key"},
+    )
+    assert created.status_code == 202
+    created_body = created.json()
+    assert created_body["job_id"] != str(failed.id)
+    _assert_compact_reference(created_body, job_id=created_body["job_id"], status_value="queued")
+
+    replayed = client.post(
+        f"/api/v1/jobs/{failed.id}/retry",
+        headers={"Idempotency-Key": "retry-key"},
+    )
+    assert replayed.status_code == 200
+    assert replayed.headers["Idempotency-Replayed"] == "true"
+    assert replayed.json() == created_body
+
+    with session_scope(load_settings()) as session:
+        new_job = session.get(Job, uuid.UUID(created_body["job_id"]))
+        assert new_job is not None
+        assert new_job.retry_of_job_id == failed.id
+        assert new_job.payload == {"message": "hello"}
+
+
+def test_retry_missing_job_returns_404(client: TestClient) -> None:
+    missing = uuid.uuid4()
+
+    response = client.post(
+        f"/api/v1/jobs/{missing}/retry",
+        headers={"Idempotency-Key": "missing-retry"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {"code": "job_not_found", "job_id": str(missing)}
+
+
+@pytest.mark.parametrize("non_terminal_status", [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.SUCCEEDED])
+def test_retry_of_non_retryable_job_returns_409(
+    client: TestClient, non_terminal_status: JobStatus
+) -> None:
+    job = _seed_job(status=non_terminal_status)
+    before = _counts()
+
+    response = client.post(
+        f"/api/v1/jobs/{job.id}/retry",
+        headers={"Idempotency-Key": f"not-retryable-{non_terminal_status.value}"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "job_not_retryable",
+        "status": non_terminal_status.value,
+    }
+    assert _counts() == before
+
+
+def test_retry_of_already_retried_job_returns_409_with_existing_retry_id(
+    client: TestClient,
+) -> None:
+    failed = _seed_job(status=JobStatus.FAILED)
+    first = client.post(
+        f"/api/v1/jobs/{failed.id}/retry",
+        headers={"Idempotency-Key": "first-retry"},
+    )
+    assert first.status_code == 202
+    existing_retry_job_id = first.json()["job_id"]
+
+    second = client.post(
+        f"/api/v1/jobs/{failed.id}/retry",
+        headers={"Idempotency-Key": "second-retry"},
+    )
+
+    assert second.status_code == 409
+    assert second.json()["detail"] == {
+        "code": "retry_exists",
+        "existing_retry_job_id": existing_retry_job_id,
+    }
+
+
+def test_retry_blocked_by_reconcile_first_predicate_returns_409(client: TestClient) -> None:
+    blocked = _seed_job(
+        status=JobStatus.FAILED,
+        job_type=_RetryPrerequisiteHandler.job_type,
+        payload={"strategy_id": "trend_following_daily"},
+        completed_at=datetime.now(UTC),
+        outcome_uncertain=True,
+    )
+    before = _counts()
+
+    response = client.post(
+        f"/api/v1/jobs/{blocked.id}/retry",
+        headers={"Idempotency-Key": "blocked-retry"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "reconciliation_required",
+        "required_job_type": _RETRY_PREREQUISITE_JOB_TYPE,
+        "strategy_id": "trend_following_daily",
+    }
+    assert _counts() == before
+
+
+def test_retry_rejects_payload_that_fails_current_validation(client: TestClient) -> None:
+    failed = _seed_job(status=JobStatus.FAILED, payload={"message": "goodbye"})
+    before = _counts()
+
+    response = client.post(
+        f"/api/v1/jobs/{failed.id}/retry",
+        headers={"Idempotency-Key": "invalid-payload-retry"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "invalid_retry_payload",
+        "reason": "message must be hello",
+    }
+    assert _counts() == before
+
+
+def test_retry_of_unregistered_job_type_returns_422(client: TestClient) -> None:
+    failed = _seed_job(status=JobStatus.FAILED, job_type="phase20_unregistered_probe")
+    before = _counts()
+
+    response = client.post(
+        f"/api/v1/jobs/{failed.id}/retry",
+        headers={"Idempotency-Key": "unregistered-retry"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "unknown_job_type",
+        "job_type": "phase20_unregistered_probe",
+    }
+    assert _counts() == before
+
+
+def test_retry_conflicting_key_returns_409(client: TestClient) -> None:
+    first_failed = _seed_job(status=JobStatus.FAILED)
+    second_failed = _seed_job(status=JobStatus.FAILED)
+    first = client.post(
+        f"/api/v1/jobs/{first_failed.id}/retry",
+        headers={"Idempotency-Key": "shared-retry-key"},
+    )
+    assert first.status_code == 202
+    original_job_id = first.json()["job_id"]
+
+    conflict = client.post(
+        f"/api/v1/jobs/{second_failed.id}/retry",
+        headers={"Idempotency-Key": "shared-retry-key"},
+    )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {
+        "code": "idempotency_key_conflict",
+        "original_job_id": original_job_id,
+    }
+
+
+def test_retry_rejections_for_missing_or_invalid_idempotency_key(client: TestClient) -> None:
+    failed = _seed_job(status=JobStatus.FAILED)
+
+    no_key = client.post(f"/api/v1/jobs/{failed.id}/retry")
+    assert no_key.status_code == 400
+    assert no_key.json()["detail"] == {"code": "missing_idempotency_key"}
+
+    blank_key = client.post(
+        f"/api/v1/jobs/{failed.id}/retry", headers={"Idempotency-Key": " "}
+    )
+    assert blank_key.status_code == 400
+    assert blank_key.json()["detail"] == {"code": "invalid_idempotency_key"}
+
+    too_long_key = client.post(
+        f"/api/v1/jobs/{failed.id}/retry", headers={"Idempotency-Key": "x" * 256}
+    )
+    assert too_long_key.status_code == 400
+    assert too_long_key.json()["detail"] == {"code": "invalid_idempotency_key"}
+
+
+def test_job_detail_reports_cancellation_mode_per_registered_spec(client: TestClient) -> None:
+    step_boundary_job = _seed_job(status=JobStatus.QUEUED)
+    step_boundary_detail = client.get(f"/api/v1/jobs/{step_boundary_job.id}").json()
+    assert step_boundary_detail["cancellation_mode"] == "step_boundary"
+    assert step_boundary_detail["retry_blocked"] is None
+
+    queued_only_job = _seed_job(status=JobStatus.QUEUED, job_type=_QueuedOnlyHandler.job_type)
+    queued_only_detail = client.get(f"/api/v1/jobs/{queued_only_job.id}").json()
+    assert queued_only_detail["cancellation_mode"] == "queued_only"
+
+    unregistered_job = _seed_job(status=JobStatus.QUEUED, job_type="phase20_unregistered_probe")
+    unregistered_detail = client.get(f"/api/v1/jobs/{unregistered_job.id}").json()
+    assert unregistered_detail["cancellation_mode"] is None
+
+
+def test_job_detail_reports_retry_blocked_object_for_blocked_uncertain_failed_job(
+    client: TestClient,
+) -> None:
+    blocked = _seed_job(
+        status=JobStatus.FAILED,
+        job_type=_RetryPrerequisiteHandler.job_type,
+        payload={"strategy_id": "trend_following_daily"},
+        completed_at=datetime.now(UTC),
+        outcome_uncertain=True,
+    )
+
+    detail = client.get(f"/api/v1/jobs/{blocked.id}").json()
+
+    assert detail["retry_blocked"] == {
+        "code": "reconciliation_required",
+        "required_job_type": _RETRY_PREREQUISITE_JOB_TYPE,
+        "strategy_id": "trend_following_daily",
+    }
+
+
+def test_job_detail_reports_retry_blocked_null_for_non_uncertain_failed_job(
+    client: TestClient,
+) -> None:
+    not_uncertain = _seed_job(
+        status=JobStatus.FAILED,
+        job_type=_RetryPrerequisiteHandler.job_type,
+        payload={"strategy_id": "trend_following_daily"},
+        completed_at=datetime.now(UTC),
+        outcome_uncertain=False,
+    )
+
+    detail = client.get(f"/api/v1/jobs/{not_uncertain.id}").json()
+
+    assert detail["retry_blocked"] is None
