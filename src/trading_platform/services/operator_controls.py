@@ -415,12 +415,16 @@ class OperatorControlService:
             session.add(strategy_run)
             session.flush()
 
-            control.state = target_state
-            control.last_changed_at = changed_at
-            control.last_change_actor = actor
-            control.last_change_reason = reason
-            control.last_change_run_id = strategy_run.id
-            session.flush()
+            if changed:
+                # D-10 only requires the unchanged audit rows (run + event); a
+                # reaffirming no-op must not overwrite the state row's "last
+                # change" provenance (mirrors _set_strategy_status).
+                control.state = target_state
+                control.last_changed_at = changed_at
+                control.last_change_actor = actor
+                control.last_change_reason = reason
+                control.last_change_run_id = strategy_run.id
+                session.flush()
             session.refresh(control)
 
             state_snapshot = _serialize_kill_switch(control).to_dict()

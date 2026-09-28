@@ -28,8 +28,10 @@ from trading_platform.core.settings import clear_settings_cache, load_settings  
 from trading_platform.db.models import (  # noqa: E402
     ExecutionEvent,
     Job,
+    KillSwitchState,
     StrategyRun,
     StrategyRunType,
+    SystemControl,
 )
 from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
 
@@ -160,6 +162,32 @@ def test_trip_kill_switch_is_idempotent_by_target_state_and_audited(client: Test
 
     after_second = _audit_counts()
     assert after_second == (before[0] + 2, before[1] + 2, before[2])
+
+
+def test_noop_kill_switch_put_preserves_last_change_provenance(client: TestClient) -> None:
+    """WR-B-01: a reaffirming PUT audits (run + event) but must not overwrite
+    the state row's last_change_* provenance."""
+    first = _put_kill_switch(client, {"state": "tripped", "reason": "original trip reason"})
+    first_run_id = first.json()["run_id"]
+    with session_scope(load_settings()) as session:
+        before = session.execute(select(SystemControl)).scalar_one()
+        original = (before.last_changed_at, before.last_change_actor)
+    before_counts = _audit_counts()
+
+    repeated = _put_kill_switch(client, {"state": "tripped", "reason": "double click"})
+    assert repeated.json()["changed"] is False
+
+    assert _audit_counts() == (before_counts[0] + 1, before_counts[1] + 1, before_counts[2])
+    with session_scope(load_settings()) as session:
+        control = session.execute(select(SystemControl)).scalar_one()
+        assert control.state == KillSwitchState.TRIPPED
+        assert control.last_change_reason == "original trip reason"
+        assert str(control.last_change_run_id) == first_run_id
+        assert (control.last_changed_at, control.last_change_actor) == original
+
+    state = client.get("/api/v1/system/kill-switch").json()
+    assert state["last_change_reason"] == "original trip reason"
+    assert state["last_change_run_id"] == first_run_id
 
 
 def test_reset_kill_switch_returns_armed(client: TestClient) -> None:
