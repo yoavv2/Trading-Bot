@@ -319,6 +319,43 @@ def test_phase20_downgrade_and_reupgrade(migrated_phase20_db: str) -> None:
     assert "job_id" in market_data_columns
 
 
+def test_phase20_downgrade_refuses_when_a_job_links_multiple_strategy_runs(
+    migrated_phase20_db: str,
+) -> None:
+    """WR-A-04: a paper-session Job may link two strategy_runs (D-07/D-08), which
+    the pre-0021 UNIQUE(job_id) constraint cannot hold. The downgrade must
+    refuse with a clear error and leave the schema (and rows) untouched."""
+
+    strategy_id = _create_strategy()
+    job_id = _create_job()
+    _create_strategy_run(strategy_id=strategy_id, job_id=job_id)
+    _create_strategy_run(strategy_id=strategy_id, job_id=job_id)
+    clear_settings_cache()
+    clear_engine_cache()
+
+    with pytest.raises(RuntimeError, match="Cannot downgrade past 0021_phase20_operations_safety"):
+        command.downgrade(build_alembic_config(), "0020_phase19_job_operations")
+
+    clear_settings_cache()
+    clear_engine_cache()
+    settings = load_settings()
+    inspector = inspect(get_engine(settings))
+    assert "ix_strategy_runs_job_id" in {
+        index["name"] for index in inspector.get_indexes("strategy_runs")
+    }
+    assert "retry_of_job_id" in {column["name"] for column in inspector.get_columns("jobs")}
+    with session_scope(settings) as session:
+        assert session.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
+            "0021_phase20_operations_safety"
+        )
+        assert (
+            session.execute(
+                select(func.count()).select_from(StrategyRun).where(StrategyRun.job_id == job_id)
+            ).scalar_one()
+            == 2
+        )
+
+
 def test_orm_metadata_matches_phase20_migration() -> None:
     strategy_run_job_id = StrategyRun.__table__.c.job_id
     assert strategy_run_job_id.unique is not True

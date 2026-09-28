@@ -1,12 +1,19 @@
 """Phase 20 operations safety: domain_conflict enum value, strategy_runs.job_id
 non-unique index, market_data_ingestion_runs.job_id FK, jobs.retry_of_job_id
 UNIQUE FK.
+
+Downgrade notes (lossy): dropping ``market_data_ingestion_runs.job_id``
+discards the Job -> ingestion-run linkage. Restoring the UNIQUE constraint on
+``strategy_runs.job_id`` is only possible while no Job links more than one
+strategy run; the downgrade refuses (before changing anything) with a clear
+error when a paper-session Job has linked two runs (D-07/D-08), rather than
+failing mid-way on a raw duplicate-key violation or silently unlinking rows.
 """
 
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 # revision identifiers, used by Alembic.
 revision = "0021_phase20_operations_safety"
@@ -61,6 +68,25 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Guard first, so a refused downgrade changes nothing: the restored
+    # UNIQUE (job_id) constraint cannot hold once any Job links >1 run.
+    if not context.is_offline_mode():
+        shared_job_count = op.get_bind().execute(
+            sa.text(
+                "SELECT count(*) FROM ("
+                "SELECT job_id FROM strategy_runs WHERE job_id IS NOT NULL "
+                "GROUP BY job_id HAVING count(*) > 1"
+                ") AS shared_jobs"
+            )
+        ).scalar_one()
+        if shared_job_count:
+            raise RuntimeError(
+                f"Cannot downgrade past {revision}: {shared_job_count} Job(s) link more than "
+                "one strategy_runs row (e.g. paper-session Jobs), which the restored "
+                "uq_strategy_runs_job_id constraint forbids. Resolve manually (for example "
+                "NULL out strategy_runs.job_id on all but one run per Job) and retry."
+            )
+
     op.drop_constraint(op.f("uq_jobs_retry_of_job_id"), "jobs", type_="unique")
     op.drop_constraint(op.f("fk_jobs_retry_of_job_id_jobs"), "jobs", type_="foreignkey")
     op.drop_column("jobs", "retry_of_job_id")
