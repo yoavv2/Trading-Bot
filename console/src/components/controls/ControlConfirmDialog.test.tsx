@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ControlConfirmDialog } from "./ControlConfirmDialog";
@@ -264,6 +265,107 @@ describe("ControlConfirmDialog", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  describe("WR-C-01: dismissal while a control request is in flight", () => {
+    type Deferred = {
+      promise: Promise<ChangedResult>;
+      resolve: (value: ChangedResult) => void;
+    };
+
+    function deferred(): Deferred {
+      let resolve!: (value: ChangedResult) => void;
+      const promise = new Promise<ChangedResult>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    }
+
+    function renderDialog(
+      props: Partial<ComponentProps<typeof ControlConfirmDialog>>,
+    ) {
+      const base = {
+        open: true,
+        actionLabel: "Trip Kill Switch",
+        currentState: "ARMED",
+        targetState: "TRIPPED",
+        onConfirm: vi.fn(),
+        onClose: vi.fn(),
+      };
+      return render(<ControlConfirmDialog {...base} {...props} />);
+    }
+
+    it("disables the dismiss button and ignores Escape while submitting", async () => {
+      const pending = deferred();
+      const onClose = vi.fn();
+      renderDialog({ onConfirm: () => pending.promise, onClose });
+
+      fireEvent.change(screen.getByLabelText("Reason"), {
+        target: { value: "drill" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+      await flush();
+
+      const dismiss = screen.getByRole("button", { name: "Keep Current State" });
+      expect(dismiss.hasAttribute("disabled")).toBe(true);
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(onClose).not.toHaveBeenCalled();
+
+      await act(async () => {
+        pending.resolve({
+          ok: true,
+          data: { changed: true },
+          replayed: false,
+          status: 200,
+        });
+        await Promise.resolve();
+      });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not apply a stale response to a re-opened dialog, but still reports onDone", async () => {
+      const pending = deferred();
+      const onClose = vi.fn();
+      const onDone = vi.fn();
+      const onConfirm = vi.fn(() => pending.promise);
+      const props = {
+        actionLabel: "Trip Kill Switch",
+        currentState: "ARMED",
+        targetState: "TRIPPED",
+        onConfirm,
+        onClose,
+        onDone,
+      };
+      const { rerender } = render(<ControlConfirmDialog open={true} {...props} />);
+
+      fireEvent.change(screen.getByLabelText("Reason"), {
+        target: { value: "drill" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+      await flush();
+
+      // The parent closes and re-opens the dialog while the PUT is in flight.
+      rerender(<ControlConfirmDialog open={false} {...props} />);
+      rerender(<ControlConfirmDialog open={true} {...props} />);
+
+      await act(async () => {
+        pending.resolve({
+          ok: true,
+          data: { changed: false },
+          replayed: false,
+          status: 200,
+        });
+        await Promise.resolve();
+      });
+
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Already TRIPPED/)).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Trip Kill Switch" }),
+      ).toBeTruthy();
+    });
   });
 
   it("renders nothing when open is false", () => {

@@ -56,8 +56,15 @@ export function ControlConfirmDialog({
   const [unchanged, setUnchanged] = useState(false);
 
   const wasOpenRef = useRef(false);
+  // Bumped on every open/close transition so a response that lands after the
+  // dialog was closed or re-opened can be recognized as belonging to a
+  // previous opening (WR-C-01).
+  const openingRef = useRef(0);
 
   useEffect(() => {
+    if (open !== wasOpenRef.current) {
+      openingRef.current += 1;
+    }
     if (open && !wasOpenRef.current) {
       setReason("");
       setTypedValue("");
@@ -73,7 +80,9 @@ export function ControlConfirmDialog({
       return;
     }
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      // Not while a request is in flight: dismissing then would promise
+      // "Keep Current State" while the PUT can still commit (WR-C-01).
+      if (event.key === "Escape" && !submitting) {
         onClose();
       }
     }
@@ -81,7 +90,7 @@ export function ControlConfirmDialog({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, onClose]);
+  }, [open, onClose, submitting]);
 
   if (!open) {
     return null;
@@ -96,9 +105,19 @@ export function ControlConfirmDialog({
   const confirmDisabled = submitting || !reasonValid || !typedValid;
 
   async function handleConfirm() {
+    const opening = openingRef.current;
     setSubmitting(true);
     setErrorMessage(null);
     const result = await onConfirm(trimmedReason);
+    if (opening !== openingRef.current) {
+      // The dialog was closed or re-opened while the request was in flight:
+      // do not write this outcome into the new opening's state, but still let
+      // the displays converge on a state change that did commit.
+      if (result.ok) {
+        onDone?.();
+      }
+      return;
+    }
     setSubmitting(false);
     if (result.ok) {
       onDone?.();
@@ -175,6 +194,7 @@ export function ControlConfirmDialog({
           <button
             type="button"
             onClick={onClose}
+            disabled={submitting}
             className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {unchanged ? "Close" : "Keep Current State"}
