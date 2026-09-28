@@ -53,6 +53,7 @@ class IngestionResult:
     bars_upserted: int = 0
     symbols_failed: list[str] = field(default_factory=list)
     request_metadata: dict[str, Any] = field(default_factory=dict)
+    run_id: str | None = None
 
     @property
     def symbol_count(self) -> int:

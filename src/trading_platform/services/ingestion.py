@@ -281,4 +281,5 @@ def ingest_daily_bars(
         symbols_requested=symbols,
         bars_upserted=total_bars,
         symbols_failed=failed_symbols,
+        run_id=str(run_id),
     )
