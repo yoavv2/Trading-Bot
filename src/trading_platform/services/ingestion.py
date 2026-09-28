@@ -118,9 +118,11 @@ def _start_run(
     adjusted: bool,
     symbols: list[str],
     trigger_source: str,
+    job_id: uuid.UUID | None = None,
 ) -> MarketDataIngestionRun:
     run = MarketDataIngestionRun(
         id=uuid.uuid4(),
+        job_id=job_id,
         provider=_PROVIDER,
         from_date=from_date,
         to_date=to_date,
@@ -188,6 +190,7 @@ def ingest_daily_bars(
     settings: MarketDataSettings,
     trigger_source: str = "cli",
     db_settings: Any = None,
+    job_id: uuid.UUID | None = None,
 ) -> IngestionResult:
     """Orchestrate full daily-bar ingestion for a list of symbols.
 
@@ -199,6 +202,12 @@ def ingest_daily_bars(
 
     Re-running with the same window is idempotent; existing bars are updated,
     not duplicated.
+
+    ``job_id`` is an opaque originating-Job identifier (D-09): when
+    provided, it is written on ``MarketDataIngestionRun.job_id`` in the same
+    transaction that creates the run. This module imports nothing from
+    ``jobs``/ -- the caller (a Job handler) owns that dependency, not this
+    service.
     """
     adjusted = settings.polygon.adjusted
     total_bars = 0
@@ -212,6 +221,7 @@ def ingest_daily_bars(
             adjusted=adjusted,
             symbols=symbols,
             trigger_source=trigger_source,
+            job_id=job_id,
         )
         run_id = run.id
 

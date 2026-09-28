@@ -284,7 +284,15 @@ def reconcile_paper_execution(
     broker_state: BrokerStateSnapshot | None = None,
     recovered_order_count: int = 0,
     trigger_source: str = "paper_reconciliation",
+    job_id: uuid.UUID | None = None,
 ) -> ReconciliationReport:
+    """Read-only broker/local reconciliation, materialized as a StrategyRun.
+
+    ``job_id`` is an opaque originating-Job identifier (D-09): when provided,
+    it is written on the created ``StrategyRun`` in the same transaction that
+    creates the run. This module imports nothing from ``jobs``/ -- the
+    caller (a Job handler) owns that dependency, not this service.
+    """
     logger = get_logger("trading_platform.reconciliation")
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
@@ -303,6 +311,7 @@ def reconcile_paper_execution(
         strategy.metadata,
         as_of_session=as_of_session,
         trigger_source=trigger_source,
+        job_id=job_id,
     )
 
     try:
@@ -750,11 +759,13 @@ def _create_reconciliation_run(
     *,
     as_of_session: date,
     trigger_source: str,
+    job_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     with session_scope(settings) as session:
         strategy_record = ensure_strategy_record(session, metadata)
         strategy_run = StrategyRun(
             strategy_id=strategy_record.id,
+            job_id=job_id,
             run_type=StrategyRunType.RECONCILIATION,
             status=StrategyRunStatus.PENDING,
             trigger_source=trigger_source,

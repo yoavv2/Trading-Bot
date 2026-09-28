@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 from trading_platform.core.settings import Settings, get_strategy_config, load_settings
 from trading_platform.db.models import (
     RiskEvent,
+    Strategy,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
@@ -471,7 +473,16 @@ def run_risk_evaluation(
     trigger_source: str = "risk_script",
     settings: Settings | None = None,
     registry: StrategyRegistry | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> RiskRunReport:
+    """Evaluate the strategy's pending signals against the risk pipeline.
+
+    ``job_id`` is an opaque originating-Job identifier (D-09): when provided,
+    it is written on the created ``StrategyRun`` in the same transaction that
+    creates the run, so the link exists from the moment the run exists. This
+    module imports nothing from ``jobs``/ -- the caller (a Job handler) owns
+    that dependency, not this service.
+    """
     resolved_settings = settings or load_settings()
     resolved_registry = registry or build_default_registry(resolved_settings)
     strategy = resolved_registry.resolve(strategy_id)
@@ -481,6 +492,7 @@ def run_risk_evaluation(
         metadata,
         trigger_source=trigger_source,
         as_of_session=as_of_session,
+        job_id=job_id,
     )
 
     _update_risk_run(
@@ -580,6 +592,7 @@ def _create_risk_run(
     *,
     trigger_source: str,
     as_of_session: date,
+    job_id: uuid.UUID | None = None,
 ) -> Any:
     with session_scope(settings) as session:
         from trading_platform.services.bootstrap import ensure_strategy_record
@@ -587,6 +600,7 @@ def _create_risk_run(
         strategy_record = ensure_strategy_record(session, metadata)
         strategy_run = StrategyRun(
             strategy_id=strategy_record.id,
+            job_id=job_id,
             run_type=StrategyRunType.RISK_EVALUATION,
             status=StrategyRunStatus.PENDING,
             trigger_source=trigger_source,
@@ -642,6 +656,36 @@ def _update_risk_run(
             completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
             result_summary=strategy_run.result_summary,
         )
+
+
+def is_eligible_risk_run(
+    *,
+    risk_run_id: uuid.UUID,
+    strategy_id: str,
+    as_of_session: date,
+    settings: Settings,
+) -> bool:
+    """Read-only D-23 eligibility check for a pinned risk-evaluation run.
+
+    Returns True only for a SUCCEEDED risk_evaluation StrategyRun of the
+    given strategy whose ``parameters_snapshot["as_of_session"]`` equals
+    ``as_of_session.isoformat()``. Performs no writes.
+    """
+    with session_scope(settings) as session:
+        row = session.execute(
+            select(StrategyRun)
+            .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+            .where(
+                StrategyRun.id == risk_run_id,
+                StrategyRun.run_type == StrategyRunType.RISK_EVALUATION,
+                StrategyRun.status == StrategyRunStatus.SUCCEEDED,
+                Strategy.strategy_id == strategy_id,
+            )
+        ).scalar_one_or_none()
+
+    if row is None:
+        return False
+    return row.parameters_snapshot.get("as_of_session") == as_of_session.isoformat()
 
 
 def _ensure_symbol_rows(session: Session, tickers: tuple[str, ...]) -> dict[str, Symbol]:
