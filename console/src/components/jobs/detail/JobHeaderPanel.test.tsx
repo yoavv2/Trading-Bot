@@ -87,7 +87,7 @@ describe("JobHeaderPanel — D-14 outcome label", () => {
         },
       ],
     });
-    render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -102,7 +102,7 @@ describe("JobHeaderPanel — D-14 outcome label", () => {
   it("shows no cancellation-related label or Cancel control for a succeeded Job with no cancellation history", async () => {
     stubJobTypesFetch();
     const job = jobDetail({ status: "succeeded", completed_at: "2026-01-01T00:10:00Z" });
-    render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -115,7 +115,7 @@ describe("JobHeaderPanel — cancel trigger (D-21)", () => {
   it("shows an enabled Cancel Job… trigger for a running Job when mutations are enabled, and opens the confirmation dialog", async () => {
     stubJobTypesFetch();
     const job = jobDetail({ status: "running" });
-    render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
 
     // The trigger renders disabled while the mutation-capability GET is in
     // flight; wait for it to resolve rather than asserting on first paint.
@@ -131,7 +131,7 @@ describe("JobHeaderPanel — cancel trigger (D-21)", () => {
   it("hides the Cancel Job… trigger for a terminal Job", async () => {
     stubJobTypesFetch();
     const job = jobDetail({ status: "failed", failure_reason: "handler_error" });
-    render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -142,7 +142,7 @@ describe("JobHeaderPanel — cancel trigger (D-21)", () => {
   it("disables the Cancel Job… trigger with the D-21 reason when mutations are disabled", async () => {
     stubJobTypesFetch({ status: 200, body: CATALOG_DISABLED });
     const job = jobDetail({ status: "queued" });
-    render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
 
     // Wait for the resolved "disabled" state (the reason text) — the trigger
     // is also disabled while the capability GET is still in flight, so
@@ -163,7 +163,7 @@ describe("JobHeaderPanel — blocking Job link", () => {
       blocking_job_id: "22222222-3333-4444-5555-666666666666",
       blocking_job_status: "running",
     });
-    render(<JobHeaderPanel job={job} onChanged={vi.fn()} />);
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -174,6 +174,223 @@ describe("JobHeaderPanel — blocking Job link", () => {
     expect(link.getAttribute("href")).toBe(
       "/jobs/22222222-3333-4444-5555-666666666666",
     );
+  });
+});
+
+describe("JobHeaderPanel — queued-only cancel gating (D-03a)", () => {
+  it("disables Cancel with the inline reason for a running Job whose cancellation_mode is queued_only", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({ status: "running", cancellation_mode: "queued_only" });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    expect(await screen.findByText("Not cancellable once running")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Cancel Job…" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps Cancel enabled for a queued Job whose cancellation_mode is queued_only", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({ status: "queued", cancellation_mode: "queued_only" });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    const button = await screen.findByRole("button", { name: "Cancel Job…" });
+    await waitFor(() => {
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(screen.queryByText("Not cancellable once running")).toBeNull();
+  });
+
+  it("keeps Cancel enabled for a running Job whose cancellation_mode is step_boundary", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({ status: "running", cancellation_mode: "step_boundary" });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    const button = await screen.findByRole("button", { name: "Cancel Job…" });
+    await waitFor(() => {
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(screen.queryByText("Not cancellable once running")).toBeNull();
+  });
+});
+
+describe("JobHeaderPanel — Retry trigger (D-20)", () => {
+  it("shows an enabled Retry trigger for a failed Job with no lineage/block, and opens RetryJobDialog", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({ status: "failed" });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    const button = await screen.findByRole("button", { name: "Retry" });
+    await waitFor(() => {
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    fireEvent.click(button);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("renders no Retry trigger for succeeded, queued, or running Jobs", async () => {
+    stubJobTypesFetch();
+    for (const status of ["succeeded", "queued", "running"] as const) {
+      const job = jobDetail({ status });
+      render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("shows only the capability reason when mutations are disabled, even with retried_as_job_id and retry_blocked also set", async () => {
+    stubJobTypesFetch({ status: 200, body: CATALOG_DISABLED });
+    const job = jobDetail({
+      status: "failed",
+      retried_as_job_id: "33333333-4444-5555-6666-777788889999",
+      retry_blocked: {
+        code: "reconciliation_required",
+        required_job_type: "reconciliation",
+        strategy_id: "trend_following_daily",
+      },
+    });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    expect(
+      await screen.findByText("Mutations disabled on this deployment"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Already retried — see the linked retry Job below."),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "Retry blocked — the original Job's outcome is uncertain. Run reconciliation first, then retry.",
+      ),
+    ).toBeNull();
+    expect(screen.queryByRole("link", { name: "Run reconciliation" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Retry" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows only the already-retried reason when retried_as_job_id is set, even with retry_blocked also set", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({
+      status: "failed",
+      retried_as_job_id: "33333333-4444-5555-6666-777788889999",
+      retry_blocked: {
+        code: "reconciliation_required",
+        required_job_type: "reconciliation",
+        strategy_id: "trend_following_daily",
+      },
+    });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    expect(
+      await screen.findByText("Already retried — see the linked retry Job below."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Retry blocked — the original Job's outcome is uncertain. Run reconciliation first, then retry.",
+      ),
+    ).toBeNull();
+    expect(screen.queryByRole("link", { name: "Run reconciliation" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Retry" });
+    await waitFor(() => {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  it("shows the retry-blocked reason and a Run reconciliation link built from server-supplied fields", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({
+      status: "failed",
+      retry_blocked: {
+        code: "reconciliation_required",
+        required_job_type: "reconciliation",
+        strategy_id: "trend_following_daily",
+      },
+    });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    expect(
+      await screen.findByText(
+        "Retry blocked — the original Job's outcome is uncertain. Run reconciliation first, then retry.",
+      ),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Run reconciliation" });
+    expect(link.getAttribute("href")).toBe(
+      "/jobs/new?type=reconciliation&strategy_id=trend_following_daily",
+    );
+  });
+
+  it("omits &strategy_id from the Run reconciliation link when retry_blocked.strategy_id is null", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({
+      status: "cancelled",
+      retry_blocked: {
+        code: "reconciliation_required",
+        required_job_type: "reconciliation",
+        strategy_id: null,
+      },
+    });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    const link = await screen.findByRole("link", { name: "Run reconciliation" });
+    expect(link.getAttribute("href")).toBe("/jobs/new?type=reconciliation");
+  });
+});
+
+describe("JobHeaderPanel — retry lineage rows (D-20)", () => {
+  it("renders Retry of Job / Retried as Job links only when the respective field is non-null", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({
+      status: "failed",
+      retry_of_job_id: "aaaaaaaa-1111-2222-3333-444455556666",
+      retried_as_job_id: "bbbbbbbb-1111-2222-3333-444455556666",
+    });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const retryOfLink = screen.getByRole("link", { name: "aaaaaaaa" });
+    expect(retryOfLink.getAttribute("href")).toBe(
+      "/jobs/aaaaaaaa-1111-2222-3333-444455556666",
+    );
+    const retriedAsLink = screen.getByRole("link", { name: "bbbbbbbb" });
+    expect(retriedAsLink.getAttribute("href")).toBe(
+      "/jobs/bbbbbbbb-1111-2222-3333-444455556666",
+    );
+  });
+
+  it("renders no lineage rows when both fields are null", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({ status: "failed" });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("Retry of Job")).toBeNull();
+    expect(screen.queryByText("Retried as Job")).toBeNull();
+  });
+});
+
+describe("JobHeaderPanel — failure_reason domain_conflict (OPS-08)", () => {
+  it("renders through the generic Failure reason / Failure message rows, unchanged from Phase 19", async () => {
+    stubJobTypesFetch();
+    const job = jobDetail({
+      status: "failed",
+      failure_reason: "domain_conflict",
+      failure_message: "strategy already has an open position",
+    });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("domain_conflict")).toBeTruthy();
+    expect(
+      screen.getByText("strategy already has an open position"),
+    ).toBeTruthy();
   });
 });
 

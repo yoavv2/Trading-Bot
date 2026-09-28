@@ -1,6 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
+
+// JobDetailView (via JobHeaderPanel) calls useRouter() from next/navigation
+// to build the onNavigate callback the Retry dialog uses (D-20). useRouter
+// throws outside an app-router context, so it is stubbed here -- no
+// existing console test mocked next/navigation before this plan.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 import { JobDetailView } from "./JobDetailView";
 import { JobsTable } from "@/components/jobs/JobsTable";
 import type {
@@ -334,7 +343,7 @@ describe("JobDetailView — empty-state copy (status/resources.length only)", ()
 
     expect(
       screen.getByText(
-        "No linked resources yet. This panel updates automatically once the Job's run starts.",
+        "No linked resources yet. This panel updates automatically if the Job's run creates one.",
       ),
     ).toBeTruthy();
   });
