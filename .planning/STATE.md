@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-19-PLAN.md
-last_updated: "2026-09-28T19:11:07.063Z"
+stopped_at: Completed 20-20-PLAN.md
+last_updated: "2026-09-28T19:14:41.801Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 46
+  completed_plans: 47
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 20 of 24
+Plan: 21 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -93,6 +93,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P17 | ~25min | 2 tasks | 9 files |
 | Phase 20 P18 | ~25min | 2 tasks | 8 files |
 | Phase 20 P19 | 25min | 2 tasks | 1 files |
+| Phase 20 P20 | 30min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -234,6 +235,7 @@ Recent decisions affecting current work:
 - [Phase 20-18]: CTRL-01/CTRL-02 stay Pending -- this plan ships only the reusable ControlConfirmDialog/trigger/sync-event kit; Plans 22/23 mount it at the four operator-visible call sites before either requirement's literal text is satisfied (20-06/19-01 precedent).
 - [Phase 20-18]: Control dialogs snapshot open-time state (openedAsTripped/openedAsEnabled) rather than deriving heading/body/onConfirm from the caller's live boolean prop, since a changed:false response's own onDone->sync-event->refetch cycle can flip that prop while the dialog is still open, which would otherwise rewrite the D-14 unchanged notice underneath the operator.
 - [Phase 20-19]: Queued-cancel route returns 200 (not plan's 202); OPS-02/04/06 closed by 20-19 E2E; OPS-07 stays Pending until 20-20.
+- [Phase 20]: 20-20: queued paper-session cancel pins HTTP 200 (shipped route); D-19 lift predicate proven with earlier/other-strategy/cancelled negatives; OPS-03/07/08 closed
 
 ### Pending Todos
 
@@ -274,6 +276,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T19:11:02.906Z
-Stopped at: Completed 20-19-PLAN.md
+Last session: 2026-09-28T19:14:37.073Z
+Stopped at: Completed 20-20-PLAN.md
 Resume file: None
