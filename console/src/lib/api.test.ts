@@ -874,3 +874,134 @@ describe("WR-C-04: control-route 5xx / non-JSON failures are not reported as an 
     }
   });
 });
+
+describe("WR-C-09: operator copy for the error codes added by the backend review fixes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function messageFor(
+    status: number,
+    body: unknown,
+    call: () => Promise<{ ok: boolean; message?: string }>,
+  ): Promise<string | undefined> {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(status, body)));
+    const result = await call();
+    expect(result.ok).toBe(false);
+    return result.message;
+  }
+
+  it("submit 422 invalid_job_payload with reason as_of_session_out_of_calendar_range shows operator copy", async () => {
+    const message = await messageFor(
+      422,
+      {
+        detail: {
+          code: "invalid_job_payload",
+          job_type: "risk-evaluation",
+          reason: "as_of_session_out_of_calendar_range",
+        },
+      },
+      () => submitJob({ job_type: "risk-evaluation", payload: {} }, "k"),
+    );
+    expect(message).toBe(
+      "This submission was rejected: the as-of session date is outside the exchange calendar's supported range.",
+    );
+  });
+
+  it("submit 422 invalid_job_payload with reason date_range_out_of_calendar_range shows operator copy", async () => {
+    const message = await messageFor(
+      422,
+      {
+        detail: {
+          code: "invalid_job_payload",
+          job_type: "sync-market-sessions",
+          reason: "date_range_out_of_calendar_range",
+        },
+      },
+      () => submitJob({ job_type: "sync-market-sessions", payload: {} }, "k"),
+    );
+    expect(message).toBe(
+      "This submission was rejected: the date range is outside the exchange calendar's supported range.",
+    );
+  });
+
+  it("retry 422 invalid_retry_payload carrying a calendar-range reason shows operator copy", async () => {
+    const message = await messageFor(
+      422,
+      {
+        detail: {
+          code: "invalid_retry_payload",
+          reason: "as_of_session_out_of_calendar_range",
+        },
+      },
+      () => retryJob("job-1", "k"),
+    );
+    expect(message).toBe(
+      "This Job can no longer be retried: the as-of session date is outside the exchange calendar's supported range.",
+    );
+  });
+
+  it("an unrecognized invalid_job_payload reason is still shown verbatim", async () => {
+    const message = await messageFor(
+      422,
+      { detail: { code: "invalid_job_payload", reason: "some_new_reason" } },
+      () => submitJob({ job_type: "backtest", payload: {} }, "k"),
+    );
+    expect(message).toBe("This submission was rejected: some_new_reason.");
+  });
+
+  it("409 strategy_archived names the strategy", async () => {
+    const message = await messageFor(
+      409,
+      { detail: { code: "strategy_archived", strategy_id: "trend_following_daily" } },
+      () => disableStrategy("trend_following_daily", "r"),
+    );
+    expect(message).toBe(
+      "Strategy trend_following_daily is archived and cannot be enabled or disabled.",
+    );
+  });
+
+  it("503 control_state_unavailable shows operator copy and beats the 5xx outage copy", async () => {
+    const message = await messageFor(
+      503,
+      { detail: { code: "control_state_unavailable" } },
+      () => tripKillSwitch("drill"),
+    );
+    expect(message).toBe(
+      "Control state is unavailable — the API could not read the stored control state. Nothing was changed; check that database migrations are current, then try again.",
+    );
+  });
+
+  it("503 control_write_failed shows operator copy", async () => {
+    const message = await messageFor(
+      503,
+      { detail: { code: "control_write_failed" } },
+      () => tripKillSwitch("drill"),
+    );
+    expect(message).toBe(
+      "The control change could not be saved — nothing was committed. Try again; if it persists, check the API and database logs.",
+    );
+  });
+
+  it("500 internal_error shows operator copy on control and Job routes", async () => {
+    const expected =
+      "The API hit an unexpected error. Reload to verify the current state, then try again; if it persists, check the API logs.";
+    expect(
+      await messageFor(500, { detail: { code: "internal_error" } }, () => tripKillSwitch("drill")),
+    ).toBe(expected);
+    expect(
+      await messageFor(500, { detail: { code: "internal_error" } }, () =>
+        submitJob({ job_type: "backtest", payload: {} }, "k"),
+      ),
+    ).toBe(expected);
+  });
+
+  it("422 invalid_control_reason and invalid_control_request keep their existing copy", async () => {
+    expect(
+      await messageFor(422, { detail: { code: "invalid_control_reason" } }, () => tripKillSwitch("")),
+    ).toBe("Reason is required and must be 500 characters or fewer.");
+    expect(
+      await messageFor(422, { detail: { code: "invalid_control_request" } }, () => tripKillSwitch("x")),
+    ).toBe("Request rejected — check the input and try again.");
+  });
+});

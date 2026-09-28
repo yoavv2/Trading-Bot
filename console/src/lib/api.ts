@@ -98,13 +98,32 @@ const CONTROL_REQUEST_REJECTED_COPY =
   "Request rejected — check the input and try again.";
 
 /**
+ * Operator copy for `invalid_job_payload` / `invalid_retry_payload` `reason`
+ * values that are not self-explanatory. These are `reason` enum values on a
+ * 422 (not top-level error codes). Any reason without an entry is shown
+ * verbatim, as before.
+ */
+const PAYLOAD_REASON_COPY: Readonly<Record<string, string>> = {
+  as_of_session_out_of_calendar_range:
+    "the as-of session date is outside the exchange calendar's supported range",
+  date_range_out_of_calendar_range:
+    "the date range is outside the exchange calendar's supported range",
+};
+
+function payloadReasonCopy(reason: string): string {
+  return Object.hasOwn(PAYLOAD_REASON_COPY, reason)
+    ? PAYLOAD_REASON_COPY[reason]
+    : reason;
+}
+
+/**
  * Closed map of typed mutation error codes (Job POST routes, plus the
  * Phase 20 retry/control routes) to the exact UI-SPEC copy for that code.
  * Each entry is a function of the response's `detail` object so codes that
  * carry extra fields (job_type, reason, status, job_id, strategy_id) can
- * interpolate them. Keys are the eighteen codes `api/routes/jobs.py`
- * (submit/cancel/retry) and the `api/routes/controls.py` mutation routes
- * can raise via their `_error(...)`-style helpers.
+ * interpolate them. Keys are the codes `api/routes/jobs.py`
+ * (submit/cancel/retry), the `api/routes/controls.py` mutation routes and
+ * the app-level unhandled-exception handler (`internal_error`) can emit.
  */
 export const MUTATION_ERROR_COPY: Readonly<
   Record<string, (detail: Record<string, unknown> | null) => string>
@@ -121,7 +140,7 @@ export const MUTATION_ERROR_COPY: Readonly<
   invalid_job_payload: (detail) => {
     const reason =
       detail && typeof detail.reason === "string" && detail.reason.length > 0
-        ? detail.reason
+        ? payloadReasonCopy(detail.reason)
         : "invalid payload";
     return `This submission was rejected: ${reason}.`;
   },
@@ -148,7 +167,7 @@ export const MUTATION_ERROR_COPY: Readonly<
   invalid_retry_payload: (detail) => {
     const reason =
       detail && typeof detail.reason === "string" && detail.reason.trim().length > 0
-        ? detail.reason
+        ? payloadReasonCopy(detail.reason)
         : "the original payload is no longer valid";
     return `This Job can no longer be retried: ${reason}.`;
   },
@@ -162,6 +181,18 @@ export const MUTATION_ERROR_COPY: Readonly<
   invalid_control_reason: () =>
     "Reason is required and must be 500 characters or fewer.",
   invalid_control_request: () => CONTROL_REQUEST_REJECTED_COPY,
+  // Codes added by the backend review fixes (WR-C-09). Not in UI-SPEC yet.
+  strategy_archived: (detail) => {
+    const strategyId =
+      detail && typeof detail.strategy_id === "string" ? detail.strategy_id : "unknown";
+    return `Strategy ${strategyId} is archived and cannot be enabled or disabled.`;
+  },
+  control_state_unavailable: () =>
+    "Control state is unavailable — the API could not read the stored control state. Nothing was changed; check that database migrations are current, then try again.",
+  control_write_failed: () =>
+    "The control change could not be saved — nothing was committed. Try again; if it persists, check the API and database logs.",
+  internal_error: () =>
+    "The API hit an unexpected error. Reload to verify the current state, then try again; if it persists, check the API logs.",
 };
 
 /**
