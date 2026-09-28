@@ -115,11 +115,18 @@ def run_paper_order_submission(
     settings: Settings | None = None,
     registry: StrategyRegistry | None = None,
     execution_service: ExecutionService | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> PaperExecutionRunReport:
     """Lock-guarded entrypoint (LOCK-01/02/03/05): resolve pure state, then
     acquire the (strategy_id, session_date) advisory lock BEFORE any write or
     broker call. All side effects happen inside `_run_paper_order_submission_guarded`,
     which runs entirely within the lock's `with` block below.
+
+    ``job_id`` is an opaque originating-Job identifier (D-09/D-28): when
+    provided, it is written on the created execution ``StrategyRun`` in the
+    same transaction that creates the run. This module imports nothing from
+    ``jobs``/ -- the caller (a Job handler) owns that dependency, not this
+    service.
     """
     logger = get_logger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
@@ -143,6 +150,7 @@ def run_paper_order_submission(
                 resolved_settings=resolved_settings,
                 resolved_registry=resolved_registry,
                 execution_service=execution_service,
+                job_id=job_id,
             )
     except ConcurrentRunLockedError:
         # The context manager raises before its body ever runs -- this
@@ -170,6 +178,7 @@ def _run_paper_order_submission_guarded(
     resolved_settings: Settings,
     resolved_registry: StrategyRegistry,
     execution_service: ExecutionService | None,
+    job_id: uuid.UUID | None = None,
 ) -> PaperExecutionRunReport:
     """Guarded body -- only ever called from inside `session_run_lock`.
 
@@ -185,6 +194,7 @@ def _run_paper_order_submission_guarded(
         trigger_source=trigger_source,
         as_of_session=as_of_session,
         requested_risk_run_id=risk_run_id,
+        job_id=job_id,
     )
 
     # DURABILITY: this reclaim -- like every write below -- commits on its
@@ -687,7 +697,16 @@ def run_paper_session(
     registry: StrategyRegistry | None = None,
     execution_service: ExecutionService | None = None,
     broker_client: AlpacaClient | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> PaperSessionRunReport:
+    """``job_id`` (D-08/D-09) is threaded to BOTH runs this function may
+    create: the internal reconciliation ``StrategyRun`` (via
+    ``reconcile_paper_execution``) and the paper_execution ``StrategyRun``
+    (via ``run_paper_order_submission``, including the
+    ``blocked_strategy_disabled`` path). ``reconciliation_run_id`` on every
+    returned ``PaperSessionRunReport`` names the internal reconciliation run
+    (``None`` when reconciliation did not run this call).
+    """
     logger = get_logger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
     runner_settings = resolved_settings.execution.paper_session_runner
@@ -736,6 +755,7 @@ def run_paper_session(
             settings=resolved_settings,
             registry=registry,
             execution_service=execution_service,
+            job_id=job_id,
         )
         result_summary = dict(blocked_execution_report.result_summary)
         result_summary["session_preflight"] = base_summary
@@ -759,6 +779,7 @@ def run_paper_session(
             execution_run_id=blocked_execution_report.run_id,
             execution_status=blocked_execution_report.status,
             result_summary=result_summary,
+            reconciliation_run_id=None,
         )
 
     if broker_client is not None or execution_service is None:
@@ -781,6 +802,7 @@ def run_paper_session(
             broker_state=broker_state,
             recovered_order_count=recovered_order_count,
             trigger_source=f"{resolved_trigger_source}_reconciliation",
+            job_id=job_id,
         )
         base_summary["reconciliation"] = reconciliation_report.to_dict()
         # Explicit corrective step (RECON-04), invoked as its own call AFTER the
@@ -791,6 +813,10 @@ def run_paper_session(
             settings=resolved_settings,
             registry=registry,
         )
+
+    reconciliation_run_id = (
+        reconciliation_report.run_id if reconciliation_report is not None else None
+    )
 
     if (
         reconciliation_report is not None
@@ -817,6 +843,7 @@ def run_paper_session(
             execution_run_id=None,
             execution_status=None,
             result_summary=base_summary,
+            reconciliation_run_id=reconciliation_run_id,
         )
 
     if not session_plan.candidates:
@@ -839,6 +866,7 @@ def run_paper_session(
             execution_run_id=None,
             execution_status=None,
             result_summary=base_summary,
+            reconciliation_run_id=reconciliation_run_id,
         )
 
     if not session_plan.missing_candidates:
@@ -861,6 +889,7 @@ def run_paper_session(
             execution_run_id=None,
             execution_status=None,
             result_summary=base_summary,
+            reconciliation_run_id=reconciliation_run_id,
         )
 
     execution_report = run_paper_order_submission(
@@ -871,6 +900,7 @@ def run_paper_session(
         settings=resolved_settings,
         registry=registry,
         execution_service=execution_service,
+        job_id=job_id,
     )
     result_summary = dict(execution_report.result_summary)
     result_summary["session_preflight"] = base_summary
@@ -912,6 +942,7 @@ def run_paper_session(
         execution_run_id=execution_report.run_id,
         execution_status=execution_report.status,
         result_summary=result_summary,
+        reconciliation_run_id=reconciliation_run_id,
     )
 
 
@@ -1415,12 +1446,16 @@ def _create_paper_execution_run(
     trigger_source: str,
     as_of_session: date,
     requested_risk_run_id: str | None,
+    job_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Insert the run row at status=RUNNING -- the literal first persisted
     write for this run (LOCK-03), acquired before kill-switch/control state
     is even read. strategy_status is genuinely unknown at this point (it is
     loaded moments later, after stale reclaim runs against this row); the
     accurate value is written into result_summary by the very next update.
+
+    ``job_id`` (D-08/D-09) is written on this row in the same transaction
+    that creates it, when provided.
     """
     with session_scope(settings) as session:
         strategy_record = ensure_strategy_record(session, metadata)
@@ -1429,6 +1464,7 @@ def _create_paper_execution_run(
             run_type=StrategyRunType.PAPER_EXECUTION,
             status=StrategyRunStatus.RUNNING,
             trigger_source=trigger_source,
+            job_id=job_id,
             parameters_snapshot={
                 "strategy": metadata.to_public_dict(),
                 "as_of_session": as_of_session.isoformat(),

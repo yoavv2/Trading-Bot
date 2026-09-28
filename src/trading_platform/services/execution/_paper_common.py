@@ -71,6 +71,10 @@ class PaperSessionRunReport:
     execution_run_id: str | None
     execution_status: str | None
     result_summary: dict[str, Any]
+    # D-08/D-09: names the internal reconciliation StrategyRun this session
+    # ran (None when reconciliation did not run this call, e.g. the
+    # blocked_strategy_disabled path).
+    reconciliation_run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +86,7 @@ class PaperSessionRunReport:
             "execution_run_id": self.execution_run_id,
             "execution_status": self.execution_status,
             "result_summary": self.result_summary,
+            "reconciliation_run_id": self.reconciliation_run_id,
         }
 
 
