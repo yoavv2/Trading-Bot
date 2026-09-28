@@ -154,6 +154,18 @@ def test_map_validation_error_invalid_date() -> None:
     assert pf.map_validation_error(exc_info.value) == pf.PayloadFieldRejection.INVALID_DATE
 
 
+def test_map_validation_error_residual_falls_back_to_invalid_field_type() -> None:
+    # A wrong-typed strategy_id (StrictStr) produces a native pydantic
+    # "string_type" error -- not extra_forbidden, not missing, and not a
+    # PayloadFieldRejection value -- exercising map_validation_error's final
+    # fallback branch.
+    with pytest.raises(ValidationError) as exc_info:
+        _SampleSymbolsPayload.model_validate(
+            {"strategy_id": 123, "as_of_session": "2024-01-02", "symbols": ["AAPL"]}
+        )
+    assert pf.map_validation_error(exc_info.value) == pf.PayloadFieldRejection.INVALID_FIELD_TYPE
+
+
 # ---------------------------------------------------------------------------
 # require_trading_session_not_future (D-21)
 # ---------------------------------------------------------------------------

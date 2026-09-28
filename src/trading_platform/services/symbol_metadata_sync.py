@@ -9,8 +9,9 @@ there is no code path here that fetches without also persisting.
 
 ``fetch_ticker_overview``/``PolygonAuthError``/``httpx`` are imported at
 module level (the retired script imported them function-locally); the
-``importlib``/``sys.path`` hack ``worker/commands/ingest.py::run_sync_metadata``
-used to reach the script no longer has anything to reach into.
+worker's dynamic script-import workaround (``worker/commands/ingest.py::run_sync_metadata``,
+which reached into the script via a runtime module-loading trick) no longer
+has anything to reach into.
 """
 
 from __future__ import annotations

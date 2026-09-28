@@ -10,6 +10,7 @@ after the test.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import date
@@ -22,7 +23,11 @@ from scripts.migrate import build_alembic_config
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.session import clear_engine_cache, session_scope
-from trading_platform.services.calendar import MarketSessionSyncResult, sync_market_sessions
+from trading_platform.services.calendar import (
+    MarketSessionSyncResult,
+    sessions_in_range,
+    sync_market_sessions,
+)
 from trading_platform.services.symbol_metadata_sync import (
     MetadataSyncResult,
     SymbolMetadataSyncFailedError,
@@ -187,6 +192,7 @@ class TestSyncSymbolMetadata:
                 first_row = session.execute(select(Symbol).where(Symbol.ticker == "AAPL")).scalar_one()
                 first_updated_at = first_row.updated_at
 
+            time.sleep(0.01)
             sync_symbol_metadata(["AAPL"], settings=settings)
 
         with session_scope(settings) as session:
@@ -198,7 +204,7 @@ class TestSyncSymbolMetadata:
             second_row = session.execute(select(Symbol).where(Symbol.ticker == "AAPL")).scalar_one()
 
         assert len(rows) == 1
-        assert second_row.updated_at >= first_updated_at
+        assert second_row.updated_at > first_updated_at
 
     def test_to_dict_has_no_dry_run_field(self) -> None:
         result = MetadataSyncResult(synced=["AAPL"], skipped=[], failed=[])
@@ -228,9 +234,15 @@ class TestSyncMarketSessions:
             from_date=date(2024, 1, 1), to_date=date(2024, 1, 10), settings=settings
         )
 
+        expected_session_count = len(
+            sessions_in_range(
+                date(2024, 1, 1), date(2024, 1, 10), settings.market_data.calendar.exchange
+            )
+        )
+
         assert isinstance(result, MarketSessionSyncResult)
         assert result.exchange == settings.market_data.calendar.exchange
-        assert result.sessions_upserted > 0
+        assert result.sessions_upserted == expected_session_count
 
         from sqlalchemy import select
 
