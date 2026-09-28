@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from trading_platform.core.logging import emit_structured_log, get_logger
@@ -33,6 +35,24 @@ _BLOCKED_REASON_STRATEGY_DISABLED = "strategy_disabled"
 BLOCKED_REASON_GLOBAL_KILL_SWITCH = "global_kill_switch_tripped"
 _DEFAULT_KILL_SWITCH_STRATEGY_ID = "trend_following_daily"
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _translate_db_errors(error_type: type[Exception]) -> Callable[[_F], _F]:
+    """Re-raise ``SQLAlchemyError`` from the wrapped method as ``error_type``."""
+
+    def decorator(func: _F) -> _F:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return func(*args, **kwargs)
+            except SQLAlchemyError as exc:
+                raise error_type(f"{type(exc).__name__}: control state database error") from exc
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
+
 
 class StrategyArchivedError(Exception):
     """An enable/disable was requested for an ARCHIVED strategy.
@@ -45,6 +65,14 @@ class StrategyArchivedError(Exception):
     def __init__(self, strategy_id: str) -> None:
         super().__init__(f"Strategy '{strategy_id}' is archived and cannot be enabled or disabled.")
         self.strategy_id = strategy_id
+
+
+class ControlWriteError(RuntimeError):
+    """A control mutation failed at the database layer (nothing was committed).
+
+    Wraps ``SQLAlchemyError`` so the HTTP adapter can map it to a typed error
+    without importing the persistence layer.
+    """
 
 
 class ControlStateUnavailableError(LookupError):
@@ -182,6 +210,7 @@ class OperatorControlService:
     def registry(self) -> StrategyRegistry:
         return self._registry or build_default_registry(self.settings)
 
+    @_translate_db_errors(ControlStateUnavailableError)
     def get_strategy_state(self, strategy_id: str) -> StrategyControlState:
         """Pure read (D-31): a plain select with a registry default, never a get-or-create.
 
@@ -249,6 +278,7 @@ class OperatorControlService:
             trigger_source=trigger_source,
         )
 
+    @_translate_db_errors(ControlWriteError)
     def _set_strategy_status(
         self,
         strategy_id: str,
@@ -425,6 +455,7 @@ class OperatorControlService:
             ) from exc
         return _ensure_audit_strategy_record(session, metadata)
 
+    @_translate_db_errors(ControlWriteError)
     def _set_kill_switch_state(
         self,
         *,

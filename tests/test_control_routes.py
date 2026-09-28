@@ -577,14 +577,17 @@ def test_missing_kill_switch_row_is_a_typed_503(client: TestClient) -> None:
     assert response.json()["detail"] == {"code": "control_state_unavailable"}
 
 
-def test_database_errors_on_control_writes_are_typed_503s(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _break_control_database(monkeypatch: pytest.MonkeyPatch) -> None:
     def broken(*_args: Any, **_kwargs: Any) -> Any:
         raise OperationalError("UPDATE", {}, Exception("connection lost"))
 
-    monkeypatch.setattr(OperatorControlService, "trip_kill_switch", broken)
-    monkeypatch.setattr(OperatorControlService, "disable_strategy", broken)
+    monkeypatch.setattr("trading_platform.services.operator_controls.session_scope", broken)
+
+
+def test_database_errors_on_control_writes_are_typed_503s(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _break_control_database(monkeypatch)
 
     kill_switch = _put_kill_switch(client, {"state": "tripped", "reason": "db down"})
     strategy = _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "disabled", "reason": "db down"})
@@ -592,6 +595,17 @@ def test_database_errors_on_control_writes_are_typed_503s(
     for response in (kill_switch, strategy):
         assert response.status_code == 503
         assert response.json()["detail"] == {"code": "control_write_failed"}
+
+
+def test_database_errors_on_strategy_control_read_are_a_typed_503(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _break_control_database(monkeypatch)
+
+    response = client.get(f"/api/v1/controls/strategies/{_KNOWN_STRATEGY_ID}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {"code": "control_state_unavailable"}
 
 
 def test_unhandled_errors_on_mutation_routes_are_json_with_a_code(

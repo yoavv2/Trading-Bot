@@ -13,7 +13,6 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy.exc import SQLAlchemyError
 
 from trading_platform.api.dependencies import (
     get_operator_control_service,
@@ -23,6 +22,7 @@ from trading_platform.api.dependencies import (
 )
 from trading_platform.services.operator_controls import (
     ControlStateUnavailableError,
+    ControlWriteError,
     OperatorControlService,
     StrategyArchivedError,
     load_strategy_control_state,
@@ -95,7 +95,7 @@ async def set_kill_switch(
         raise _error(
             status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
         ) from exc
-    except SQLAlchemyError as exc:
+    except ControlWriteError as exc:
         raise _error(status.HTTP_503_SERVICE_UNAVAILABLE, "control_write_failed") from exc
     return {"state": report.current_state, "changed": report.changed, "run_id": report.run_id}
 
@@ -137,7 +137,7 @@ async def set_strategy_status(
         raise _error(
             status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
         ) from exc
-    except SQLAlchemyError as exc:
+    except ControlWriteError as exc:
         raise _error(status.HTTP_503_SERVICE_UNAVAILABLE, "control_write_failed") from exc
     return {
         "strategy_id": strategy_id,
@@ -170,7 +170,7 @@ async def get_strategy_control_status(
             strategy_id,
             settings=get_settings(request),
         )
-    except SQLAlchemyError as exc:
+    except ControlStateUnavailableError as exc:
         raise _error(
             status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
         ) from exc
