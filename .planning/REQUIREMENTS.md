@@ -44,11 +44,11 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Operation Triggers
 
 - [x] **OPS-01**: Operator can run a backtest from the UI — `backtest` is the first registered production Job type, proven end-to-end Console → HTTP → Job → worker → existing backtest service
-- [ ] **OPS-02**: Operator can run a risk evaluation from the UI as a registered Job
+- [x] **OPS-02**: Operator can run a risk evaluation from the UI as a registered Job
 - [ ] **OPS-03**: Operator can run a paper trading session from the UI as a registered Job; it is cancellable only before broker submission begins, and the catalog states this
-- [ ] **OPS-04**: Operator can run reconciliation from the UI as a registered Job
+- [x] **OPS-04**: Operator can run reconciliation from the UI as a registered Job
 - [ ] **OPS-05**: Operator can run market-data operations from the UI as three separate, independently validated Job types — `ingest-bars`, `sync-symbol-metadata`, `sync-market-sessions`; no composite handler that switches behavior on flags
-- [ ] **OPS-06**: Operator can run broker order-lifecycle sync from the UI as a registered Job
+- [x] **OPS-06**: Operator can run broker order-lifecycle sync from the UI as a registered Job
 - [ ] **OPS-07**: Operator can retry a `FAILED` or `CANCELLED` Job from its detail view; retry creates a new Job with the same job type and payload, linked via one nullable `retry_of_job_id`; retry submission is idempotent by `Idempotency-Key` under the ORCH-03 contract; no automatic retries, retry policies, backoff, counters, or retry scheduler
 - [ ] **OPS-08**: Typed domain conflicts (e.g. paper-session advisory lock already held) land as a distinct closed `failure_reason` value, not `handler_error`
 
@@ -138,11 +138,11 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | JOBUI-04 | Phase 19 | Complete |
 | JOBUI-05 | Phase 19 | Complete |
 | OPS-01 | Phase 19 | Complete |
-| OPS-02 | Phase 20 | Pending |
+| OPS-02 | Phase 20 | Complete |
 | OPS-03 | Phase 20 | Pending |
-| OPS-04 | Phase 20 | Pending |
+| OPS-04 | Phase 20 | Complete |
 | OPS-05 | Phase 20 | Pending |
-| OPS-06 | Phase 20 | Pending |
+| OPS-06 | Phase 20 | Complete |
 | OPS-07 | Phase 20 | Pending |
 | OPS-08 | Phase 20 | Pending |
 | CTRL-01 | Phase 20 | Pending |
