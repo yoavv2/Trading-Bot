@@ -3,7 +3,7 @@ status: partial
 phase: 20-complete-operation-migration-safety-controls
 source: [20-VERIFICATION.md]
 started: 2026-09-28T23:15:00Z
-updated: 2026-09-28T23:15:00Z
+updated: 2026-09-29T00:00:00Z
 ---
 
 ## Current Test
@@ -28,6 +28,10 @@ result: [pending]
 expected: Kill switch trips, JSON report printed, OPERATOR_CONTROL run written; no reset/enable/disable subcommand exists
 result: [pending]
 
+### 5. Code-review fixes that need a live stack (see 20-REVIEW-FIX.md)
+expected: (a) Control dialogs: Escape/Keep Current State disabled while a PUT is in flight; focus moves into the dialog, Tab is trapped, focus returns on close; an API outage (stop the API mid-trip) shows the outage message, not "Request rejected"; banner resyncs after a transport failure. (b) Enable/disable on an archived strategy returns the archived notice. (c) A failing ingest-bars Job (bad Polygon key or unreachable) shows its ingestion run as FAILED in Job resources. (d) Kill-switch trip works even if the strategy registry fails to load. (e) Two concurrent same-key retries both return the same retry Job.
+result: [pending]
+
 ## Environment notes
 
 - Check `lsof -nP -iTCP:8000 -sTCP:LISTEN` first — a host uvicorn and the compose API can both bind :8000.
@@ -35,10 +39,10 @@ result: [pending]
 
 ## Summary
 
-total: 4
+total: 5
 passed: 0
 issues: 0
-pending: 4
+pending: 5
 skipped: 0
 blocked: 0
 
