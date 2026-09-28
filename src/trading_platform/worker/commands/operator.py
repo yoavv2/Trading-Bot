@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 
 from trading_platform.core.logging import build_log_context, configure_logging, get_logger
 from trading_platform.core.startup import enforce_startup_config
@@ -113,6 +114,49 @@ def _run_kill_switch_action(
         },
     )
     print(render_kill_switch_report(report, summary_format=args.summary_format))
+
+
+def run_kill_switch_trip_command(args: argparse.Namespace) -> None:
+    """Break-glass: trip the global kill switch when the API is unavailable.
+
+    D-15: this is the sole ORCH-01 exception. Shell operator access is
+    already privileged, and this command can only make the system safer
+    (trip-only) -- it never re-arms the kill switch and never
+    enables/disables a strategy. Reset and enable/disable exist only as
+    HTTP controls behind ORCH-07's mutation-enablement gate; this command
+    never reads that setting and boots at BACKTEST level (no broker
+    credentials required), so it works even when the API is unavailable
+    or HTTP mutations are disabled.
+    """
+    settings = enforce_startup_config(mode=ExecutionMode.BACKTEST)
+    configure_logging(settings.logging)
+    logger = get_logger("trading_platform.worker")
+
+    reason = args.reason.strip()
+    if not reason or len(reason) > 500:
+        print(
+            "kill-switch-trip: --reason must be 1-500 characters after trimming.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    service = OperatorControlService(settings=settings)
+    report = service.trip_kill_switch(
+        reason=reason,
+        actor="local_operator",
+        trigger_source="break_glass_cli",
+    )
+    logger.warning(
+        "worker_kill_switch_break_glass_trip",
+        extra={
+            "context": build_log_context(
+                run_id=report.run_id,
+                kill_switch_state=report.current_state,
+                trigger_source=report.trigger_source,
+            )
+        },
+    )
+    print(render_kill_switch_report(report, summary_format="json"))
 
 
 def run_operator_status_command(args: argparse.Namespace) -> None:

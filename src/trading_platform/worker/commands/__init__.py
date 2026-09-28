@@ -20,7 +20,10 @@ from trading_platform.worker.commands.backtest import (
     run_report_strategy_analytics_command,
 )
 from trading_platform.worker.commands.bootstrap import run_placeholder_worker
-from trading_platform.worker.commands.operator import run_operator_status_command
+from trading_platform.worker.commands.operator import (
+    run_kill_switch_trip_command,
+    run_operator_status_command,
+)
 from trading_platform.worker.commands.run_jobs import run_jobs_command
 
 DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
@@ -28,6 +31,7 @@ DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "report-strategy-analytics": run_report_strategy_analytics_command,
     "operator-status": run_operator_status_command,
     "run-jobs": run_jobs_command,
+    "kill-switch-trip": run_kill_switch_trip_command,
 }
 
 __all__ = ["DISPATCH", "run_placeholder_worker"]

@@ -70,4 +70,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_jobs_parser.add_argument("--compact", action="store_true", default=False)
 
+    kill_switch_trip_parser = subparsers.add_parser(
+        "kill-switch-trip",
+        help="Break-glass: trip the global kill switch when the API is unavailable.",
+    )
+    kill_switch_trip_parser.add_argument("--reason", required=True)
+
     return parser

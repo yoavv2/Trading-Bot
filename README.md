@@ -153,6 +153,28 @@ make console
 
 See `console/README.md` for setup (`.env.local`) and the proxy design.
 
+## Break-glass Kill Switch
+
+Every normal way to change the global kill switch or a strategy's
+enabled/disabled state goes through the console's mutation-gated HTTP API
+(`OperatorControlService`, guarded by `mutations_enabled`). If the API is
+unavailable, there is exactly one supported bypass, and it is trip-only:
+
+```bash
+docker compose run --rm worker python -m trading_platform.worker kill-switch-trip --reason "api down"
+```
+
+This is the worker CLI's sole exception to "the HTTP Job API is the only
+manual mutation surface" (see `docs/gsd/decisions/D-15` or 20-CONTEXT.md).
+It writes the same `StrategyRun` (`operator_control`, `trigger_source:
+break_glass_cli`) and `ExecutionEvent` (`kill_switch_trip`) audit rows as
+the HTTP control, requires a non-empty `--reason` (max 500 characters), and
+works with no broker credentials configured and no `mutations_enabled` flag
+set, since it never reads that flag. It can only make the system safer: the
+worker CLI has no reset, enable, or disable command. Once the API is back,
+reset the kill switch (and re-enable/disable strategies) only through the
+console/HTTP control.
+
 ## Configuration Model
 
 Runtime settings are assembled in this order:
