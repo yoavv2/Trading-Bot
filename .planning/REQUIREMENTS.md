@@ -24,8 +24,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Orchestration Surface
 
-- [x] **ORCH-01**: Every manual long-running operation is exposed only as an HTTP Job submission and every immediate safety control only as an HTTP control endpoint — sole exception: one trip-only break-glass worker subcommand (`kill-switch-trip`, reason required, calls `OperatorControlService.trip_kill_switch`, same audit rows) that exists so the kill switch can be tripped when the API is down (amended 2026-09-27, Phase 20 discussion); the console invokes only the HTTP API — never business logic, scripts, or CLI code directly *(Partial: holds for the worker CLI and API adapters as of Phase 18; mutating `scripts/*.py` and Makefile targets still call domain services directly — closes in Phase 20 via ORCH-08)*
-- [x] **ORCH-02**: CLI worker commands and scripts are thin wrappers over the same service layer the API uses — no business logic exists in CLI, script, or API route code (import/structure enforcement) *(Partial: enforcement covers `worker/` and `api/` only; extended to `scripts/` and the Makefile in Phase 20)*
+- [x] **ORCH-01**: Every manual long-running operation is exposed only as an HTTP Job submission and every immediate safety control only as an HTTP control endpoint — sole exception: one trip-only break-glass worker subcommand (`kill-switch-trip`, reason required, calls `OperatorControlService.trip_kill_switch`, same audit rows) that exists so the kill switch can be tripped when the API is down (amended 2026-09-27, Phase 20 discussion); the console invokes only the HTTP API — never business logic, scripts, or CLI code directly *(Closed in Phase 20: mutating scripts and Makefile targets deleted; closed-world boundary test in tests/test_orchestration_boundaries.py)*
+- [x] **ORCH-02**: CLI worker commands and scripts are thin wrappers over the same service layer the API uses — no business logic exists in CLI, script, or API route code (import/structure enforcement) *(Closed in Phase 20: enforcement extended to `scripts/` and the Makefile)*
 - [x] **ORCH-03**: Every Job mutation handled through `JobOrchestrationService` (submit, cancel, and — from Phase 20 — retry) is idempotent by `Idempotency-Key` — resubmitting the same operation with the same key returns the existing Job reference (Phase 18 replay contract) instead of executing twice. *(Scope: Job mutations only. Immediate safety controls are idempotent by explicit target state under CTRL-01/CTRL-02 and do not use `Idempotency-Key`.)*
 - [x] **ORCH-04**: Submitting an operation returns a Job reference whose state, progress, and logs the console observes via API reads — transport-agnostic, no architectural dependency on polling vs push
 - [x] **ORCH-05**: The production worker process runs the Job runner — the compose worker service command is `run-jobs`, and no deploy configuration starts the placeholder `serve` loop (config-parsing test)
@@ -125,8 +125,8 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | JOB-05 | Phase 17 (+ Phase 18 post-phase race hardening) | Complete |
 | JOB-06 | Phase 17 (framework) + Phase 18 (API surface + post-phase race hardening) | Complete |
 | JOB-07 | Phase 17 | Complete |
-| ORCH-01 | Phase 18 → closes Phase 20 | Partial |
-| ORCH-02 | Phase 18 → closes Phase 20 | Partial |
+| ORCH-01 | Phase 18 → closed Phase 20 | Complete |
+| ORCH-02 | Phase 18 → closed Phase 20 | Complete |
 | ORCH-03 | Phase 18 (Job mutations; retry extends it in Phase 20) | Complete |
 | ORCH-04 | Phase 18 | Complete |
 | ORCH-05 | Phase 19 | Complete |
