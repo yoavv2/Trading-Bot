@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-16-PLAN.md
-last_updated: "2026-09-28T18:36:39.814Z"
+stopped_at: Completed 20-17-PLAN.md
+last_updated: "2026-09-28T18:50:37.240Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 43
+  completed_plans: 44
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 17 of 24
+Plan: 18 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -90,6 +90,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P14 | 20min | 2 tasks | 7 files |
 | Phase 20 P15 | ~62min | 3 tasks | 10 files |
 | Phase 20 P16 | ~20min | 2 tasks | 6 files |
+| Phase 20 P17 | ~25min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -227,6 +228,7 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-15]: SyncMarketSessionsPayloadRejection.INVALID_FIELD_TYPE is kept in the closed enum (shared PayloadFieldRejection vocabulary, map_validation_error's residual fallback) but is unreachable via this spec's own payload since both from_date/to_date route through the shared parse_iso_date before-validator, which maps every wrong type to INVALID_DATE instead -- pinned by a dedicated fallback test rather than a fabricated reachable case (advisor-reviewed).
 - [Phase 20]: [20-15]: All three OPS-05 market-data Job types (ingest-bars 20-14, sync-symbol-metadata + sync-market-sessions this plan) now exist as strict spec+handler pairs with unwired console forms, but neither of this plan's two types is registered in build_default_registry() nor wired into jobTypeForms.ts -- OPS-05 stays Pending in REQUIREMENTS.md (owned by 20-16 registry+form-map wiring and 20-21), matching the 20-03/20-07/20-08/20-09/20-14 registration-vs-implementation precedent; ORCH-02 also stays Pending, owned by 20-24 (scripts/Makefile boundary-enforcement alongside ORCH-01/ORCH-08) -- confirmed via `grep -ln "OPS-05\|ORCH-02" .planning/phases/20-*/20-1[6-9]-PLAN.md .planning/phases/20-*/20-2[0-4]-PLAN.md` (20-16, 20-21, 20-24) so neither requirement ID is left orphaned.
 - [Phase 20-16]: Registered all 7 remaining Job types in build_default_registry() and console JOB_TYPE_FORMS in one plan/commit each to avoid concurrent edits on these two hot shared files; pinned cancellation_mode (D-01), required_execution_mode (D-22), and retry_prerequisite_for (D-19) with exact-set tests. — OPS-02..06 left Pending -- confirmed via 20-19/20-20/20-21-PLAN.md that each requirement's literal operator-invocable UI/registry text is closed by a downstream true E2E test this plan does not run.
+- [Phase 20]: [20-17]: RetryJobDialog + JobHeaderPanel D-20 retry trigger/lineage + D-03a queued-only cancel gating shipped; OPS-07/OPS-03 stay Pending since 20-19/20-20/20-23 also declare them per this phase's shared-ID-requirement precedent
 
 ### Pending Todos
 
@@ -267,6 +269,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T18:36:39.805Z
-Stopped at: Completed 20-16-PLAN.md
+Last session: 2026-09-28T18:50:37.218Z
+Stopped at: Completed 20-17-PLAN.md
 Resume file: None
