@@ -139,3 +139,7 @@ None - no external service configuration required. Note: any local Postgres data
 - FOUND commit: 81c9038 (Task 1)
 - FOUND commit: 95b0eef (Task 2)
 - FOUND commit: e915d84 (docs: summary)
+
+## Process Note
+
+The final state-tracking commit (`c3703f8`, `docs(20-01): complete migration-0021-and-retry-lineage plan`) was made via `gsd-sdk query commit`, which has no argument for a trailer and so landed without the `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` line this session's attribution instructions require (same gap the 19-08 summary recorded). Per the git safety protocol's explicit preference for new commits over `--amend`, and the 19-08 precedent flagging amend-to-fix-a-trailer as itself a rule violation, this was disclosed rather than corrected via amend. No work was lost; this is a metadata-only gap on a docs-only tracking commit.
