@@ -31,6 +31,22 @@ class JobCancelledError(Exception):
         super().__init__(f"Job '{job_id}' was cancelled.")
 
 
+class JobDomainConflictError(Exception):
+    """Framework-level signal that a handler translated a typed domain
+    conflict (D-04).
+
+    The runner maps this to ``JobFailureReason.DOMAIN_CONFLICT``. Per
+    JOB-04, ``jobs/`` never imports the domain exception itself -- a
+    handler-layer translation module (``jobs/handlers/domain_conflicts.py``)
+    catches the typed domain exception and raises this framework-owned
+    signal instead.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 @runtime_checkable
 class JobContext(Protocol):
     """Framework-owned context passed to every ``JobHandler.run()`` call.

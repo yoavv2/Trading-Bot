@@ -88,7 +88,7 @@ def _build_client(registry: JobRegistry, *, mutations_enabled: bool) -> TestClie
 
 
 def test_cancellation_mode_enum_is_closed() -> None:
-    assert {mode.value for mode in JobCancellationMode} == {"step_boundary"}
+    assert {mode.value for mode in JobCancellationMode} == {"step_boundary", "queued_only"}
 
 
 @pytest.mark.parametrize("mutations_enabled", [True, False])

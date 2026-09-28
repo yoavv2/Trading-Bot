@@ -12,17 +12,25 @@ Proves two things:
 from __future__ import annotations
 
 import ast
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
 
-from trading_platform.jobs.contracts import JobContext, JobHandler
+from trading_platform.jobs.contracts import JobContext, JobDomainConflictError, JobHandler
+from trading_platform.jobs.handlers.domain_conflicts import (
+    DOMAIN_CONFLICT_EXCEPTIONS,
+    translate_domain_conflicts,
+)
 from trading_platform.jobs.registry import (
+    JobCancellationMode,
     JobRegistry,
     UnknownJobTypeError,
     build_default_registry,
+    retry_prerequisite_for,
 )
+from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
 
 _ROOT = Path(__file__).resolve().parents[1]
 _JOBS_PKG = _ROOT / "src" / "trading_platform" / "jobs"
@@ -133,3 +141,105 @@ def test_adding_a_job_type_touches_zero_queue_framework_modules() -> None:
     resolved = registry.resolve("second_fake_job")
     assert resolved.run(context=None) == {"ok": True}  # type: ignore[arg-type]
     assert registry.list_job_types() == ["fake_job", "second_fake_job"]
+
+
+# --- D-01: JobCancellationMode closed 2-value set --------------------------
+
+
+def test_job_cancellation_mode_is_exactly_two_values() -> None:
+    assert {mode.value for mode in JobCancellationMode} == {"step_boundary", "queued_only"}
+    assert JobCancellationMode.QUEUED_ONLY.value == "queued_only"
+
+
+# --- D-19: retry_prerequisite_for + register() validation ------------------
+
+
+class _FakeSubmissionSpecNoRetryPrerequisite:
+    """No ``retry_prerequisite_job_type`` attribute at all."""
+
+    job_type = "fake_job_with_spec"
+    description = "A fake submission spec for registry tests."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        return dict(payload)
+
+    def submission_defaults(self) -> Mapping[str, Any] | None:
+        return None
+
+
+class _FakeSubmissionSpecWithRetryPrerequisite:
+    job_type = "fake_job_with_spec"
+    description = "A fake submission spec for registry tests."
+    cancellation_mode = JobCancellationMode.STEP_BOUNDARY
+
+    def __init__(self, retry_prerequisite_job_type: object) -> None:
+        self.retry_prerequisite_job_type = retry_prerequisite_job_type
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        return dict(payload)
+
+    def submission_defaults(self) -> Mapping[str, Any] | None:
+        return None
+
+
+def test_retry_prerequisite_for_returns_none_when_attribute_absent() -> None:
+    spec = _FakeSubmissionSpecNoRetryPrerequisite()
+    assert retry_prerequisite_for(spec) is None
+
+
+def test_retry_prerequisite_for_returns_declared_job_type() -> None:
+    spec = _FakeSubmissionSpecWithRetryPrerequisite(retry_prerequisite_job_type="reconciliation")
+    assert retry_prerequisite_for(spec) == "reconciliation"
+
+
+@pytest.mark.parametrize("bad_value", ["", 5])
+def test_register_rejects_invalid_retry_prerequisite_job_type(bad_value: object) -> None:
+    registry = JobRegistry()
+    handler = _FakeJobHandler("fake_job_with_spec", {"ok": True})
+    spec = _FakeSubmissionSpecWithRetryPrerequisite(retry_prerequisite_job_type=bad_value)
+
+    with pytest.raises(ValueError, match="retry_prerequisite_job_type"):
+        registry.register(handler, submission_spec=spec)
+
+
+@pytest.mark.parametrize("good_value", [None, "reconciliation"])
+def test_register_accepts_valid_retry_prerequisite_job_type(good_value: object) -> None:
+    registry = JobRegistry()
+    handler = _FakeJobHandler("fake_job_with_spec", {"ok": True})
+    spec = _FakeSubmissionSpecWithRetryPrerequisite(retry_prerequisite_job_type=good_value)
+
+    registry.register(handler, submission_spec=spec)
+
+    assert registry.resolve_submission_spec("fake_job_with_spec") is spec
+
+
+# --- D-04: JobDomainConflictError + translate_domain_conflicts -------------
+
+
+def test_job_domain_conflict_error_message_and_str() -> None:
+    exc = JobDomainConflictError("x")
+    assert exc.message == "x"
+    assert str(exc) == "x"
+
+
+def test_domain_conflict_exceptions_is_the_closed_tuple() -> None:
+    assert DOMAIN_CONFLICT_EXCEPTIONS == (ConcurrentRunLockedError,)
+
+
+def test_translate_domain_conflicts_translates_concurrent_run_locked_error() -> None:
+    original = ConcurrentRunLockedError("trend_following_daily", date(2024, 1, 5))
+
+    with pytest.raises(JobDomainConflictError) as exc_info:
+        with translate_domain_conflicts():
+            raise original
+
+    assert "trend_following_daily" in exc_info.value.message
+    assert "2024-01-05" in exc_info.value.message
+    assert exc_info.value.__cause__ is original
+
+
+def test_translate_domain_conflicts_passes_through_other_exceptions() -> None:
+    with pytest.raises(ValueError, match="unrelated"):
+        with translate_domain_conflicts():
+            raise ValueError("unrelated")

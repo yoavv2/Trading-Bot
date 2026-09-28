@@ -19,13 +19,15 @@ from trading_platform.jobs.contracts import JobHandler
 class JobCancellationMode(StrEnum):
     """Closed vocabulary describing how a public Job type acknowledges cancellation.
 
-    Cooperative cancellation is acknowledged at handler step boundaries
-    (Phase 17 D-08) -- every Phase 19 Job type uses ``STEP_BOUNDARY``. Phase
-    20 is expected to add further values (e.g. "before broker submission")
-    as new operation types with different cancellation semantics register.
+    - ``STEP_BOUNDARY``: cooperative acknowledgement at handler step
+      boundaries (Phase 17 D-08).
+    - ``QUEUED_ONLY``: cancellable only while QUEUED; a RUNNING Job of such
+      a type is never cancellable and ``JobOrchestrationService`` rejects
+      the request (D-01/D-02).
     """
 
     STEP_BOUNDARY = "step_boundary"
+    QUEUED_ONLY = "queued_only"
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,17 @@ class JobSubmissionSpec(Protocol):
         session data to derive them from). Must not mutate any state --
         this is called on every catalog read (``GET /api/v1/job-types``),
         including reads that never lead to a submission."""
+
+
+def retry_prerequisite_for(spec: JobSubmissionSpec) -> str | None:
+    """D-19: the Job type that must SUCCEED (same strategy_id, completed
+    after the original) before a FAILED outcome_uncertain Job of this type
+    may be retried; None = no reconcile-first block.
+
+    Optional spec attribute, deliberately not a Protocol member.
+    """
+
+    return getattr(spec, "retry_prerequisite_job_type", None)
 
 
 class JobRegistry:
@@ -115,6 +128,15 @@ class JobRegistry:
                     f"Job type '{job_type}': submission spec must define a callable "
                     "'submission_defaults' method."
                 )
+            if hasattr(submission_spec, "retry_prerequisite_job_type"):
+                retry_prerequisite = submission_spec.retry_prerequisite_job_type
+                if retry_prerequisite is not None and not (
+                    isinstance(retry_prerequisite, str) and retry_prerequisite.strip()
+                ):
+                    raise ValueError(
+                        f"Job type '{job_type}': submission spec "
+                        "'retry_prerequisite_job_type' must be None or a nonblank string."
+                    )
         self._handlers[job_type] = handler
         if submission_spec is not None:
             self._submission_specs[job_type] = submission_spec
@@ -149,9 +171,10 @@ def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     """Return the default ``JobRegistry`` for the running process.
 
     Phase 19 registers the first concrete operation handler here
-    (``backtest``). Phase 20 appends the remaining operations (risk
-    evaluation, paper session, reconciliation, market-data sync, broker
-    sync, ...) to this same function.
+    (``backtest``). Phase 20 (Plan 16) appends the remaining seven
+    registrations (risk evaluation, paper session, reconciliation,
+    ingest-bars, sync-symbol-metadata, sync-market-sessions, broker-order
+    sync) to this same function -- not this plan's scope.
 
     JOB-03's extensibility contract: adding a new Job type means (1)
     writing a handler module implementing ``JobHandler`` and (2) appending
