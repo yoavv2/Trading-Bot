@@ -549,6 +549,7 @@ def test_jobs_router_exposes_exact_allowed_methods() -> None:
         "/api/v1/jobs/{job_id}/logs": {"GET"},
         "/api/v1/jobs/{job_id}/events": {"GET"},
         "/api/v1/jobs/{job_id}/cancel": {"POST"},
+        "/api/v1/jobs/{job_id}/retry": {"POST"},
     }
     assert all(
         not methods.intersection({"PUT", "PATCH", "DELETE"})

@@ -15,18 +15,24 @@ from trading_platform.api.dependencies import (
     get_job_orchestration_service,
     get_job_read_filters,
     get_job_read_service,
+    get_job_registry,
     require_mutations_enabled,
     serialize_job_filters,
 )
-from trading_platform.jobs.registry import InvalidJobPayloadError
+from trading_platform.jobs.registry import InvalidJobPayloadError, JobRegistry, UnknownJobTypeError
 from trading_platform.orchestration.job_mutations import (
     IdempotencyConflictError,
     InvalidCancellationReasonError,
     InvalidIdempotencyKeyError,
+    InvalidRetryPayloadError,
     JobMutationNotFoundError,
+    JobNotCancellableRunningError,
+    JobNotRetryableError,
     JobOrchestrationService,
     JobTerminalConflictError,
     MissingIdempotencyKeyError,
+    RetryAlreadyExistsError,
+    RetryBlockedError,
     UnknownJobTypeForSubmissionError,
 )
 from trading_platform.services.job_reads import (
@@ -145,6 +151,12 @@ def cancel_job(
             job_id=str(exc.job_id),
             status=exc.status,
         ) from exc
+    except JobNotCancellableRunningError as exc:
+        raise _error(
+            status.HTTP_409_CONFLICT,
+            "job_not_cancellable_running",
+            job_id=str(exc.job_id),
+        ) from exc
     except IdempotencyConflictError as exc:
         raise _error(
             status.HTTP_409_CONFLICT,
@@ -155,6 +167,55 @@ def cancel_job(
     return _mutation_response(
         reference=result.reference.to_dict(),
         status_code=status.HTTP_200_OK,
+        replayed=result.replayed,
+    )
+
+
+@router.post("/{job_id}/retry", dependencies=[Depends(require_mutations_enabled)])
+def retry_job(
+    job_id: UUID,
+    orchestration: Annotated[JobOrchestrationService, Depends(get_job_orchestration_service)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> JSONResponse:
+    try:
+        result = orchestration.retry(job_id=job_id, idempotency_key=idempotency_key)
+    except MissingIdempotencyKeyError as exc:
+        raise _error(status.HTTP_400_BAD_REQUEST, "missing_idempotency_key") from exc
+    except InvalidIdempotencyKeyError as exc:
+        raise _error(status.HTTP_400_BAD_REQUEST, "invalid_idempotency_key") from exc
+    except JobMutationNotFoundError as exc:
+        raise _error(status.HTTP_404_NOT_FOUND, "job_not_found", job_id=str(exc.job_id)) from exc
+    except JobNotRetryableError as exc:
+        raise _error(status.HTTP_409_CONFLICT, "job_not_retryable", status=exc.status) from exc
+    except RetryAlreadyExistsError as exc:
+        raise _error(
+            status.HTTP_409_CONFLICT,
+            "retry_exists",
+            existing_retry_job_id=str(exc.existing_retry_job_id),
+        ) from exc
+    except RetryBlockedError as exc:
+        block_detail: dict[str, str] = {"required_job_type": exc.block.required_job_type}
+        if exc.block.strategy_id is not None:
+            block_detail["strategy_id"] = exc.block.strategy_id
+        raise _error(status.HTTP_409_CONFLICT, exc.block.code, **block_detail) from exc
+    except InvalidRetryPayloadError as exc:
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_retry_payload", reason=exc.reason) from exc
+    except UnknownJobTypeForSubmissionError as exc:
+        raise _error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "unknown_job_type",
+            job_type=exc.job_type,
+        ) from exc
+    except IdempotencyConflictError as exc:
+        raise _error(
+            status.HTTP_409_CONFLICT,
+            "idempotency_key_conflict",
+            original_job_id=exc.original_job_id,
+        ) from exc
+
+    return _mutation_response(
+        reference=result.reference.to_dict(),
+        status_code=status.HTTP_200_OK if result.replayed else status.HTTP_202_ACCEPTED,
         replayed=result.replayed,
     )
 
@@ -175,11 +236,24 @@ def list_jobs(
 def job_detail(
     job_id: UUID,
     job_reads: Annotated[JobReadService, Depends(get_job_read_service)],
+    registry: Annotated[JobRegistry, Depends(get_job_registry)],
+    orchestration: Annotated[JobOrchestrationService, Depends(get_job_orchestration_service)],
 ) -> dict[str, object]:
     try:
-        return job_reads.get_job_detail(str(job_id))
+        detail = job_reads.get_job_detail(str(job_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        spec = registry.resolve_submission_spec(detail["job_type"])
+        detail["cancellation_mode"] = spec.cancellation_mode.value
+    except UnknownJobTypeError:
+        detail["cancellation_mode"] = None
+
+    block = orchestration.retry_block(job_id=job_id)
+    detail["retry_blocked"] = block.to_dict() if block is not None else None
+
+    return detail
 
 
 @router.get("/{job_id}/progress")
