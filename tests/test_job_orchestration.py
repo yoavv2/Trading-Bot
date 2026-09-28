@@ -790,7 +790,11 @@ def test_retry_block_d19_matrix(case: str, expect_blocked: bool) -> None:
         # "no_prerequisite_job" and "original_not_uncertain"/"original_cancelled"
         # seed no prerequisite Job row.
 
+    before = _counts()
     block = service.retry_block(job_id=original_id)
+    # retry_block() is read-only (D-19/D-20): it must never write, whether or
+    # not it finds a block.
+    assert _counts() == before
 
     if expect_blocked:
         assert block is not None
@@ -800,6 +804,8 @@ def test_retry_block_d19_matrix(case: str, expect_blocked: bool) -> None:
         with pytest.raises(RetryBlockedError) as exc_info:
             service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
         assert exc_info.value.block == block
+        # A blocked retry() rejects before session.begin_nested() -- zero rows.
+        assert _counts() == before
     else:
         assert block is None
         result = service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
