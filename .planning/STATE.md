@@ -88,7 +88,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P12 | 10min | 2 tasks | 13 files |
 | Phase 20 P13 | ~35min | 3 tasks | 9 files |
 | Phase 20 P14 | 20min | 2 tasks | 7 files |
-| Phase 20 P15 | ~23min | 3 tasks | 10 files |
+| Phase 20 P15 | ~62min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -224,7 +224,7 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-14]: ingest-bars is implemented (spec, handler, tests, form) but deliberately not registered in build_default_registry() or console's jobTypeForms.ts -- both are explicitly deferred to Phase 20 Plan 16 per registry.py's own documented plan, mirroring the 19-06/19-07 registration-vs-implementation split.
 - [Phase 20]: [20-15]: sync-symbol-metadata + sync-market-sessions ship as strict step-boundary Job types over the Plan 03 services; SyncSymbolMetadataJobHandler calls raise_for_failures() only after the completion log is written (ORCH-02), and both submission_defaults are the first Phase 20 specs that never depend on the database (settings-derived metadata universe; clock-derived exchange-local today) so neither ever returns None.
 - [Phase 20]: [20-15]: SyncMarketSessionsPayloadRejection.INVALID_FIELD_TYPE is kept in the closed enum (shared PayloadFieldRejection vocabulary, map_validation_error's residual fallback) but is unreachable via this spec's own payload since both from_date/to_date route through the shared parse_iso_date before-validator, which maps every wrong type to INVALID_DATE instead -- pinned by a dedicated fallback test rather than a fabricated reachable case (advisor-reviewed).
-- [Phase 20]: [20-15]: All three OPS-05 market-data Job types (ingest-bars 20-14, sync-symbol-metadata + sync-market-sessions this plan) now exist as strict spec+handler pairs with unwired console forms, but neither of this plan's two types is registered in build_default_registry() nor wired into jobTypeForms.ts (Plan 16's scope per this plan's own action text) -- OPS-05 and ORCH-02 both stay Pending in REQUIREMENTS.md, matching the 20-03/20-07/20-08/20-09/20-14 registration-vs-implementation precedent.
+- [Phase 20]: [20-15]: All three OPS-05 market-data Job types (ingest-bars 20-14, sync-symbol-metadata + sync-market-sessions this plan) now exist as strict spec+handler pairs with unwired console forms, but neither of this plan's two types is registered in build_default_registry() nor wired into jobTypeForms.ts -- OPS-05 stays Pending in REQUIREMENTS.md (owned by 20-16 registry+form-map wiring and 20-21), matching the 20-03/20-07/20-08/20-09/20-14 registration-vs-implementation precedent; ORCH-02 also stays Pending, owned by 20-24 (scripts/Makefile boundary-enforcement alongside ORCH-01/ORCH-08) -- confirmed via `grep -ln "OPS-05\|ORCH-02" .planning/phases/20-*/20-1[6-9]-PLAN.md .planning/phases/20-*/20-2[0-4]-PLAN.md` (20-16, 20-21, 20-24) so neither requirement ID is left orphaned.
 
 ### Pending Todos
 
