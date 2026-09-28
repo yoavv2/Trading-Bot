@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchApi, submitJob, cancelJob, retryJob } from "./api";
+import {
+  fetchApi,
+  submitJob,
+  cancelJob,
+  retryJob,
+  tripKillSwitch,
+  resetKillSwitch,
+  enableStrategy,
+  disableStrategy,
+} from "./api";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -499,6 +508,222 @@ describe("retryJob", () => {
       expect(result.message).toBe(
         "This Job can no longer be retried: the original payload is no longer valid.",
       );
+    }
+  });
+});
+
+describe("control mutations (tripKillSwitch/resetKillSwitch/enableStrategy/disableStrategy)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("tripKillSwitch sends PUT with no Idempotency-Key header and the tripped body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { state: "tripped", changed: true, run_id: "r1" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tripKillSwitch("drill");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/backend/api/v1/controls/kill-switch");
+    expect(init.method).toBe("PUT");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["Idempotency-Key"]).toBeUndefined();
+    expect(JSON.parse(init.body as string)).toEqual({
+      state: "tripped",
+      reason: "drill",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("resetKillSwitch sends the armed body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { state: "armed", changed: true, run_id: "r2" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await resetKillSwitch("resuming");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      state: "armed",
+      reason: "resuming",
+    });
+  });
+
+  it("enableStrategy sends PUT /controls/strategies/<id> with the enabled body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        strategy_id: "trend_following_daily",
+        status: "enabled",
+        changed: true,
+        run_id: "r3",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await enableStrategy("trend_following_daily", "r");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/backend/api/v1/controls/strategies/trend_following_daily");
+    expect(JSON.parse(init.body as string)).toEqual({
+      status: "enabled",
+      reason: "r",
+    });
+  });
+
+  it("disableStrategy sends the disabled body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        strategy_id: "trend_following_daily",
+        status: "disabled",
+        changed: true,
+        run_id: "r4",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await disableStrategy("trend_following_daily", "r");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      status: "disabled",
+      reason: "r",
+    });
+  });
+
+  it("returns ok:true with data.changed === false on a 200 unchanged response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(200, { state: "tripped", changed: false, run_id: "x" }),
+      ),
+    );
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.changed).toBe(false);
+    }
+  });
+
+  it("maps 422 invalid_control_reason to the exact UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(422, { detail: { code: "invalid_control_reason" } }),
+      ),
+    );
+
+    const result = await tripKillSwitch("");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(
+        "Reason is required and must be 500 characters or fewer.",
+      );
+    }
+  });
+
+  it("maps 404 strategy_not_found (structured detail) to the exact UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, { detail: { code: "strategy_not_found", strategy_id: "x" } }),
+      ),
+    );
+
+    const result = await enableStrategy("x", "r");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("Strategy x was not found.");
+    }
+  });
+
+  it("renders a plain-string detail verbatim", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, { detail: "Unknown strategy 'x'." }),
+      ),
+    );
+
+    const result = await enableStrategy("x", "r");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("Unknown strategy 'x'.");
+    }
+  });
+
+  it("falls back to the defensive copy when detail is an array", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(422, { detail: [{ loc: ["body", "status"], msg: "bad" }] }),
+      ),
+    );
+
+    const result = await enableStrategy("x", "r");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(
+        "Request rejected — check the input and try again.",
+      );
+    }
+  });
+
+  it("maps 422 invalid_control_request to the defensive copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(422, { detail: { code: "invalid_control_request" } }),
+      ),
+    );
+
+    const result = await enableStrategy("x", "r");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(
+        "Request rejected — check the input and try again.",
+      );
+    }
+  });
+
+  it("maps 403 mutations_disabled to the reused copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(403, { detail: { code: "mutations_disabled" } }),
+      ),
+    );
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("Mutations disabled on this deployment");
+    }
+  });
+
+  it("returns ok:false with status:null and never throws on a network failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+    );
+
+    const result = await tripKillSwitch("drill");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBeNull();
     }
   });
 });
