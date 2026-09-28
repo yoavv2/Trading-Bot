@@ -256,7 +256,7 @@ Plans:
 
 **Wave 3**
 
-- [ ] 20-07-PLAN.md — risk-evaluation Job type + form
+- [x] 20-07-PLAN.md — risk-evaluation Job type + form
 - [ ] 20-08-PLAN.md — reconciliation Job type (report-only, queued-only) + form
 - [ ] 20-09-PLAN.md — paper-session Job type (queued-only, domain_conflict, two linked runs) + form
 
@@ -334,7 +334,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
-| 20. Complete Operation Migration & Safety Controls | v1.3 | 6/24 | In Progress | - |
+| 20. Complete Operation Migration & Safety Controls | v1.3 | 7/24 | In Progress | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
 ---

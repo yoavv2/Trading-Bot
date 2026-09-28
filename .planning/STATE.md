@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-06-PLAN.md
-last_updated: "2026-09-28T09:20:55.867Z"
+stopped_at: Completed 20-07-PLAN.md
+last_updated: "2026-09-28T09:40:41.273Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 33
+  completed_plans: 34
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 7 of 24
+Plan: 8 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -80,6 +80,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P04 | 20min | 2 tasks | 6 files |
 | Phase 20 P05 | ~40min | 2 tasks | 6 files |
 | Phase 20 P06 | 22min | 3 tasks | 8 files |
+| Phase 20 P07 | ~25min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -198,6 +199,8 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-05]: apply_reconciliation_corrections left unchanged -- direct read confirmed it creates no StrategyRun, so per orchestrator decision 4 it takes no job_id parameter
 - [Phase 20]: [20-06]: OPS-07/CTRL-01/CTRL-02/OPS-03 stay Pending: 20-06 shipped only the console contract layer (types.ts, api.ts clients, jobFormKit); no operator-visible Retry/control UI exists yet
 - [Phase 20]: [20-06]: Control mutation clients (tripKillSwitch/resetKillSwitch/enableStrategy/disableStrategy) send no Idempotency-Key header, per D-10, structurally distinct from Job mutation clients
+- [Phase 20]: [20-07]: RiskEvaluationSubmissionSpec/Handler/RiskEvaluationJobForm shipped test-first; OPS-02 left Pending in REQUIREMENTS.md since build_default_registry registration (Plan 16) and the E2E vertical-slice test (Plan 19) are still outstanding, per the 19-01/19-03/19-06/19-07 precedent.
+- [Phase 20]: [20-07]: Mapped the plan's 'as_of_session as int' rejection example to invalid_date (payload_fields.parse_iso_date raises INVALID_DATE for any non-str/non-date input), using strategy_id=123 for the invalid_field_type test case instead, matching the backtest_submission.py precedent rather than bending the validator to the plan's prose.
 
 ### Pending Todos
 
@@ -238,6 +241,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T09:20:55.858Z
-Stopped at: Completed 20-06-PLAN.md
+Last session: 2026-09-28T09:40:41.262Z
+Stopped at: Completed 20-07-PLAN.md
 Resume file: None
