@@ -7,7 +7,7 @@ FROM_DATE ?=
 TO_DATE ?=
 SYMBOLS ?=
 
-.PHONY: up down logs migrate seed dry-run backtest export-backtest-report ingest-bars sync-metadata sync-sessions generate-signals submit-paper-orders run-paper-session sync-paper-state reconcile-paper-execution test console console-install
+.PHONY: up down logs migrate seed export-backtest-report generate-signals test console console-install
 
 up:
 	$(COMPOSE) up --build -d
@@ -24,65 +24,19 @@ migrate:
 seed:
 	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/seed_phase1.py
 
-dry-run:
-	$(PYTHONPATH_PREFIX) $(PYTHON) -m trading_platform.worker dry-run --strategy $(STRATEGY)
-
-backtest:
-	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/run_backtest.py \
-		--strategy $(STRATEGY) \
-		$(if $(FROM_DATE),--from-date $(FROM_DATE),) \
-		$(if $(TO_DATE),--to-date $(TO_DATE),)
-
 export-backtest-report:
 	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/export_backtest_report.py \
 		$(if $(RUN_ID),--run-id $(RUN_ID),--strategy $(STRATEGY)) \
 		--summary-format $(or $(SUMMARY_FORMAT),markdown) \
 		$(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),)
 
-ingest-bars:
-	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/ingest_polygon_bars.py \
-		$(if $(FROM_DATE),--from-date $(FROM_DATE),) \
-		$(if $(TO_DATE),--to-date $(TO_DATE),) \
-		$(if $(SYMBOLS),--symbols $(SYMBOLS),)
-
-sync-metadata:
-	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/sync_symbol_metadata.py \
-		$(if $(SYMBOLS),--symbols $(SYMBOLS),)
-
-sync-sessions:
-	$(PYTHONPATH_PREFIX) $(PYTHON) -m trading_platform.worker sync-sessions \
-		$(if $(FROM_DATE),--from-date $(FROM_DATE),) \
-		$(if $(TO_DATE),--to-date $(TO_DATE),)
-
 generate-signals:
 	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/generate_signals.py \
 		--strategy $(STRATEGY) \
 		$(if $(AS_OF),--as-of $(AS_OF),)
 
-submit-paper-orders:
-	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/submit_paper_orders.py \
-		--strategy $(STRATEGY) \
-		$(if $(AS_OF),--as-of $(AS_OF),) \
-		$(if $(RISK_RUN_ID),--risk-run-id $(RISK_RUN_ID),)
-
-run-paper-session:
-	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/run_paper_session.py \
-		$(if $(STRATEGY),--strategy $(STRATEGY),) \
-		$(if $(AS_OF),--as-of $(AS_OF),) \
-		$(if $(RISK_RUN_ID),--risk-run-id $(RISK_RUN_ID),)
-
-sync-paper-state:
-	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/sync_paper_state.py \
-		$(if $(STRATEGY),--strategy $(STRATEGY),) \
-		$(if $(AS_OF),--as-of $(AS_OF),)
-
-reconcile-paper-execution:
-	$(PYTHONPATH_PREFIX) $(PYTHON) scripts/reconcile_paper_execution.py \
-		$(if $(STRATEGY),--strategy $(STRATEGY),) \
-		$(if $(AS_OF),--as-of $(AS_OF),)
-
 test:
-	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py tests/test_strategy_registry.py tests/test_dry_run.py tests/test_market_data_ingestion.py tests/test_market_data_access.py tests/test_trend_following_strategy.py -q
+	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py tests/test_strategy_registry.py tests/test_market_data_ingestion.py tests/test_market_data_access.py tests/test_trend_following_strategy.py -q
 
 console-install:
 	cd console && npm install

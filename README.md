@@ -1,6 +1,6 @@
 # Trading Strategy Platform
 
-Trading Strategy Platform is a local-first Python foundation for a single-user, auditable strategy system. The current repository is the first operational slice of that platform: typed configuration loading, a FastAPI control plane, strategy registration, PostgreSQL persistence, Alembic migrations, and a persisted dry-run flow for the initial `TrendFollowingDailyV1` strategy.
+Trading Strategy Platform is a local-first Python foundation for a single-user, auditable strategy system. The current repository is the first operational slice of that platform: typed configuration loading, a FastAPI control plane, strategy registration, PostgreSQL persistence, Alembic migrations, and and the initial `TrendFollowingDailyV1` strategy.
 
 This is not a live trading system yet. It is the Phase 1 foundation for one.
 
@@ -12,12 +12,12 @@ Implemented today:
 - File-first configuration using `config/app.yaml` and `config/strategies/*.yaml`
 - Environment variable overrides via the `TRADING_PLATFORM_` prefix
 - Strategy registry with the first registered strategy: `trend_following_daily`
-- PostgreSQL persistence for strategy catalog entries and dry-run execution records
+- PostgreSQL persistence for strategy catalog entries and Job-linked run records
 - Alembic migration flow for schema management
 - Seed script for the initial strategy catalog entry
-- Worker and script-based dry-run flow that persists a `strategy_runs` record
+- Operator console Jobs and controls as the sole manual mutation surface
 - Docker Compose services for PostgreSQL, API, and a placeholder worker
-- Pytest coverage for app boot, strategy registry, migrations, and dry-run persistence
+- Pytest coverage for app boot, strategy registry, and migrations
 
 Not implemented yet:
 
@@ -47,7 +47,7 @@ Not implemented yet:
 │   └── strategies/
 │       └── trend_following_daily.yaml
 ├── scripts/
-│   ├── dry_run.py             # Persisted dry-run bootstrap CLI
+│   ├── export_backtest_report.py / generate_signals.py / operator_status.py / report_strategy_analytics.py  # read/report tools
 │   ├── migrate.py             # Alembic wrapper
 │   └── seed_phase1.py         # Seed initial strategy metadata
 ├── src/trading_platform/
@@ -108,11 +108,10 @@ This is the most complete development workflow right now because migrations and 
    PYTHONPATH=src .venv/bin/python -m trading_platform.api.app
    ```
 
-7. In another shell, run a dry bootstrap:
-
-   ```bash
-   PYTHONPATH=src .venv/bin/python -m trading_platform.worker dry-run --strategy trend_following_daily
-   ```
+7. Run operations (backtests, data ingestion, risk, paper sessions, reconciliation)
+   as Jobs from the operator console at `/jobs/new`, and manage the kill switch
+   and strategy enable/disable from `/controls`. The old per-operation scripts and
+   Makefile targets have been removed; the HTTP Job API is the only mutation path.
 
 ### Docker Compose Notes
 
@@ -130,15 +129,13 @@ make down       # Stop containers and remove orphans
 make logs       # Follow db/api/worker logs
 make migrate    # Apply Alembic migrations from the host environment
 make seed       # Seed the initial strategy record
-make dry-run    # Execute the worker dry-run for the default strategy
+make export-backtest-report  # Read-only backtest report export
+make generate-signals        # Read-only signal evaluation
 make test       # Run the current test suite
 ```
 
-Override the default strategy for the dry-run flow with:
-
-```bash
-make dry-run STRATEGY=trend_following_daily
-```
+All mutating operations run as Jobs from the console (`/jobs/new`) and
+controls from `/controls`; there are no Makefile targets for them.
 
 ## Operator Console
 
@@ -226,9 +223,9 @@ curl http://127.0.0.1:8000/api/v1/system
 The current schema is intentionally minimal and centers on two tables:
 
 - `strategies`: persisted strategy catalog metadata
-- `strategy_runs`: persisted dry-run execution records
+- `strategy_runs`: persisted strategy run records
 
-The dry-run flow creates or refreshes the strategy record and then stores a `dry_bootstrap` run with status transitions such as `pending`, `running`, and `succeeded`.
+Job-driven operations create or refresh the strategy record and store run rows linked to their Job.
 
 ## Testing
 
@@ -248,7 +245,7 @@ Its current role in the codebase is to prove:
 
 - strategy discovery through a registry
 - config-driven metadata
-- dry-run execution plumbing
+- strategy execution plumbing
 - persistence of strategy and run metadata
 
 It does not yet place orders, ingest candles, or run backtests.
