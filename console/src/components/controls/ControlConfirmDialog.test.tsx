@@ -112,8 +112,9 @@ describe("ControlConfirmDialog", () => {
     expect(screen.queryByLabelText("Type RESET to confirm")).toBeNull();
   });
 
-  it("closes immediately on a changed:true response", async () => {
+  it("closes immediately on a changed:true response and calls onDone", async () => {
     const onClose = vi.fn();
+    const onDone = vi.fn();
     const onConfirm = vi.fn<(reason: string) => Promise<ChangedResult>>().mockResolvedValue({
       ok: true,
       data: { changed: true },
@@ -129,6 +130,7 @@ describe("ControlConfirmDialog", () => {
         targetState="TRIPPED"
         onConfirm={onConfirm}
         onClose={onClose}
+        onDone={onDone}
       />,
     );
 
@@ -140,6 +142,7 @@ describe("ControlConfirmDialog", () => {
 
     expect(onConfirm).toHaveBeenCalledWith("drill");
     expect(onClose).toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   it("on a changed:false response, stays open, shows the unchanged body, hides confirm, and switches dismiss to Close", async () => {

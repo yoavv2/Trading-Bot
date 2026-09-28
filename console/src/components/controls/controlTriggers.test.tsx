@@ -181,6 +181,36 @@ describe("KillSwitchControlTrigger", () => {
       screen.getByText(/Mutation availability unknown/),
     ).toBeTruthy();
   });
+
+  it("keeps showing the Already TRIPPED unchanged notice for the state confirmed at open, even after the live isTripped prop flips underneath the still-open dialog", async () => {
+    stubControlFetch({ putResponse: { status: 200, body: { changed: false } } });
+
+    const { rerender } = render(<KillSwitchControlTrigger isTripped={false} />);
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+    await flush();
+
+    fireEvent.change(screen.getByLabelText("Reason"), {
+      target: { value: "drill" },
+    });
+    const confirmButtons = screen.getAllByRole("button", {
+      name: "Trip Kill Switch",
+    });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+    await flush();
+
+    // Simulate the caller refetching and flipping isTripped after the
+    // killswitch:changed dispatch from onDone — the dialog must not
+    // re-derive its heading/body from the now-live (flipped) prop.
+    rerender(<KillSwitchControlTrigger isTripped={true} />);
+    await flush();
+
+    expect(
+      screen.getByText("Already TRIPPED — no change (recorded)"),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Trip Kill Switch" })).toBeTruthy();
+  });
 });
 
 describe("StrategyControlTrigger", () => {
