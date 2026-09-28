@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-13-PLAN.md
-last_updated: "2026-09-28T15:13:53.583Z"
+stopped_at: Completed 20-14-PLAN.md
+last_updated: "2026-09-28T15:28:47.744Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 40
+  completed_plans: 41
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 14 of 24
+Plan: 15 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -87,6 +87,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P11 | ~30min | 2 tasks | 5 files |
 | Phase 20 P12 | 10min | 2 tasks | 13 files |
 | Phase 20 P13 | ~35min | 3 tasks | 9 files |
+| Phase 20 P14 | 20min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -218,6 +219,8 @@ Recent decisions affecting current work:
 - [Phase 20-12]: ORCH-01/ORCH-08 left un-marked despite being listed in plan 20-12's frontmatter requirements -- 20-24 is the explicitly-designated plan that closes both with exact-set AST literals over the final state (scripts/ + Makefile cleanup is out of 20-12's scope).
 - [Phase 20]: [20-13]: CTRL-01/CTRL-02/OPS-03/OPS-07 all left Pending in REQUIREMENTS.md -- this plan ships only the HTTP mechanism (control routes, retry route, queued-only cancel mapping, job-detail composition); console wiring and production Job-type registration are later plans' scope (20-16..20-23), confirmed by grepping every 20-*-PLAN.md frontmatter requirements field so none is orphaned.
 - [Phase 20]: [20-13]: Verified the console wire contract (console/src/lib/api.ts, 20-06) before finalizing -- typed clients and MUTATION_ERROR_COPY already matched this plan's exact error codes and response shapes, zero server-side changes needed to align.
+- [Phase 20]: [20-14]: IngestBarsJobHandler resolves Settings explicitly (self._settings or load_settings()) rather than passing self._settings through unresolved, because ingest_daily_bars needs both settings.market_data (a sub-object) and the full Settings as db_settings -- unlike backtest/risk-evaluation handlers, which pass self._settings straight through to a service that accepts the full Settings object.
+- [Phase 20]: [20-14]: ingest-bars is implemented (spec, handler, tests, form) but deliberately not registered in build_default_registry() or console's jobTypeForms.ts -- both are explicitly deferred to Phase 20 Plan 16 per registry.py's own documented plan, mirroring the 19-06/19-07 registration-vs-implementation split.
 
 ### Pending Todos
 
@@ -258,6 +261,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T15:13:53.574Z
-Stopped at: Completed 20-13-PLAN.md
+Last session: 2026-09-28T15:28:47.734Z
+Stopped at: Completed 20-14-PLAN.md
 Resume file: None
