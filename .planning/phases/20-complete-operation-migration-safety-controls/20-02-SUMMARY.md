@@ -112,6 +112,10 @@ None - no external service configuration required.
 - `ruff check`, `ruff format`, and the scoped `mypy` gate (execution/reconciliation/config) all pass; pre-commit hooks passed clean on both task commits.
 - No blockers for subsequent Phase 20 plans.
 
+## Process Note
+
+The `docs(20-02)` tracking commit (`500de94`) was created via `gsd-sdk query commit`, which does not expose a trailer argument, so it landed without the required `Co-Authored-By` trailer -- same tool limitation documented in the 20-01/19-08 process notes. Per that precedent, this is disclosed here rather than corrected via `git commit --amend` (avoiding a history rewrite); no work was lost.
+
 ## Self-Check: PASSED
 
 - FOUND: `src/trading_platform/services/backtest_reporting.py` (build_backtest_report, persist_backtest_metrics)
