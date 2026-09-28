@@ -20,7 +20,7 @@ from alembic import command
 from scripts.migrate import build_alembic_config
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import Job, Strategy, StrategyRun
+from trading_platform.db.models import Strategy, StrategyRun
 from trading_platform.db.session import clear_engine_cache, get_engine, session_scope
 
 
@@ -62,6 +62,12 @@ def _upgrade_to_revision(revision: str) -> None:
 
 @pytest.fixture()
 def migrated_phase19_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """Pins revision 0020 (not head): this file tests migration 0020's own
+    schema, which migration 0021 (Phase 20) later changes (drops
+    ``uq_strategy_runs_job_id`` in favor of a non-unique index -- see
+    ``tests/test_phase20_operations_migration.py`` for the head-state
+    equivalents).
+    """
     database_name = f"phase19_job_ops_{uuid.uuid4().hex[:8]}"
     admin_params = _admin_connection_settings()
 
@@ -72,7 +78,7 @@ def migrated_phase19_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         pytest.fail(f"PostgreSQL is required for Phase 19 migration tests: {exc}")
 
     _set_database_env(monkeypatch, database_name)
-    _upgrade_to_revision("head")
+    _upgrade_to_revision("0020_phase19_job_operations")
 
     try:
         yield database_name
@@ -94,11 +100,28 @@ def migrated_phase19_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 
 
 def _create_job() -> uuid.UUID:
+    """Insert a minimal ``jobs`` row via raw SQL rather than the ``Job`` ORM
+    class: at revision 0020 the ``jobs`` table has no ``retry_of_job_id``
+    column, but the current-code ``Job`` model (Phase 20) always includes it
+    in an ORM INSERT (with value ``NULL``), which raises ``UndefinedColumn``
+    against a DB still pinned to this file's revision."""
+
+    job_id = uuid.uuid4()
     with session_scope(load_settings()) as session:
-        job = Job(job_type="phase19_probe", payload={})
-        session.add(job)
-        session.flush()
-        return job.id
+        session.execute(
+            text(
+                "INSERT INTO jobs (id, job_type, payload, status, result_summary) "
+                "VALUES (:id, :job_type, CAST(:payload AS JSON), :status, CAST(:result_summary AS JSON))"
+            ),
+            {
+                "id": job_id,
+                "job_type": "phase19_probe",
+                "payload": "{}",
+                "status": "queued",
+                "result_summary": "{}",
+            },
+        )
+    return job_id
 
 
 def _create_strategy() -> uuid.UUID:
@@ -211,7 +234,7 @@ def test_phase19_migration_downgrade_and_reupgrade(migrated_phase19_db: str) -> 
         )
     assert "config_invalid" in enum_values
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0020_phase19_job_operations")
     clear_settings_cache()
     clear_engine_cache()
 
@@ -227,9 +250,11 @@ def test_phase19_migration_downgrade_and_reupgrade(migrated_phase19_db: str) -> 
 
 
 def test_orm_metadata_matches_migration() -> None:
+    # NOTE: as of Phase 20 (migration 0021), the ORM column is no longer
+    # unique -- see test_orm_metadata_matches_phase20_migration in
+    # tests/test_phase20_operations_migration.py for that assertion.
     column = StrategyRun.__table__.c.job_id
     assert column.nullable is True
-    assert column.unique is True
 
     foreign_keys = list(column.foreign_keys)
     assert len(foreign_keys) == 1

@@ -175,6 +175,7 @@ def test_alembic_upgrade_creates_phase2_market_data_tables(migrated_database: st
     run_cols = {col["name"] for col in inspector.get_columns("market_data_ingestion_runs")}
     assert run_cols >= {
         "id",
+        "job_id",
         "provider",
         "from_date",
         "to_date",
@@ -960,6 +961,7 @@ def test_alembic_upgrade_creates_phase17_job_tables(migrated_database: str) -> N
         "lease_expired",
         "cancellation_timeout",
         "config_invalid",
+        "domain_conflict",
     }
     assert enums["job_cancellation_cause"] == {
         "operator_request",
@@ -991,6 +993,7 @@ def test_alembic_upgrade_creates_phase17_job_tables(migrated_database: str) -> N
         "blocking_job_id",
         "blocking_job_status",
         "root_cause_job_id",
+        "retry_of_job_id",
         "progress_percent",
         "progress_step",
         "progress_current",

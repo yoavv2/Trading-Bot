@@ -177,6 +177,7 @@ def _submit_job_in_session(
     job_type: str,
     payload: Mapping[str, Any],
     depends_on: Sequence[uuid.UUID],
+    retry_of_job_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Insert one Job and its immutable submission records into ``session``."""
 
@@ -197,6 +198,7 @@ def _submit_job_in_session(
             job_type=job_type,
             payload=dict(payload),
             status=JobStatus.QUEUED,
+            retry_of_job_id=retry_of_job_id,
         )
     )
 
@@ -263,6 +265,7 @@ def submit_job(
     job_type: str,
     payload: Mapping[str, Any],
     depends_on: Sequence[uuid.UUID] = (),
+    retry_of_job_id: uuid.UUID | None = None,
     settings: Settings | DatabaseSettings | None = None,
     session: Session | None = None,
 ) -> uuid.UUID:
@@ -287,6 +290,10 @@ def submit_job(
     Per D-06: no function in this module or anywhere else may add, remove, or
     modify a ``JobDependency`` row after this function returns -- there is
     deliberately no ``add_dependency`` or ``remove_dependency`` function.
+
+    ``retry_of_job_id``: immediate parent of an operator retry (OPS-07/D-16);
+    uniqueness is enforced by ``uq_jobs_retry_of_job_id`` -- callers translate
+    the ``IntegrityError``.
     """
 
     if session is not None:
@@ -295,6 +302,7 @@ def submit_job(
             job_type=job_type,
             payload=payload,
             depends_on=depends_on,
+            retry_of_job_id=retry_of_job_id,
         )
 
     with session_scope(settings) as standalone_session:
@@ -303,6 +311,7 @@ def submit_job(
             job_type=job_type,
             payload=payload,
             depends_on=depends_on,
+            retry_of_job_id=retry_of_job_id,
         )
 
 
