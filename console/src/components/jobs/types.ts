@@ -1,8 +1,11 @@
-// Job domain types for the console Job UI (Phase 19).
+// Job domain types for the console Job UI (Phase 19, extended Phase 20).
 // Verified against the actual backend response shapes:
 //   - src/trading_platform/services/job_reads.py
-//     (_serialize_job_summary, get_job_detail, list_job_logs, list_job_events)
-//   - src/trading_platform/api/routes/jobs.py (list_jobs/job_detail/job_logs/job_events)
+//     (_serialize_job_summary, get_job_detail, list_job_logs, list_job_events;
+//     Phase 20 composes retry lineage and the D-19 reconcile-first gate
+//     into get_job_detail's response here)
+//   - src/trading_platform/api/routes/jobs.py (list_jobs/job_detail/job_logs/job_events
+//     job detail composition, including the Phase 20 retry route)
 //   - src/trading_platform/api/routes/job_types.py (list_job_types)
 //   - src/trading_platform/orchestration/job_mutations.py (JobReference.to_dict, _relative_links)
 // String-literal unions use exactly the values in each closed backend enum.
@@ -24,7 +27,16 @@ export type JobFailureReason =
   | "worker_lost"
   | "lease_expired"
   | "cancellation_timeout"
-  | "config_invalid";
+  | "config_invalid"
+  | "domain_conflict";
+
+export type JobCancellationMode = "step_boundary" | "queued_only";
+
+export type RetryBlocked = {
+  code: string;
+  required_job_type: string;
+  strategy_id: string | null;
+};
 
 export type JobCancellationCause =
   | "operator_request"
@@ -76,7 +88,7 @@ export type JobResource = {
   kind: string;
   id: string;
   status: string;
-  links: { self: string };
+  links: { self?: string };
 };
 
 export type JobDependency = {
@@ -98,6 +110,11 @@ export type JobDetail = JobSummary & {
   dependencies: JobDependency[];
   blocking_dependencies: JobDependency[];
   resources: JobResource[];
+  payload: Record<string, unknown>;
+  retry_of_job_id: string | null;
+  retried_as_job_id: string | null;
+  retry_blocked: RetryBlocked | null;
+  cancellation_mode: JobCancellationMode | null;
 };
 
 export type JobLogLine = {
@@ -149,7 +166,7 @@ export type JobReference = {
 export type JobTypeCatalogItem = {
   job_type: string;
   description: string;
-  cancellation_mode: string;
+  cancellation_mode: JobCancellationMode;
   submission_defaults?: Record<string, string>;
 };
 

@@ -31,6 +31,11 @@ function buildJob(overrides: Partial<JobDetail> & { job_type?: string }): JobDet
     dependencies: [],
     blocking_dependencies: [],
     resources: [],
+    payload: {},
+    retry_of_job_id: null,
+    retried_as_job_id: null,
+    retry_blocked: null,
+    cancellation_mode: "step_boundary",
     ...overrides,
   };
 }

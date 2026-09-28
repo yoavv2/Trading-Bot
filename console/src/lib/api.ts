@@ -87,11 +87,12 @@ export async function fetchApi<T>(endpoint: string): Promise<ApiResult<T>> {
 }
 
 /**
- * Closed map of typed mutation error codes (Job POST routes) to the exact
- * UI-SPEC copy for that code. Each entry is a function of the response's
- * `detail` object so codes that carry extra fields (job_type, reason,
- * status, job_id) can interpolate them. Keys are the nine codes
- * `api/routes/jobs.py` can raise via `_error(...)`.
+ * Closed map of typed mutation error codes (Job POST routes, plus the
+ * Phase 20 retry/control routes) to the exact UI-SPEC copy for that code.
+ * Each entry is a function of the response's `detail` object so codes that
+ * carry extra fields (job_type, reason, status, job_id, strategy_id) can
+ * interpolate them. Keys are the fourteen codes `api/routes/jobs.py`
+ * (submit/cancel/retry) can raise via `_error(...)`.
  */
 export const MUTATION_ERROR_COPY: Readonly<
   Record<string, (detail: Record<string, unknown> | null) => string>
@@ -126,6 +127,19 @@ export const MUTATION_ERROR_COPY: Readonly<
     return `This Job is already ${cancelStatus} and cannot be cancelled.`;
   },
   mutations_disabled: () => "Mutations disabled on this deployment",
+  job_not_cancellable_running: () => "Not cancellable once running",
+  reconciliation_required: () =>
+    "Retry blocked — the original Job's outcome is uncertain. Run reconciliation first, then retry.",
+  retry_exists: () => "This Job already has a retry.",
+  job_not_retryable: () =>
+    "This Job cannot be retried — retry is only available for FAILED or CANCELLED Jobs.",
+  invalid_retry_payload: (detail) => {
+    const reason =
+      detail && typeof detail.reason === "string" && detail.reason.trim().length > 0
+        ? detail.reason
+        : "the original payload is no longer valid";
+    return `This Job can no longer be retried: ${reason}.`;
+  },
 };
 
 /**
@@ -246,6 +260,23 @@ export function cancelJob(
   return postJson<JobReference>(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`,
     { reason },
+    idempotencyKey,
+    { job_id: jobId },
+  );
+}
+
+/**
+ * Requests a retry of `jobId` (D-16/D-20). `idempotencyKey` is generated and
+ * owned by the caller (the Retry confirmation dialog), one per dialog
+ * opening, reused across a transport-failure retry of the same attempt.
+ */
+export function retryJob(
+  jobId: string,
+  idempotencyKey: string,
+): Promise<MutationResult<JobReference>> {
+  return postJson<JobReference>(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/retry`,
+    {},
     idempotencyKey,
     { job_id: jobId },
   );
