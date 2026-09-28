@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-20-PLAN.md
-last_updated: "2026-09-28T19:14:41.801Z"
+stopped_at: Completed 20-21-PLAN.md
+last_updated: "2026-09-28T19:19:32.016Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 21 of 24
+Plan: 22 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -236,6 +236,7 @@ Recent decisions affecting current work:
 - [Phase 20-18]: Control dialogs snapshot open-time state (openedAsTripped/openedAsEnabled) rather than deriving heading/body/onConfirm from the caller's live boolean prop, since a changed:false response's own onDone->sync-event->refetch cycle can flip that prop while the dialog is still open, which would otherwise rewrite the D-14 unchanged notice underneath the operator.
 - [Phase 20-19]: Queued-cancel route returns 200 (not plan's 202); OPS-02/04/06 closed by 20-19 E2E; OPS-07 stays Pending until 20-20.
 - [Phase 20]: 20-20: queued paper-session cancel pins HTTP 200 (shipped route); D-19 lift predicate proven with earlier/other-strategy/cancelled negatives; OPS-03/07/08 closed
+- [Phase 20]: 20-21: market-data E2E fakes Polygon only at the service seam (FakePolygonClient in services.ingestion, fetch_ticker_overview in symbol_metadata_sync); OPS-05 closed by proving all three separate types through create_app -> POST /api/v1/jobs -> run-jobs --once; ORCH-02 left to 20-24.
 
 ### Pending Todos
 
@@ -276,6 +277,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T19:14:37.073Z
-Stopped at: Completed 20-20-PLAN.md
+Last session: 2026-09-28T19:19:32.007Z
+Stopped at: Completed 20-21-PLAN.md
 Resume file: None
