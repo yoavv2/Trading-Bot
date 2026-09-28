@@ -437,6 +437,65 @@ def test_ingest_daily_bars_without_job_id_leaves_link_null(migrated_job_links_db
         assert run.job_id is None
 
 
+def test_failing_ingest_leaves_failed_run_linked_to_job(migrated_job_links_db: str) -> None:
+    """CR-B-01: the run row (with job_id) is committed before the work and
+    finalized FAILED in its own transaction, so a failing ingest keeps it."""
+    settings = load_settings()
+    job_id = submit_job(job_type="ingest-bars", payload={}, settings=settings)
+    md_settings = _make_market_data_settings()
+
+    with patch(
+        "trading_platform.services.ingestion.PolygonClient",
+        side_effect=RuntimeError("polygon client exploded"),
+    ):
+        with pytest.raises(RuntimeError, match="polygon client exploded"):
+            ingest_daily_bars(
+                from_date=date(2024, 1, 1),
+                to_date=date(2024, 1, 3),
+                symbols=["AAPL"],
+                settings=md_settings,
+                trigger_source="job",
+                db_settings=settings,
+                job_id=job_id,
+            )
+
+    with session_scope(settings) as session:
+        run = session.execute(select(MarketDataIngestionRun)).scalars().one()
+        assert run.job_id == job_id
+        assert run.status == "failed"
+        assert run.error_message == "polygon client exploded"
+        assert run.completed_at is not None
+
+
+def test_ingest_run_is_visible_while_running(migrated_job_links_db: str) -> None:
+    """CR-B-01: the running row is committed (visible to other sessions)
+    before any bar is fetched."""
+    settings = load_settings()
+    job_id = submit_job(job_type="ingest-bars", payload={}, settings=settings)
+    md_settings = _make_market_data_settings()
+    seen: dict[str, Any] = {}
+
+    def probing_get(*args: Any, **kwargs: Any) -> MagicMock:
+        with session_scope(settings) as probe:
+            run = probe.execute(select(MarketDataIngestionRun)).scalars().one()
+            seen["job_id"] = run.job_id
+            seen["status"] = run.status
+        return _polygon_response()
+
+    with patch("httpx.Client.get", side_effect=probing_get):
+        ingest_daily_bars(
+            from_date=date(2024, 1, 1),
+            to_date=date(2024, 1, 3),
+            symbols=["AAPL"],
+            settings=md_settings,
+            trigger_source="job",
+            db_settings=settings,
+            job_id=job_id,
+        )
+
+    assert seen == {"job_id": job_id, "status": "running"}
+
+
 # ---------------------------------------------------------------------------
 # is_eligible_risk_run (D-23)
 # ---------------------------------------------------------------------------

@@ -177,6 +177,28 @@ def _finish_run(
     )
 
 
+def _finalize_run(
+    db_settings: Any,
+    run_id: uuid.UUID,
+    *,
+    bars_upserted: int,
+    failed_symbols: list[str],
+    error_message: str | None = None,
+) -> None:
+    """Reload the run by id and finalize it in its own committed transaction."""
+    with session_scope(db_settings) as session:
+        run = session.get(MarketDataIngestionRun, run_id)
+        if run is None:  # pragma: no cover - the row was committed at start
+            raise LookupError(f"Ingestion run {run_id} not found")
+        _finish_run(
+            session,
+            run,
+            bars_upserted=bars_upserted,
+            failed_symbols=failed_symbols,
+            error_message=error_message,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -195,17 +217,19 @@ def ingest_daily_bars(
     """Orchestrate full daily-bar ingestion for a list of symbols.
 
     Steps:
-    1. Open a DB session and record an ingestion run.
-    2. Upsert symbol catalog rows (minimal, ticker-only if not found).
-    3. For each symbol, fetch bars from Polygon and upsert them.
-    4. Update the ingestion run with outcome metadata and close.
+    1. Record an ingestion run in its own committed transaction.
+    2. For each symbol (one transaction each), upsert the symbol catalog row
+       (minimal, ticker-only if not found), fetch bars from Polygon and upsert
+       them.
+    3. Finalize the ingestion run (succeeded/partial/failed) in a separate
+       committed transaction that also runs when the ingest fails.
 
     Re-running with the same window is idempotent; existing bars are updated,
     not duplicated.
 
     ``job_id`` is an opaque originating-Job identifier (D-09): when
     provided, it is written on ``MarketDataIngestionRun.job_id`` in the same
-    transaction that creates the run. This module imports nothing from
+    transaction that creates (and commits) the run. This module imports nothing from
     ``jobs``/ -- the caller (a Job handler) owns that dependency, not this
     service.
     """
@@ -213,6 +237,9 @@ def ingest_daily_bars(
     total_bars = 0
     failed_symbols: list[str] = []
 
+    # The run row (with its ``job_id``) is committed in its own short
+    # transaction BEFORE any work, so it is visible while running and survives
+    # a failure or crash (P19 D-13, D-08/D-09).
     with session_scope(db_settings) as session:
         run = _start_run(
             session,
@@ -225,11 +252,15 @@ def ingest_daily_bars(
         )
         run_id = run.id
 
-        try:
-            with PolygonClient(settings.polygon) as client:
-                for ticker in symbols:
-                    try:
-                        symbol = upsert_symbol(session, ticker)
+    try:
+        with PolygonClient(settings.polygon) as client:
+            for ticker in symbols:
+                try:
+                    # One transaction per symbol: a per-symbol DB error rolls
+                    # back only that symbol and cannot poison later symbols
+                    # or the final run bookkeeping.
+                    with session_scope(db_settings) as symbol_session:
+                        symbol = upsert_symbol(symbol_session, ticker)
                         request = DailyBarRequest(
                             symbol=ticker,
                             from_date=from_date,
@@ -238,41 +269,48 @@ def ingest_daily_bars(
                             provider=_PROVIDER,
                         )
                         bars = client.fetch_daily_bars(request)
-                        count = upsert_daily_bars(session, bars, symbol.id)
-                        total_bars += count
-                        logger.info(
-                            "symbol_bars_ingested",
-                            extra={
-                                "context": {
-                                    "ticker": ticker,
-                                    "bars": count,
-                                    "run_id": str(run_id),
-                                }
-                            },
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            "symbol_ingest_failed",
-                            extra={"context": {"ticker": ticker, "error": str(exc)}},
-                        )
-                        failed_symbols.append(ticker)
+                        count = upsert_daily_bars(symbol_session, bars, symbol.id)
+                    total_bars += count
+                    logger.info(
+                        "symbol_bars_ingested",
+                        extra={
+                            "context": {
+                                "ticker": ticker,
+                                "bars": count,
+                                "run_id": str(run_id),
+                            }
+                        },
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "symbol_ingest_failed",
+                        extra={"context": {"ticker": ticker, "error": str(exc)}},
+                    )
+                    failed_symbols.append(ticker)
 
-            _finish_run(
-                session,
-                run,
-                bars_upserted=total_bars,
-                failed_symbols=failed_symbols,
-            )
-
-        except Exception as exc:
-            _finish_run(
-                session,
-                run,
+        _finalize_run(
+            db_settings,
+            run_id,
+            bars_upserted=total_bars,
+            failed_symbols=failed_symbols,
+        )
+    except Exception as exc:
+        # Finalize FAILED in a separate, committed transaction; never let a
+        # bookkeeping error mask the original failure.
+        try:
+            _finalize_run(
+                db_settings,
+                run_id,
                 bars_upserted=total_bars,
                 failed_symbols=failed_symbols,
                 error_message=str(exc),
             )
-            raise
+        except Exception:
+            logger.exception(
+                "ingestion_run_finalize_failed",
+                extra={"context": {"run_id": str(run_id)}},
+            )
+        raise
 
     return IngestionResult(
         provider=_PROVIDER,
