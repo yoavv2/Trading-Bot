@@ -128,3 +128,7 @@ None - no external service configuration required.
 ---
 *Phase: 20-complete-operation-migration-safety-controls*
 *Completed: 2026-09-28*
+
+## Self-Check: PASSED
+
+All 11 created files confirmed present on disk; all 4 commit hashes (392251e, c1682c0, 3a2ba8f, bf12bd7) confirmed in `git log`. Full backend suite: 919 passed (baseline 880 + 39 new), 0 failures. Console: `npx vitest run src/components/jobs/new` 54 passed; `npx tsc --noEmit` clean; `npx eslint` clean on all 4 new console files.

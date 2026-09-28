@@ -270,7 +270,7 @@ Plans:
 
 - [x] 20-13-PLAN.md — HTTP: control routes, retry route, cancel 409, detail composition, five-route allowlist
 - [x] 20-14-PLAN.md — ingest-bars Job type + form
-- [ ] 20-15-PLAN.md — sync-symbol-metadata + sync-market-sessions Job types + forms
+- [x] 20-15-PLAN.md — sync-symbol-metadata + sync-market-sessions Job types + forms
 
 **Wave 6**
 
@@ -334,7 +334,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
-| 20. Complete Operation Migration & Safety Controls | v1.3 | 14/24 | In Progress | - |
+| 20. Complete Operation Migration & Safety Controls | v1.3 | 15/24 | In Progress | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
 ---

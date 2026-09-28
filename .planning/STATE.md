@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-14-PLAN.md
-last_updated: "2026-09-28T15:28:47.744Z"
+stopped_at: Completed 20-15-PLAN.md
+last_updated: "2026-09-28T16:39:28.446Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 41
+  completed_plans: 42
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 15 of 24
+Plan: 16 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -88,6 +88,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P12 | 10min | 2 tasks | 13 files |
 | Phase 20 P13 | ~35min | 3 tasks | 9 files |
 | Phase 20 P14 | 20min | 2 tasks | 7 files |
+| Phase 20 P15 | ~23min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -221,6 +222,9 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-13]: Verified the console wire contract (console/src/lib/api.ts, 20-06) before finalizing -- typed clients and MUTATION_ERROR_COPY already matched this plan's exact error codes and response shapes, zero server-side changes needed to align.
 - [Phase 20]: [20-14]: IngestBarsJobHandler resolves Settings explicitly (self._settings or load_settings()) rather than passing self._settings through unresolved, because ingest_daily_bars needs both settings.market_data (a sub-object) and the full Settings as db_settings -- unlike backtest/risk-evaluation handlers, which pass self._settings straight through to a service that accepts the full Settings object.
 - [Phase 20]: [20-14]: ingest-bars is implemented (spec, handler, tests, form) but deliberately not registered in build_default_registry() or console's jobTypeForms.ts -- both are explicitly deferred to Phase 20 Plan 16 per registry.py's own documented plan, mirroring the 19-06/19-07 registration-vs-implementation split.
+- [Phase 20]: [20-15]: sync-symbol-metadata + sync-market-sessions ship as strict step-boundary Job types over the Plan 03 services; SyncSymbolMetadataJobHandler calls raise_for_failures() only after the completion log is written (ORCH-02), and both submission_defaults are the first Phase 20 specs that never depend on the database (settings-derived metadata universe; clock-derived exchange-local today) so neither ever returns None.
+- [Phase 20]: [20-15]: SyncMarketSessionsPayloadRejection.INVALID_FIELD_TYPE is kept in the closed enum (shared PayloadFieldRejection vocabulary, map_validation_error's residual fallback) but is unreachable via this spec's own payload since both from_date/to_date route through the shared parse_iso_date before-validator, which maps every wrong type to INVALID_DATE instead -- pinned by a dedicated fallback test rather than a fabricated reachable case (advisor-reviewed).
+- [Phase 20]: [20-15]: All three OPS-05 market-data Job types (ingest-bars 20-14, sync-symbol-metadata + sync-market-sessions this plan) now exist as strict spec+handler pairs with unwired console forms, but neither of this plan's two types is registered in build_default_registry() nor wired into jobTypeForms.ts (Plan 16's scope per this plan's own action text) -- OPS-05 and ORCH-02 both stay Pending in REQUIREMENTS.md, matching the 20-03/20-07/20-08/20-09/20-14 registration-vs-implementation precedent.
 
 ### Pending Todos
 
@@ -261,6 +265,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T15:28:47.734Z
-Stopped at: Completed 20-14-PLAN.md
+Last session: 2026-09-28T16:39:28.430Z
+Stopped at: Completed 20-15-PLAN.md
 Resume file: None
