@@ -16,7 +16,6 @@ from typing import Any
 
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.contracts import JobContext
-from trading_platform.jobs.handlers.risk_evaluation_submission import RISK_EVALUATION_JOB_TYPE
 from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.risk import run_risk_evaluation
 
@@ -29,7 +28,7 @@ class RiskEvaluationJobHandler:
     """Runs one risk evaluation for a registered strategy over one explicit
     trading session."""
 
-    job_type = RISK_EVALUATION_JOB_TYPE
+    job_type = "risk-evaluation"
     required_execution_mode = ExecutionMode.BACKTEST
 
     def __init__(self, settings: Settings | None = None) -> None:
