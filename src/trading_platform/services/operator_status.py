@@ -192,7 +192,7 @@ def render_operator_status_report(
         "",
         f"- Status: `{report.strategy['status']}`",
         f"- Execution enabled: `{str(report.strategy['is_execution_enabled']).lower()}`",
-        f"- Updated at: `{report.strategy['updated_at']}`",
+        f"- Updated at: `{report.strategy['updated_at'] if report.strategy['updated_at'] is not None else '-'}`",
         f"- Global kill switch: `{report.kill_switch['state']}` "
         f"(last changed `{report.kill_switch['last_changed_at']}` by "
         f"`{report.kill_switch['last_change_actor']}`)",

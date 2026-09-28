@@ -37,7 +37,7 @@ class StrategyControlState:
     strategy_id: str
     display_name: str
     status: str
-    updated_at: str
+    updated_at: str | None
 
     @property
     def is_execution_enabled(self) -> bool:
@@ -160,6 +160,31 @@ class OperatorControlService:
         return self._registry or build_default_registry(self.settings)
 
     def get_strategy_state(self, strategy_id: str) -> StrategyControlState:
+        """Pure read (D-31): a plain select with a registry default, never a get-or-create.
+
+        The registry default below is the exact status the mutating sibling
+        method (`ensure_strategy_state`) would persist for a brand-new row
+        (always ACTIVE, regardless of StrategyMetadata.enabled -- config
+        trend_following_daily.yaml has enabled: true today), so the pure read
+        and the mutating path agree on an empty DB. This method never
+        creates a strategy row and never writes to the session.
+        """
+        metadata = self.registry.resolve(strategy_id).metadata
+        with session_scope(self.settings) as session:
+            strategy_record = session.execute(
+                select(Strategy).where(Strategy.strategy_id == metadata.strategy_id)
+            ).scalar_one_or_none()
+            if strategy_record is not None:
+                return _serialize_strategy_control_state(strategy_record)
+            return StrategyControlState(
+                strategy_id=metadata.strategy_id,
+                display_name=metadata.display_name,
+                status=StrategyStatus.ACTIVE.value,
+                updated_at=None,
+            )
+
+    def ensure_strategy_state(self, strategy_id: str) -> StrategyControlState:
+        """Get-or-create for mutating callers only (D-31)."""
         metadata = self.registry.resolve(strategy_id).metadata
         with session_scope(self.settings) as session:
             strategy_record = ensure_strategy_record(session, metadata)
@@ -477,6 +502,15 @@ def load_strategy_control_state(
     registry: StrategyRegistry | None = None,
 ) -> StrategyControlState:
     return OperatorControlService(settings=settings, registry=registry).get_strategy_state(strategy_id)
+
+
+def ensure_strategy_control_state(
+    strategy_id: str,
+    *,
+    settings: Settings | None = None,
+    registry: StrategyRegistry | None = None,
+) -> StrategyControlState:
+    return OperatorControlService(settings=settings, registry=registry).ensure_strategy_state(strategy_id)
 
 
 def load_kill_switch_state(

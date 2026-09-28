@@ -58,7 +58,7 @@ def build_backtest_report(
 ) -> dict[str, Any]:
     """Pure read: loads a persisted backtest run and serializes a report.
 
-    Never calls session.add, flush, commit or any persist helper (D-31).
+    Never mutates the session or the database in any way (D-31).
     """
     resolved_settings = settings or load_settings()
 

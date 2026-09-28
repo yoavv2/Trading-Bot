@@ -60,8 +60,8 @@ from trading_platform.services.market_data_access import latest_completed_sessio
 from trading_platform.services.operator_controls import (
     BLOCKED_REASON_GLOBAL_KILL_SWITCH,
     KillSwitchStateSnapshot,
+    ensure_strategy_control_state,
     load_kill_switch_state,
-    load_strategy_control_state,
 )
 from trading_platform.services.reconciliation import (
     apply_reconciliation_corrections,
@@ -203,7 +203,7 @@ def _run_paper_order_submission_guarded(
             reclaiming_run_id=run_id,
         )
 
-    control_state = load_strategy_control_state(
+    control_state = ensure_strategy_control_state(
         strategy_id,
         settings=resolved_settings,
         registry=resolved_registry,
@@ -705,7 +705,7 @@ def run_paper_session(
             client_order_id_prefix=resolved_settings.execution.client_order_id_prefix,
         )
 
-    control_state = load_strategy_control_state(
+    control_state = ensure_strategy_control_state(
         resolved_strategy_id,
         settings=resolved_settings,
         registry=registry,
