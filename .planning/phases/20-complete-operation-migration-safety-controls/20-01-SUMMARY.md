@@ -130,3 +130,12 @@ None - no external service configuration required. Note: any local Postgres data
 ---
 *Phase: 20-complete-operation-migration-safety-controls*
 *Completed: 2026-09-28*
+
+## Self-Check: PASSED
+
+- FOUND: alembic/versions/0021_phase20_operations_safety.py
+- FOUND: tests/test_phase20_operations_migration.py
+- FOUND: .planning/phases/20-complete-operation-migration-safety-controls/20-01-SUMMARY.md
+- FOUND commit: 81c9038 (Task 1)
+- FOUND commit: 95b0eef (Task 2)
+- FOUND commit: e915d84 (docs: summary)

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Phase 20 UI-SPEC approved
-last_updated: "2026-09-28T07:14:34.224Z"
-last_activity: 2026-09-28 -- Phase 20 execution started
+stopped_at: Completed 20-01-PLAN.md
+last_updated: "2026-09-28T07:37:47.104Z"
+last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 27
-  percent: 53
+  completed_plans: 28
+  percent: 55
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 1 of 24
-Status: Executing Phase 20
-Last activity: 2026-09-28 -- Phase 20 execution started
+Plan: 2 of 24
+Status: Ready to execute
+Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
 
 v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase race/test hardening done) → 19 ✓ → 20 → 21 → close v1.3. Scheduling deferred. Next milestone direction: Strategy Research / Strategy Lab.
@@ -74,6 +74,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 19 P10 | 21min | 2 tasks | 6 files |
 | Phase 19 P11 | ~35min | 3 tasks | 9 files |
 | Phase 19 P12 | 25min | 3 tasks | 9 files |
+| Phase 20 P01 | 30min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -184,6 +185,7 @@ Recent decisions affecting current work:
 - [Phase 19]: OPS-01 stays Pending: onNavigate targets /jobs/{job_id} but that route does not exist until Plan 12, and 19-07 recorded the close condition as the console plans landing AND being live-verified -- neither has happened yet.
 - [Phase 19]: BacktestJobForm declares its own local props type instead of importing JobSubmissionFormProps from jobTypeForms.ts, keeping map-1 import scoped to NewJobView.tsx only (structural D-17 grep/consoleBoundaries requirement); TypeScript still checks structural compatibility at the JOB_TYPE_FORMS assignment.
 - [Phase 19]: Job detail screen (/jobs/{id}) composed from Plan 08/10 primitives; SC6 proven with a test-only Job type through list+detail — Completes the Phase 19 Job operations vertical slice UI; JOBUI-02/03/04/05 all become code-complete
+- [Phase 20]: 20-01: Migration 0021 lands domain_conflict, non-unique strategy_runs.job_id, market_data_ingestion_runs.job_id FK, jobs.retry_of_job_id UNIQUE, and submit_job(retry_of_job_id=...); OPS-07/OPS-08/OPS-05 left Pending (schema spine only, no handler/runner/console behavior yet)
 
 ### Pending Todos
 
@@ -224,6 +226,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-27T15:31:23.617Z
-Stopped at: Phase 20 UI-SPEC approved
-Resume file: .planning/phases/20-complete-operation-migration-safety-controls/20-UI-SPEC.md
+Last session: 2026-09-28T07:37:47.095Z
+Stopped at: Completed 20-01-PLAN.md
+Resume file: None
