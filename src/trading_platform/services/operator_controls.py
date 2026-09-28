@@ -47,6 +47,14 @@ class StrategyArchivedError(Exception):
         self.strategy_id = strategy_id
 
 
+class ControlStateUnavailableError(LookupError):
+    """Persisted control state needed by a mutator is missing or unresolvable.
+
+    Raised when the global kill-switch row is absent (migrations not current)
+    or when no strategy row can be found/created to anchor the audit run.
+    """
+
+
 @dataclass(frozen=True)
 class StrategyControlState:
     strategy_id: str
@@ -394,6 +402,29 @@ class OperatorControlService:
             trigger_source=trigger_source,
         )
 
+    def _resolve_audit_strategy_record(self, session: Session) -> Strategy:
+        """Strategy row that anchors the kill-switch audit run's FK (D-15).
+
+        The kill switch must stay operable when strategy configuration is
+        unhealthy, so an already-persisted row is used without consulting the
+        registry at all; the registry is only needed to create the row on a
+        brand-new database.
+        """
+        existing = session.execute(
+            select(Strategy).where(Strategy.strategy_id == _DEFAULT_KILL_SWITCH_STRATEGY_ID)
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing
+        try:
+            metadata = self.registry.resolve(_DEFAULT_KILL_SWITCH_STRATEGY_ID).metadata
+        except Exception as exc:
+            raise ControlStateUnavailableError(
+                f"Cannot anchor the kill-switch audit run: strategy "
+                f"'{_DEFAULT_KILL_SWITCH_STRATEGY_ID}' has no persisted row and is not "
+                f"resolvable from the strategy registry ({exc})."
+            ) from exc
+        return _ensure_audit_strategy_record(session, metadata)
+
     def _set_kill_switch_state(
         self,
         *,
@@ -403,10 +434,9 @@ class OperatorControlService:
         actor: str,
         trigger_source: str,
     ) -> KillSwitchControlReport:
-        metadata = self.registry.resolve(_DEFAULT_KILL_SWITCH_STRATEGY_ID).metadata
         changed_at = datetime.now(UTC)
         with session_scope(self.settings) as session:
-            strategy_record = _ensure_audit_strategy_record(session, metadata)
+            strategy_record = self._resolve_audit_strategy_record(session)
             control = _load_global_kill_switch(session, for_update=True)
             previous_state = control.state
             changed = previous_state != target_state
@@ -637,7 +667,7 @@ def _load_global_kill_switch(session: Session, *, for_update: bool = False) -> S
         statement = statement.with_for_update()
     control = session.execute(statement).scalar_one_or_none()
     if control is None:
-        raise LookupError(
+        raise ControlStateUnavailableError(
             f"Missing global kill switch row '{GLOBAL_KILL_SWITCH_NAME}'; "
             "database migrations may not be current."
         )

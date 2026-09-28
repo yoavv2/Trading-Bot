@@ -19,6 +19,7 @@ from trading_platform.core.logging import build_log_context, configure_logging, 
 from trading_platform.core.startup import enforce_startup_config
 from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.operator_controls import (
+    ControlStateUnavailableError,
     OperatorControlService,
     render_kill_switch_report,
 )
@@ -53,11 +54,15 @@ def run_kill_switch_trip_command(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
     service = OperatorControlService(settings=settings)
-    report = service.trip_kill_switch(
-        reason=reason,
-        actor="local_operator",
-        trigger_source="break_glass_cli",
-    )
+    try:
+        report = service.trip_kill_switch(
+            reason=reason,
+            actor="local_operator",
+            trigger_source="break_glass_cli",
+        )
+    except ControlStateUnavailableError as exc:
+        print(f"kill-switch-trip: control state unavailable: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     logger.warning(
         "worker_kill_switch_break_glass_trip",
         extra={

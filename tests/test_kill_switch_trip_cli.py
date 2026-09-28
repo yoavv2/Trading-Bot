@@ -181,3 +181,26 @@ def test_kill_switch_trip_reason_over_500_chars_exits_nonzero_and_writes_zero_ro
 
     assert exc_info.value.code != 0
     assert _count_operator_control_rows(settings) == (0, 0)
+
+
+def test_kill_switch_trip_reports_unavailable_control_state_cleanly(
+    migrated_paper_db: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """WR-B-05: no anchor row and an unresolvable registry -> clean stderr, exit 1."""
+    from trading_platform.strategies.registry import StrategyRegistry
+
+    settings = load_settings()
+    monkeypatch.setattr(
+        "trading_platform.services.operator_controls.build_default_registry",
+        lambda _settings=None: StrategyRegistry(),
+    )
+    args = build_parser().parse_args(["kill-switch-trip", "--reason", "registry broken"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        DISPATCH["kill-switch-trip"](args)
+
+    assert exc_info.value.code == 1
+    assert "control state unavailable" in capsys.readouterr().err
+    assert _count_operator_control_rows(settings) == (0, 0)

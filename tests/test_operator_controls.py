@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -35,6 +36,7 @@ from trading_platform.services.execution import (  # noqa: E402
     sync_paper_state,
 )
 from trading_platform.services.operator_controls import (  # noqa: E402
+    ControlStateUnavailableError,
     OperatorControlService,
     load_kill_switch_state,
 )
@@ -43,6 +45,7 @@ from trading_platform.services.operator_reads import (  # noqa: E402
     OperatorReadService,
 )
 from trading_platform.services.operator_status import build_operator_status_report  # noqa: E402
+from trading_platform.strategies.registry import StrategyRegistry  # noqa: E402
 
 
 def test_operator_control_service_persists_status_transitions_and_audit_events(
@@ -318,3 +321,32 @@ def test_operator_status_report_surfaces_kill_switch_state_and_blocked_submissio
     report_dict = report.to_dict()
     assert "kill_switch" in report_dict
     assert "recent_blocked_paper_executions" in report_dict
+
+
+def test_kill_switch_trip_does_not_depend_on_the_strategy_registry_once_a_row_exists(
+    migrated_paper_db: str,
+) -> None:
+    """WR-B-05: an unrelated strategy-config failure must not block the trip."""
+    settings = load_settings()
+    OperatorControlService(settings=settings).trip_kill_switch(reason="seed", actor="pytest")
+    OperatorControlService(settings=settings).reset_kill_switch(reason="seed reset", actor="pytest")
+
+    broken = OperatorControlService(settings=settings, registry=StrategyRegistry())
+    report = broken.trip_kill_switch(reason="registry is empty", actor="pytest")
+
+    assert report.current_state == KillSwitchState.TRIPPED.value
+    assert report.changed is True
+
+
+def test_kill_switch_trip_with_no_anchor_row_and_no_registry_entry_is_typed(
+    migrated_paper_db: str,
+) -> None:
+    settings = load_settings()
+    broken = OperatorControlService(settings=settings, registry=StrategyRegistry())
+
+    with pytest.raises(ControlStateUnavailableError):
+        broken.trip_kill_switch(reason="registry is empty", actor="pytest")
+
+    with session_scope(settings) as session:
+        assert session.execute(select(SystemControl)).scalar_one().state == KillSwitchState.ARMED
+        assert session.execute(select(StrategyRun)).first() is None
