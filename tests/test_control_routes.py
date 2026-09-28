@@ -510,3 +510,31 @@ def test_concurrent_first_use_strategy_ensure_does_not_raise(client: TestClient)
     assert outcome["result"].changed is False
     with session_scope(settings) as session:
         assert len(session.execute(select(Strategy)).scalars().all()) == 1
+
+
+# ---------------------------------------------------------------------------
+# WR-B-03: archived strategies are never silently un-archived
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("target", ["enabled", "disabled"])
+def test_put_on_archived_strategy_is_a_typed_409_with_zero_writes(
+    client: TestClient, target: str
+) -> None:
+    settings = load_settings()
+    OperatorControlService(settings=settings).ensure_strategy_state(_KNOWN_STRATEGY_ID)
+    with session_scope(settings) as session:
+        record = session.execute(select(Strategy)).scalar_one()
+        record.status = StrategyStatus.ARCHIVED
+    before = _audit_counts()
+
+    response = _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": target, "reason": "x"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "strategy_archived",
+        "strategy_id": _KNOWN_STRATEGY_ID,
+    }
+    assert _audit_counts() == before
+    with session_scope(settings) as session:
+        assert session.execute(select(Strategy)).scalar_one().status == StrategyStatus.ARCHIVED

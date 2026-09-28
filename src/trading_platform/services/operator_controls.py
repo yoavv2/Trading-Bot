@@ -34,6 +34,19 @@ BLOCKED_REASON_GLOBAL_KILL_SWITCH = "global_kill_switch_tripped"
 _DEFAULT_KILL_SWITCH_STRATEGY_ID = "trend_following_daily"
 
 
+class StrategyArchivedError(Exception):
+    """An enable/disable was requested for an ARCHIVED strategy.
+
+    ARCHIVED is not representable in the enabled|disabled control vocabulary
+    (D-10), so the control path refuses to transition out of it rather than
+    silently resurrecting the strategy for paper execution.
+    """
+
+    def __init__(self, strategy_id: str) -> None:
+        super().__init__(f"Strategy '{strategy_id}' is archived and cannot be enabled or disabled.")
+        self.strategy_id = strategy_id
+
+
 @dataclass(frozen=True)
 class StrategyControlState:
     strategy_id: str
@@ -243,6 +256,10 @@ class OperatorControlService:
         with session_scope(self.settings) as session:
             strategy_record = _ensure_locked_strategy_record(session, metadata)
             previous_status = strategy_record.status
+            if previous_status == StrategyStatus.ARCHIVED:
+                # Raised before any audit row is added; session_scope rolls back
+                # the whole transaction, so the rejection performs zero writes.
+                raise StrategyArchivedError(metadata.strategy_id)
             changed = previous_status != target_status
 
             strategy_run = StrategyRun(

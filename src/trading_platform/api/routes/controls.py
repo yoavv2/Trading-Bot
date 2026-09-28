@@ -22,6 +22,7 @@ from trading_platform.api.dependencies import (
 )
 from trading_platform.services.operator_controls import (
     OperatorControlService,
+    StrategyArchivedError,
     load_strategy_control_state,
 )
 from trading_platform.strategies.registry import StrategyRegistry, UnknownStrategyError
@@ -109,13 +110,18 @@ async def set_strategy_status(
     reason = _validate_reason(body.get("reason"))
 
     mutator = service.enable_strategy if target_status == "enabled" else service.disable_strategy
-    report = await run_in_threadpool(
-        mutator,
-        strategy_id,
-        reason=reason,
-        actor=CONTROL_ACTOR,
-        trigger_source=CONTROL_TRIGGER_SOURCE,
-    )
+    try:
+        report = await run_in_threadpool(
+            mutator,
+            strategy_id,
+            reason=reason,
+            actor=CONTROL_ACTOR,
+            trigger_source=CONTROL_TRIGGER_SOURCE,
+        )
+    except StrategyArchivedError as exc:
+        raise _error(
+            status.HTTP_409_CONFLICT, "strategy_archived", strategy_id=strategy_id
+        ) from exc
     return {
         "strategy_id": strategy_id,
         "status": "enabled" if report.current_status == "active" else "disabled",
