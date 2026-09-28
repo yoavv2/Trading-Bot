@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-09-PLAN.md
-last_updated: "2026-09-28T10:20:18.687Z"
+stopped_at: Completed 20-10-PLAN.md
+last_updated: "2026-09-28T10:39:06.834Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 36
+  completed_plans: 37
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 10 of 24
+Plan: 11 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -83,6 +83,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P07 | ~25min | 2 tasks | 5 files |
 | Phase 20 P08 | ~20min | 2 tasks | 5 files |
 | Phase 20 P09 | ~35min | 3 tasks | 7 files |
+| Phase 20 P10 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -209,6 +210,7 @@ Recent decisions affecting current work:
 - [Phase 20]: [20-09]: run_paper_session(..., job_id=) threads job_id to both runs it creates (internal reconciliation StrategyRun + paper_execution StrategyRun, including the blocked_strategy_disabled path); PaperSessionRunReport.reconciliation_run_id names the internal reconciliation run. recover_inflight_paper_orders confirmed to create no StrategyRun, so it takes no job_id param.
 - [Phase 20]: [20-09]: PaperSessionSubmissionSpec/PaperSessionJobHandler shipped test-first (strict {strategy_id, as_of_session, risk_run_id|null} payload with UUID + SUCCEEDED-risk-evaluation eligibility check; QUEUED_ONLY cancellation; retry_prerequisite_job_type = "reconciliation" for D-19; handler wraps run_paper_session in translate_domain_conflicts() and logs external_broker_session_started before the call, zero cancellation checkpoints, never branches on report.action). PaperSessionJobForm.tsx ships unwired, following the reconciliation/risk-evaluation precedent.
 - [Phase 20]: [20-09]: OPS-03/OPS-08 left Pending in REQUIREMENTS.md -- this plan ships job_id threading, spec+handler+unit tests, and an unwired form only; build_default_registry registration and JOB_TYPE_FORMS console wiring are a later plan's scope (20-01/20-04/20-05/20-08 precedent).
+- [Phase 20]: [20-10]: cancel() rejects a RUNNING queued-only Job before begin_nested(), checked against the row-locked object so the claim/cancel race is serialized by the row lock; retry()/retry_block() ship as the sole D-16..D-20 retry mechanism -- OPS-03/OPS-07 stay Pending since the API route and console UI (20-13, 20-17, 20-20) haven't landed yet.
 
 ### Pending Todos
 
@@ -249,6 +251,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T10:20:18.678Z
-Stopped at: Completed 20-09-PLAN.md
+Last session: 2026-09-28T10:39:06.824Z
+Stopped at: Completed 20-10-PLAN.md
 Resume file: None
