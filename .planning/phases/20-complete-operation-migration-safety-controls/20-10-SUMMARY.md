@@ -19,7 +19,7 @@ tech-stack:
   added: []
   patterns:
     - "Pre-begin_nested rejection: both the queued-only cancel check and every retry precondition (terminal-status, existing-child, D-19 block, D-18 payload gate) run against the row-locked object BEFORE session.begin_nested() opens, so every rejection path writes zero rows by construction rather than by a rollback"
-    - "_is_named_uniqueness_error(exc, *, constraint_name=...) is now a reusable IntegrityError dispatcher keyed by exact Postgres constraint name -- retry() uses it twice (uq_job_mutations_endpoint_key -> replay, uq_jobs_retry_of_job_id -> RetryAlreadyExistsError with the winning id re-read after rollback)"
+    - "_is_named_uniqueness_error(exc, *, constraint_name=...) is now a reusable IntegrityError dispatcher keyed by exact Postgres constraint name -- retry() uses it twice (uq_job_mutations_endpoint_key -> replay, uq_jobs_retry_of_job_id -> RetryAlreadyExistsError with the winning id re-read after rollback). NOTE: because retry() takes FOR UPDATE on the original Job before the existing-child pre-check, two concurrent fresh-key retries always serialize on that lock -- the loser's pre-check (select(Job.id).where(Job.retry_of_job_id == job_id)) already sees the winner's committed row, so it raises RetryAlreadyExistsError from the pre-check, never from the uq_jobs_retry_of_job_id IntegrityError branch. That branch is defense-in-depth against a narrower race this lock ordering does not produce under normal conditions, and is not exercised by any test in this plan."
     - "D-19's reconcile-first predicate reads only Job.payload/Job.status/Job.completed_at via Job.payload[\"strategy_id\"].as_string() == strategy_id -- no domain-report coupling, mirroring services/execution/submit_orders.py's existing JSON-path comparison pattern"
 
 key-files:
@@ -65,6 +65,7 @@ completed: 2026-09-28
 
 1. **Task 1: Queued-only cancel rejection inside the row lock + race test** - `7ae7d88` (feat)
 2. **Task 2: Idempotent retry with lineage, D-18 revalidation and D-19 reconcile-first block** - `8121210` (feat)
+3. **Post-review fix: assert retry_block() and a blocked retry() write zero rows** - `da557c3` (test, advisor-caught gap against the plan's own D-19 "writes nothing" bullet, before handback)
 
 ## Files Created/Modified
 - `src/trading_platform/orchestration/job_mutations.py` - `JobNotCancellableRunningError` + queued-only cancel rejection in `cancel()`; `RETRY_ENDPOINT_ID`/`RETRY_BLOCKED_CODE` constants; `RetryBlock` dataclass; `JobNotRetryableError`/`RetryAlreadyExistsError`/`RetryBlockedError`/`InvalidRetryPayloadError`; `_retry_block_for()`, `retry_block()`, `retry()`; generalized `_is_named_uniqueness_error(exc, *, constraint_name=)`; module docstring documents D-17
@@ -89,7 +90,8 @@ None - no external service configuration required.
 ## Next Phase Readiness
 
 - `JobOrchestrationService.retry()`/`retry_block()` and the queued-only cancel rejection are ready for the retry API route (`POST /api/v1/jobs/{job_id}/retry`) and `cancel_job`'s new `except JobNotCancellableRunningError` clause -- both explicitly out of this plan's scope per its `files_modified` list, owned by 20-13 (`CTRL-01, CTRL-02, OPS-07, OPS-03`).
-- Full suite verified green at 771 passed (0 failed), up from the 746-pass pre-plan baseline (25 new tests: 5 in the queued-only cancel/race group, 20 in the retry group).
+- **Known gap for 20-13 to close:** `api/routes/jobs.py::cancel_job` does not yet catch `JobNotCancellableRunningError` -- if a `QUEUED_ONLY` job type is registered in `build_default_registry` before 20-13 lands the `except` clause mapping it to a 409, a RUNNING cancel of that type would surface as an unhandled 500 through the HTTP layer (the service-layer behavior itself is correct and tested; only the route-layer translation is missing, and no `QUEUED_ONLY` type is registered yet, so this is not user-reachable today).
+- Full suite verified green at 771 passed (0 failed), up from the 746-pass pre-plan baseline (25 new tests from Tasks 1-2: 5 in the queued-only cancel/race group, 20 in the retry group; a post-review commit added assertions to an existing test without adding new test functions).
 - `.venv/bin/ruff check src/trading_platform/orchestration` clean.
 
 ---
@@ -102,3 +104,8 @@ None - no external service configuration required.
 - FOUND (modified): tests/test_job_orchestration.py
 - FOUND commit: 7ae7d88 (Task 1)
 - FOUND commit: 8121210 (Task 2)
+- FOUND commit: da557c3 (post-review test fix)
+
+## Process Note
+
+Commits `7ae7d88` (Task 1) and `8121210` (Task 2) -- both `feat(20-10): ...` -- were created without the `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` trailer this session's attribution instructions require; only the `test(20-10)` post-review commit (`da557c3`) and the two `docs(20-10)` commits carry it. Per the git safety protocol's explicit preference for new commits over `--amend`, and the 19-08/20-01 summary precedent of disclosing rather than correcting a trailer gap via amend, this is disclosed rather than fixed. No work was lost; this is a metadata-only gap on two otherwise-correct commits.
