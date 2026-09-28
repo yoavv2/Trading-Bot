@@ -86,6 +86,7 @@ describe("KillSwitchPanel", () => {
     expect(screen.getByText("action for tripped")).toBeTruthy();
     expect(renderAction).toHaveBeenCalledWith(
       expect.objectContaining({ state: "tripped", is_tripped: true }),
+      { stateKnown: true },
     );
     expect(killSwitchCalls(fn)).toBe(1);
   });
@@ -142,5 +143,65 @@ describe("KillSwitchPanel", () => {
     expect(
       screen.getByText("Current state: ARMED. This will change it to: TRIPPED."),
     ).toBeTruthy();
+  });
+});
+
+describe("WR-C-06: /controls panel keeps an open dialog across a failed re-read", () => {
+  it("keeps the open confirm dialog when the refetch fails and hides the trigger", async () => {
+    const current = { state: "armed" as "armed" | "tripped", fail: false };
+    const fn = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/system/kill-switch")) {
+        return Promise.resolve(
+          current.fail
+            ? jsonResponse(500, { detail: "boom" })
+            : jsonResponse(200, killSwitchBody(current.state)),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse(200, { mutations_enabled: true, items: [] }),
+      );
+    });
+    vi.stubGlobal("fetch", fn);
+
+    render(
+      <KillSwitchPanel
+        renderAction={(data, meta) => (
+          <KillSwitchControlTrigger
+            isTripped={data.is_tripped}
+            stateKnown={meta.stateKnown}
+          />
+        )}
+      />,
+    );
+    await flush();
+
+    const trigger = screen.getByRole("button", { name: "Trip Kill Switch" });
+    fireEvent.click(trigger);
+    await flush();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+
+    current.fail = true;
+    act(() => {
+      dispatchControlChanged("killswitch");
+    });
+    await flush();
+
+    expect(screen.getByText("Request failed")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect((screen.getByLabelText("Reason") as HTMLTextAreaElement).value).toBe("drill");
+    expect(trigger.isConnected).toBe(false);
+    expect(screen.getAllByRole("button", { name: "Trip Kill Switch" })).toHaveLength(1);
+
+    current.fail = false;
+    act(() => {
+      dispatchControlChanged("killswitch");
+    });
+    await flush();
+
+    expect(screen.getByText("ARMED")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect((screen.getByLabelText("Reason") as HTMLTextAreaElement).value).toBe("drill");
+    expect(screen.getAllByRole("button", { name: "Trip Kill Switch" })).toHaveLength(2);
   });
 });

@@ -15,8 +15,11 @@ export default function ControlsPage() {
       <h1 className="mb-4 text-xl font-semibold text-zinc-100">Controls</h1>
       <div className="space-y-6">
         <KillSwitchPanel
-          renderAction={(data) => (
-            <KillSwitchControlTrigger isTripped={data.is_tripped} />
+          renderAction={(data, meta) => (
+            <KillSwitchControlTrigger
+              isTripped={data.is_tripped}
+              stateKnown={meta.stateKnown}
+            />
           )}
         />
         <StrategyControlSection />

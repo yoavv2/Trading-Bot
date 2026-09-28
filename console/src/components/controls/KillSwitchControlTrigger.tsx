@@ -8,6 +8,14 @@ import { dispatchControlChanged } from "./controlEvents";
 
 type KillSwitchControlTriggerProps = {
   isTripped: boolean;
+  /**
+   * False while the caller's state read is failing (WR-C-06): the trigger
+   * button is withheld (no target state can be computed from an unknown
+   * current state) but the component stays mounted so an already-open
+   * confirmation dialog, and the operator's typed input, survive a transient
+   * read failure. Defaults to true.
+   */
+  stateKnown?: boolean;
 };
 
 /**
@@ -35,6 +43,7 @@ type KillSwitchControlTriggerProps = {
  */
 export function KillSwitchControlTrigger({
   isTripped,
+  stateKnown = true,
 }: KillSwitchControlTriggerProps) {
   const [openedAsTripped, setOpenedAsTripped] = useState<boolean | null>(null);
   const capability = useMutationCapability();
@@ -47,15 +56,17 @@ export function KillSwitchControlTrigger({
 
   return (
     <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => setOpenedAsTripped(isTripped)}
-        disabled={capability.state !== "enabled"}
-        className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {triggerLabel}
-      </button>
-      {capability.state !== "enabled" && capability.reason ? (
+      {stateKnown ? (
+        <button
+          type="button"
+          onClick={() => setOpenedAsTripped(isTripped)}
+          disabled={capability.state !== "enabled"}
+          className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {triggerLabel}
+        </button>
+      ) : null}
+      {stateKnown && capability.state !== "enabled" && capability.reason ? (
         <span className="text-xs text-zinc-500">{capability.reason}</span>
       ) : null}
 

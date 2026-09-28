@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 import { useApiQuery } from "@/lib/useApiQuery";
+import { useLastKnownData } from "@/lib/useLastKnownData";
+import { ErrorState } from "@/components/ErrorState";
 import { useControlChanged } from "@/components/controls/controlEvents";
 import { StatusPanel } from "./StatusPanel";
 
@@ -22,7 +24,10 @@ type KillSwitchPanelProps = {
    * state). The System Status screen passes nothing; /controls passes the
    * Trip/Reset trigger.
    */
-  renderAction?: (data: KillSwitchData) => ReactNode;
+  renderAction?: (
+    data: KillSwitchData,
+    meta: { stateKnown: boolean },
+  ) => ReactNode;
 };
 
 /**
@@ -31,12 +36,19 @@ type KillSwitchPanelProps = {
  * refetches on the same-tab `killswitch:changed` event so it stays in sync with
  * any control mutation made elsewhere on the page (Plan 23 also makes the banner
  * render the armed state).
+ *
+ * WR-C-06: when a refetch fails while a `renderAction` dialog is open, the
+ * failure branch keeps the action mounted at the same tree position (same
+ * outer element, same flex row, action at the same index) fed with the last
+ * known data and `stateKnown: false`, so the open dialog and the operator's
+ * typed input survive; the caller withholds only the trigger button.
  */
 export function KillSwitchPanel({ renderAction }: KillSwitchPanelProps = {}) {
   const { loading, result, refetch } = useApiQuery<KillSwitchData>(
     "/api/v1/system/kill-switch",
   );
   useControlChanged("killswitch", refetch);
+  const lastKnown = useLastKnownData(result);
 
   return (
     <StatusPanel
@@ -44,6 +56,18 @@ export function KillSwitchPanel({ renderAction }: KillSwitchPanelProps = {}) {
       loading={loading}
       result={result}
       refetch={refetch}
+      renderError={
+        renderAction && lastKnown
+          ? (failure) => (
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center gap-4">
+                  <ErrorState failure={failure} />
+                  {renderAction(lastKnown, { stateKnown: false })}
+                </div>
+              </div>
+            )
+          : undefined
+      }
     >
       {(data) => (
         <div className="space-y-2 text-sm">
@@ -56,7 +80,7 @@ export function KillSwitchPanel({ renderAction }: KillSwitchPanelProps = {}) {
               >
                 {data.state.toUpperCase()}
               </p>
-              {renderAction(data)}
+              {renderAction(data, { stateKnown: true })}
             </div>
           ) : (
             <p

@@ -9,6 +9,8 @@ import { dispatchControlChanged } from "./controlEvents";
 type StrategyControlTriggerProps = {
   strategyId: string;
   enabled: boolean;
+  /** See KillSwitchControlTrigger: false withholds the button, keeps the dialog (WR-C-06). */
+  stateKnown?: boolean;
 };
 
 /**
@@ -29,6 +31,7 @@ type StrategyControlTriggerProps = {
 export function StrategyControlTrigger({
   strategyId,
   enabled,
+  stateKnown = true,
 }: StrategyControlTriggerProps) {
   const [openedAsEnabled, setOpenedAsEnabled] = useState<boolean | null>(null);
   const capability = useMutationCapability();
@@ -41,15 +44,17 @@ export function StrategyControlTrigger({
 
   return (
     <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => setOpenedAsEnabled(enabled)}
-        disabled={capability.state !== "enabled"}
-        className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {triggerLabel}
-      </button>
-      {capability.state !== "enabled" && capability.reason ? (
+      {stateKnown ? (
+        <button
+          type="button"
+          onClick={() => setOpenedAsEnabled(enabled)}
+          disabled={capability.state !== "enabled"}
+          className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {triggerLabel}
+        </button>
+      ) : null}
+      {stateKnown && capability.state !== "enabled" && capability.reason ? (
         <span className="text-xs text-zinc-500">{capability.reason}</span>
       ) : null}
 

@@ -160,3 +160,39 @@ describe("StrategyOverviewPanel", () => {
     ).toBeTruthy();
   });
 });
+
+describe("WR-C-06: StrategyOverviewPanel keeps an open dialog across a failed state re-read", () => {
+  it("keeps the open confirm dialog when the control-state refetch fails and hides the trigger", async () => {
+    const current: Stub = { control: "enabled", mutationsEnabled: true };
+    stubFetch(current);
+    render(<StrategyOverviewPanel />);
+    await flush();
+
+    const trigger = screen.getByRole("button", { name: "Disable Strategy" });
+    fireEvent.click(trigger);
+    await flush();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+
+    current.control = "error";
+    act(() => {
+      dispatchControlChanged("strategy");
+    });
+    await flush();
+
+    expect(screen.getByText("Control state unavailable")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect((screen.getByLabelText("Reason") as HTMLTextAreaElement).value).toBe("drill");
+    expect(trigger.isConnected).toBe(false);
+    expect(screen.getAllByRole("button", { name: "Disable Strategy" })).toHaveLength(1);
+
+    current.control = "enabled";
+    act(() => {
+      dispatchControlChanged("strategy");
+    });
+    await flush();
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect((screen.getByLabelText("Reason") as HTMLTextAreaElement).value).toBe("drill");
+    expect(screen.getAllByRole("button", { name: "Disable Strategy" })).toHaveLength(2);
+  });
+});

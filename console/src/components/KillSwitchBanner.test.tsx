@@ -148,3 +148,43 @@ describe("KillSwitchBanner", () => {
     ).toBeTruthy();
   });
 });
+
+describe("WR-C-06: an open dialog survives a failed state re-read", () => {
+  it("keeps the open confirm dialog (and typed reason) when the refetch fails, hides the trigger, and re-shows it on recovery", async () => {
+    const current = { mode: "armed" as Mode };
+    stubFetch(current);
+    render(<KillSwitchBanner />);
+    await flush();
+
+    const trigger = screen.getByRole("button", { name: "Trip Kill Switch" });
+    fireEvent.click(trigger);
+    await flush();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "drill" } });
+
+    current.mode = "error";
+    act(() => {
+      dispatchControlChanged("killswitch");
+    });
+    await flush();
+
+    expect(screen.getByText(/Kill-switch state UNKNOWN/)).toBeTruthy();
+    // The dialog is still open with the operator's input intact.
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect((screen.getByLabelText("Reason") as HTMLTextAreaElement).value).toBe("drill");
+    // No trigger while the state is unknown (honesty rule): only the dialog's
+    // own confirm button carries that name now.
+    expect(trigger.isConnected).toBe(false);
+    expect(screen.getAllByRole("button", { name: "Trip Kill Switch" })).toHaveLength(1);
+
+    current.mode = "armed";
+    act(() => {
+      dispatchControlChanged("killswitch");
+    });
+    await flush();
+
+    expect(screen.getByText("Kill switch: ARMED")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect((screen.getByLabelText("Reason") as HTMLTextAreaElement).value).toBe("drill");
+    expect(screen.getAllByRole("button", { name: "Trip Kill Switch" })).toHaveLength(2);
+  });
+});

@@ -6,6 +6,7 @@ import { FetchMeta } from "@/components/FetchMeta";
 import { StrategyStatusBadge } from "@/components/strategy/StrategyStatusBadge";
 import { StrategyControlTrigger } from "@/components/controls/StrategyControlTrigger";
 import { useStrategyControlState } from "@/components/controls/useStrategyControlState";
+import { useLastKnownData } from "@/lib/useLastKnownData";
 import { JobShortcutLink } from "@/components/shortcuts/JobShortcutLink";
 
 const STRATEGY_ID = "trend_following_daily";
@@ -70,13 +71,16 @@ function KeyValueSection({
  * that read fails the panel shows "Control state unavailable" and no trigger
  * (no target state can be computed without a known current state). The
  * trigger sits at one stable JSX position and receives `enabled` as a prop
- * (20-18 caller constraint). Composed directly from
+ * (20-18 caller constraint); it also stays mounted across a failed re-read
+ * (WR-C-06) so an open confirm dialog survives, with only the badge and the
+ * trigger button withheld (`stateKnown={false}`). Composed directly from
  * the shared lib primitives (useApiQuery/FetchMeta/ErrorState) rather than
  * the status-screen-scoped StatusPanel wrapper.
  */
 export function StrategyOverviewPanel() {
   const { loading, result, refetch } = useApiQuery<StrategyDetail>("/api/v1/strategies/trend_following_daily");
   const controlState = useStrategyControlState(STRATEGY_ID);
+  const lastKnownControl = useLastKnownData(controlState.result);
   const strategyId = result?.ok ? result.data.strategy.strategy_id : null;
 
   return (
@@ -125,16 +129,18 @@ export function StrategyOverviewPanel() {
                     {strategy.version}
                   </span>
                   {controlState.result?.ok ? (
-                    <>
-                      <StrategyStatusBadge
-                        enabled={controlState.result.data.status === "enabled"}
-                      />
-                      <StrategyControlTrigger
-                        strategyId={STRATEGY_ID}
-                        enabled={controlState.result.data.status === "enabled"}
-                      />
-                    </>
-                  ) : controlState.result ? (
+                    <StrategyStatusBadge
+                      enabled={controlState.result.data.status === "enabled"}
+                    />
+                  ) : null}
+                  {lastKnownControl ? (
+                    <StrategyControlTrigger
+                      strategyId={STRATEGY_ID}
+                      enabled={lastKnownControl.status === "enabled"}
+                      stateKnown={controlState.result?.ok === true}
+                    />
+                  ) : null}
+                  {controlState.result && !controlState.result.ok ? (
                     <span className="text-xs text-zinc-500">
                       Control state unavailable
                     </span>
