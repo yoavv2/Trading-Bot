@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchApi, submitJob, cancelJob } from "./api";
+import { fetchApi, submitJob, cancelJob, retryJob } from "./api";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -324,6 +324,181 @@ describe("submitJob / cancelJob", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toBe("Job missing-job was not found.");
+    }
+  });
+
+  it("maps 409 job_not_cancellable_running to the exact UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, { detail: { code: "job_not_cancellable_running" } }),
+      ),
+    );
+
+    const result = await cancelJob("job-1", null, "key-2");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("Not cancellable once running");
+    }
+  });
+});
+
+describe("retryJob", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends method POST with the Idempotency-Key header to /backend/api/v1/jobs/<id>/retry", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(202, {
+        job_id: "j2",
+        job_type: "backtest",
+        status: "queued",
+        links: { self: "", progress: "", logs: "", events: "" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await retryJob("abc", "key-3");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/backend/api/v1/jobs/abc/retry");
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["Idempotency-Key"]).toBe("key-3");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.replayed).toBe(false);
+    }
+  });
+
+  it("returns ok:true replayed:true on a 200 with Idempotency-Replayed: true", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            job_id: "j2",
+            job_type: "backtest",
+            status: "queued",
+            links: { self: "", progress: "", logs: "", events: "" },
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "Idempotency-Replayed": "true",
+            },
+          },
+        ),
+      ),
+    );
+
+    const result = await retryJob("abc", "key-3");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.replayed).toBe(true);
+    }
+  });
+
+  it("maps 409 reconciliation_required to the exact UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, {
+          detail: {
+            code: "reconciliation_required",
+            required_job_type: "reconciliation",
+            strategy_id: "trend_following_daily",
+          },
+        }),
+      ),
+    );
+
+    const result = await retryJob("abc", "key-3");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(
+        "Retry blocked — the original Job's outcome is uncertain. Run reconciliation first, then retry.",
+      );
+    }
+  });
+
+  it("maps 409 retry_exists to the exact UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, {
+          detail: { code: "retry_exists", existing_retry_job_id: "j3" },
+        }),
+      ),
+    );
+
+    const result = await retryJob("abc", "key-3");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("This Job already has a retry.");
+    }
+  });
+
+  it("maps 409 job_not_retryable to the exact UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(409, { detail: { code: "job_not_retryable", status: "queued" } }),
+      ),
+    );
+
+    const result = await retryJob("abc", "key-3");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(
+        "This Job cannot be retried — retry is only available for FAILED or CANCELLED Jobs.",
+      );
+    }
+  });
+
+  it("maps 422 invalid_retry_payload with a reason to the exact UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(422, {
+          detail: { code: "invalid_retry_payload", reason: "strategy no longer exists" },
+        }),
+      ),
+    );
+
+    const result = await retryJob("abc", "key-3");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(
+        "This Job can no longer be retried: strategy no longer exists.",
+      );
+    }
+  });
+
+  it("maps 422 invalid_retry_payload without a usable reason to the fallback UI-SPEC copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(422, { detail: { code: "invalid_retry_payload", reason: "   " } }),
+      ),
+    );
+
+    const result = await retryJob("abc", "key-3");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe(
+        "This Job can no longer be retried: the original payload is no longer valid.",
+      );
     }
   });
 });
