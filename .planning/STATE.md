@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-04-PLAN.md
-last_updated: "2026-09-28T08:43:01.573Z"
+stopped_at: Completed 20-05-PLAN.md
+last_updated: "2026-09-28T08:58:46.268Z"
 last_activity: 2026-09-28
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 51
-  completed_plans: 31
+  completed_plans: 32
   percent: 60
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 5 of 24
+Plan: 6 of 24
 Status: Ready to execute
 Last activity: 2026-09-28
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
@@ -78,6 +78,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P02 | 15min | 2 tasks | 7 files |
 | Phase 20 P03 | 15min | 2 tasks | 5 files |
 | Phase 20 P04 | 20min | 2 tasks | 6 files |
+| Phase 20 P05 | ~40min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -192,6 +193,8 @@ Recent decisions affecting current work:
 - [Phase 20]: 20-02: backtest_reporting split into a pure build_backtest_report read plus persist_backtest_metrics (called once at backtest SUCCEEDED, same transaction); OperatorControlService.get_strategy_state is now a plain select returning a registry-default StrategyControlState(status=active, updated_at=None) on an empty strategies table, with ensure_strategy_state/ensure_strategy_control_state preserving get-or-create for submit_orders.py's mutating call sites. tests/test_read_path_purity.py proves zero writes at runtime (engine + session spies) for export_backtest_report.py, report_strategy_analytics.py, operator_status.py, and the analytics GET route. ORCH-08 stays Pending -- this plan makes the D-29 exemption reasons literally true but does not remove mutating scripts or ship the boundary test itself (Plan 23's scope).
 - [Phase 20]: 20-03: payload_fields.py ships shared strict-payload validators (PayloadFieldRejection 12-value closed enum, normalize_symbols, map_validation_error, require_registered_strategy/require_trading_session_not_future/require_date_range, never defaulting) that every remaining Phase 20 Job submission spec will import; services/symbol_metadata_sync.py extracts the metadata-sync business logic out of scripts/sync_symbol_metadata.py with module-level imports and no dry_run field (OPS-05); services/calendar.py::sync_market_sessions wraps upsert_market_sessions in its own session_scope so the future sync-market-sessions Job handler stays inside the services.*-only JobHandler import contract. ORCH-02/OPS-05 left Pending -- service/validator layer only, no Job handler or registry registration yet.
 - [Phase 20]: 20-04: QUEUED_ONLY cancellation mode, JobDomainConflictError translated from ConcurrentRunLockedError via jobs/handlers/domain_conflicts.py, and registry.retry_prerequisite_for/register() validation for the optional D-19 spec attribute; runner.py pins outcome_uncertain False on the domain_conflict path since the lock-denial conflict always precedes any broker order submission (LOCK-01). OPS-08/OPS-03/OPS-07 stay Pending -- mechanism only, no handler raises it yet (Plan 16).
+- [Phase 20]: [20-05]: OPS-02, OPS-04, OPS-05, OPS-07 stay Pending in REQUIREMENTS.md -- this plan ships only the job_reads read-model fix/extension and the job_id threading the later handler plans consume; no Job handler/type is registered here and no operator-visible Job path exists yet (17-01/19-01/19-03/20-01 precedent)
+- [Phase 20]: [20-05]: apply_reconciliation_corrections left unchanged -- direct read confirmed it creates no StrategyRun, so per orchestrator decision 4 it takes no job_id parameter
 
 ### Pending Todos
 
@@ -232,6 +235,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T08:43:01.554Z
-Stopped at: Completed 20-04-PLAN.md
+Last session: 2026-09-28T08:58:46.259Z
+Stopped at: Completed 20-05-PLAN.md
 Resume file: None
