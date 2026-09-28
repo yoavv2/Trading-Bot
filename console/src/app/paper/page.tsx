@@ -1,3 +1,4 @@
+import { PaperJobShortcuts } from "@/components/paper/PaperJobShortcuts";
 import { PaperAnalyticsSection } from "@/components/paper/PaperAnalyticsSection";
 import { PositionsPanel } from "@/components/paper/PositionsPanel";
 import { OpenOrdersPanel } from "@/components/paper/OpenOrdersPanel";
@@ -14,6 +15,7 @@ export default function PaperPage() {
         Paper Trading Status
       </h1>
       <div className="space-y-6">
+        <PaperJobShortcuts />
         <PaperAnalyticsSection />
         <PositionsPanel />
         <OpenOrdersPanel />

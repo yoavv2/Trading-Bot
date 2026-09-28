@@ -1,10 +1,14 @@
 "use client";
 
-import Link from "next/link";
 import { useApiQuery } from "@/lib/useApiQuery";
-import { useMutationCapability } from "@/lib/useMutationCapability";
 import { ErrorState } from "@/components/ErrorState";
 import { FetchMeta } from "@/components/FetchMeta";
+import { StrategyStatusBadge } from "@/components/strategy/StrategyStatusBadge";
+import { StrategyControlTrigger } from "@/components/controls/StrategyControlTrigger";
+import { useStrategyControlState } from "@/components/controls/useStrategyControlState";
+import { JobShortcutLink } from "@/components/shortcuts/JobShortcutLink";
+
+const STRATEGY_ID = "trend_following_daily";
 
 type StrategyDetail = {
   strategy: {
@@ -59,14 +63,20 @@ function KeyValueSection({
 
 /**
  * Strategy overview screen panel (STRA-01/STRA-02): fetches the declared
- * config for TrendFollowingDailyV1 and renders its enabled/disabled status,
- * universe, and entry/exit/risk config generically. Composed directly from
+ * config for TrendFollowingDailyV1 and renders its universe and
+ * entry/exit/risk config generically. The ENABLED/DISABLED badge and the
+ * inline Enable/Disable trigger read the DB control status
+ * (`useStrategyControlState`), never the static config `enabled` flag; when
+ * that read fails the panel shows "Control state unavailable" and no trigger
+ * (no target state can be computed without a known current state). The
+ * trigger sits at one stable JSX position and receives `enabled` as a prop
+ * (20-18 caller constraint). Composed directly from
  * the shared lib primitives (useApiQuery/FetchMeta/ErrorState) rather than
  * the status-screen-scoped StatusPanel wrapper.
  */
 export function StrategyOverviewPanel() {
   const { loading, result, refetch } = useApiQuery<StrategyDetail>("/api/v1/strategies/trend_following_daily");
-  const capability = useMutationCapability();
+  const controlState = useStrategyControlState(STRATEGY_ID);
   const strategyId = result?.ok ? result.data.strategy.strategy_id : null;
 
   return (
@@ -77,27 +87,18 @@ export function StrategyOverviewPanel() {
         </h2>
         <div className="flex items-center gap-3">
           {strategyId ? (
-            capability.state === "enabled" ? (
-              <Link
-                href={`/jobs/new?type=backtest&strategy_id=${encodeURIComponent(strategyId)}`}
-                className="rounded bg-sky-400 px-3 py-1 text-xs font-semibold text-zinc-950 hover:bg-sky-300"
-              >
-                Run backtest
-              </Link>
-            ) : (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled
-                  className="rounded bg-sky-400 px-3 py-1 text-xs font-semibold text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Run backtest
-                </button>
-                {capability.reason ? (
-                  <span className="text-xs text-zinc-500">{capability.reason}</span>
-                ) : null}
-              </div>
-            )
+            <>
+              <JobShortcutLink
+                jobType="backtest"
+                strategyId={strategyId}
+                label="Run backtest"
+              />
+              <JobShortcutLink
+                jobType="risk-evaluation"
+                strategyId={strategyId}
+                label="Evaluate risk"
+              />
+            </>
           ) : null}
           <FetchMeta
             asOf={result?.asOf ?? null}
@@ -123,15 +124,21 @@ export function StrategyOverviewPanel() {
                   <span className="text-xs text-zinc-500">
                     {strategy.version}
                   </span>
-                  <span
-                    className={
-                      strategy.enabled
-                        ? "rounded border border-emerald-700 bg-emerald-950/60 px-2 py-0.5 text-xs font-bold tracking-wide text-emerald-300"
-                        : "rounded border border-zinc-700 bg-zinc-800/60 px-2 py-0.5 text-xs font-bold tracking-wide text-zinc-400"
-                    }
-                  >
-                    {strategy.enabled ? "ENABLED" : "DISABLED"}
-                  </span>
+                  {controlState.result?.ok ? (
+                    <>
+                      <StrategyStatusBadge
+                        enabled={controlState.result.data.status === "enabled"}
+                      />
+                      <StrategyControlTrigger
+                        strategyId={STRATEGY_ID}
+                        enabled={controlState.result.data.status === "enabled"}
+                      />
+                    </>
+                  ) : controlState.result ? (
+                    <span className="text-xs text-zinc-500">
+                      Control state unavailable
+                    </span>
+                  ) : null}
                 </div>
 
                 <p className="mt-2 text-sm text-zinc-300">

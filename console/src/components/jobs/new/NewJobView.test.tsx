@@ -182,6 +182,10 @@ describe("StrategyOverviewPanel Run backtest shortcut (D-18)", () => {
 
     const button = screen.getByRole("button", { name: "Run backtest" });
     expect((button as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("Mutations disabled on this deployment")).toBeTruthy();
+    // The reason now renders beside every capability-gated control on the
+    // panel (Run backtest, Evaluate risk, inline strategy trigger).
+    expect(
+      screen.getAllByText("Mutations disabled on this deployment").length,
+    ).toBeGreaterThan(0);
   });
 });
