@@ -264,11 +264,9 @@ class TestSymbolMetadataUpsert:
     def test_metadata_upsert_creates_symbol_with_enriched_fields(
         self, migrated_access_db: str
     ) -> None:
-        sys.path.insert(
-            0,
-            str(Path(__file__).resolve().parents[1] / "scripts"),
+        from trading_platform.services.symbol_metadata_sync import (
+            upsert_symbol_metadata as _upsert_symbol_metadata,
         )
-        from sync_symbol_metadata import _upsert_symbol_metadata
 
         settings = load_settings()
         overview = self._make_overview("AAPL")
@@ -293,11 +291,9 @@ class TestSymbolMetadataUpsert:
         assert persisted.metadata_provider == "polygon"
 
     def test_metadata_upsert_is_idempotent(self, migrated_access_db: str) -> None:
-        sys.path.insert(
-            0,
-            str(Path(__file__).resolve().parents[1] / "scripts"),
+        from trading_platform.services.symbol_metadata_sync import (
+            upsert_symbol_metadata as _upsert_symbol_metadata,
         )
-        from sync_symbol_metadata import _upsert_symbol_metadata
 
         settings = load_settings()
         overview = self._make_overview("SPY")

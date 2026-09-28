@@ -647,3 +647,213 @@ def test_runtime_packages_forbid_schema_mutation_and_alembic_commands() -> None:
     assert not offenders, "Runtime schema mutation is Alembic-only:\n" + "\n".join(offenders)
 
 
+
+
+# ---------------------------------------------------------------------------
+# Closed-world boundary for scripts/, the Makefile and worker commands
+# (D-26..D-31, ORCH-01/02/08). Every scan below uses explicit roots -- never a
+# repo-wide rglob -- so the stale `.claude/worktrees/` copy of src/ is never
+# scanned (orchestrator decision 5).
+# ---------------------------------------------------------------------------
+_SCRIPTS_ROOT = _ROOT / "scripts"
+_WORKER_ROOT = _ROOT / "src/trading_platform/worker"
+_MAKEFILE = _ROOT / "Makefile"
+
+_SCRIPT_EXEMPTIONS: dict[str, str] = {
+    "migrate.py": "deployment tooling (schema migrations)",
+    "seed_phase1.py": "deployment tooling (strategy catalog seed)",
+    "generate_signals.py": (
+        "read-only: evaluates the strategy against persisted bars, writes nothing "
+        "(verified transitively)"
+    ),
+    "export_backtest_report.py": (
+        "report: pure build_backtest_report read, writes local files only "
+        "(D-31; tests/test_read_path_purity.py)"
+    ),
+    "operator_status.py": (
+        "read/report: pure strategy control-state read (D-31; tests/test_read_path_purity.py)"
+    ),
+    "report_strategy_analytics.py": "read/report (D-31; tests/test_read_path_purity.py)",
+}
+_DEPLOYMENT_TOOLING = {"migrate.py", "seed_phase1.py"}
+_KEPT_MAKE_TARGETS = {
+    "up",
+    "down",
+    "logs",
+    "migrate",
+    "seed",
+    "export-backtest-report",
+    "generate-signals",
+    "test",
+    "console",
+    "console-install",
+}
+_SCRIPT_TOP_LEVEL_DEFS: dict[str, set[str]] = {
+    "migrate.py": {"build_alembic_config", "build_parser", "main"},
+    "seed_phase1.py": {"_config_reference", "seed_phase_one", "build_parser", "main"},
+    "generate_signals.py": {"build_parser", "resolve_as_of", "main"},
+    "export_backtest_report.py": {"build_parser", "main"},
+    "operator_status.py": {"build_parser", "main"},
+    "report_strategy_analytics.py": {"build_parser", "main"},
+}
+_MUTATING_ENTRY_POINTS = {
+    "run_backtest",
+    "run_risk_evaluation",
+    "run_paper_session",
+    "run_paper_order_submission",
+    "reconcile_paper_execution",
+    "apply_reconciliation_corrections",
+    "recover_inflight_paper_orders",
+    "sync_paper_state",
+    "ingest_daily_bars",
+    "sync_symbol_metadata",
+    "upsert_symbol_metadata",
+    "sync_market_sessions",
+    "upsert_market_sessions",
+    "enable_strategy",
+    "disable_strategy",
+    "trip_kill_switch",
+    "reset_kill_switch",
+    "ensure_strategy_record",
+    "ensure_strategy_control_state",
+    "persist_backtest_metrics",
+    "_upsert_backtest_metric",
+    "submit_job",
+    "run_dry_bootstrap",
+}
+_ALLOWED_MUTATING_CALLS = {
+    ("src/trading_platform/worker/commands/operator.py", "trip_kill_switch"),
+}
+
+
+def _scripts_files() -> list[Path]:
+    return sorted(_SCRIPTS_ROOT.glob("*.py"))
+
+
+def _scanned_mutation_paths() -> list[Path]:
+    """scripts/*.py minus deployment tooling, plus every worker module."""
+    scripts = [p for p in _scripts_files() if p.name not in _DEPLOYMENT_TOOLING]
+    return scripts + sorted(_WORKER_ROOT.rglob("*.py"))
+
+
+def _terminal_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _mutating_hits(path: Path) -> list[tuple[str, str, int]]:
+    """(relative path, pinned name, lineno) for calls/imports of pinned entry points."""
+    rel = path.relative_to(_ROOT).as_posix()
+    tree = ast.parse(path.read_text(), filename=str(path))
+    hits: list[tuple[str, str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _terminal_name(node.func)
+            if name in _MUTATING_ENTRY_POINTS:
+                hits.append((rel, name, node.lineno))
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name in _MUTATING_ENTRY_POINTS:
+                    hits.append((rel, alias.name, node.lineno))
+    return hits
+
+
+def _makefile_targets() -> set[str]:
+    import re
+
+    targets: set[str] = set()
+    for line in _MAKEFILE.read_text().splitlines():
+        match = re.match(r"^([A-Za-z0-9_.-]+):(?!=)", line)
+        if match and match.group(1) != ".PHONY":
+            targets.add(match.group(1))
+    return targets
+
+
+def test_scripts_directory_is_exactly_the_exempt_set() -> None:
+    assert {p.name for p in _scripts_files()} == set(_SCRIPT_EXEMPTIONS)
+
+
+def test_every_exemption_has_a_nonblank_reason() -> None:
+    assert _DEPLOYMENT_TOOLING <= set(_SCRIPT_EXEMPTIONS)
+    for name, reason in _SCRIPT_EXEMPTIONS.items():
+        assert reason.strip(), name
+    assert set(_SCRIPT_TOP_LEVEL_DEFS) == set(_SCRIPT_EXEMPTIONS)
+
+
+def test_makefile_targets_are_exactly_the_kept_set() -> None:
+    assert _makefile_targets() == _KEPT_MAKE_TARGETS
+
+
+def test_makefile_phony_matches_kept_targets() -> None:
+    phony_lines = [
+        line for line in _MAKEFILE.read_text().splitlines() if line.startswith(".PHONY:")
+    ]
+    assert len(phony_lines) == 1
+    phony = phony_lines[0].split(":", 1)[1].split()
+    assert len(phony) == len(set(phony))
+    assert set(phony) == _KEPT_MAKE_TARGETS
+
+
+def test_makefile_recipes_reference_only_exempt_scripts_and_dispatch_commands() -> None:
+    import re
+
+    text = _MAKEFILE.read_text()
+    referenced_scripts = set(re.findall(r"scripts/([A-Za-z0-9_]+\.py)", text))
+    referenced_commands = set(re.findall(r"trading_platform\.worker\s+([a-z-]+)", text))
+
+    assert referenced_scripts <= set(_SCRIPT_EXEMPTIONS)
+    assert referenced_commands <= set(DISPATCH)
+
+
+def test_scripts_and_worker_commands_call_no_mutating_entry_points() -> None:
+    offenders = [
+        f"{rel}:{lineno} uses {name}"
+        for path in _scanned_mutation_paths()
+        for rel, name, lineno in _mutating_hits(path)
+        if (rel, name) not in _ALLOWED_MUTATING_CALLS
+    ]
+
+    assert offenders == []
+
+
+def test_mutating_scan_is_not_vacuous() -> None:
+    """The scan sees the one allowed break-glass call, and would flag a new one."""
+    allowed_seen = {
+        (rel, name)
+        for path in _scanned_mutation_paths()
+        for rel, name, _lineno in _mutating_hits(path)
+    }
+    assert allowed_seen == _ALLOWED_MUTATING_CALLS
+
+    probe = ast.parse("from x import run_backtest\nrun_backtest()\nsvc.submit_job(1)\n")
+    names = [
+        _terminal_name(node.func) for node in ast.walk(probe) if isinstance(node, ast.Call)
+    ]
+    assert names == ["run_backtest", "submit_job"]
+    assert {"run_backtest", "submit_job"} <= _MUTATING_ENTRY_POINTS
+
+
+def test_exempt_scripts_are_thin_wrappers() -> None:
+    for name, expected_defs in _SCRIPT_TOP_LEVEL_DEFS.items():
+        path = _SCRIPTS_ROOT / name
+        tree = ast.parse(path.read_text(), filename=str(path))
+        defs = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        classes = [node.name for node in tree.body if isinstance(node, ast.ClassDef)]
+
+        assert defs == expected_defs, name
+        assert classes == [], name
+
+
+def test_boundary_scans_exclude_claude_worktrees() -> None:
+    scanned = _scanned_mutation_paths() + _scripts_files() + [_MAKEFILE]
+    assert scanned
+    for path in scanned:
+        assert ".claude" not in path.parts, path
+        assert path.is_relative_to(_SCRIPTS_ROOT) or path.is_relative_to(_WORKER_ROOT) or path == _MAKEFILE
