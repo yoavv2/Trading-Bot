@@ -229,40 +229,29 @@ def test_api_lifespan_rejects_empty_alpaca_keys_when_db_is_unreachable(
 def test_gate_is_wired_into_api_worker_and_bootstrap_entrypoints() -> None:
     """Static proof the gate is invoked at every named entrypoint (not hooked
     into `load_settings`, which stays untouched — see 10-01/10-05 key
-    facts)."""
+    facts).
+
+    20-12 (D-30): the worker CLI surface is now exactly {report-backtest,
+    report-strategy-analytics, operator-status, run-jobs, kill-switch-trip};
+    the retired command modules (bootstrap, paper_execute, reconcile,
+    risk_check, ingest) no longer exist, and the dry-bootstrap service
+    function is no longer asserted here -- it retires in Plan 23.
+    """
     import inspect
 
     import trading_platform.api.app as api_app
-    import trading_platform.services.bootstrap as bootstrap
     from trading_platform.worker.commands import backtest as backtest_commands
-    from trading_platform.worker.commands import bootstrap as worker_bootstrap_commands
-    from trading_platform.worker.commands import ingest as ingest_commands
     from trading_platform.worker.commands import operator as operator_commands
-    from trading_platform.worker.commands import paper_execute as paper_execute_commands
-    from trading_platform.worker.commands import reconcile as reconcile_commands
-    from trading_platform.worker.commands import risk_check as risk_check_commands
     from trading_platform.worker.commands import run_jobs as run_jobs_commands
 
     assert "enforce_startup_config" in inspect.getsource(api_app.lifespan)
-    assert "enforce_startup_config" in inspect.getsource(bootstrap.run_dry_bootstrap)
 
     gated_worker_functions = [
-        worker_bootstrap_commands.run_placeholder_worker,
-        worker_bootstrap_commands.run_dry_bootstrap,
-        backtest_commands.run_backtest_command,
         backtest_commands.run_report_backtest_command,
         backtest_commands.run_report_strategy_analytics_command,
-        risk_check_commands.run_evaluate_risk_command,
-        paper_execute_commands.run_submit_paper_orders_command,
-        paper_execute_commands.run_paper_session_command,
-        paper_execute_commands.run_sync_paper_state_command,
-        reconcile_commands.run_reconcile_paper_execution_command,
-        operator_commands.run_operator_control_command,
         operator_commands.run_operator_status_command,
+        operator_commands.run_kill_switch_trip_command,
         run_jobs_commands.run_jobs_command,
-        ingest_commands.run_ingest_bars,
-        ingest_commands.run_sync_metadata,
-        ingest_commands.run_sync_sessions,
     ]
     for func in gated_worker_functions:
         assert "enforce_startup_config" in inspect.getsource(func), (

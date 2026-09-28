@@ -9,9 +9,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="trading-platform-worker")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    serve_parser = subparsers.add_parser("serve", help="Run the placeholder worker loop.")
-    serve_parser.add_argument("--interval-seconds", type=int, default=30)
-
     report_parser = subparsers.add_parser(
         "report-backtest",
         help="Render and export a persisted backtest report.",

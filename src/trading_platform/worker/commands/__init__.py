@@ -2,12 +2,7 @@
 
 `worker/__main__.py` imports `DISPATCH` from this package to resolve a
 parsed `args.command` string to its handler, keeping the entrypoint itself
-limited to parser construction, dispatch, and top-level error handling.
-
-`serve` is intentionally excluded from `DISPATCH`: its handler
-(`run_placeholder_worker`) takes a positional scalar rather than the uniform
-`(args: argparse.Namespace) -> None` signature every other handler shares, so
-`__main__.main()` special-cases it.
+a pure routing/dispatch lookup with no per-command special cases.
 """
 
 from __future__ import annotations
@@ -19,7 +14,6 @@ from trading_platform.worker.commands.backtest import (
     run_report_backtest_command,
     run_report_strategy_analytics_command,
 )
-from trading_platform.worker.commands.bootstrap import run_placeholder_worker
 from trading_platform.worker.commands.operator import (
     run_kill_switch_trip_command,
     run_operator_status_command,
@@ -34,4 +28,4 @@ DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "kill-switch-trip": run_kill_switch_trip_command,
 }
 
-__all__ = ["DISPATCH", "run_placeholder_worker"]
+__all__ = ["DISPATCH"]

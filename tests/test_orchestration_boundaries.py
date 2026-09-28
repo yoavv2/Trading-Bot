@@ -38,17 +38,18 @@ _JOB_FRAMEWORK_MODULES = (
     "progress",
 )
 _RETAINED_CLI_COMMANDS = {
-    "serve",
     "report-backtest",
     "report-strategy-analytics",
     "operator-status",
     "run-jobs",
+    "kill-switch-trip",
 }
 _RETAINED_DISPATCH_COMMANDS = {
     "report-backtest",
     "report-strategy-analytics",
     "operator-status",
     "run-jobs",
+    "kill-switch-trip",
 }
 _REMOVED_CLI_COMMANDS = {
     "dry-run",
@@ -62,6 +63,11 @@ _REMOVED_CLI_COMMANDS = {
     "ingest-bars",
     "sync-metadata",
     "sync-sessions",
+    "serve",
+    "kill-switch-reset",
+    "reset-kill-switch",
+    "enable-strategy",
+    "disable-strategy",
 }
 
 
@@ -97,18 +103,58 @@ def test_run_jobs_once_parses_and_dispatches_to_thin_worker_adapter() -> None:
     assert DISPATCH[args.command] is run_jobs_command
 
 
-def test_worker_entrypoint_has_only_serve_special_case_and_dispatch_lookup() -> None:
+def test_worker_entrypoint_is_a_pure_dispatch_lookup() -> None:
+    """D-30: `main()` resolves every command through `DISPATCH.get(args.command)`
+    with zero `if args.command == <literal>` special cases."""
     entrypoint = _ROOT / "src/trading_platform/worker/__main__.py"
     tree = ast.parse(entrypoint.read_text(), filename=str(entrypoint))
     main = next(
         node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"
     )
-    special_cases = [node for node in main.body if isinstance(node, ast.If)]
 
-    assert len(special_cases) == 2
-    assert isinstance(special_cases[0].test, ast.Compare)
-    assert ast.unparse(special_cases[0].test) == "args.command == 'serve'"
+    def _compares_args_command_to_string_constant(node: ast.If) -> bool:
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            return False
+        if ast.unparse(test.left) != "args.command":
+            return False
+        return any(
+            isinstance(comparator, ast.Constant) and isinstance(comparator.value, str)
+            for comparator in test.comparators
+        )
+
+    command_literal_ifs = [
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.If) and _compares_args_command_to_string_constant(node)
+    ]
+
+    assert command_literal_ifs == []
     assert "DISPATCH.get(args.command)" in ast.unparse(main)
+
+
+def test_worker_commands_call_no_reset_or_strategy_mutators() -> None:
+    """D-15/D-30: `kill-switch-trip` is the sole surviving worker-CLI
+    mutation, and it is trip-only -- no worker module may call
+    `reset_kill_switch`, `enable_strategy`, or `disable_strategy`, and
+    `trip_kill_switch` may only be called from the break-glass handler."""
+    worker_root = _ROOT / "src/trading_platform/worker"
+    forbidden_attrs = {"reset_kill_switch", "enable_strategy", "disable_strategy"}
+    forbidden_offenders: list[str] = []
+    trip_kill_switch_callers: list[str] = []
+
+    for path in sorted(worker_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr in forbidden_attrs:
+                forbidden_offenders.append(f"{path.relative_to(_ROOT)}:{node.lineno} calls {node.func.attr}")
+            if node.func.attr == "trip_kill_switch":
+                trip_kill_switch_callers.append(str(path.relative_to(_ROOT)))
+
+    assert not forbidden_offenders, forbidden_offenders
+    assert trip_kill_switch_callers == ["src/trading_platform/worker/commands/operator.py"]
 
 
 def _module_imports(path: Path) -> set[str]:
