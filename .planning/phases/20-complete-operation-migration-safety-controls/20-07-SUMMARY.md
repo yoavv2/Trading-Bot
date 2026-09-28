@@ -38,6 +38,7 @@ key-files:
 key-decisions:
   - "The plan's illustrative rejection example 'as_of_session as int' maps to invalid_date (parse_iso_date raises PayloadFieldRejection.INVALID_DATE for any non-str/non-date input), not invalid_field_type as the plan's ordering implied. Used strategy_id=123 for the invalid_field_type test case (matching the backtest_submission.py precedent) and as_of_session='2024-13-01' for invalid_date, covering all 7 closed enum values without bending the validator to fit the plan's prose."
   - "OPS-02 left Pending in REQUIREMENTS.md: registration in build_default_registry (Plan 16) and the E2E test (Plan 19) are both still outstanding, per the established Phase 19/20 precedent (19-01, 19-03, 19-06, 19-07) of not marking a requirement complete until every plan closing it has landed."
+  - "risk_evaluation.py declares job_type = \"risk-evaluation\" as a literal string (not imported from risk_evaluation_submission.py) after a post-hoc review found the initial draft imported RISK_EVALUATION_JOB_TYPE across handlers/ modules, which the plan's own action text restricts against ('Imports: services.* and jobs contracts/registry only'); fixed in a follow-up fix(20-07) commit to match backtest.py's literal job_type = \"backtest\" precedent before any later Phase 20 handler could copy the wrong pattern."
 
 patterns-established: []
 
@@ -71,11 +72,12 @@ Each task was committed via TDD RED -> GREEN pairs:
 1. **Task 1: RiskEvaluationSubmissionSpec + RiskEvaluationJobHandler + unit tests**
    - `de2e364` (test) — 21 failing tests (ImportError, neither module existed)
    - `deb1367` (feat) — spec + handler, 21/21 green, ruff clean
+   - `7a451f7` (fix) — post-hoc review deviation: switched `risk_evaluation.py`'s `job_type` from an imported `RISK_EVALUATION_JOB_TYPE` constant to a literal `"risk-evaluation"` string, matching `backtest.py`'s precedent and the plan's own import restriction; 21/21 still green, ruff clean
 2. **Task 2: RiskEvaluationJobForm**
    - `cf43582` (test) — failing vitest suite (component did not exist)
    - `2b12b4f` (feat) — form component, 17/17 vitest green (component + consoleBoundaries), `tsc --noEmit` and eslint clean
 
-**Plan metadata:** (this commit) `docs(20-07): complete risk-evaluation job type plan`
+**Plan metadata:** `664c297` (docs: complete risk-evaluation job type plan) — this commit was created via `gsd-sdk query commit`, which does not expose a trailer argument, so it is missing the session's required `Co-Authored-By` trailer; disclosed rather than amended (see Deviations below). A follow-up `317402c` records this in STATE.md.
 
 ## Files Created/Modified
 - `src/trading_platform/jobs/handlers/risk_evaluation_submission.py` - `RiskEvaluationSubmissionSpec`, `RiskEvaluationPayloadRejection`, `RISK_EVALUATION_JOB_TYPE`
@@ -90,10 +92,23 @@ Each task was committed via TDD RED -> GREEN pairs:
 
 ## Deviations from Plan
 
-None - plan executed exactly as written (the "as_of_session as int" example choice above is a test-case mapping detail within the plan's own must_haves text, not a deviation from any file/behavior requirement).
+### Auto-fixed Issues
+
+**1. [Rule 1 - Bug/consistency] risk_evaluation.py imported across handlers/ modules, violating the plan's own import restriction**
+- **Found during:** post-implementation advisor review, before handoff
+- **Issue:** The initial `risk_evaluation.py` set `job_type = RISK_EVALUATION_JOB_TYPE`, importing that constant from `risk_evaluation_submission.py`. The plan's action text for this file says "Imports: services.* and jobs contracts/registry only," and `backtest.py` (the named template) declares its `job_type` as a literal string instead of importing a sibling constant.
+- **Fix:** Changed `RiskEvaluationJobHandler.job_type` to the literal `"risk-evaluation"` and removed the cross-module import.
+- **Files modified:** `src/trading_platform/jobs/handlers/risk_evaluation.py`
+- **Verification:** `21/21` tests still green; `ruff check src/trading_platform/jobs/handlers` clean; all grep-count acceptance criteria re-verified.
+- **Committed in:** `7a451f7`
+
+---
+
+**Total deviations:** 1 auto-fixed (Rule 1)
+**Impact on plan:** Behavior-neutral (the constant and the literal have the same value); brings the file back in line with both the plan's stated import scope and the precedent this plan explicitly exists to establish for the six remaining Phase 20 handler plans.
 
 ## Issues Encountered
-- The full pytest suite showed one flaky, order-dependent error in `tests/test_alpaca_execution.py::test_run_paper_order_submission_persists_idempotent_paper_orders` on a first full-suite run; it passed in isolation and on a clean re-run of the full suite (693/693 passed), confirming it is a pre-existing test-isolation flake unrelated to this plan's changes.
+- A full pytest suite run (`.venv/bin/python -m pytest -q`, no flags) reported `693 passed, 1 warning, 1 error`, with the error attributed to `tests/test_alpaca_execution.py::test_run_paper_order_submission_persists_idempotent_paper_orders` (a teardown-stage error on a test that had passed). An immediate re-run of the same full suite reported `693 passed` with no error, and the test also passes in isolation. `test_alpaca_execution.py` collects well before `tests/test_risk_evaluation_job_type.py` in suite order and the pass count was unchanged between runs, so this plan's additions did not cause it; whether the flake predates this plan is not established from these two observations alone. Not investigated further (out of this plan's file scope) — logged in `deferred-items.md`.
 
 ## User Setup Required
 
@@ -109,4 +124,4 @@ None - no external service configuration required.
 
 ## Self-Check: PASSED
 
-All 6 claimed files found on disk; all 5 claimed commit hashes (de2e364, deb1367, cf43582, 2b12b4f, da05e9f) found in git log.
+All 6 claimed files found on disk; all claimed commit hashes (de2e364, deb1367, cf43582, 2b12b4f, da05e9f, 664c297, 317402c, 7a451f7) found in git log.
