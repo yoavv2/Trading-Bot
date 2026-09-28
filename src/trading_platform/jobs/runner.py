@@ -44,7 +44,7 @@ from trading_platform.jobs.cancellation import (
     sweep_cancellation_timeouts,
 )
 from trading_platform.jobs.context import DatabaseJobContext
-from trading_platform.jobs.contracts import JobCancelledError, JobHandler
+from trading_platform.jobs.contracts import JobCancelledError, JobDomainConflictError, JobHandler
 from trading_platform.jobs.dependencies import cascade_dependency_outcome
 from trading_platform.jobs.lifecycle import (
     IllegalJobTransition,
@@ -239,6 +239,13 @@ def execute_job(
             outcome_kind = "success"
         except JobCancelledError:
             outcome_kind = "cancelled"
+        except JobDomainConflictError as exc:
+            outcome_kind = "domain_conflict"
+            failure_message = exc.message[:_MAX_FAILURE_MESSAGE_CHARS]
+            logger.warning(
+                "job_runner_domain_conflict",
+                extra={"context": {"job_id": str(job_id), "job_type": job_type}},
+            )
         except Exception as exc:
             outcome_kind = "error"
             failure_message = f"{type(exc).__name__}: {exc}"[:_MAX_FAILURE_MESSAGE_CHARS]
@@ -304,6 +311,29 @@ def execute_job(
                 acknowledge_cancellation(session, job_id=job_id)
                 cascade_dependency_outcome(session, terminal_job_id=job_id)
             return JobStatus.CANCELLED
+
+        if outcome_kind == "domain_conflict":
+            # OPS-08/D-04: outcome_uncertain is pinned False -- the only
+            # translated conflict (ConcurrentRunLockedError) is raised when
+            # run_paper_order_submission's advisory lock is denied, which
+            # precedes any broker order submission (LOCK-01). Earlier steps
+            # of a paper session (reconciliation run, local sync-failure
+            # corrections, broker reads) may already have run; none of them
+            # submits to the broker, so a lock conflict never forces a
+            # reconcile-first retry block (D-19).
+            with session_scope(settings) as session:
+                apply_job_transition(
+                    session,
+                    job_id=job_id,
+                    request=JobTransitionRequest(
+                        event_type=JobEventType.FAILED,
+                        failure_reason=JobFailureReason.DOMAIN_CONFLICT,
+                        failure_message=failure_message,
+                        outcome_uncertain=False,
+                    ),
+                )
+                cascade_dependency_outcome(session, terminal_job_id=job_id)
+            return JobStatus.FAILED
 
         # outcome_kind == "error"
         with session_scope(settings) as session:

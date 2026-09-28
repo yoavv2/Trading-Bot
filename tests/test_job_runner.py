@@ -34,7 +34,12 @@ from trading_platform.jobs.cancellation import (
     request_cancellation,
     sweep_cancellation_timeouts,
 )
-from trading_platform.jobs.contracts import JobCancelledError, JobContext, JobHandler
+from trading_platform.jobs.contracts import (
+    JobCancelledError,
+    JobContext,
+    JobDomainConflictError,
+    JobHandler,
+)
 from trading_platform.jobs.dependencies import submit_job
 from trading_platform.jobs.queue import claim_next_job, reclaim_lost_jobs
 from trading_platform.jobs.registry import JobRegistry
@@ -152,6 +157,31 @@ class _ExternalThenRaisingHandler:
             message="calling an external broker",
         )
         raise RuntimeError("external side effect state unknown")
+
+
+class _DomainConflictHandler:
+    job_type = "phase20_runner_domain_conflict"
+
+    def __init__(self, message: str = "lock held for trend_following_daily 2024-01-05") -> None:
+        self._message = message
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        raise JobDomainConflictError(self._message)
+
+
+class _ExternalThenDomainConflictHandler:
+    job_type = "phase20_runner_external_then_domain_conflict"
+
+    def __init__(self, message: str = "lock held for trend_following_daily 2024-01-05") -> None:
+        self._message = message
+
+    def run(self, context: JobContext) -> Mapping[str, Any]:
+        context.log(
+            level="info",
+            event_code="external_broker_call_started",
+            message="calling an external broker",
+        )
+        raise JobDomainConflictError(self._message)
 
 
 class _CancellationObservingHandler:
@@ -355,6 +385,75 @@ def test_handler_exception_after_external_call_sets_outcome_uncertain(
         claim_next_job(session, worker_id="worker-1")
     execute_job(job_id=plain_job_id, worker_id="worker-1", registry=_registry(plain_handler))
     assert _get_job(plain_job_id).outcome_uncertain is False
+
+
+def test_domain_conflict_lands_on_failed_with_domain_conflict_reason(
+    migrated_job_runner_db: str,
+) -> None:
+    load_settings()
+    message = "lock held for trend_following_daily 2024-01-05"
+    handler = _DomainConflictHandler(message=message)
+    job_id = _submit(handler.job_type)
+
+    with session_scope() as session:
+        claim_next_job(session, worker_id="worker-1")
+
+    status = execute_job(job_id=job_id, worker_id="worker-1", registry=_registry(handler))
+    assert status is JobStatus.FAILED
+
+    job = _get_job(job_id)
+    assert job.status is JobStatus.FAILED
+    assert job.failure_reason is JobFailureReason.DOMAIN_CONFLICT
+    assert job.failure_message == message
+    assert job.outcome_uncertain is False
+
+    with session_scope() as session:
+        terminal_events = (
+            session.query(JobEvent)
+            .filter(
+                JobEvent.job_id == job_id,
+                JobEvent.outcome == JobTransitionOutcome.ACCEPTED,
+                JobEvent.to_status == JobStatus.FAILED,
+            )
+            .count()
+        )
+    assert terminal_events == 1
+
+
+def test_domain_conflict_after_external_log_still_forces_outcome_certain(
+    migrated_job_runner_db: str,
+) -> None:
+    load_settings()
+    handler = _ExternalThenDomainConflictHandler()
+    job_id = _submit(handler.job_type)
+
+    with session_scope() as session:
+        claim_next_job(session, worker_id="worker-1")
+
+    status = execute_job(job_id=job_id, worker_id="worker-1", registry=_registry(handler))
+    assert status is JobStatus.FAILED
+
+    job = _get_job(job_id)
+    assert job.failure_reason is JobFailureReason.DOMAIN_CONFLICT
+    # OPS-08/D-04: pinned False even though an external_* log was emitted --
+    # the only translated conflict precedes any broker order submission.
+    assert job.outcome_uncertain is False
+
+
+def test_domain_conflict_cascades_to_unstarted_dependent(migrated_job_runner_db: str) -> None:
+    load_settings()
+    handler = _DomainConflictHandler()
+    job_a_id = _submit(handler.job_type)
+    job_b_id = _submit(_SuccessHandler.job_type, depends_on=(job_a_id,))
+
+    with session_scope() as session:
+        claim_next_job(session, worker_id="worker-1")
+
+    execute_job(job_id=job_a_id, worker_id="worker-1", registry=_registry(handler))
+
+    job_b = _get_job(job_b_id)
+    assert job_b.status is JobStatus.CANCELLED
+    assert job_b.root_cause_job_id == job_a_id
 
 
 def test_handler_observing_cancellation_lands_on_cancelled(
