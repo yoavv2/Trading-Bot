@@ -237,6 +237,18 @@ Three of the seven new types (`sync-symbol-metadata`, `sync-market-sessions`, `b
 
 ---
 
+## Amendment 2026-09-28 — Strategy control-state source (operator-approved during plan-phase)
+
+These points supersede any conflicting text above, including the Copywriting row for `/controls` Strategy, the §188 404 note, and the §204/§213 `enabled` source notes.
+
+1. **Control state comes from the DB, not config.** `GET /api/v1/strategies/{id}`'s `enabled` is `StrategyMetadata.enabled`, which is loaded from `config/strategies/*.yaml` and never changes. Enable/disable writes DB `Strategy.status`. A new pure-read route, `GET /api/v1/controls/strategies/{strategy_id}`, returns the effective control status. It is D-31 read-only and is not part of the mutating-route allowlist. `/controls` Strategy, the inline `/strategy` trigger, and the confirmation dialog's "current → target" line all use this route.
+2. **The `StrategyOverviewPanel` badge shows DB control status**, through the shared `StrategyStatusBadge`. This changes what STRA-01 displays. If the control-state read fails, the panel shows `Control state unavailable` and renders no Enable/Disable trigger. This is the same honesty-first rule as the unknown kill-switch state.
+3. **Control routes return a structured 404:** `{"detail": {"code": "strategy_not_found", "strategy_id": ...}}`. They no longer use the plain-string `resolve_strategy_metadata` 404. The copy is the existing `strategy_not_found` row. Plain-string detail is still rendered verbatim as a defensive path.
+4. **`invalid_control_request` (422)** is returned for a malformed body or unknown keys. It maps to `Request rejected — check the input and try again.`
+5. **No-row default is `active`.** When no `Strategy` row exists, the read route reports `active`, which is exactly what `ensure_strategy_record` inserts. An invariant test pins read-default == ensure-inserted status.
+
+---
+
 ## Checker Sign-Off
 
 - [x] Dimension 1 Copywriting: FLAG (non-blocking)

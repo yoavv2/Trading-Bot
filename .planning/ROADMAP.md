@@ -238,7 +238,57 @@ Plans:
   7. The "exactly two mutating routes" test is replaced by an explicit mutating-route allowlist covering Job submit/cancel/retry (idempotent by `Idempotency-Key`, ORCH-03) and the control endpoints (idempotent by target state, CTRL-01/02), all subject to the ORCH-07 mutation guard.
 
 **Out of scope**: new Job types beyond existing operations (e.g. parameter sweeps, walk-forward, strategy comparison); a composite "sync everything" market-data handler; retry policies/backoff/counters/automatic retry; in-service cancellation/progress abstractions; scheduling; auth/identity fields.
-**Plans**: TBD
+**Plans**: 24 plans
+
+Plans:
+
+**Wave 1**
+
+- [ ] 20-01-PLAN.md — Migration 0021 + models: domain_conflict, non-unique strategy_runs.job_id, market_data_ingestion_runs.job_id, UNIQUE jobs.retry_of_job_id; submit_job lineage
+- [ ] 20-02-PLAN.md — D-31 read-path purity: pure backtest report builder + metric persist at completion, pure strategy-control-state read, zero-write proof
+- [ ] 20-03-PLAN.md — Shared strict payload validators; symbol-metadata sync extracted to services; calendar.sync_market_sessions
+
+**Wave 2**
+
+- [ ] 20-04-PLAN.md — Framework: QUEUED_ONLY cancellation mode, JobDomainConflictError + runner domain_conflict branch, D-19 retry-prerequisite declaration
+- [ ] 20-05-PLAN.md — Read model (multi-run resources, market-data kind, payload + retry lineage) + job_id threading for risk/reconciliation/ingestion
+- [ ] 20-06-PLAN.md — Console contract layer: Job detail types, retry + control clients, error copy, shared job-form kit
+
+**Wave 3**
+
+- [ ] 20-07-PLAN.md — risk-evaluation Job type + form
+- [ ] 20-08-PLAN.md — reconciliation Job type (report-only, queued-only) + form
+- [ ] 20-09-PLAN.md — paper-session Job type (queued-only, domain_conflict, two linked runs) + form
+
+**Wave 4**
+
+- [ ] 20-10-PLAN.md — Orchestration: queued-only cancel rejection + idempotent retry with D-18/D-19
+- [ ] 20-11-PLAN.md — broker-order-sync Job type + form
+- [ ] 20-12-PLAN.md — Worker surface: delete dead commands and serve; add kill-switch-trip break-glass
+
+**Wave 5**
+
+- [ ] 20-13-PLAN.md — HTTP: control routes, retry route, cancel 409, detail composition, five-route allowlist
+- [ ] 20-14-PLAN.md — ingest-bars Job type + form
+- [ ] 20-15-PLAN.md — sync-symbol-metadata + sync-market-sessions Job types + forms
+
+**Wave 6**
+
+- [ ] 20-16-PLAN.md — Register 7 types + console form map; pin per-type registry contract
+- [ ] 20-17-PLAN.md — Job detail retry UI, lineage, queued-only cancel gating
+- [ ] 20-18-PLAN.md — Control UI kit: shared confirmation dialog, triggers, sync events, status badge
+
+**Wave 7**
+
+- [ ] 20-19-PLAN.md — E2E: risk-evaluation, reconciliation, broker-order-sync, operator retry
+- [ ] 20-20-PLAN.md — E2E: paper-session cancellation honesty, domain_conflict, reconcile-first retry
+- [ ] 20-21-PLAN.md — E2E: three market-data Job types
+
+**Wave 8**
+
+- [ ] 20-22-PLAN.md — /controls page + nav link
+- [ ] 20-23-PLAN.md — Inline controls on KillSwitchBanner and /strategy; Job shortcuts on /strategy and /paper
+- [ ] 20-24-PLAN.md — Delete bypass scripts/Makefile targets; closed-world boundary test
 **UI hint**: yes
 
 ### Phase 21: Operations History & Polish
@@ -284,7 +334,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
-| 20. Complete Operation Migration & Safety Controls | v1.3 | 0/TBD | Not started | - |
+| 20. Complete Operation Migration & Safety Controls | v1.3 | 0/24 | Not started | - |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
 ---

@@ -401,16 +401,16 @@ The Phase 20 migration's downgrade for D-07 must drop the constraint by this exa
 | A3 | The `JobDomainConflictError`-in-`contracts.py` mechanism (Pattern 2) is the best of several valid designs | Pattern 2 | Medium — explicit Claude's-discretion item; an alternative (e.g. a runner-side exception-type classification hook) could also satisfy JOB-04. Recommended because it structurally mirrors the existing `JobCancelledError` precedent in the same file. |
 | A4 | `export_backtest_report.py`'s DB write (`_upsert_backtest_metric`) doesn't disqualify it from D-29's exemption | scripts/ inventory table | Medium — this is presented as an open item, not a silent override, precisely because reasonable people could reclassify it; flagged for explicit planner/user re-confirmation given the project's stated preference for testable, precise classification over "direction" language |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **~~Whether existing tests reference deleted scripts~~ — RESOLVED this session.** Only `tests/test_dry_run.py` (direct import of `scripts.dry_run`) and `tests/test_startup_validation.py` (references `run_placeholder_worker`) need updates. Verified via anchored grep; all other `from scripts.` hits are `scripts.migrate` (kept).
 
-2. **Whether `export_backtest_report.py` and `operator_status.py`'s D-29 exemptions should be re-confirmed with corrected reasoning, or reclassified**
+2. **Whether `export_backtest_report.py` and `operator_status.py`'s D-29 exemptions should be re-confirmed with corrected reasoning, or reclassified** — RESOLVED 2026-09-27 by operator decision D-31 (20-CONTEXT.md): read paths made genuinely read-only (also covers `report_strategy_analytics.py` and the analytics GET route); exemptions kept with now-true reasons; implemented in Plan 20-02. The recommendation below is superseded.
    - What we know: both perform a DB write as a side effect (verified this session — `_upsert_backtest_metric`, `ensure_strategy_record`'s flush respectively), contradicting the literal "writes local files only"/"read/report" framing in D-29's stated reasons.
    - What's unclear: whether this is material enough to change the boundary-test's exemption reasoning text, or purely cosmetic (both writes are idempotent, derived, and don't constitute a new manual operation).
    - Recommendation: keep both exempt (their writes are non-state-changing upserts of already-computed data, not new orchestrated operations), but correct D-29's exemption *reason* text in the actual boundary test's comments/docstring to be accurate, per this project's stated preference for precise, testable, non-"direction" language.
 
-3. **Whether `apply_reconciliation_corrections` needs a `job_id` param**
+3. **Whether `apply_reconciliation_corrections` needs a `job_id` param** — RESOLVED during planning: it creates no run record, so it takes no `job_id`; Plan 20-05 keeps this as an acceptance item re-verified at implementation time.
    - What we know: D-06 says the `reconciliation` Job does NOT call it (report-only). It's called only from inside `run_paper_session`.
    - What's unclear: whether it creates any new run record itself (if it only updates existing `PaperOrder` fields, no `job_id` threading is needed there).
    - Recommendation: verify its body directly during implementation; not read in full this session due to time-boxing.
