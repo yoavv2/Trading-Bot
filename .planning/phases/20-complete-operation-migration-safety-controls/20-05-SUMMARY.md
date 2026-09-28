@@ -116,3 +116,7 @@ None - no external service configuration required.
 - FOUND: .planning/phases/20-complete-operation-migration-safety-controls/20-05-SUMMARY.md
 - FOUND commit: 3ef3cdd (Task 1)
 - FOUND commit: 5748cdd (Task 2)
+
+## Process Note
+
+The final state-tracking commit (`f89e1cf`, `docs(20-05): complete job-read-model-and-service-job-id-threading plan`) was made via `gsd-sdk query commit`, which has no argument for a trailer and so landed without the `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` line this session's attribution instructions require (same gap the 19-08 and 20-01 summaries recorded). Per the git safety protocol's explicit preference for new commits over `--amend`, and the 19-08/20-01 precedent flagging amend-to-fix-a-trailer as itself a rule violation, this is disclosed rather than corrected via amend. No work was lost; this is a metadata-only gap on a docs-only tracking commit.
