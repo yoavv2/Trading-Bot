@@ -5,7 +5,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from trading_platform.api.routes.analytics import router as analytics_router
 from trading_platform.api.routes.controls import router as controls_router
@@ -58,6 +59,21 @@ async def lifespan(app: FastAPI):
         app.state.bootstrapped = False
 
 
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort JSON body so no route ever returns a bare text 500.
+
+    The console's mutation error contract requires ``detail`` to be an object
+    carrying a ``code``; HTTPException and typed route errors already do, this
+    covers anything that escapes them.
+    """
+    get_logger("trading_platform.api").error(
+        "unhandled_api_error",
+        exc_info=exc,
+        extra={"context": {"path": request.url.path, "error_type": type(exc).__name__}},
+    )
+    return JSONResponse(status_code=500, content={"detail": {"code": "internal_error"}})
+
+
 def create_app(*, job_registry: JobRegistry | None = None) -> FastAPI:
     app = FastAPI(
         title="Trading Strategy Platform",
@@ -66,6 +82,7 @@ def create_app(*, job_registry: JobRegistry | None = None) -> FastAPI:
     )
     if job_registry is not None:
         app.state.job_registry = job_registry
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
     app.include_router(health_router)
     app.include_router(strategies_router)
     app.include_router(analytics_router)

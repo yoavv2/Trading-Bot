@@ -204,3 +204,18 @@ def test_kill_switch_trip_reports_unavailable_control_state_cleanly(
     assert exc_info.value.code == 1
     assert "control state unavailable" in capsys.readouterr().err
     assert _count_operator_control_rows(settings) == (0, 0)
+
+
+def test_kill_switch_trip_reason_with_nul_exits_nonzero_and_writes_zero_rows(
+    migrated_paper_db: str,
+) -> None:
+    """WR-B-04: NUL in the reason is rejected up front, not a DB error."""
+    settings = load_settings()
+    args = build_parser().parse_args(["kill-switch-trip", "--reason", "bad reason"])
+    args.reason = "bad\x00reason"
+
+    with pytest.raises(SystemExit) as exc_info:
+        DISPATCH["kill-switch-trip"](args)
+
+    assert exc_info.value.code == 2
+    assert _count_operator_control_rows(settings) == (0, 0)

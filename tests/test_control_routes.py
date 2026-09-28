@@ -18,7 +18,8 @@ import psycopg
 import pytest
 from alembic import command
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import OperationalError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -538,3 +539,74 @@ def test_put_on_archived_strategy_is_a_typed_409_with_zero_writes(
     assert _audit_counts() == before
     with session_scope(settings) as session:
         assert session.execute(select(Strategy)).scalar_one().status == StrategyStatus.ARCHIVED
+
+
+# ---------------------------------------------------------------------------
+# WR-B-04: every control-route failure is a JSON body with detail.code
+# ---------------------------------------------------------------------------
+
+
+def test_reason_containing_nul_is_a_typed_422_with_zero_writes(client: TestClient) -> None:
+    before = _audit_counts()
+
+    kill_switch = _put_kill_switch(client, {"state": "tripped", "reason": "bad\x00reason"})
+    strategy = _put_strategy(
+        client, _KNOWN_STRATEGY_ID, {"status": "disabled", "reason": "bad\x00reason"}
+    )
+
+    for response in (kill_switch, strategy):
+        assert response.status_code == 422
+        assert response.json()["detail"] == {"code": "invalid_control_reason"}
+    assert _audit_counts() == before
+
+
+def test_deeply_nested_json_body_is_a_typed_422(client: TestClient) -> None:
+    response = _put_kill_switch(client, None, raw="[" * 200000)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {"code": "invalid_control_request"}
+
+
+def test_missing_kill_switch_row_is_a_typed_503(client: TestClient) -> None:
+    with session_scope(load_settings()) as session:
+        session.execute(delete(SystemControl))
+
+    response = _put_kill_switch(client, {"state": "tripped", "reason": "no row"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {"code": "control_state_unavailable"}
+
+
+def test_database_errors_on_control_writes_are_typed_503s(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise OperationalError("UPDATE", {}, Exception("connection lost"))
+
+    monkeypatch.setattr(OperatorControlService, "trip_kill_switch", broken)
+    monkeypatch.setattr(OperatorControlService, "disable_strategy", broken)
+
+    kill_switch = _put_kill_switch(client, {"state": "tripped", "reason": "db down"})
+    strategy = _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "disabled", "reason": "db down"})
+
+    for response in (kill_switch, strategy):
+        assert response.status_code == 503
+        assert response.json()["detail"] == {"code": "control_write_failed"}
+
+
+def test_unhandled_errors_on_mutation_routes_are_json_with_a_code(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(OperatorControlService, "trip_kill_switch", explode)
+
+    with TestClient(create_app(), raise_server_exceptions=False) as lenient:
+        response = lenient.put(
+            "/api/v1/controls/kill-switch", json={"state": "tripped", "reason": "boom"}
+        )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == {"detail": {"code": "internal_error"}}

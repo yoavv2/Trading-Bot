@@ -46,9 +46,10 @@ def run_kill_switch_trip_command(args: argparse.Namespace) -> None:
     logger = get_logger("trading_platform.worker")
 
     reason = args.reason.strip()
-    if not reason or len(reason) > 500:
+    if not reason or len(reason) > 500 or "\x00" in reason:
         print(
-            "kill-switch-trip: --reason must be 1-500 characters after trimming.",
+            "kill-switch-trip: --reason must be 1-500 characters after trimming "
+            "and must not contain NUL.",
             file=sys.stderr,
         )
         raise SystemExit(2)

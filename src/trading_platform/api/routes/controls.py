@@ -13,6 +13,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
+from sqlalchemy.exc import SQLAlchemyError
 
 from trading_platform.api.dependencies import (
     get_operator_control_service,
@@ -21,6 +22,7 @@ from trading_platform.api.dependencies import (
     require_mutations_enabled,
 )
 from trading_platform.services.operator_controls import (
+    ControlStateUnavailableError,
     OperatorControlService,
     StrategyArchivedError,
     load_strategy_control_state,
@@ -52,7 +54,7 @@ async def _read_body(request: Request, allowed_keys: set[str]) -> dict[str, Any]
 
     try:
         parsed = json.loads(await request.body())
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_request") from exc
     if not isinstance(parsed, dict) or not set(parsed).issubset(allowed_keys):
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_request")
@@ -63,7 +65,9 @@ def _validate_reason(value: Any) -> str:
     if not isinstance(value, str):
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_reason")
     trimmed = value.strip()
-    if not trimmed or len(trimmed) > MAX_CONTROL_REASON_LENGTH:
+    # PostgreSQL rejects NUL in text columns; catch it here so it is a typed
+    # 422 with zero writes rather than a 500 after the request was accepted.
+    if not trimmed or len(trimmed) > MAX_CONTROL_REASON_LENGTH or "\x00" in trimmed:
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_reason")
     return trimmed
 
@@ -80,12 +84,19 @@ async def set_kill_switch(
     reason = _validate_reason(body.get("reason"))
 
     mutator = service.trip_kill_switch if target_state == "tripped" else service.reset_kill_switch
-    report = await run_in_threadpool(
-        mutator,
-        reason=reason,
-        actor=CONTROL_ACTOR,
-        trigger_source=CONTROL_TRIGGER_SOURCE,
-    )
+    try:
+        report = await run_in_threadpool(
+            mutator,
+            reason=reason,
+            actor=CONTROL_ACTOR,
+            trigger_source=CONTROL_TRIGGER_SOURCE,
+        )
+    except ControlStateUnavailableError as exc:
+        raise _error(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise _error(status.HTTP_503_SERVICE_UNAVAILABLE, "control_write_failed") from exc
     return {"state": report.current_state, "changed": report.changed, "run_id": report.run_id}
 
 
@@ -122,6 +133,12 @@ async def set_strategy_status(
         raise _error(
             status.HTTP_409_CONFLICT, "strategy_archived", strategy_id=strategy_id
         ) from exc
+    except ControlStateUnavailableError as exc:
+        raise _error(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise _error(status.HTTP_503_SERVICE_UNAVAILABLE, "control_write_failed") from exc
     return {
         "strategy_id": strategy_id,
         "status": "enabled" if report.current_status == "active" else "disabled",
@@ -147,11 +164,16 @@ async def get_strategy_control_status(
             status.HTTP_404_NOT_FOUND, "strategy_not_found", strategy_id=strategy_id
         ) from exc
 
-    state = await run_in_threadpool(
-        load_strategy_control_state,
-        strategy_id,
-        settings=get_settings(request),
-    )
+    try:
+        state = await run_in_threadpool(
+            load_strategy_control_state,
+            strategy_id,
+            settings=get_settings(request),
+        )
+    except SQLAlchemyError as exc:
+        raise _error(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
+        ) from exc
     return {
         "strategy_id": state.strategy_id,
         "status": "enabled" if state.status == "active" else "disabled",
