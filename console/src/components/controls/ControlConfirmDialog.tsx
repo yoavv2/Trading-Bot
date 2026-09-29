@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { isOutcomeUncertain, type MutationResult } from "@/lib/api";
 import { useDialogFocus } from "@/lib/useDialogFocus";
 
@@ -33,13 +33,20 @@ const MAX_REASON_LENGTH = 500;
  * D-13/D-14: the single shared confirmation dialog reused verbatim across
  * all four control call sites (Trip/Reset Kill Switch, Enable/Disable
  * Strategy) — no other file under console/src renders a control
- * confirmation dialog. Follows CancelJobDialog's exact plain React-state
- * overlay/reset-on-open/Escape mechanics (role="dialog", aria-modal="true",
- * zinc-950/80 backdrop, zinc-900 panel, zinc-800 border) — the native HTML
- * modal element is deliberately not used, per the same jsdom-testability
- * constraint documented there. Sends no per-request replay-key header
- * (D-10): control mutations are idempotent by explicit target state, not
- * by key.
+ * confirmation dialog. Uses CancelJobDialog's plain React-state overlay
+ * (role="dialog", aria-modal="true", zinc-950/80 backdrop, zinc-900 panel,
+ * zinc-800 border) — the native HTML modal element is deliberately not used,
+ * per the same jsdom-testability constraint documented there.
+ *
+ * Shell/body split (UAT gap 3): the exported component is a persistent shell
+ * that owns only the opening counter (the WR-C-01 stale-continuation guard)
+ * and renders a non-exported body while `open`. The body holds all
+ * per-opening state and mounts fresh on every opening, so a re-opened dialog
+ * is clean on its first committed frame; no effect resets state on open.
+ * Never key this component: the shell's openingRef is the WR-C-01 guard.
+ *
+ * Sends no per-request replay-key header (D-10): control mutations are
+ * idempotent by explicit target state, not by key.
  *
  * State machine (D-14): a `changed: true` response closes the dialog
  * immediately; a `changed: false` response keeps it open, replaces the body
@@ -50,8 +57,32 @@ const MAX_REASON_LENGTH = 500;
  * not the state actually changed, but never on error. `onOutcomeUncertain`
  * fires only for failures that may have been applied anyway.
  */
-export function ControlConfirmDialog({
-  open,
+export function ControlConfirmDialog({ open, ...bodyProps }: ControlConfirmDialogProps) {
+  const wasOpenRef = useRef(false);
+  // Bumped on every open/close transition so a response that lands after the
+  // dialog was closed or re-opened can be recognized as belonging to a
+  // previous opening (WR-C-01). Lives in the never-keyed shell so it survives
+  // the body unmounting between openings.
+  const openingRef = useRef(0);
+
+  useEffect(() => {
+    if (open !== wasOpenRef.current) {
+      openingRef.current += 1;
+    }
+    wasOpenRef.current = open;
+  }, [open]);
+
+  if (!open) {
+    return null;
+  }
+  return <ControlConfirmDialogBody {...bodyProps} openingRef={openingRef} />;
+}
+
+type ControlConfirmDialogBodyProps = Omit<ControlConfirmDialogProps, "open"> & {
+  openingRef: RefObject<number>;
+};
+
+function ControlConfirmDialogBody({
   actionLabel,
   currentState,
   targetState,
@@ -60,51 +91,31 @@ export function ControlConfirmDialog({
   onClose,
   onDone,
   onOutcomeUncertain,
-}: ControlConfirmDialogProps) {
+  openingRef,
+}: ControlConfirmDialogBodyProps) {
   const [reason, setReason] = useState("");
   const [typedValue, setTypedValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [unchanged, setUnchanged] = useState(false);
 
-  const wasOpenRef = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   const dismissRef = useRef<HTMLButtonElement>(null);
-  // Bumped on every open/close transition so a response that lands after the
-  // dialog was closed or re-opened can be recognized as belonging to a
-  // previous opening (WR-C-01).
-  const openingRef = useRef(0);
 
-  useEffect(() => {
-    if (open !== wasOpenRef.current) {
-      openingRef.current += 1;
-    }
-    if (open && !wasOpenRef.current) {
-      setReason("");
-      setTypedValue("");
-      setErrorMessage(null);
-      setSubmitting(false);
-      setUnchanged(false);
-    }
-    wasOpenRef.current = open;
-  }, [open]);
-
-  // WR-C-05: focus into the reason field on open, Tab trap, restore on close.
-  useDialogFocus(open, panelRef, reasonRef);
+  // WR-C-05: focus into the reason field on every opening (the body mounts
+  // per opening), Tab trap, restore focus to the opener on unmount.
+  useDialogFocus(true, panelRef, reasonRef);
 
   // The unchanged notice removes the reason field (and the confirm button the
   // operator just pressed); move focus to the Close button so it is not lost.
   useEffect(() => {
-    if (open && unchanged) {
+    if (unchanged) {
       dismissRef.current?.focus();
     }
-  }, [open, unchanged]);
+  }, [unchanged]);
 
   useEffect(() => {
-    if (!open) {
-      return;
-    }
     function handleKeyDown(event: KeyboardEvent) {
       // Not while a request is in flight: dismissing then would promise
       // "Keep Current State" while the PUT can still commit (WR-C-01).
@@ -116,11 +127,7 @@ export function ControlConfirmDialog({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, onClose, submitting]);
-
-  if (!open) {
-    return null;
-  }
+  }, [onClose, submitting]);
 
   const trimmedReason = reason.trim();
   const reasonValid =

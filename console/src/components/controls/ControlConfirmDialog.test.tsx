@@ -1,5 +1,14 @@
 // @vitest-environment jsdom
-import { useState, type ComponentProps } from "react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  StrictMode,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ControlConfirmDialog } from "./ControlConfirmDialog";
@@ -573,6 +582,282 @@ describe("ControlConfirmDialog", () => {
       />,
     );
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+type FirstFrame = {
+  reason: string | null;
+  typed: string | null;
+  confirmDisabled: boolean | null;
+  alerts: number;
+  already: boolean;
+  bodyText: string | null;
+  dismissLabel: string | null;
+};
+
+/**
+ * UAT gap 3: RTL render/rerender are wrapped in act, which flushes passive
+ * effects before any assertion, so a stale first frame that a passive-effect
+ * reset repairs is invisible to ordinary assertions. This probe is rendered as
+ * the NEXT SIBLING of the dialog; its useLayoutEffect runs in the same commit
+ * as the dialog, before any passive effect, and snapshots the DOM of only the
+ * first commit after each false -> true flip of `open`.
+ */
+function FrameProbe({
+  open,
+  actionLabel,
+  frames,
+}: {
+  open: boolean;
+  actionLabel: string;
+  frames: FirstFrame[];
+}) {
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (open && !wasOpen.current) {
+      const reason = document.getElementById(
+        "control-confirm-dialog-reason",
+      ) as HTMLTextAreaElement | null;
+      const typed = document.getElementById(
+        "control-confirm-dialog-typed-confirmation",
+      ) as HTMLInputElement | null;
+      const buttons = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+      );
+      const confirm = buttons.find((b) => b.textContent === actionLabel);
+      frames.push({
+        reason: reason ? reason.value : null,
+        typed: typed ? typed.value : null,
+        confirmDisabled: confirm ? confirm.disabled : null,
+        alerts: document.querySelectorAll('[role="alert"]').length,
+        already: (document.body.textContent ?? "").includes("Already"),
+        bodyText:
+          document.getElementById("control-confirm-dialog-body")?.textContent ??
+          null,
+        dismissLabel: buttons[0]?.textContent ?? null,
+      });
+    }
+    wasOpen.current = open;
+  });
+  return null;
+}
+
+describe("UAT gap 3: every opening is clean on its first committed frame", () => {
+  function GapHarness({
+    onConfirm,
+    frames,
+    requiresTypedConfirmation,
+    actionLabel = "Trip Kill Switch",
+  }: {
+    onConfirm: (reason: string) => Promise<ChangedResult>;
+    frames: FirstFrame[];
+    requiresTypedConfirmation?: "RESET";
+    actionLabel?: string;
+  }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          opener
+        </button>
+        <ControlConfirmDialog
+          open={open}
+          actionLabel={actionLabel}
+          currentState="ARMED"
+          targetState="TRIPPED"
+          requiresTypedConfirmation={requiresTypedConfirmation}
+          onConfirm={onConfirm}
+          onClose={() => setOpen(false)}
+        />
+        <FrameProbe open={open} actionLabel={actionLabel} frames={frames} />
+      </>
+    );
+  }
+
+  const CLEAN_PROMPT = "Current state: ARMED. This will change it to: TRIPPED.";
+
+  function expectCleanFrame(frame: FirstFrame | undefined) {
+    expect(frame).toBeTruthy();
+    expect(frame?.reason).toBe("");
+    expect(frame?.confirmDisabled).toBe(true);
+    expect(frame?.alerts).toBe(0);
+    expect(frame?.already).toBe(false);
+    expect(frame?.bodyText).toBe(CLEAN_PROMPT);
+    expect(frame?.dismissLabel).toBe("Keep Current State");
+  }
+
+  function reopen() {
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+  }
+
+  function fillReason(value = "drill") {
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value } });
+  }
+
+  it("(a) typed reason, then Keep Current State", () => {
+    const frames: FirstFrame[] = [];
+    render(<GapHarness onConfirm={vi.fn()} frames={frames} />);
+    reopen();
+    fillReason();
+    fireEvent.click(screen.getByRole("button", { name: "Keep Current State" }));
+    reopen();
+
+    expect(frames).toHaveLength(2);
+    expectCleanFrame(frames[1]);
+  });
+
+  it("(b) changed:false unchanged notice, then Close", async () => {
+    const frames: FirstFrame[] = [];
+    const onConfirm = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { changed: false }, replayed: false, status: 200 });
+    render(<GapHarness onConfirm={onConfirm} frames={frames} />);
+    reopen();
+    fillReason();
+    fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+    await flush();
+    expect(screen.getByRole("alert").textContent).toBe("Already TRIPPED — no change (recorded)");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    reopen();
+
+    expect(frames).toHaveLength(2);
+    expectCleanFrame(frames[1]);
+  });
+
+  it("(c) changed:true close", async () => {
+    const frames: FirstFrame[] = [];
+    const onConfirm = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { changed: true }, replayed: false, status: 200 });
+    render(<GapHarness onConfirm={onConfirm} frames={frames} />);
+    reopen();
+    fillReason();
+    fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+    await flush();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    reopen();
+
+    expect(frames).toHaveLength(2);
+    expectCleanFrame(frames[1]);
+  });
+
+  it("(d) error response, then Keep Current State", async () => {
+    const frames: FirstFrame[] = [];
+    const onConfirm = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      code: "invalid_control_request",
+      message: "Request rejected",
+      detail: null,
+    });
+    render(<GapHarness onConfirm={onConfirm} frames={frames} />);
+    reopen();
+    fillReason();
+    fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+    await flush();
+    expect(screen.getByRole("alert").textContent).toBe("Request rejected");
+    fireEvent.click(screen.getByRole("button", { name: "Keep Current State" }));
+    reopen();
+
+    expect(frames).toHaveLength(2);
+    expectCleanFrame(frames[1]);
+  });
+
+  it("(e) RESET typed field filled, then Keep Current State", () => {
+    const frames: FirstFrame[] = [];
+    render(
+      <GapHarness
+        onConfirm={vi.fn()}
+        frames={frames}
+        requiresTypedConfirmation="RESET"
+      />,
+    );
+    reopen();
+    fillReason();
+    fireEvent.change(screen.getByLabelText("Type RESET to confirm"), {
+      target: { value: "RESET" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Keep Current State" }));
+    reopen();
+
+    expect(frames).toHaveLength(2);
+    expectCleanFrame(frames[1]);
+    expect(frames[1]?.typed).toBe("");
+  });
+
+  describe.each([
+    ["plain", false],
+    ["StrictMode", true],
+  ])("focus after unchanged -> Close -> re-open (%s)", (_name, strict) => {
+    it("lands on the Reason textarea on the re-opened dialog", async () => {
+      const frames: FirstFrame[] = [];
+      const onConfirm = vi
+        .fn()
+        .mockResolvedValue({ ok: true, data: { changed: false }, replayed: false, status: 200 });
+      const tree = <GapHarness onConfirm={onConfirm} frames={frames} />;
+      render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+      reopen();
+      fillReason();
+      fireEvent.click(screen.getByRole("button", { name: "Trip Kill Switch" }));
+      await flush();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      reopen();
+      await flush();
+
+      expect(document.activeElement).toBe(screen.getByLabelText("Reason"));
+    });
+  });
+});
+
+describe("WR-C-01: mount sites never key a dialog shell", () => {
+  const COMPONENTS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+  /**
+   * Returns each JSX opening tag `<Name ...>` in the source. Walks characters
+   * from `<Name`, tracking `{`/`}` depth, and stops at the first `>` at depth 0
+   * (a lazy regex would stop inside the `=>` of an arrow-function prop).
+   */
+  function openingTags(source: string, name: string): string[] {
+    const tags: string[] = [];
+    const startRe = new RegExp(`<${name}(?![A-Za-z0-9_])`, "g");
+    let match: RegExpExecArray | null;
+    while ((match = startRe.exec(source)) !== null) {
+      let depth = 0;
+      let i = match.index;
+      for (; i < source.length; i += 1) {
+        const ch = source[i];
+        if (ch === "{") depth += 1;
+        else if (ch === "}") depth -= 1;
+        else if (ch === ">" && depth === 0 && source[i - 1] !== "=") break;
+      }
+      tags.push(source.slice(match.index, i + 1));
+    }
+    return tags;
+  }
+
+  it("the scanner stops at the tag end, not at an arrow-function prop", () => {
+    const tags = openingTags(
+      `<Foo onClose={() => setOpen(false)} open={x} />\n<div key={1} />`,
+      "Foo",
+    );
+    expect(tags).toHaveLength(1);
+    expect(tags[0]).toContain("open={x}");
+    expect(tags[0]).not.toContain("key=");
+  });
+
+  const SITES: Array<[string, string, string]> = [
+    ["controls/KillSwitchControlTrigger.tsx", "ControlConfirmDialog", "one"],
+    ["controls/StrategyControlTrigger.tsx", "ControlConfirmDialog", "one"],
+    ["jobs/detail/JobHeaderPanel.tsx", "CancelJobDialog", "one"],
+    ["jobs/detail/JobHeaderPanel.tsx", "RetryJobDialog", "one"],
+  ];
+
+  it.each(SITES)("%s mounts exactly one <%s> and never keys it", (file, name) => {
+    const source = readFileSync(join(COMPONENTS_ROOT, file), "utf8");
+    const tags = openingTags(source, name);
+    expect(tags).toHaveLength(1);
+    expect(/\bkey=/.test(tags[0])).toBe(false);
   });
 });
 
