@@ -140,7 +140,7 @@ blocked: 0
 ## Gaps
 
 - truth: "A failing ingest-bars Job (bad Polygon key or unreachable) shows its ingestion run as FAILED in Job resources"
-  status: fix_applied
+  status: failed
   fixed_by: 20-25 (awaiting live re-test 7)
   reason: "Automated UAT: with an invalid key or an unreachable Polygon, every symbol fails inside the per-symbol try, the run finalizes PARTIAL and the Job SUCCEEDS. Only run-level errors (a missing key) give FAILED."
   severity: major
@@ -162,7 +162,7 @@ blocked: 0
     - "tests: predicate truth table; service all-fail/empty-bars/partial; handler all-fail and cancel-during-all-fail; E2E all-fail (job failed, handler_error, resources[0].status failed, run.job_id==job.id) and 1ok+1fail (job succeeded, run partial)"
   debug_session: .planning/debug/ingest-bars-all-symbols-failed-not-failed.md
 - truth: "reconciliation, broker-order-sync and paper-session Jobs complete against the live Alpaca paper broker and see the COMPLETE broker order and fill sets"
-  status: fix_applied
+  status: failed
   fixed_by: 20-27 (awaiting live re-test 6)
   reason: "Found during test 3 (whose literal criteria passed): Jobs dbf6a335, 302020fc and 45b09f0d (and the earlier 52468936) FAILED with AlpacaClientError 422 'tried to set the page size to 500, but the maximum is 100'"
   severity: major
@@ -185,7 +185,7 @@ blocked: 0
     - "annotate 20-VERIFICATION SC1 (the E2E evidence used a fake broker) and REQUIREMENTS OPS-03/04/06 traceability until the fix lands and UAT test 3 re-runs"
   debug_session: .planning/debug/alpaca-fills-page-size-422.md
 - truth: "Every opening of a control or job confirmation dialog is clean on its first committed frame (prompt body, empty reason, confirm disabled, no stale alert), and focus goes to the reason field on every opening (WR-C-05)"
-  status: fix_applied
+  status: failed
   fixed_by: 20-26 (awaiting live re-test 8)
   reason: "Found during tests 2 and 5a (whose literal criteria passed): a re-opened dialog first renders the previous opening's state; after an unchanged notice, Close and re-open, focus stays on 'Keep Current State'"
   severity: minor
@@ -205,7 +205,7 @@ blocked: 0
     - "amend 20-UI-SPEC shared-dialog and Retry mechanics sections, and the WR-C-05 text: clean first frame, focus on reason on every opening"
   debug_session: .planning/debug/control-dialog-stale-state-on-reopen.md
 - truth: "Every completed StrategyRun satisfies completed_at >= started_at (control audit rows are temporally consistent)"
-  status: fix_applied
+  status: failed
   fixed_by: 20-28 (awaiting live re-test 9)
   reason: "UAT observation promoted after diagnosis: 25 of 25 operator_control runs in the live DB have completed_at < started_at (as much as -93ms); every other run type has 0 violations"
   severity: minor
