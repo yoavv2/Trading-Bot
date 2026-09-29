@@ -139,10 +139,10 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | JOBUI-05 | Phase 19 | Complete |
 | OPS-01 | Phase 19 | Complete |
 | OPS-02 | Phase 20 | Complete |
-| OPS-03 | Phase 20 | Complete |
-| OPS-04 | Phase 20 | Complete |
+| OPS-03 | Phase 20 | Complete (code; 20-27 Alpaca pagination fix); live UAT test 3 re-run pending |
+| OPS-04 | Phase 20 | Complete (code; 20-27 Alpaca pagination fix); live UAT test 3 re-run pending |
 | OPS-05 | Phase 20 | Complete |
-| OPS-06 | Phase 20 | Complete |
+| OPS-06 | Phase 20 | Complete (code; 20-27 Alpaca pagination fix); live UAT test 3 re-run pending |
 | OPS-07 | Phase 20 | Complete |
 | OPS-08 | Phase 20 | Complete |
 | CTRL-01 | Phase 20 | Complete |
