@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useLayoutEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { CancelJobDialog } from "./CancelJobDialog";
@@ -338,5 +339,127 @@ describe("WR-C-08: CancelJobDialog idempotency key", () => {
     await flush();
 
     expect(calls[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});
+
+type CancelFirstFrame = {
+  reason: string | null;
+  errorText: string | null;
+  cancelDisabled: boolean | null;
+  bodyText: string;
+};
+
+/**
+ * Sibling probe: its useLayoutEffect runs in the same commit as the dialog,
+ * before passive effects, so it sees the first committed frame of an opening
+ * (RTL's act() would otherwise flush a passive-effect reset before assertions).
+ */
+function CancelFrameProbe({
+  open,
+  frames,
+}: {
+  open: boolean;
+  frames: CancelFirstFrame[];
+}) {
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (open && !wasOpen.current) {
+      const reason = document.getElementById(
+        "cancel-job-dialog-reason",
+      ) as HTMLTextAreaElement | null;
+      const cancel = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+      ).find((b) => b.textContent === "Cancel Job");
+      frames.push({
+        reason: reason ? reason.value : null,
+        errorText: document.querySelector("p.text-red-400")?.textContent ?? null,
+        cancelDisabled: cancel ? cancel.disabled : null,
+        bodyText: document.body.textContent ?? "",
+      });
+    }
+    wasOpen.current = open;
+  });
+  return null;
+}
+
+describe("UAT gap 3: clean first frame", () => {
+  function GapHarness({ frames }: { frames: CancelFirstFrame[] }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          opener
+        </button>
+        <CancelJobDialog
+          jobId={REFERENCE.job_id}
+          jobType="probe_type"
+          jobStatus="queued"
+          open={open}
+          onClose={() => setOpen(false)}
+          onCancelled={vi.fn()}
+        />
+        <CancelFrameProbe open={open} frames={frames} />
+      </>
+    );
+  }
+
+  it("re-opens with an empty reason and an enabled Cancel Job after a typed reason plus Keep Job", () => {
+    vi.stubGlobal("fetch", makeCancelFetch([{ status: 200, body: REFERENCE }]).fn);
+    const frames: CancelFirstFrame[] = [];
+    render(<GapHarness frames={frames} />);
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+    fireEvent.change(screen.getByLabelText("Reason (optional)"), {
+      target: { value: "old" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Keep Job" }));
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+
+    expect(frames).toHaveLength(2);
+    expect(frames[1].reason).toBe("");
+    expect(frames[1].errorText).toBeNull();
+    expect(frames[1].cancelDisabled).toBe(false);
+  });
+
+  it("re-opens without the previous error text after a failed cancel", async () => {
+    const { fn } = makeCancelFetch([
+      {
+        status: 409,
+        body: { detail: { code: "job_not_cancellable", status: "succeeded" } },
+      },
+    ]);
+    vi.stubGlobal("fetch", fn);
+    const frames: CancelFirstFrame[] = [];
+    render(<GapHarness frames={frames} />);
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Job" }));
+    await flush();
+    const previousError = document.querySelector("p.text-red-400")?.textContent;
+    expect(previousError).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Keep Job" }));
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+
+    expect(frames).toHaveLength(2);
+    expect(frames[1].bodyText).not.toContain(previousError as string);
+    expect(frames[1].errorText).toBeNull();
+    expect(frames[1].cancelDisabled).toBe(false);
+  });
+
+  it("uses one Idempotency-Key per opening, differing between openings", async () => {
+    const { fn, calls } = makeCancelFetch([{ networkError: true }]);
+    vi.stubGlobal("fetch", fn);
+    render(<GapHarness frames={[]} />);
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Job" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Job" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Keep Job" }));
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Job" }));
+    await flush();
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0].headers["Idempotency-Key"]).toBe(calls[1].headers["Idempotency-Key"]);
+    expect(calls[2].headers["Idempotency-Key"]).not.toBe(calls[0].headers["Idempotency-Key"]);
   });
 });

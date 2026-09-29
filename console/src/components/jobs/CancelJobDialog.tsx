@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { cancelJob } from "@/lib/api";
 import { newIdempotencyKey } from "@/lib/idempotencyKey";
 import type { JobReference } from "./types";
@@ -22,41 +22,33 @@ const REASON_FIELD_ID = "cancel-job-dialog-reason";
  * A plain React-state overlay (accessible modal role/attributes set
  * below) -- the native HTML modal element is deliberately not used, per
  * the UI-SPEC implementation constraint (jsdom's implementation has no
- * showModal/close behavior). One Idempotency-Key is generated per dialog
- * opening and reused for every confirm attempt within that opening,
- * including a transport-failure retry (T-19-10-03); a failed cancel
- * keeps the dialog open and shows mutationErrorMessage copy instead of
- * closing.
+ * showModal/close behavior). One Idempotency-Key per body mount (one
+ * opening), reused across attempts, including a transport-failure retry
+ * (T-19-10-03); a failed cancel keeps the dialog open and shows
+ * mutationErrorMessage copy instead of closing. The exported component is a
+ * shell; the body mounts fresh on every opening, so the first frame is clean
+ * (UAT gap 3) and no effect resets state on open.
  */
-export function CancelJobDialog({
+export function CancelJobDialog({ open, ...bodyProps }: CancelJobDialogProps) {
+  if (!open) {
+    return null;
+  }
+  return <CancelJobDialogBody {...bodyProps} />;
+}
+
+function CancelJobDialogBody({
   jobId,
   jobType,
   jobStatus,
-  open,
   onClose,
   onCancelled,
-}: CancelJobDialogProps) {
+}: Omit<CancelJobDialogProps, "open">) {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const idempotencyKeyRef = useRef<string>("");
-  const wasOpenRef = useRef(false);
+  const [idempotencyKey] = useState(() => newIdempotencyKey());
 
   useEffect(() => {
-    if (open && !wasOpenRef.current) {
-      idempotencyKeyRef.current = newIdempotencyKey();
-      setReason("");
-      setErrorMessage(null);
-      setSubmitting(false);
-    }
-    wasOpenRef.current = open;
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         onClose();
@@ -66,11 +58,7 @@ export function CancelJobDialog({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, onClose]);
-
-  if (!open) {
-    return null;
-  }
+  }, [onClose]);
 
   const shortId = jobId.slice(0, 8);
   const bodyCopy =
@@ -85,7 +73,7 @@ export function CancelJobDialog({
     const result = await cancelJob(
       jobId,
       trimmed === "" ? null : trimmed,
-      idempotencyKeyRef.current,
+      idempotencyKey,
     );
     setSubmitting(false);
     if (result.ok) {

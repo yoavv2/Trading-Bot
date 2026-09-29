@@ -30,48 +30,42 @@ function renderPayloadValue(value: unknown): string {
 
 /**
  * D-20: confirmation dialog for POST /api/v1/jobs/{id}/retry. Follows
- * CancelJobDialog's overlay/key-per-opening mechanics exactly. One
- * Idempotency-Key is generated per dialog opening and reused for every
- * confirm attempt within that opening, including a transport-failure
- * retry (T-20-17-01). On a fresh (202) or replayed (200) success the
- * dialog navigates away immediately; on any error it stays open, shows
- * the mapped copy, and triggers a Job-detail refetch via onChanged() so
- * retried_as_job_id/retry_blocked are fresh once the operator dismisses.
+ * CancelJobDialog's overlay mechanics. One Idempotency-Key per body mount
+ * (one opening), reused across attempts, including a transport-failure
+ * retry (T-20-17-01); the body mounts fresh on every opening, so the first
+ * frame is clean (UAT gap 3) and no effect resets state on open. On a fresh
+ * (202) or replayed (200) success the dialog navigates away immediately; on
+ * any error it stays open, shows the mapped copy, and triggers a Job-detail
+ * refetch via onChanged() so retried_as_job_id/retry_blocked are fresh once
+ * the operator dismisses.
  */
-export function RetryJobDialog({
-  open,
+export function RetryJobDialog({ open, ...bodyProps }: RetryJobDialogProps) {
+  if (!open) {
+    return null;
+  }
+  return <RetryJobDialogBody {...bodyProps} />;
+}
+
+function RetryJobDialogBody({
   job,
   onClose,
   onChanged,
   onNavigate,
-}: RetryJobDialogProps) {
+}: Omit<RetryJobDialogProps, "open">) {
   const [submitting, setSubmitting] = useState(false);
   const [replayed, setReplayed] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [idempotencyKey] = useState(() => newIdempotencyKey());
 
-  const idempotencyKeyRef = useRef<string>("");
-  const wasOpenRef = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    if (open && !wasOpenRef.current) {
-      idempotencyKeyRef.current = newIdempotencyKey();
-      setReplayed(false);
-      setErrorMessage(null);
-      setSubmitting(false);
-    }
-    wasOpenRef.current = open;
-  }, [open]);
-
-  // WR-C-05: focus the safe Close button on open (not the confirm action, so
-  // a stray Enter cannot create a Job), Tab trap, restore focus on close.
-  useDialogFocus(open, panelRef, closeRef);
+  // WR-C-05: focus the safe Close button on every opening (not the confirm
+  // action, so a stray Enter cannot create a Job), Tab trap, restore focus on
+  // unmount.
+  useDialogFocus(true, panelRef, closeRef);
 
   useEffect(() => {
-    if (!open) {
-      return;
-    }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         onClose();
@@ -81,11 +75,7 @@ export function RetryJobDialog({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, onClose]);
-
-  if (!open) {
-    return null;
-  }
+  }, [onClose]);
 
   const shortId = job.id.slice(0, 8);
   const payloadEntries = Object.entries(job.payload);
@@ -93,7 +83,7 @@ export function RetryJobDialog({
   async function handleConfirm() {
     setSubmitting(true);
     setErrorMessage(null);
-    const result = await retryJob(job.id, idempotencyKeyRef.current);
+    const result = await retryJob(job.id, idempotencyKey);
     setSubmitting(false);
     if (result.ok) {
       if (result.replayed) {

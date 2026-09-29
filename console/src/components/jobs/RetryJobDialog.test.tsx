@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RetryJobDialog } from "./RetryJobDialog";
@@ -447,5 +447,111 @@ describe("WR-C-05: RetryJobDialog accessibility", () => {
     await flush();
 
     expect(screen.getByRole("alert").textContent).toBe("This Job already has a retry.");
+  });
+});
+
+type RetryFirstFrame = {
+  alerts: number;
+  bodyText: string;
+  retryDisabled: boolean | null;
+};
+
+/**
+ * Sibling probe: its useLayoutEffect runs in the same commit as the dialog,
+ * before passive effects, so it sees the first committed frame of an opening.
+ */
+function RetryFrameProbe({
+  open,
+  frames,
+}: {
+  open: boolean;
+  frames: RetryFirstFrame[];
+}) {
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (open && !wasOpen.current) {
+      const retry = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+      ).find((b) => b.textContent === "Retry Job");
+      frames.push({
+        alerts: document.querySelectorAll('[role="alert"]').length,
+        bodyText: document.body.textContent ?? "",
+        retryDisabled: retry ? retry.disabled : null,
+      });
+    }
+    wasOpen.current = open;
+  });
+  return null;
+}
+
+describe("UAT gap 3: clean first frame", () => {
+  function GapHarness({ frames }: { frames: RetryFirstFrame[] }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          opener
+        </button>
+        <RetryJobDialog
+          open={open}
+          job={jobDetail()}
+          onClose={() => setOpen(false)}
+          onChanged={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+        <RetryFrameProbe open={open} frames={frames} />
+      </>
+    );
+  }
+
+  const open = () => fireEvent.click(screen.getByRole("button", { name: "opener" }));
+
+  it("re-opens with no alert and no error text after a 409", async () => {
+    const { fn } = makeRetryFetch([
+      { status: 409, body: { detail: { code: "retry_exists" } } },
+    ]);
+    vi.stubGlobal("fetch", fn);
+    const frames: RetryFirstFrame[] = [];
+    render(<GapHarness frames={frames} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
+    await flush();
+    const message = screen.getByRole("alert").textContent as string;
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    open();
+
+    expect(frames).toHaveLength(2);
+    expect(frames[1].alerts).toBe(0);
+    expect(frames[1].bodyText).not.toContain(message);
+    expect(frames[1].bodyText).not.toContain("Already submitted");
+  });
+
+  it("re-opens without the replay notice and with Retry Job enabled after a replayed 200", async () => {
+    const { fn } = makeRetryFetch([
+      { status: 200, body: REFERENCE, replayed: true },
+    ]);
+    vi.stubGlobal("fetch", fn);
+    const frames: RetryFirstFrame[] = [];
+    render(<GapHarness frames={frames} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
+    await flush();
+    expect(document.body.textContent).toContain("Already submitted — opening existing Job");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    open();
+
+    expect(frames).toHaveLength(2);
+    expect(frames[1].bodyText).not.toContain("Already submitted");
+    expect(frames[1].alerts).toBe(0);
+    expect(frames[1].retryDisabled).toBe(false);
+  });
+
+  it("focuses Close on the first opening and again after close + re-open", () => {
+    render(<GapHarness frames={[]} />);
+    open();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    open();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
   });
 });
