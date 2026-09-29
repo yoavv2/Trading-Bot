@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 import httpx
 
@@ -41,6 +41,15 @@ _PENDING_BROKER_STATUSES = {
 
 EnumT = TypeVar("EnumT")
 
+# Alpaca docs + live check 2026-09-29: GET /v2/account/activities page_size max is 100
+# (server-enforced with 422, even when date= is supplied).
+ALPACA_ACTIVITIES_MAX_PAGE_SIZE: Final = 100
+# Alpaca docs: GET /v2/orders limit max is 500 (NOT server-enforced, so the client caps it).
+ALPACA_ORDERS_MAX_LIMIT: Final = 500
+# Hard page caps bound memory/time (<= 10,000 items per call); exceeding one raises.
+ALPACA_FILLS_MAX_PAGES: Final = 100
+ALPACA_ORDERS_MAX_PAGES: Final = 20
+
 
 class AlpacaClientError(Exception):
     """Raised when the Alpaca REST client encounters a non-recoverable error."""
@@ -48,6 +57,44 @@ class AlpacaClientError(Exception):
 
 class AlpacaAuthError(AlpacaClientError):
     """Raised when Alpaca credentials are missing or rejected."""
+
+
+class AlpacaPaginationError(AlpacaClientError):
+    """Raised when a paginated Alpaca listing cannot be returned as a complete set."""
+
+
+class AlpacaPaginationCapExceededError(AlpacaPaginationError):
+    """Raised when a listing still has full pages after the configured page cap."""
+
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        pages_fetched: int,
+        items_fetched: int,
+        max_pages: int,
+    ) -> None:
+        self.endpoint = endpoint
+        self.pages_fetched = pages_fetched
+        self.items_fetched = items_fetched
+        self.max_pages = max_pages
+        super().__init__(
+            f"Alpaca pagination cap exceeded for {endpoint}: {pages_fetched} full pages "
+            f"({items_fetched} items) reached max_pages={max_pages}; "
+            "refusing to return a partial list"
+        )
+
+
+class AlpacaPaginationStalledError(AlpacaPaginationError):
+    """Raised when a listing cannot advance safely (repeat id, bad payload, stuck cursor)."""
+
+    def __init__(self, *, endpoint: str, cursor: str | None, detail: str) -> None:
+        self.endpoint = endpoint
+        self.cursor = cursor
+        self.detail = detail
+        super().__init__(
+            f"Alpaca pagination stalled for {endpoint} at cursor {cursor!r}: {detail}"
+        )
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -276,13 +323,80 @@ class AlpacaClient:
         )
         return [_normalized_order_snapshot(item) for item in payload]
 
-    def list_fills(self, *, page_size: int = 500) -> list[BrokerFillSnapshot]:
-        payload = self._request_with_retry(
-            "GET",
-            "/v2/account/activities/FILL",
-            params={"direction": "desc", "page_size": page_size},
+    def list_fills(self) -> list[BrokerFillSnapshot]:
+        # No date bounding: the local fills/orders history is unbounded, so the broker
+        # side must be too (UAT gap 2).
+        items = self._paginate(
+            endpoint="/v2/account/activities/FILL",
+            base_params={
+                "direction": "desc",
+                "page_size": str(ALPACA_ACTIVITIES_MAX_PAGE_SIZE),
+            },
+            cursor_param="page_token",
+            page_size=ALPACA_ACTIVITIES_MAX_PAGE_SIZE,
+            max_pages=ALPACA_FILLS_MAX_PAGES,
         )
-        return [_normalized_fill_snapshot(item) for item in payload]
+        return [_normalized_fill_snapshot(item) for item in items]
+
+    def _paginate(
+        self,
+        *,
+        endpoint: str,
+        base_params: dict[str, str],
+        cursor_param: str,
+        page_size: int,
+        max_pages: int,
+    ) -> list[dict[str, Any]]:
+        """Fetch the COMPLETE listing via last-id cursors, or raise a typed error.
+
+        The cursor key is added only once a cursor exists: live Alpaca answers 200 [] for a
+        bogus/empty token, which would silently truncate the set.
+        """
+        seen_ids: set[str] = set()
+        items: list[dict[str, Any]] = []
+        cursor: str | None = None
+        pages = 0
+
+        while True:
+            params = dict(base_params)
+            if cursor is not None:
+                params[cursor_param] = cursor
+            payload = self._request_with_retry("GET", endpoint, params=params)
+            pages += 1
+
+            if not isinstance(payload, list):
+                raise AlpacaPaginationStalledError(
+                    endpoint=endpoint, cursor=cursor, detail="non-list page payload"
+                )
+            for item in payload:
+                item_id = item.get("id") if isinstance(item, dict) else None
+                if not isinstance(item_id, str) or not item_id:
+                    raise AlpacaPaginationStalledError(
+                        endpoint=endpoint, cursor=cursor, detail="item without a string id"
+                    )
+                if item_id in seen_ids:
+                    raise AlpacaPaginationStalledError(
+                        endpoint=endpoint, cursor=cursor, detail=f"duplicate id {item_id}"
+                    )
+                seen_ids.add(item_id)
+                items.append(item)
+
+            if len(payload) < page_size:
+                return items
+
+            next_cursor = payload[-1]["id"]
+            if next_cursor == cursor:
+                raise AlpacaPaginationStalledError(
+                    endpoint=endpoint, cursor=cursor, detail="cursor did not advance"
+                )
+            if pages >= max_pages:
+                raise AlpacaPaginationCapExceededError(
+                    endpoint=endpoint,
+                    pages_fetched=pages,
+                    items_fetched=len(items),
+                    max_pages=max_pages,
+                )
+            cursor = next_cursor
 
     def list_positions(self) -> list[BrokerPositionSnapshot]:
         payload = self._request_with_retry("GET", "/v2/positions")
