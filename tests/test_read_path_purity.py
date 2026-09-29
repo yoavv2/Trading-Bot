@@ -10,6 +10,7 @@ Session ``before_flush`` spy, not just by code inspection.
 from __future__ import annotations
 
 import inspect
+import json
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 from sqlalchemy.engine import Engine
@@ -26,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.export_backtest_report import main as export_backtest_report_main  # noqa: E402
+from scripts.generate_signals import main as generate_signals_main  # noqa: E402
 from scripts.operator_status import main as operator_status_main  # noqa: E402
 from scripts.report_strategy_analytics import main as report_strategy_analytics_main  # noqa: E402
 from tests.test_analytics_service import (  # noqa: E402
@@ -181,6 +184,54 @@ def test_operator_status_script_writes_no_rows(
 
     assert exit_code == 0
     assert spy.is_empty
+    assert _row_counts(settings) == before
+
+
+def test_generate_signals_script_writes_no_rows(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """generate_signals.py is a pinned read-only exemption (ORCH-08 / SIG-01).
+
+    Drives the REAL evaluation path: persisted bars with enough history
+    (warmup_periods=3) for both universe symbols at an explicit --as-of, so
+    ``strategy.generate_signals`` actually computes indicators rather than
+    taking the no-bars fallback. ``main()`` takes no argv parameter (it calls
+    ``parser.parse_args()``), so arguments are supplied via ``sys.argv``; it
+    returns None and signals failure by raising SystemExit, so "exit code 0"
+    means it returned normally.
+    """
+    settings = load_settings()
+    _seed_market_data(_trading_fixture())
+    before = _row_counts(settings)
+    assert before["strategies"] == 0
+    capsys.readouterr()  # discard any seeding noise
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["generate_signals", "--strategy", "trend_following_daily", "--as-of", "2024-01-08"],
+    )
+    with write_spy() as spy:
+        result = generate_signals_main()
+
+    assert result is None  # normal return == exit code 0 (no SystemExit)
+    payload = json.loads(capsys.readouterr().out)
+
+    # Sanity: the real evaluation ran against the seeded bars, not the fallback.
+    assert payload["strategy_id"] == "trend_following_daily"
+    assert payload["as_of_session"] == "2024-01-08"
+    assert payload["signal_count"] == 2
+    by_symbol = {signal["symbol"]: signal for signal in payload["signals"]}
+    assert set(by_symbol) == {"AAPL", "MSFT"}
+    assert by_symbol["AAPL"]["direction"] == "long"
+    assert by_symbol["AAPL"]["reason"] == "trend_entry"
+    assert by_symbol["MSFT"]["reason"] == "trend_not_confirmed"
+    assert all(signal["reason"] != "insufficient_history" for signal in payload["signals"])
+
+    assert spy.is_empty, spy.statements
     assert _row_counts(settings) == before
 
 
