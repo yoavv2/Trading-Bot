@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20-27-PLAN.md
-last_updated: "2026-09-29T11:49:13.262Z"
+stopped_at: Completed 20-28-PLAN.md
+last_updated: "2026-09-29T11:54:07.132Z"
 last_activity: 2026-09-29
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 55
-  completed_plans: 54
+  completed_plans: 55
   percent: 60
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
 Plan: 28 of 28 (gap closure 20-25..20-28)
-Status: Ready to execute
+Status: All 28 plans executed - awaiting phase verification
 Last activity: 2026-09-29
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
 
@@ -100,6 +100,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P25 | 35min | 3 tasks | 14 files |
 | Phase 20 P26 | 20min | 3 tasks | 8 files |
 | Phase 20 P27 | 25min | 3 tasks | 4 files |
+| Phase 20 P28 | 20min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -249,6 +250,7 @@ Recent decisions affecting current work:
 - [Phase 20-25]: D-08a: ingest-bars zero succeeded symbols means run FAILED and Job FAILED/handler_error; partial stays SUCCEEDED; all-fail wins over concurrent cancel
 - [Phase 20-26]: Dialog shells (ControlConfirmDialog/CancelJobDialog/RetryJobDialog) are never keyed; openingRef lives in the persistent shell (WR-C-01), per-opening state in a body that mounts fresh
 - [Phase 20-27]: Alpaca list_fills/list_orders paginate by last-id cursor at documented limits (100/500) with typed cap/stall errors and no date bounding; callers unchanged. Live UAT test 3 re-run still pending.
+- [Phase 20-28]: D-11a: control audit timestamps from one clock_timestamp() read after the row lock; no CHECK migration (deferred)
 
 ### Pending Todos
 
@@ -289,6 +291,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-29T11:49:13.252Z
-Stopped at: Completed 20-27-PLAN.md
+Last session: 2026-09-29T11:54:06.963Z
+Stopped at: Completed 20-28-PLAN.md
 Resume file: None
