@@ -182,12 +182,14 @@ Residuals noted by the auditors. None is an open mitigation; each declared mitig
 | Ref | Observation | Tracking |
 |-----|-------------|----------|
 | T-20-03-02 / T-20-14-02 | `ingest-bars` has no lookback / span cap on `from_date` (future-date rejection + 500-symbol cap present) | WR-A-03 residual in 20-REVIEW-FIX.md |
-| — | `ingest-bars` reports SUCCEEDED even when every symbol fails | WR-A-02 (skipped) in 20-REVIEW-FIX.md |
+| — | `ingest-bars` reports SUCCEEDED even when every symbol fails | Resolved by D-08a (plan 20-25): all-fail run FAILED + Job FAILED/handler_error |
 | — | Crashed ingest leaves a `running` ingestion row nothing reclaims | CR-B-01 residual in 20-REVIEW-FIX.md |
 | T-20-03-03 | No dedicated test asserts the Polygon API key never reaches logs (code path verified clean) | — |
 | T-20-13-03 | No test asserts the literal `api_control` / `local_operator` audit values; only code constants pin them | — |
 | T-20-12-02 | AST scan catches attribute calls only, not a bare-name call after a from-import (code itself clean) | — |
 | T-20-24-04 | `.claude` path assertion is near-vacuous given explicit scan roots | — |
+
+The all-fail `error_message` carries exception class names only, never `str(exc)`, so provider URLs and query parameters cannot reach the run row (20-25).
 
 ---
 

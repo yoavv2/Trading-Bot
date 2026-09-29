@@ -139,7 +139,9 @@ Existing infrastructure covers all phase requirements.
 | Break-glass `kill-switch-trip` CLI with API stopped | ORCH-01, CTRL-02 | Live DB + process-level check | `20-VERIFICATION.md` human item 4 / `20-HUMAN-UAT.md` |
 | Review-fix concurrency/migration/async behaviors (WR-A-01/04/05, CR-B-01, WR-B-02/05/06, WR-C-01..04/06/07) | OPS-05, OPS-07, OPS-08, CTRL-01/02 | Unit/E2E cover them only in simulated form | `20-HUMAN-UAT.md` test 5 |
 
-Out of scope for validation (not test gaps): WR-A-02 ingest-bars all-symbols-fail semantics (open product decision), CR-B-01 stale `running` ingestion-run residual, DOC-01 REQUIREMENTS.md traceability drift.
+Out of scope for validation (not test gaps): CR-B-01 stale `running` ingestion-run residual, DOC-01 REQUIREMENTS.md traceability drift.
+
+WR-A-02 closed by D-08a (plan 20-25). Regression tests: tests/test_market_data_ingestion.py (predicate truth table, all-fail/empty-bars/partial), tests/test_ingest_bars_job_type.py (handler all-fail, cancel during all-fail), tests/test_market_data_job_types_e2e.py (E2E all-fail and 1 ok + 1 fail).
 
 ---
 

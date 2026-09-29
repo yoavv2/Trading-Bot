@@ -19,7 +19,7 @@ status: partial
 **Summary:**
 - Findings in scope: 6 (CR-A-01, WR-A-01..05; Info out of scope)
 - Fixed: 5 (WR-A-03 only partially, see below)
-- Skipped: 1 (WR-A-02)
+- Skipped: 1 (WR-A-02; amended 2026-09-29: decided by the user as D-08a and implemented in plan 20-25)
 
 Each fix has its own commit on `main` and a regression test that failed before the fix and passes after it.
 
@@ -67,6 +67,8 @@ Each fix has its own commit on `main` and a regression test that failed before t
 **File:** `src/trading_platform/jobs/handlers/ingest_bars.py:89-96`
 **Reason:** Requires a product/design decision. The handler's documented design, referencing D-08/D-09, is that it "never reinterprets a partial symbol failure" and mirrors `IngestionResult.succeeded` in `ingestion_succeeded`, with per-symbol failure detail kept on the linked `MarketDataIngestionRun`. It is consistent with invariant 2 and D-05 ("Jobs never reinterpret domain outcomes"). Failing the Job on an all- or partial-symbols-failed ingest would reverse that design and would change what the Phase 21 failure indicator sees. There is no safe minimal change. Whether `sync-symbol-metadata` and `ingest-bars` should share failure semantics needs a human call, recorded in CONTEXT.
 **Original issue:** A bad or expired Polygon key yields a SUCCEEDED Job with `ingestion_succeeded: false` and `bars_upserted: 0`, unlike the retired CLI's `sys.exit(1)` and unlike `sync-symbol-metadata`.
+
+**Amendment 2026-09-29:** decided by the user after UAT. See 20-CONTEXT.md D-08a. The all-fail case is now FAILED (plan 20-25). The partial case stays SUCCEEDED. D-08/D-09 never contained the cited rule.
 
 ---
 

@@ -51,7 +51,7 @@ Out of scope (roadmap-fixed):
   - Needs a migration if the enum is DB-constrained.
 - **D-05:** A paper session that returns a **blocked** report (`blocked_strategy_disabled`, `blocked_global_kill_switch`, `blocked_reconciliation`) or a no-op (`noop_*`) is a **SUCCEEDED** Job.
   - The domain decision is surfaced through `result_summary.action`, rendered by the generic key/value view.
-  - Jobs never reinterpret domain outcomes (invariant 2).
+  - Jobs never reinterpret domain outcomes (invariant 2). Scope (amended 2026-09-29, see D-08a): this governs domain decisions a service returns as a normal outcome (blocked or no-op paper sessions). It does not forbid a service-owned predicate that classifies a run FAILED and a service-defined typed error that the handler propagates unchanged.
 
 ### Reconciliation Job scope (OPS-04)
 - **D-06:** The `reconciliation` Job is **report-only**. It calls `reconcile_paper_execution` exactly as the CLI does today.
@@ -74,6 +74,7 @@ Out of scope (roadmap-fixed):
   | `sync-symbol-metadata`, `sync-market-sessions`, `broker-order-sync` | empty |
 
   The three types with no run record report counts in `result_summary` (e.g. synced/failed, sessions upserted, orders_synced/fills_ingested). No new audit tables.
+- **D-08a (amended 2026-09-29, UAT gap 1, user decision):** `ingest-bars` failure semantics. The ingestion service (not the handler; invariant 2) derives the run status with the pure predicate `_derive_run_status(succeeded_count, failed_count, run_error)`, where a symbol succeeds when its fetch and upsert complete without raising, including zero bars. The result is `failed` if a run-level error occurred or if zero symbols succeeded (this includes 0 requested, i.e. 0 succeeded and 0 failed, which follows the literal user decision; that row is unreachable through the Job path because `validate_payload` rejects an empty symbols list with `empty_symbols`); `partial` if at least one succeeded and at least one failed; `succeeded` otherwise. On an all-fail run the service writes a deterministic `error_message` built from exception class names only ('0 of N symbols succeeded; failed: T (Class), ...'), and `IngestionResult.raise_for_all_symbols_failed()` raises `IngestionAllSymbolsFailedError` (defined in `services/data.py`). The handler calls it after its completion log and before the post-call cancel checkpoint, so the Job lands FAILED with failure_reason `handler_error` (no new `JobFailureReason` value, no migration) and `failure_message` naming the run id. A cancel requested during an all-fail call therefore also ends FAILED, not CANCELLED. A partial run (at least 1 ok, at least 1 failed) keeps the Job SUCCEEDED, unchanged. Consequence: all-fail Jobs are FAILED and therefore retryable (ingest-bars declares no retry prerequisite). Implemented by plan 20-25.
 - **D-09:** The following carry forward to every new type that creates a run:
   - P19 D-02: `job_id` is written in the same transaction that creates the run, and services accept an opaque originating `job_id`.
   - P19 D-07: "Created by Job" back-link.

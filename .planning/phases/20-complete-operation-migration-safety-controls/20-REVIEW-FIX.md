@@ -31,7 +31,7 @@ Scope was Critical + Warning: 21 review findings plus WR-C-09, which the orchest
 - **CR-B-01:** the ingestion run row, with its `job_id`, is committed before any work starts and finalized in its own transaction. A failed ingest keeps a FAILED run linked to its Job, and each symbol runs in its own transaction.
 
 ## Skipped
-- **WR-A-02 (product decision):** should `ingest-bars` FAIL when every symbol fails? D-08/D-09 say the handler never reinterprets partial symbol failures, and changing that reverses a documented design. The user needs to decide.
+- **WR-A-02 (product decision):** should `ingest-bars` FAIL when every symbol fails? D-08/D-09 say the handler never reinterprets partial symbol failures, and changing that reverses a documented design. The user needs to decide. **Decided 2026-09-29 (UAT gap 1):** zero succeeded symbols means run FAILED and Job FAILED/handler_error; partial stays SUCCEEDED. See 20-CONTEXT.md D-08a, implemented in plan 20-25. The earlier claim that D-08/D-09 contain the 'never reinterprets partial symbol failures' rule was incorrect: that wording existed only in the handler docstring.
 
 ## Partial or residual
 - **WR-A-03:** `sync-market-sessions` ranges are now calendar-bounded at submit. The lookback cap for `ingest-bars` is not implemented because it needs a config value.
