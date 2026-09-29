@@ -687,6 +687,10 @@ _KEPT_MAKE_TARGETS = {
     "test",
     "console",
     "console-install",
+    # Canonical host development (tests/test_dev_workflow.py).
+    "api",
+    "worker",
+    "dev",
 }
 _SCRIPT_TOP_LEVEL_DEFS: dict[str, set[str]] = {
     "migrate.py": {"build_alembic_config", "build_parser", "main"},

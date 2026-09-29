@@ -16,10 +16,15 @@ services:
       timeout: 5s
       retries: 5
 
+  # migrate/api/worker are the full container stack, opt-in via the `stack`
+  # profile (`make up`). A bare `docker compose up` starts only `db`, so it can
+  # never put a second API on :8000 next to the canonical host `make dev`.
+  #
   # One-shot schema migration (alembic assets are baked into the image). The
   # api/worker `command` overrides the Dockerfile CMD that would otherwise run
   # `alembic upgrade head`, so they wait for this to finish instead.
   migrate:
+    profiles: ["stack"]
     build: .
     restart: "no"
     environment:
@@ -36,6 +41,7 @@ services:
     command: ["alembic", "upgrade", "head"]
 
   api:
+    profiles: ["stack"]
     build: .
     restart: unless-stopped
     environment:
@@ -55,6 +61,7 @@ services:
     command: ["uvicorn", "trading_platform.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
   worker:
+    profiles: ["stack"]
     build: .
     restart: unless-stopped
     environment:

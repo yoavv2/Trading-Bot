@@ -16,7 +16,7 @@ Implemented today:
 - Alembic migration flow for schema management
 - Seed script for the initial strategy catalog entry
 - Operator console Jobs and controls as the sole manual mutation surface
-- Docker Compose services for PostgreSQL, API, and a placeholder worker
+- Docker Compose PostgreSQL, plus an opt-in full container stack (`stack` profile)
 - Pytest coverage for app boot, strategy registry, and migrations
 
 Not implemented yet:
@@ -66,11 +66,16 @@ Not implemented yet:
 
 ## Quick Start
 
-### Recommended: local Python + Dockerized Postgres
+### Local development (canonical)
 
-This is the most complete development workflow right now because migrations and helper scripts run from the host repository.
+There is exactly one supported way to run the platform locally: the API, the
+Job worker and the operator console as host processes, started together by
+`make dev`, against the PostgreSQL database named in `.env`
+(`localhost:5432`, e.g. a native Homebrew PostgreSQL).
 
-1. Create an environment file:
+One-time setup:
+
+1. Create an environment file and fill in the database and provider keys:
 
    ```bash
    cp .env.example .env
@@ -82,53 +87,89 @@ This is the most complete development workflow right now because migrations and 
    python3.12 -m venv .venv
    .venv/bin/pip install --upgrade pip
    .venv/bin/pip install -e '.[dev]'
+   make console-install
+   cp console/.env.example console/.env.local
    ```
 
-3. Start PostgreSQL:
+3. Make sure PostgreSQL is running on `localhost:5432`, then migrate and seed
+   (re-run `make migrate` after pulling new migrations):
 
    ```bash
-   docker compose up -d db
+   make migrate
+   make seed
    ```
 
-4. Apply database migrations:
+Every day:
 
-   ```bash
-   PYTHONPATH=src .venv/bin/python scripts/migrate.py upgrade head
-   ```
+```bash
+make dev
+```
 
-5. Seed the initial strategy catalog entry:
+`make dev` refuses to start if port 8000 or 3000 is already taken (for example
+by the Compose stack), then runs in one process group:
 
-   ```bash
-   PYTHONPATH=src .venv/bin/python scripts/seed_phase1.py
-   ```
+- **API** on `http://127.0.0.1:8000` with `--reload`: backend code changes
+  under `src/` are picked up automatically. Mutations are enabled for this API
+  process only (`TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED=true`); the
+  application default stays off.
+- **Job worker** (`python -m trading_platform.worker run-jobs`), restarted by
+  `watchfiles` on changes under `src/`. A restart lets the in-flight Job finish
+  for up to 30 seconds; a Job still running after that is reclaimed by the
+  lost-lease sweep.
+- **Console** on `http://localhost:3000`.
 
-6. Start the API:
+Press `Ctrl-C` to stop all three. Changes to `config/` or `.env` need a
+`make dev` restart.
 
-   ```bash
-   PYTHONPATH=src .venv/bin/python -m trading_platform.api.app
-   ```
+Run operations (backtests, data ingestion, risk, paper sessions,
+reconciliation) as Jobs from the console at `/jobs/new`, and manage the kill
+switch and strategy enable/disable from `/controls`. The HTTP Job API is the
+only mutation path.
 
-7. Run operations (backtests, data ingestion, risk, paper sessions, reconciliation)
-   as Jobs from the operator console at `/jobs/new`, and manage the kill switch
-   and strategy enable/disable from `/controls`. The old per-operation scripts and
-   Makefile targets have been removed; the HTTP Job API is the only mutation path.
+`make api`, `make worker` and `make console` run a single piece in the
+foreground for debugging. `make api` is configuration-neutral: it reads
+`mutations_enabled` from `.env`/config like any deployment, so mutating routes
+return `403 mutations_disabled` unless you enable them there.
 
-### Docker Compose Notes
+### Alternative: full Docker Compose stack
 
-`docker compose up --build -d` starts `db`, runs a one-shot `migrate` service (`alembic upgrade head`, using the migration assets baked into the image), then starts `api` and `worker` once migrations succeed. The image pins its config location via `TRADING_PLATFORM_CONFIG_FILE=/app/config/app.yaml` and `TRADING_PLATFORM_STRATEGY_CONFIG_DIR=/app/config/strategies`, because the installed package cannot locate the repo `config/` directory on its own.
+The containerized stack (`db`, one-shot `migrate`, `api`, `worker`) sits behind
+the Compose `stack` profile. Use it **instead of** `make dev`, never alongside
+it: its API binds port 8000 and its worker polls its own `db`.
 
-The `scripts/` directory is not bundled; run seeding and other scripts from the host repository. If host port 5432 is already in use (e.g. a native Postgres), set `POSTGRES_HOST_PORT` to publish the compose database on another port.
+```bash
+make up      # docker compose --profile stack up --build -d
+make logs    # follow db/api/worker logs
+make down    # stop and remove the stack
+```
+
+Notes:
+
+- The images contain an installed copy of `src/`; code changes need `make up`
+  again (rebuild). Nothing reloads.
+- The stack uses the Compose `db` (its own volume, unseeded) and only the
+  environment set in `docker-compose.yml` (mutations enabled; no Polygon or
+  Alpaca keys). Seeding and other `scripts/` run from the host repository.
+- A bare `docker compose up` starts only `db`. If a native PostgreSQL already
+  owns port 5432, set `POSTGRES_HOST_PORT` to publish the Compose database on
+  another port.
+- `migrate` runs `alembic upgrade head` (assets baked into the image) before
+  `api` and `worker` start. The image pins `TRADING_PLATFORM_CONFIG_FILE` and
+  `TRADING_PLATFORM_STRATEGY_CONFIG_DIR` to `/app/config`, because the
+  installed package cannot locate the repo `config/` directory on its own.
 
 ## Common Commands
 
-The `Makefile` wraps the main development flows:
-
 ```bash
-make up         # Start db/api/worker with Docker Compose
-make down       # Stop containers and remove orphans
-make logs       # Follow db/api/worker logs
-make migrate    # Apply Alembic migrations from the host environment
+make dev        # Canonical local development: API + worker + console
+make api        # API only, with --reload (configuration-neutral)
+make worker     # Job worker only, restarted on code changes
+make console    # Operator console only
+make migrate    # Apply Alembic migrations to the .env database
 make seed       # Seed the initial strategy record
+make up         # Alternative: full Compose stack (stack profile)
+make down       # Stop the Compose stack
+make logs       # Follow Compose db/api/worker logs
 make export-backtest-report  # Read-only backtest report export
 make generate-signals        # Read-only signal evaluation
 make test       # Run the current test suite
@@ -139,16 +180,9 @@ controls from `/controls`; there are no Makefile targets for them.
 
 ## Operator Console
 
-A read-only Next.js operator console lives at `console/`. It proxies to this
-FastAPI app's read surface (no new backend capabilities) so an operator can see
-run/strategy/analytics/system status without touching the API directly. Start
-it with:
-
-```bash
-make console
-```
-
-See `console/README.md` for setup (`.env.local`) and the proxy design.
+The Next.js operator console lives at `console/` and is started by `make dev`.
+It proxies to this FastAPI app (no new backend capabilities). See
+`console/README.md` for `.env.local` and the proxy design.
 
 ## Break-glass Kill Switch
 

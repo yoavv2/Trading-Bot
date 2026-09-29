@@ -8,11 +8,9 @@ and lets the operator halt it if needed.
 ## Prerequisites
 
 - Node.js 22+
-- The FastAPI backend running and reachable, e.g.:
-  ```bash
-  PYTHONPATH=src .venv/bin/python -m uvicorn trading_platform.api.app:app --port 8000
-  ```
-  or via `docker compose up` (the `api` service listens on port 8000 the same way).
+- The repo's canonical local development setup (see the root `README.md`):
+  `make dev` from the repo root runs the API, the Job worker and this console
+  together.
 
 ## Setup
 
@@ -33,10 +31,12 @@ TRADING_CONSOLE_API_BASE_URL=http://127.0.0.1:8000
 From the repo root:
 
 ```bash
-make console
+make dev
 ```
 
-(equivalent to `cd console && npm run dev`). Then open http://localhost:3000.
+Then open http://localhost:3000. `make console` (equivalent to
+`cd console && npm run dev -- --port 3000`) starts the console alone when the
+API and worker are already running.
 
 ## Proxy design
 
