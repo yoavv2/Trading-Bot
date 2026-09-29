@@ -1,9 +1,9 @@
 ---
-status: complete
+status: diagnosed
 phase: 20-complete-operation-migration-safety-controls
 source: [20-VERIFICATION.md]
 started: 2026-09-28T23:15:00Z
-updated: 2026-09-29T10:26:00Z
+updated: 2026-09-29T11:10:00Z
 ---
 
 ## Current Test
@@ -121,35 +121,87 @@ blocked: 0
 
 - truth: "A failing ingest-bars Job (bad Polygon key or unreachable) shows its ingestion run as FAILED in Job resources"
   status: failed
-  reason: "Automated UAT: with an invalid key or an unreachable Polygon, every symbol fails inside the per-symbol try in services/ingestion.py. The run finalizes as PARTIAL and the Job SUCCEEDS, so no failing Job exists to show FAILED. Only run-level errors, such as a missing key raising in PolygonClient.__init__, give a FAILED run and Job, and that path renders correctly."
+  reason: "Automated UAT: with an invalid key or an unreachable Polygon, every symbol fails inside the per-symbol try, the run finalizes PARTIAL and the Job SUCCEEDS. Only run-level errors (a missing key) give FAILED."
   severity: major
   test: 5
-  root_cause: "Known: WR-A-02 was skipped as a product decision (should ingest-bars FAIL when all symbols fail?). D-08/D-09 say the handler never reinterprets partial symbol failures. The user must decide."
-  artifacts: [src/trading_platform/services/ingestion.py, src/trading_platform/jobs/handlers/ingest_bars.py]
-  missing: []
-  debug_session: ""
-- truth: "reconciliation, broker-order-sync and paper-session Jobs can complete against the live Alpaca paper broker"
+  user_decision: "2026-09-29: zero symbols succeeded => run FAILED and Job FAILED; >=1 succeeded and >=1 failed => run PARTIAL, Job SUCCEEDED (unchanged); explicit amendment (new D-08a) rather than an undocumented change"
+  root_cause: "services/ingestion.py _finish_run derives status as failed-if-error_message / partial-if-any-failed / succeeded, with no zero-succeeded branch. The per-symbol except swallows PolygonAuthError/PolygonClientError into failed_symbols without error_message, so the handler returns normally and the runner writes SUCCEEDED. The 'never reinterpret partial failures' rule is not in D-08/D-09; it exists only in the ingest_bars.py docstring, 20-14-SUMMARY and WR-A-02."
+  artifacts:
+    - path: src/trading_platform/services/ingestion.py
+      issue: "status derivation has no zero-succeeded branch; no succeeded_count; all-fail sets no error_message"
+    - path: src/trading_platform/services/data.py
+      issue: "IngestionResult carries no run_status and no raise method"
+    - path: src/trading_platform/jobs/handlers/ingest_bars.py
+      issue: "returns normally on all-fail; docstring misattributes the rule to D-08/D-09"
+  missing:
+    - "pure _derive_run_status(succeeded_count, failed_count, run_error) -> succeeded|partial|failed in the service (invariant 2: the service decides, not the handler)"
+    - "typed IngestionAllSymbolsFailedError in services/data.py; IngestionResult.run_status + raise_for_all_symbols_failed(); the handler calls it after the completion log and before the post-call cancel checkpoint; Job FAILED/handler_error (no new enum value)"
+    - "all-fail run error_message: deterministic, exception class names only"
+    - "amend 20-CONTEXT.md with D-08a plus a D-05 scope note; update the handler docstring, 20-SECURITY/VALIDATION/VERIFICATION/REVIEW-FIX lines; amendment notes on 20-14-SUMMARY and WR-A-02"
+    - "tests: predicate truth table; service all-fail/empty-bars/partial; handler all-fail and cancel-during-all-fail; E2E all-fail (job failed, handler_error, resources[0].status failed, run.job_id==job.id) and 1ok+1fail (job succeeded, run partial)"
+  debug_session: .planning/debug/ingest-bars-all-symbols-failed-not-failed.md
+- truth: "reconciliation, broker-order-sync and paper-session Jobs complete against the live Alpaca paper broker and see the COMPLETE broker order and fill sets"
   status: failed
-  reason: "Found during test 3; that test's literal criteria still pass. Jobs dbf6a335, 302020fc and 45b09f0d, and the earlier paper-session 52468936, all failed with 'AlpacaClientError: Alpaca request failed with status 422: tried to set the page size to 500, but the maximum is 100'."
+  reason: "Found during test 3 (whose literal criteria passed): Jobs dbf6a335, 302020fc and 45b09f0d (and the earlier 52468936) FAILED with AlpacaClientError 422 'tried to set the page size to 500, but the maximum is 100'"
   severity: major
   test: 3
-  root_cause: "services/alpaca.py:279 list_fills(page_size=500) calls GET /v2/account/activities/FILL, whose page_size is capped at 100; the error text names page_size. list_orders(limit=500) on /v2/orders uses a different parameter; Alpaca documents its max as 500, so leave it. This predates Phase 20; the E2E tests use a fake broker."
-  artifacts: [src/trading_platform/services/alpaca.py]
-  missing: []
-  debug_session: ""
-- truth: "A re-opened control confirmation dialog starts clean: prompt body, empty reason, focus on the reason field (WR-C-05)"
+  user_decision: "2026-09-29: fix in Phase 20; verify the documented limits; pagination must retrieve the complete set, with no truncation"
+  root_cause: "alpaca.py list_fills sends page_size=500 to GET /v2/account/activities/FILL (documented max 100, confirmed live: 101 and 500 give 422). Neither list_fills nor list_orders paginates. list_orders(limit=500) is legal (max 500), but it is single-page and silently drops older orders beyond 500 (the server does not enforce limit). load_broker_state (reconciliation, paper-session) and sync_paper_state (broker-order-sync) need the complete sets: the matchers compare them against undated local history, so truncation gives false MISSING_BROKER blocking findings and silently missing fills. It predates Phase 20 (d5579f8, phase 10); all E2E tests fake AlpacaClient."
+  artifacts:
+    - path: src/trading_platform/services/alpaca.py
+      issue: "page_size over the max; no pagination in list_fills or list_orders"
+    - path: src/trading_platform/services/reconciliation/report.py
+      issue: "consumer requiring the complete sets (no change expected)"
+    - path: src/trading_platform/services/execution/sync_orders.py
+      issue: "consumer requiring the complete sets (no change expected)"
+  missing:
+    - "Final constants: ALPACA_ACTIVITIES_MAX_PAGE_SIZE=100, ALPACA_ORDERS_MAX_LIMIT=500, and max-page caps"
+    - "cursor pagination: page_token for fills (the last id, direction desc) and before_order_id for orders (never combined with after/until); terminate on a short or empty page"
+    - "typed AlpacaPaginationCapExceededError and AlpacaPaginationStalledError (duplicate id or non-advancing cursor), both AlpacaClientError subclasses; never return a partial list"
+    - "no date bounding (the local side is undated; bounding only the broker side would create false findings)"
+    - "tests/test_alpaca_pagination.py with httpx.MockTransport: page_size<=100, limit<=500, multi-page concatenation, cursor==last id, termination on short/empty page, cap raises, stall raises, before_order_id never combined with after/until"
+    - "annotate 20-VERIFICATION SC1 (the E2E evidence used a fake broker) and REQUIREMENTS OPS-03/04/06 traceability until the fix lands and UAT test 3 re-runs"
+  debug_session: .planning/debug/alpaca-fills-page-size-422.md
+- truth: "Every opening of a control or job confirmation dialog is clean on its first committed frame (prompt body, empty reason, confirm disabled, no stale alert), and focus goes to the reason field on every opening (WR-C-05)"
   status: failed
-  reason: "Found during tests 2 and 5a; the literal criteria still pass. On re-open the first rendered frame shows the previous opening's state, such as the old reason with confirm enabled or 'Already ENABLED — no change (recorded)', until the reset effect runs. After an unchanged notice -> Close -> re-open, focus lands on 'Keep Current State' instead of the reason field, and it stays there."
+  reason: "Found during tests 2 and 5a (whose literal criteria passed): a re-opened dialog first renders the previous opening's state; after an unchanged notice, Close and re-open, focus stays on 'Keep Current State'"
   severity: minor
   test: 5
-  root_cause: "Likely: ControlConfirmDialog resets its state in a useEffect after the render, so the first commit renders stale state. useDialogFocus runs in that same commit, while the reason textarea is not rendered because unchanged=true, so it falls back to the dismiss button."
-  artifacts: [console/src/components/controls/ControlConfirmDialog.tsx, console/src/lib/useDialogFocus.ts]
-  missing: []
-  debug_session: ""
+  root_cause: "Confirmed. ControlConfirmDialog stays mounted between openings and resets per-opening state with setState in a post-commit useEffect, so the first commit shows stale state, including stale role=alert nodes. useDialogFocus and the [open, unchanged] effect run in that same flush against the stale DOM, where the textarea is absent after an unchanged notice, and both focus the dismiss button; nothing re-focuses after the reset. CancelJobDialog and RetryJobDialog share the reset-in-effect pattern (stale first frame, no persistent focus bug). useLayoutEffect does not fix it (tested)."
+  artifacts:
+    - path: console/src/components/controls/ControlConfirmDialog.tsx
+      issue: "reset-in-effect; the [open, unchanged] focus effect fires on the stale state"
+    - path: console/src/components/jobs/CancelJobDialog.tsx
+      issue: "same reset-in-effect pattern (stale first frame)"
+    - path: console/src/components/jobs/RetryJobDialog.tsx
+      issue: "same pattern (stale role=alert on re-open); idempotency key per opening"
+  missing:
+    - "split each dialog: a persistent outer part keeps openingRef/wasOpenRef (the WR-C-01 guard) and renders an inner body only while open; all per-opening state, useDialogFocus and the handlers live in the body; delete the reset effect. Do NOT key the outer dialog (that would regress WR-C-01)"
+    - "job dialogs: idempotency key generated once per body mount (useState initializer), reused across attempts within an opening"
+    - "tests using a useLayoutEffect FrameProbe (first commit): clean first frame after keep, error and changed:true re-open; no 'Already' text; focus on the textarea after unchanged, Close, re-open (with and without StrictMode); no stale alert; Cancel and Retry equivalents; key differs per opening; the existing WR-C-01 and WR-C-06 tests stay green"
+    - "amend 20-UI-SPEC shared-dialog and Retry mechanics sections, and the WR-C-05 text: clean first frame, focus on reason on every opening"
+  debug_session: .planning/debug/control-dialog-stale-state-on-reopen.md
+- truth: "Every completed StrategyRun satisfies completed_at >= started_at (control audit rows are temporally consistent)"
+  status: failed
+  reason: "UAT observation promoted after diagnosis: 25 of 25 operator_control runs in the live DB have completed_at < started_at (as much as -93ms); every other run type has 0 violations"
+  severity: minor
+  test: 4
+  root_cause: "operator_controls.py takes changed_at = datetime.now(UTC) in Python BEFORE the transaction opens (lines 293, 468) and writes it to completed_at, event_at, system_controls.last_changed_at and result_summary.changed_at. started_at is server_default now() = the Postgres transaction start, which is always later. There are two clocks and one ordering, and the skew grows with a remote DB. It predates Phase 20 (06-03/07-03), but Phase 20 made it the primary HTTP and break-glass control path. No duration consumer exists; the impact is audit integrity."
+  artifacts:
+    - path: src/trading_platform/services/operator_controls.py
+      issue: "pre-transaction Python timestamp used as the completion time"
+    - path: src/trading_platform/db/models/strategy_run.py
+      issue: "started_at uses the DB transaction-start clock; there is no CHECK on the ordering"
+  missing:
+    - "read one DB clock inside the transaction after the row lock (clock_timestamp()) and use it for completed_at, event_at, last_changed_at and result_summary.changed_at"
+    - "Postgres tests for trip/reset/enable/disable, changed and unchanged: completed_at >= started_at; event_at == completed_at; last_changed_at == completed_at on a change; a lock-wait variant"
+    - "OPTIONAL (user decision): migration 0022 CHECK (completed_at IS NULL OR completed_at >= started_at) NOT VALID (enforces new rows; legacy audit rows left unrewritten)"
+    - "add a one-line timestamp-source invariant to the 20-CONTEXT control-path decisions"
+  debug_session: .planning/debug/operator-control-run-completed-before-started.md
 
 ## Observations (not gaps; for the user to triage)
 
 - `kill-switch-trip` prints two structured JSON log lines on stdout before the report, so stdout is not pure JSON.
-- Control-run reports have completed_at earlier than started_at by about 25ms. completed_at uses Python time taken at method entry; started_at uses the DB default at insert.
+- (Promoted to gap 4 after diagnosis) control runs have completed_at < started_at.
 - An ARCHIVED strategy is shown as DISABLED with an "Enable Strategy" trigger (GET maps anything non-active to disabled). The archived notice appears only after the attempt.
 - The sync-market-sessions form defaults to_date to today (2026-09-29), while local market_sessions data ends 2026-03-13. Not exercised.
