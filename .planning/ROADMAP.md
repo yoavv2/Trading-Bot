@@ -77,7 +77,7 @@ Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-
 - [x] **Phase 17: Job Framework** - Generic DB-backed job queue: closed lifecycle enum, restart-safe persistence, registry-based extensibility, import-boundary enforcement, dependencies, cancellation, progress and structured logs. (completed 2026-07-20)
 - [x] **Phase 18: Orchestration Surface** - Idempotent Job submit/cancel HTTP endpoints, transport-agnostic Job observation, worker CLI reduced to thin adapters. (completed 2026-07-21; ORCH-01/02 Partial — `scripts/` bypass not covered, closes in Phase 20; post-phase race/test hardening completed 2026-07-22 in PR #1 / `2b88d49`)
 - [x] **Phase 19: Job Operations Vertical Slice** - Backtest as the first real production Job, production worker wiring, generic Job list/detail/progress/logs/events/cancel UI, minimal submission UI, end-to-end Console → HTTP → Job → Worker → Service proof. (completed 2026-09-26)
-- [ ] **Phase 20: Complete Operation Migration & Safety Controls** - Remaining operations as Jobs, synchronous kill-switch/strategy controls, operator retry with lineage, retirement of every mutation bypass with boundary enforcement.
+- [x] **Phase 20: Complete Operation Migration & Safety Controls** - Remaining operations as Jobs, synchronous kill-switch/strategy controls, operator retry with lineage, retirement of every mutation bypass with boundary enforcement. (completed 2026-09-29)
 - [ ] **Phase 21: Operations History & Polish** - Unified operational history and global failure visibility built from existing Job/event/control audit data; operational UX cleanup; then v1.3 closes.
 
 **Deferred out of v1.3:** SCHED-01..03 (→ future Paper Automation milestone), AUD-03 (multi-user identity groundwork — single operator). NOTIF-01 folded into AUD-02.
@@ -334,7 +334,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 17. Job Framework | v1.3 | 9/9 | Complete | 2026-07-20 |
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
-| 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | In Progress | - |
+| 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
 | 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
 
 ---
