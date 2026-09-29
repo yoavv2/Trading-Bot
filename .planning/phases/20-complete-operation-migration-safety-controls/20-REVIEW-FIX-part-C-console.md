@@ -85,6 +85,7 @@ fresh alert region). The dialog is `aria-describedby` its body copy, and the rea
 `aria-describedby` their helper texts. The panels got `tabIndex={-1}`. The app root is deliberately NOT made
 `inert`/`aria-hidden`, because the overlay renders inside that same tree and would inert itself.
 **Not changed:** `CancelJobDialog` has the same gaps but is not in this finding's scope (Phase 19 file).
+**Amendment 2026-09-29 (UAT gap 3, plan 20-26):** the focus contract is 'focus on the reason field on EVERY opening', and every opening is clean on its first committed frame. The original fix focused via a hook that ran against the previous opening's stale DOM, so after an unchanged notice -> Close -> re-open focus stuck on 'Keep Current State'. The fix splits a persistent shell (WR-C-01 guard) from a per-opening body; the same split is applied to CancelJobDialog and RetryJobDialog.
 
 ### WR-C-06: Confirm dialog and trigger vanish when the underlying state read fails while the dialog is open
 

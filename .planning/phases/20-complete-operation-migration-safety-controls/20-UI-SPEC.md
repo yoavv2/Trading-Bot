@@ -189,13 +189,13 @@ Grepped directly. The test enforces exactly four things: (1) no `fetch(` outside
 - **Control mutation client functions (`tripKillSwitch`/`resetKillSwitch`/`enableStrategy`/`disableStrategy`, or equivalent, all added to `lib/api.ts`) send NO `Idempotency-Key` header** (D-10 — these are idempotent by explicit target state, not by key). This is a structural difference from `submitJob`/`cancelJob`/`retryJob`, which all require one.
 
 ### Retry mutation mechanics (D-20, fully pinned — was previously unpinned)
-Mirrors `CancelJobDialog`'s existing mechanics exactly: one `Idempotency-Key` generated per dialog opening (`crypto.randomUUID()`), reused across every confirm attempt within that opening (including a transport-failure retry). On `202` (fresh submission): call `onNavigate(`/jobs/${result.data.job_id}`)` immediately. On `200` + `Idempotency-Replayed: true` (exact replay): show `Already submitted — opening existing Job` and call `onNavigate` to the same `job_id` immediately after (matches `BacktestJobForm`'s existing replay handling verbatim — the message is transient since navigation follows at once). On any error (409/422/etc.): the dialog stays open, shows the mapped plain-text copy from the Retry rejection table above, and triggers a Job-detail refetch (so `retried_as_job_id`/`retry_blocked` are fresh once the operator dismisses) — it does **not** auto-navigate or auto-close.
+Mirrors `CancelJobDialog`'s existing mechanics exactly: one `Idempotency-Key` generated per dialog opening (`crypto.randomUUID()`) (per body mount; see Amendment 2026-09-29), reused across every confirm attempt within that opening (including a transport-failure retry). On `202` (fresh submission): call `onNavigate(`/jobs/${result.data.job_id}`)` immediately. On `200` + `Idempotency-Replayed: true` (exact replay): show `Already submitted — opening existing Job` and call `onNavigate` to the same `job_id` immediately after (matches `BacktestJobForm`'s existing replay handling verbatim — the message is transient since navigation follows at once). On any error (409/422/etc.): the dialog stays open, shows the mapped plain-text copy from the Retry rejection table above, and triggers a Job-detail refetch (so `retried_as_job_id`/`retry_blocked` are fresh once the operator dismisses) — it does **not** auto-navigate or auto-close.
 
 ### Retry gating precedence (D-20) — never branches on `job_type`
 Evaluate in this order and show the first that applies, using only generic, job-type-agnostic fields: (1) mutations disabled (`capability.state !== "enabled"`) — (2) `job.retried_as_job_id !== null` (a retry already exists) — (3) `job.retry_blocked !== null` (server-derived D-19 block, see API contract dependency above). Never show more than one disabled-reason message at once; the client-side check is UX-only — the 409 responses in the error-copy table above are the enforcement backstop for a stale view.
 
 ### Shared Control confirmation dialog — one component, four call sites
-Build exactly one `ControlConfirmDialog` component (or equivalently named), reused verbatim across all four call sites (`/controls` Kill Switch section, `/controls` Strategy section, inline on `KillSwitchBanner`, inline on `/strategy`) — this is what CONTEXT D-13 means by "one shared confirmation-dialog component." It must NOT be four separate copy-pasted dialogs. Props: `currentState`, `targetState`, `actionLabel` (heading/confirm text), `requiresTypedConfirmation?: "RESET"` (only passed for the kill-switch reset call site), `onConfirm(reason: string) => Promise<{ changed: boolean; ... }>`. Implementation follows the exact same plain React-state overlay pattern as `CancelJobDialog` (`role="dialog"`, `aria-modal="true"`, `zinc-950/80` backdrop, `zinc-900` panel, `zinc-800` border) — do not introduce the native `<dialog>` element, for the same jsdom-testability reason documented in `19-UI-SPEC.md`. Sends no `Idempotency-Key` (see API contract dependency above).
+Build exactly one `ControlConfirmDialog` component (or equivalently named), reused verbatim across all four call sites (`/controls` Kill Switch section, `/controls` Strategy section, inline on `KillSwitchBanner`, inline on `/strategy`) — this is what CONTEXT D-13 means by "one shared confirmation-dialog component." It must NOT be four separate copy-pasted dialogs. Props: `currentState`, `targetState`, `actionLabel` (heading/confirm text), `requiresTypedConfirmation?: "RESET"` (only passed for the kill-switch reset call site), `onConfirm(reason: string) => Promise<{ changed: boolean; ... }>`. Implementation follows the exact same plain React-state overlay pattern as `CancelJobDialog` (`role="dialog"`, `aria-modal="true"`, `zinc-950/80` backdrop, `zinc-900` panel, `zinc-800` border) — do not introduce the native `<dialog>` element, for the same jsdom-testability reason documented in `19-UI-SPEC.md`. Sends no `Idempotency-Key` (see API contract dependency above). Per-opening state lives in a body that mounts fresh on each opening (Amendment 2026-09-29); the dialog does not reset state in an effect.
 
 ### `KillSwitchPanel` gains an optional `renderAction` slot (single-fetch, not a second request)
 Add `renderAction?: (data: KillSwitchData) => React.ReactNode` to `KillSwitchPanel`'s props, rendered next to its existing state display, fed from the same `useApiQuery` call already inside the component — not a second, independently-fetched instance that could disagree with what is displayed. The System Status screen's existing `<KillSwitchPanel />` usage (unchanged) passes nothing. `/controls`'s Kill Switch section passes a function rendering the `Trip Kill Switch`/`Reset Kill Switch` trigger (derived from `data.is_tripped`), gated by `useMutationCapability()` exactly like every other trigger.
@@ -246,6 +246,24 @@ These points supersede any conflicting text above, including the Copywriting row
 3. **Control routes return a structured 404:** `{"detail": {"code": "strategy_not_found", "strategy_id": ...}}`. They no longer use the plain-string `resolve_strategy_metadata` 404. The copy is the existing `strategy_not_found` row. Plain-string detail is still rendered verbatim as a defensive path.
 4. **`invalid_control_request` (422)** is returned for a malformed body or unknown keys. It maps to `Request rejected — check the input and try again.`
 5. **No-row default is `active`.** When no `Strategy` row exists, the read route reports `active`, which is exactly what `ensure_strategy_record` inserts. An invariant test pins read-default == ensure-inserted status.
+
+---
+
+## Amendment 2026-09-29 — Per-opening dialog body (UAT gap 3)
+
+A re-opened dialog rendered the previous opening's state on its first committed frame, because state was reset in a passive effect on a dialog that stays mounted. These rules supersede any conflicting text above.
+
+1. `ControlConfirmDialog`, `CancelJobDialog` and `RetryJobDialog` each consist of an exported shell plus a non-exported body in the same file. The body renders only while `open` is true and holds all per-opening state. No effect resets state on open.
+2. `ControlConfirmDialog`'s shell owns `wasOpenRef` and `openingRef`. It bumps `openingRef` on every open/close transition (the WR-C-01 stale-continuation guard). Callers never pass a `key` to any of the three dialogs, because keying would reset `openingRef` and regress WR-C-01.
+3. The first committed frame of every opening is clean:
+   - Control: prompt body "Current state: X. This will change it to: Y.", empty reason, empty RESET field, confirm disabled, zero `role="alert"` nodes, dismiss "Keep Current State".
+   - Cancel: empty reason, no error text, "Cancel Job" enabled.
+   - Retry: zero `role="alert"` nodes and no replay text.
+4. Focus on every opening:
+   - Control: the Reason field, including after an unchanged notice -> Close -> re-open (WR-C-05 amended).
+   - Retry: the Close button.
+   - Cancel: no focus management (Phase 19 file, outside WR-C-05; unchanged, recorded as out of scope).
+5. Idempotency-Key (Cancel, Retry): generated once per body mount (one opening) and reused for every confirm attempt within that opening.
 
 ---
 
