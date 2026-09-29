@@ -46,7 +46,7 @@ from trading_platform.jobs.registry import (
     retry_prerequisite_for,
 )
 from trading_platform.services.config.validation import ExecutionMode
-from trading_platform.services.data import IngestionResult
+from trading_platform.services.data import IngestionAllSymbolsFailedError, IngestionResult
 from trading_platform.services.ingestion import ingest_daily_bars
 from trading_platform.worker.commands.run_jobs import required_mode_preflight
 
@@ -347,6 +347,74 @@ def test_cancel_during_call_acknowledged_after_service(monkeypatch: pytest.Monke
         handler.run(context)
 
     assert call_count == 1
+
+
+_ALL_FAIL_MESSAGE = (
+    "0 of 2 symbols succeeded; failed: AAPL (PolygonAuthError), SPY (PolygonAuthError)"
+)
+
+
+def _all_fail_result() -> IngestionResult:
+    return _fake_result(
+        symbols_failed=["AAPL", "SPY"],
+        bars_upserted=0,
+        run_status="failed",
+        run_error_message=_ALL_FAIL_MESSAGE,
+    )
+
+
+def test_handler_raises_when_all_symbols_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import trading_platform.jobs.handlers.ingest_bars as ingest_bars_module
+
+    result = _all_fail_result()
+    monkeypatch.setattr(ingest_bars_module, "ingest_daily_bars", lambda **kwargs: result)
+
+    context = _FakeContext()
+    handler = IngestBarsJobHandler()
+
+    with pytest.raises(IngestionAllSymbolsFailedError) as excinfo:
+        handler.run(context)
+
+    assert str(excinfo.value) == f"Ingestion run {result.run_id} failed: {_ALL_FAIL_MESSAGE}"
+    assert [c["event_code"] for c in context.log_calls] == [
+        "ingest_bars_started",
+        "ingest_bars_completed",
+    ]
+    assert context.log_calls[-1]["context"]["run_status"] == "failed"
+
+
+def test_cancel_during_all_fail_call_lands_failed_not_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_ingest_daily_bars(**kwargs: Any) -> IngestionResult:
+        context.cancelled = True
+        return _all_fail_result()
+
+    import trading_platform.jobs.handlers.ingest_bars as ingest_bars_module
+
+    monkeypatch.setattr(ingest_bars_module, "ingest_daily_bars", _fake_ingest_daily_bars)
+
+    context = _FakeContext()
+    handler = IngestBarsJobHandler()
+
+    with pytest.raises(IngestionAllSymbolsFailedError):
+        handler.run(context)
+
+
+def test_partial_result_returns_summary_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading_platform.jobs.handlers.ingest_bars as ingest_bars_module
+
+    result = _fake_result(symbols_failed=["SPY"], bars_upserted=3, run_status="partial")
+    monkeypatch.setattr(ingest_bars_module, "ingest_daily_bars", lambda **kwargs: result)
+
+    context = _FakeContext()
+    summary = IngestBarsJobHandler().run(context)
+
+    assert summary["ingestion_succeeded"] is False
+    assert summary["symbols_failed"] == ["SPY"]
+    assert context.log_calls[-1]["context"]["run_status"] == "partial"
 
 
 def test_handler_passes_job_id_trigger_source_db_settings(monkeypatch: pytest.MonkeyPatch) -> None:

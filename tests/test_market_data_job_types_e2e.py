@@ -45,6 +45,7 @@ from trading_platform.services import ingestion as ingestion_module
 from trading_platform.services import symbol_metadata_sync as symbol_metadata_sync_module
 from trading_platform.services.calendar import sessions_in_range
 from trading_platform.services.data import DailyBar, DailyBarRequest
+from trading_platform.services.polygon import PolygonAuthError
 
 # Fixtures consumed by pytest name (market_jobs_env -> job_operations_env ->
 # migrated_backtest_db/strategy_config_override); re-exported so ruff F401 passes.
@@ -113,6 +114,19 @@ class FakePolygonClient:
             for session_date in INGEST_SESSIONS
             if request.from_date <= session_date <= request.to_date
         ]
+
+
+def _failing_polygon_client(failing: set[str]) -> type[FakePolygonClient]:
+    """Factory: a ``FakePolygonClient`` that raises ``PolygonAuthError`` for the
+    given tickers and returns the normal fake bars for all others."""
+
+    class _FailingPolygonClient(FakePolygonClient):
+        def fetch_daily_bars(self, request: DailyBarRequest) -> list[DailyBar]:
+            if request.symbol in failing:
+                raise PolygonAuthError("simulated 401")
+            return super().fetch_daily_bars(request)
+
+    return _FailingPolygonClient
 
 
 def _fake_overview(ticker: str, _settings: Any) -> dict[str, Any]:
@@ -208,6 +222,64 @@ def test_ingest_bars_job_links_ingestion_run(market_jobs_env: None) -> None:
     assert run.job_id == uuid.UUID(detail["id"])
     assert run.trigger_source == "job"
     assert spy_bars == 2
+
+
+def test_ingest_bars_all_symbols_failed_fails_job(
+    market_jobs_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-08a / UAT gap 1: every symbol failing lands the run FAILED and the Job
+    FAILED/handler_error (retryable), with the run still linked."""
+
+    monkeypatch.setattr(ingestion_module, "PolygonClient", _failing_polygon_client({"AAPL", "SPY"}))
+    expected = (
+        "0 of 2 symbols succeeded; failed: AAPL (PolygonAuthError), SPY (PolygonAuthError)"
+    )
+
+    with TestClient(create_app()) as client:
+        detail = _submit_and_run(client, "e2e-ingest-allfail", "ingest-bars", INGEST_PAYLOAD)
+
+        assert detail["status"] == "failed"
+        assert detail["failure_reason"] == "handler_error"
+        assert detail["outcome_uncertain"] is False
+        assert len(detail["resources"]) == 1
+        resource = detail["resources"][0]
+        assert resource["kind"] == "market_data_ingestion_run"
+        assert resource["status"] == "failed"
+        assert detail["failure_message"] == (
+            "IngestionAllSymbolsFailedError: "
+            f"Ingestion run {resource['id']} failed: {expected}"
+        )
+
+        with session_scope(load_settings()) as session:
+            runs = session.execute(select(MarketDataIngestionRun)).scalars().all()
+        assert len(runs) == 1
+        assert runs[0].job_id == uuid.UUID(detail["id"])
+        assert runs[0].status == "failed"
+        assert runs[0].error_message == expected
+
+        retried = client.post(
+            f"/api/v1/jobs/{detail['id']}/retry",
+            headers={"Idempotency-Key": "e2e-ingest-allfail-retry"},
+        )
+        assert retried.status_code == 202, retried.text
+
+
+def test_ingest_bars_one_ok_one_fail_stays_succeeded(
+    market_jobs_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-08a: at least one ok and at least one failed stays a SUCCEEDED Job with
+    a PARTIAL run."""
+
+    monkeypatch.setattr(ingestion_module, "PolygonClient", _failing_polygon_client({"SPY"}))
+
+    with TestClient(create_app()) as client:
+        detail = _submit_and_run(client, "e2e-ingest-partial", "ingest-bars", INGEST_PAYLOAD)
+
+    assert detail["status"] == "succeeded", detail["failure_message"]
+    assert detail["failure_reason"] is None
+    assert detail["resources"][0]["status"] == "partial"
+    assert detail["result_summary"]["symbols_failed"] == ["SPY"]
+    assert detail["result_summary"]["ingestion_succeeded"] is False
 
 
 def test_ingest_bars_symbols_normalized_and_fingerprint_stable(market_jobs_env: None) -> None:

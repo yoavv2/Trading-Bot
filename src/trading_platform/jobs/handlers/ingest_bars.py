@@ -4,10 +4,12 @@
 Calls the existing ``services.ingestion.ingest_daily_bars`` exactly once,
 bracketed by two cooperative-cancellation checkpoints (D-01). Progress is
 reported as step text only, never a fabricated completion fraction -- the
-framework owns the Job's own terminal-state progress. This handler never
-reinterprets a partial symbol failure -- ``ingestion_succeeded`` mirrors
-``IngestionResult.succeeded`` exactly; the linked ``MarketDataIngestionRun``
-already records per-symbol failure detail (D-08/D-09).
+framework owns the Job's own terminal-state progress. The service decides the
+run outcome (D-08a): a partial run returns normally and the Job SUCCEEDS with
+``ingestion_succeeded`` mirroring ``IngestionResult.succeeded``; an
+all-symbols-failed run raises the service's ``IngestionAllSymbolsFailedError``,
+which this handler propagates unchanged, so the Job lands FAILED/handler_error.
+The handler never derives status itself (invariant 2).
 """
 
 from __future__ import annotations
@@ -77,8 +79,14 @@ class IngestBarsJobHandler:
                 "run_id": result.run_id,
                 "bars_upserted": result.bars_upserted,
                 "failed_count": result.failed_count,
+                "run_status": result.run_status,
             },
         )
+
+        # D-08a: an all-symbols-failed run raises the service-defined typed
+        # error here, BEFORE the post-call cancel checkpoint, so all-fail wins
+        # over a concurrent cancel: the Job lands FAILED, not CANCELLED.
+        result.raise_for_all_symbols_failed()
 
         # D-01: post-call cancellation checkpoint -- a cancel requested
         # during the call is acknowledged here. The linked
