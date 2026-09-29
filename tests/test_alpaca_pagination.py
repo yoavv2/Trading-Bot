@@ -285,3 +285,152 @@ def test_fill_requests_never_send_date_bounds() -> None:
     assert len(recorder.requests) == 3
     for _, params in recorder.requests:
         assert not {"date", "after", "until"} & set(params)
+
+
+# ---------------------------------------------------------------------------
+# list_orders
+# ---------------------------------------------------------------------------
+
+
+def test_list_orders_takes_only_status() -> None:
+    signature = inspect.signature(AlpacaClient.list_orders)
+    assert list(signature.parameters) == ["self", "status"]
+    assert signature.parameters["status"].default == "all"
+
+
+def test_list_orders_single_short_page() -> None:
+    pages = _unique_pages(_order, [2])
+    client, recorder = _client(_paged_handler(ORDERS_PATH, pages, "before_order_id"))
+
+    orders = client.list_orders()
+
+    assert len(recorder.requests) == 1
+    params = recorder.requests[0][1]
+    assert set(params) == {"status", "direction", "limit"}
+    assert params["limit"] == "500"
+    assert params["direction"] == "desc"
+    assert params["status"] == "all"
+    assert len(orders) == 2
+
+    open_client, open_recorder = _client(_paged_handler(ORDERS_PATH, pages, "before_order_id"))
+    open_client.list_orders(status="open")
+    assert open_recorder.requests[0][1]["status"] == "open"
+
+
+def test_list_orders_concatenates_pages_with_before_order_id() -> None:
+    pages = _unique_pages(_order, [500, 500, 12])
+    client, recorder = _client(_paged_handler(ORDERS_PATH, pages, "before_order_id"))
+
+    orders = client.list_orders()
+
+    assert len(recorder.requests) == 3
+    order_params = recorder.for_path(ORDERS_PATH)
+    assert "before_order_id" not in order_params[0]
+    assert order_params[1]["before_order_id"] == pages[0][-1]["id"]
+    assert order_params[2]["before_order_id"] == pages[1][-1]["id"]
+    assert set(order_params[0]) == {"status", "direction", "limit"}
+    assert set(order_params[1]) == {"status", "direction", "limit", "before_order_id"}
+    assert set(order_params[2]) == {"status", "direction", "limit", "before_order_id"}
+    assert len(orders) == 1012
+    assert [o.broker_order_id for o in orders] == [item["id"] for page in pages for item in page]
+
+
+def test_list_orders_never_combines_cursor_with_after_until() -> None:
+    pages = _unique_pages(_order, [500, 500, 12])
+    client, recorder = _client(_paged_handler(ORDERS_PATH, pages, "before_order_id"))
+
+    client.list_orders()
+
+    assert len(recorder.requests) == 3
+    for _, params in recorder.requests:
+        assert not ("before_order_id" in params and ("after" in params or "until" in params))
+        assert "after" not in params
+        assert "until" not in params
+        assert "date" not in params
+
+
+def test_list_orders_exact_multiple_terminates_on_empty_page() -> None:
+    pages = _unique_pages(_order, [500])
+    client, recorder = _client(_paged_handler(ORDERS_PATH, pages, "before_order_id"))
+
+    orders = client.list_orders()
+
+    assert len(recorder.requests) == 2
+    assert len(orders) == 500
+
+
+def test_list_orders_cap_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(alpaca_module, "ALPACA_ORDERS_MAX_PAGES", 2)
+    counter = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = []
+        for _ in range(500):
+            page.append(_order(counter["n"]))
+            counter["n"] += 1
+        return httpx.Response(200, json=page)
+
+    client, recorder = _client(handler)
+
+    with pytest.raises(AlpacaPaginationCapExceededError) as excinfo:
+        client.list_orders()
+
+    assert len(recorder.requests) == 2
+    err = excinfo.value
+    assert err.endpoint == ORDERS_PATH
+    assert err.pages_fetched == 2
+    assert err.items_fetched == 1000
+    assert err.max_pages == 2
+
+
+def test_list_orders_duplicate_id_raises_stalled() -> None:
+    page1 = [_order(i) for i in range(500)]
+    page2 = [_order(7)] + [_order(i) for i in range(500, 999)]
+    client, _ = _client(_paged_handler(ORDERS_PATH, [page1, page2], "before_order_id"))
+
+    with pytest.raises(AlpacaPaginationStalledError) as excinfo:
+        client.list_orders()
+
+    assert excinfo.value.endpoint == ORDERS_PATH
+
+
+# ---------------------------------------------------------------------------
+# load_broker_state wiring (callers stay zero-argument)
+# ---------------------------------------------------------------------------
+
+
+def test_load_broker_state_returns_complete_multi_page_sets() -> None:
+    from trading_platform.core.settings import load_settings
+    from trading_platform.services.reconciliation.report import load_broker_state
+
+    order_pages = _unique_pages(_order, [500, 3])
+    fill_pages = _unique_pages(_fill, [100, 5])
+    order_handler = _paged_handler(ORDERS_PATH, order_pages, "before_order_id")
+    fill_handler = _paged_handler(FILLS_PATH, fill_pages, "page_token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == ORDERS_PATH:
+            return order_handler(request)
+        if request.url.path == FILLS_PATH:
+            return fill_handler(request)
+        if request.url.path == "/v2/positions":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/v2/account":
+            return httpx.Response(
+                200,
+                json={
+                    "cash": "1000",
+                    "buying_power": "2000",
+                    "equity": "1000",
+                    "long_market_value": "0",
+                    "short_market_value": "0",
+                },
+            )
+        return httpx.Response(404, json={"message": "unexpected path"})
+
+    client, _ = _client(handler)
+
+    snapshot = load_broker_state(settings=load_settings(), broker_client=client)
+
+    assert len(snapshot.orders) == 503
+    assert len(snapshot.fills) == 105

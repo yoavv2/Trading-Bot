@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Literal, TypeVar
 
 import httpx
 
@@ -313,15 +313,22 @@ class AlpacaClient:
     def list_orders(
         self,
         *,
-        status: str = "all",
-        limit: int = 500,
+        status: Literal["open", "closed", "all"] = "all",
     ) -> list[BrokerOrderSnapshot]:
-        payload = self._request_with_retry(
-            "GET",
-            "/v2/orders",
-            params={"status": status, "direction": "desc", "limit": limit},
+        # No date bounding: the local fills/orders history is unbounded, so the broker
+        # side must be too (UAT gap 2). before_order_id must not combine with after/until.
+        items = self._paginate(
+            endpoint="/v2/orders",
+            base_params={
+                "status": status,
+                "direction": "desc",
+                "limit": str(ALPACA_ORDERS_MAX_LIMIT),
+            },
+            cursor_param="before_order_id",
+            page_size=ALPACA_ORDERS_MAX_LIMIT,
+            max_pages=ALPACA_ORDERS_MAX_PAGES,
         )
-        return [_normalized_order_snapshot(item) for item in payload]
+        return [_normalized_order_snapshot(item) for item in items]
 
     def list_fills(self) -> list[BrokerFillSnapshot]:
         # No date bounding: the local fills/orders history is unbounded, so the broker
