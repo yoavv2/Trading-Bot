@@ -16,7 +16,12 @@ from trading_platform.db.models.daily_bar import DailyBar as DailyBarModel
 from trading_platform.db.models.market_data_ingestion_run import MarketDataIngestionRun
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import session_scope
-from trading_platform.services.data import DailyBar, DailyBarRequest, IngestionResult
+from trading_platform.services.data import (
+    DailyBar,
+    DailyBarRequest,
+    IngestionResult,
+    IngestionRunStatus,
+)
 from trading_platform.services.polygon import PolygonClient
 
 logger = logging.getLogger(__name__)
@@ -145,10 +150,43 @@ def _start_run(
     return run
 
 
+def _derive_run_status(
+    *, succeeded_count: int, failed_count: int, run_error: str | None
+) -> IngestionRunStatus:
+    """Pure D-08a predicate for the terminal ingestion run status.
+
+    ``failed`` when a run-level error occurred or zero symbols succeeded
+    (including 0 succeeded and 0 failed); ``partial`` when at least one symbol
+    succeeded and at least one failed; ``succeeded`` otherwise.
+    """
+    if succeeded_count < 0 or failed_count < 0:
+        raise ValueError("succeeded_count and failed_count must be >= 0")
+    if run_error is not None:
+        return "failed"
+    if succeeded_count == 0:
+        return "failed"
+    if failed_count >= 1:
+        return "partial"
+    return "succeeded"
+
+
+def _all_symbols_failed_message(
+    requested: int, failures: list[tuple[str, str]]
+) -> str:
+    """Deterministic all-fail message: exception class names only, never
+    ``str(exc)`` (provider URLs/query strings must not reach the run row)."""
+    listed = (
+        ", ".join(f"{ticker} ({class_name})" for ticker, class_name in failures)
+        or "none"
+    )
+    return f"0 of {requested} symbols succeeded; failed: {listed}"
+
+
 def _finish_run(
     session: Session,
     run: MarketDataIngestionRun,
     *,
+    status: IngestionRunStatus,
     bars_upserted: int,
     failed_symbols: list[str],
     error_message: str | None = None,
@@ -156,11 +194,7 @@ def _finish_run(
     run.bars_upserted = bars_upserted
     run.symbols_failed = failed_symbols
     run.completed_at = datetime.now(UTC)
-    run.status = (
-        "failed"
-        if error_message
-        else ("partial" if failed_symbols else "succeeded")
-    )
+    run.status = status
     if error_message:
         run.error_message = error_message
     session.flush()
@@ -181,6 +215,7 @@ def _finalize_run(
     db_settings: Any,
     run_id: uuid.UUID,
     *,
+    status: IngestionRunStatus,
     bars_upserted: int,
     failed_symbols: list[str],
     error_message: str | None = None,
@@ -193,6 +228,7 @@ def _finalize_run(
         _finish_run(
             session,
             run,
+            status=status,
             bars_upserted=bars_upserted,
             failed_symbols=failed_symbols,
             error_message=error_message,
@@ -221,8 +257,9 @@ def ingest_daily_bars(
     2. For each symbol (one transaction each), upsert the symbol catalog row
        (minimal, ticker-only if not found), fetch bars from Polygon and upsert
        them.
-    3. Finalize the ingestion run (succeeded/partial/failed) in a separate
-       committed transaction that also runs when the ingest fails.
+    3. Finalize the ingestion run (succeeded/partial/failed, derived by
+       ``_derive_run_status`` per D-08a: zero succeeded symbols is FAILED) in a
+       separate committed transaction that also runs when the ingest fails.
 
     Re-running with the same window is idempotent; existing bars are updated,
     not duplicated.
@@ -236,6 +273,8 @@ def ingest_daily_bars(
     adjusted = settings.polygon.adjusted
     total_bars = 0
     failed_symbols: list[str] = []
+    failures: list[tuple[str, str]] = []
+    succeeded_count = 0
 
     # The run row (with its ``job_id``) is committed in its own short
     # transaction BEFORE any work, so it is visible while running and survives
@@ -271,6 +310,7 @@ def ingest_daily_bars(
                         bars = client.fetch_daily_bars(request)
                         count = upsert_daily_bars(symbol_session, bars, symbol.id)
                     total_bars += count
+                    succeeded_count += 1
                     logger.info(
                         "symbol_bars_ingested",
                         extra={
@@ -287,12 +327,25 @@ def ingest_daily_bars(
                         extra={"context": {"ticker": ticker, "error": str(exc)}},
                     )
                     failed_symbols.append(ticker)
+                    failures.append((ticker, type(exc).__name__))
 
+        run_status = _derive_run_status(
+            succeeded_count=succeeded_count,
+            failed_count=len(failed_symbols),
+            run_error=None,
+        )
+        run_error_message = (
+            _all_symbols_failed_message(len(symbols), failures)
+            if run_status == "failed"
+            else None
+        )
         _finalize_run(
             db_settings,
             run_id,
+            status=run_status,
             bars_upserted=total_bars,
             failed_symbols=failed_symbols,
+            error_message=run_error_message,
         )
     except Exception as exc:
         # Finalize FAILED in a separate, committed transaction; never let a
@@ -301,6 +354,7 @@ def ingest_daily_bars(
             _finalize_run(
                 db_settings,
                 run_id,
+                status="failed",
                 bars_upserted=total_bars,
                 failed_symbols=failed_symbols,
                 error_message=str(exc),
@@ -320,4 +374,6 @@ def ingest_daily_bars(
         bars_upserted=total_bars,
         symbols_failed=failed_symbols,
         run_id=str(run_id),
+        run_status=run_status,
+        run_error_message=run_error_message,
     )

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
+import typing
 import uuid
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
@@ -296,11 +298,18 @@ from scripts.migrate import build_alembic_config  # noqa: E402
 from trading_platform.db.models import DailyBar as DailyBarModel  # noqa: E402
 from trading_platform.db.models import MarketDataIngestionRun  # noqa: E402
 from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
+from trading_platform.services.data import (  # noqa: E402
+    IngestionAllSymbolsFailedError,
+    IngestionResult,
+    IngestionRunStatus,
+)
 from trading_platform.services.ingestion import (  # noqa: E402
+    _derive_run_status,
     ingest_daily_bars,
     upsert_daily_bars,
     upsert_symbol,
 )
+from trading_platform.services.polygon import PolygonClientError  # noqa: E402
 
 
 def _admin_connection_settings() -> dict[str, str]:
@@ -480,6 +489,7 @@ class TestIngestionPipeline:
 
         assert len(runs) == 1
         assert runs[0].status == "succeeded"
+        assert result.run_status == "succeeded" == runs[0].status
         assert len(bars) == 3
 
     def test_ingest_daily_bars_idempotent_repeat(self, migrated_ingest_db: str) -> None:
@@ -563,3 +573,204 @@ class TestIngestionPipeline:
 
         assert runs[0].status == "partial"
         assert "MSFT" in runs[0].symbols_failed
+        assert result.run_status == "partial"
+        assert runs[0].error_message is None
+        assert result.raise_for_all_symbols_failed() is None
+
+
+# ---------------------------------------------------------------------------
+# D-08a: service-owned run status predicate and all-fail semantics
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("succeeded", "failed", "run_error", "expected"),
+    [
+        (0, 0, None, "failed"),
+        (0, 1, None, "failed"),
+        (0, 2, None, "failed"),
+        (1, 1, None, "partial"),
+        (2, 1, None, "partial"),
+        (1, 0, None, "succeeded"),
+        (3, 0, None, "succeeded"),
+        (1, 0, "boom", "failed"),
+        (0, 0, "boom", "failed"),
+        (2, 2, "boom", "failed"),
+    ],
+)
+def test_derive_run_status_truth_table(
+    succeeded: int, failed: int, run_error: str | None, expected: str
+) -> None:
+    assert (
+        _derive_run_status(
+            succeeded_count=succeeded, failed_count=failed, run_error=run_error
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(("succeeded", "failed"), [(-1, 0), (0, -1), (-1, -1)])
+def test_derive_run_status_rejects_negative_counts(succeeded: int, failed: int) -> None:
+    with pytest.raises(ValueError):
+        _derive_run_status(succeeded_count=succeeded, failed_count=failed, run_error=None)
+
+
+def test_ingestion_run_status_literal_is_closed() -> None:
+    assert typing.get_args(IngestionRunStatus) == ("succeeded", "partial", "failed")
+
+
+def test_ingestion_result_run_status_is_required() -> None:
+    field = {f.name: f for f in dataclasses.fields(IngestionResult)}["run_status"]
+    assert field.kw_only is True
+    assert field.default is dataclasses.MISSING
+    assert field.default_factory is dataclasses.MISSING
+    with pytest.raises(TypeError):
+        IngestionResult(  # type: ignore[call-arg]
+            provider="polygon", from_date=date(2024, 1, 1), to_date=date(2024, 1, 3)
+        )
+
+
+def test_all_symbols_failed_error_shape() -> None:
+    err = IngestionAllSymbolsFailedError(run_id="r1", symbols_failed=("A",), detail="d")
+    assert isinstance(err, RuntimeError)
+    assert str(err) == "Ingestion run r1 failed: d"
+    assert err.run_id == "r1"
+    assert err.symbols_failed == ("A",)
+
+
+class _FakeIngestPolygonClient:
+    """Context-manager Polygon fake: per-ticker exception or bars."""
+
+    behaviours: dict[str, Exception | list[DailyBar]] = {}
+
+    def __init__(self, _settings: object) -> None:
+        pass
+
+    def __enter__(self) -> "_FakeIngestPolygonClient":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def fetch_daily_bars(self, request: DailyBarRequest) -> list[DailyBar]:
+        outcome = self.behaviours[request.symbol]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _install_fake_polygon(
+    monkeypatch: pytest.MonkeyPatch, behaviours: dict[str, Exception | list[DailyBar]]
+) -> None:
+    import trading_platform.services.ingestion as ingestion_module
+
+    fake = type("_Fake", (_FakeIngestPolygonClient,), {"behaviours": behaviours})
+    monkeypatch.setattr(ingestion_module, "PolygonClient", fake)
+
+
+def _run_ingest(symbols: list[str]) -> IngestionResult:
+    from trading_platform.core.settings import load_settings
+
+    return ingest_daily_bars(
+        from_date=date(2024, 1, 1),
+        to_date=date(2024, 1, 3),
+        symbols=symbols,
+        settings=_make_market_data_settings(),
+        trigger_source="test",
+        db_settings=load_settings(),
+    )
+
+
+def _only_run() -> MarketDataIngestionRun:
+    from sqlalchemy import select
+
+    from trading_platform.core.settings import load_settings
+
+    with session_scope(load_settings()) as session:
+        runs = session.execute(select(MarketDataIngestionRun)).scalars().all()
+        assert len(runs) == 1
+        run = runs[0]
+        session.expunge(run)
+        return run
+
+
+class TestIngestionAllFailSemantics:
+    def test_ingest_all_symbols_failed_finalizes_failed_run(
+        self, migrated_ingest_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_fake_polygon(
+            monkeypatch,
+            {
+                "AAPL": PolygonAuthError("secret-token-XYZ"),
+                "MSFT": PolygonAuthError("secret-token-XYZ"),
+            },
+        )
+
+        result = _run_ingest(["AAPL", "MSFT"])
+
+        expected = (
+            "0 of 2 symbols succeeded; failed: AAPL (PolygonAuthError), "
+            "MSFT (PolygonAuthError)"
+        )
+        assert result.run_status == "failed"
+        run = _only_run()
+        assert run.status == "failed"
+        assert list(run.symbols_failed) == ["AAPL", "MSFT"]
+        assert run.bars_upserted == 0
+        assert run.completed_at is not None
+        assert run.error_message == expected
+        assert "secret-token-XYZ" not in run.error_message
+
+        with pytest.raises(IngestionAllSymbolsFailedError) as excinfo:
+            result.raise_for_all_symbols_failed()
+        assert str(excinfo.value) == f"Ingestion run {result.run_id} failed: {expected}"
+        assert excinfo.value.run_id == result.run_id
+        assert excinfo.value.symbols_failed == ("AAPL", "MSFT")
+
+    def test_ingest_mixed_exception_classes_named_per_symbol(
+        self, migrated_ingest_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_fake_polygon(
+            monkeypatch,
+            {
+                "AAPL": PolygonAuthError("nope"),
+                "MSFT": PolygonClientError("nope"),
+            },
+        )
+
+        _run_ingest(["AAPL", "MSFT"])
+
+        assert _only_run().error_message == (
+            "0 of 2 symbols succeeded; failed: AAPL (PolygonAuthError), "
+            "MSFT (PolygonClientError)"
+        )
+
+    def test_ingest_empty_bars_counts_as_success(
+        self, migrated_ingest_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_fake_polygon(monkeypatch, {"AAPL": [], "MSFT": []})
+
+        result = _run_ingest(["AAPL", "MSFT"])
+
+        run = _only_run()
+        assert run.status == "succeeded"
+        assert result.run_status == "succeeded"
+        assert result.bars_upserted == 0
+        assert run.error_message is None
+        assert result.raise_for_all_symbols_failed() is None
+
+    def test_ingest_one_ok_one_failed_is_partial_without_error(
+        self, migrated_ingest_db: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_fake_polygon(
+            monkeypatch,
+            {"AAPL": _fixture_bars("AAPL"), "MSFT": PolygonAuthError("nope")},
+        )
+
+        result = _run_ingest(["AAPL", "MSFT"])
+
+        run = _only_run()
+        assert run.status == "partial"
+        assert run.error_message is None
+        assert result.run_status == "partial"
+        assert result.raise_for_all_symbols_failed() is None

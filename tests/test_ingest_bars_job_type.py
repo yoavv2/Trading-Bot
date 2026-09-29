@@ -279,6 +279,7 @@ def _fake_result(**overrides: Any) -> IngestionResult:
         "bars_upserted": 6,
         "symbols_failed": [],
         "run_id": str(uuid.uuid4()),
+        "run_status": "succeeded",
     }
     defaults.update(overrides)
     return IngestionResult(**defaults)

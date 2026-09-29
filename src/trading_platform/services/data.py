@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
 # Request / response value objects
@@ -42,9 +42,35 @@ class DailyBar:
     trade_count: int | None = None
 
 
+IngestionRunStatus = Literal["succeeded", "partial", "failed"]
+"""Terminal statuses ``ingest_daily_bars`` can assign (D-08a). ``running`` is
+never returned to a caller."""
+
+
+class IngestionAllSymbolsFailedError(RuntimeError):
+    """Raised by ``IngestionResult.raise_for_all_symbols_failed()`` when the
+    ingestion run finished FAILED (zero symbols succeeded).
+
+    Service-defined (D-08a): the service owns the run-outcome decision and the
+    Job handler only propagates this error unchanged. ``detail`` is the run's
+    deterministic ``error_message`` (exception class names only).
+    """
+
+    def __init__(
+        self, *, run_id: str | None, symbols_failed: tuple[str, ...], detail: str
+    ) -> None:
+        self.run_id = run_id
+        self.symbols_failed = symbols_failed
+        super().__init__(f"Ingestion run {run_id} failed: {detail}")
+
+
 @dataclass
 class IngestionResult:
-    """Summary of a completed ingestion run."""
+    """Summary of a completed ingestion run.
+
+    ``run_status`` is required (no default): it is derived once by the service
+    and equals the persisted ``MarketDataIngestionRun.status`` (D-08a).
+    """
 
     provider: str
     from_date: date
@@ -54,6 +80,8 @@ class IngestionResult:
     symbols_failed: list[str] = field(default_factory=list)
     request_metadata: dict[str, Any] = field(default_factory=dict)
     run_id: str | None = None
+    run_status: IngestionRunStatus = field(kw_only=True)
+    run_error_message: str | None = field(default=None, kw_only=True)
 
     @property
     def symbol_count(self) -> int:
@@ -66,6 +94,15 @@ class IngestionResult:
     @property
     def succeeded(self) -> bool:
         return self.failed_count == 0
+
+    def raise_for_all_symbols_failed(self) -> None:
+        """Raise ``IngestionAllSymbolsFailedError`` iff the run is FAILED."""
+        if self.run_status == "failed":
+            raise IngestionAllSymbolsFailedError(
+                run_id=self.run_id,
+                symbols_failed=tuple(self.symbols_failed),
+                detail=self.run_error_message or "",
+            )
 
 
 # ---------------------------------------------------------------------------
