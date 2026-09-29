@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TypeVar
 
+from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -290,9 +291,12 @@ class OperatorControlService:
         trigger_source: str,
     ) -> OperatorControlReport:
         metadata = self.registry.resolve(strategy_id).metadata
-        changed_at = datetime.now(UTC)
         with session_scope(self.settings) as session:
             strategy_record = _ensure_locked_strategy_record(session, metadata)
+            # D-11a: one DB clock read after the row lock. clock_timestamp() is
+            # >= now() (the transaction start that StrategyRun.started_at
+            # records), so completed_at >= started_at by construction.
+            changed_at = _db_clock_now(session)
             previous_status = strategy_record.status
             if previous_status == StrategyStatus.ARCHIVED:
                 # Raised before any audit row is added; session_scope rolls back
@@ -465,10 +469,13 @@ class OperatorControlService:
         actor: str,
         trigger_source: str,
     ) -> KillSwitchControlReport:
-        changed_at = datetime.now(UTC)
         with session_scope(self.settings) as session:
             strategy_record = self._resolve_audit_strategy_record(session)
             control = _load_global_kill_switch(session, for_update=True)
+            # D-11a: one DB clock read after the row lock. clock_timestamp() is
+            # >= now() (the transaction start that StrategyRun.started_at
+            # records), so completed_at >= started_at by construction.
+            changed_at = _db_clock_now(session)
             previous_state = control.state
             changed = previous_state != target_state
 
@@ -657,6 +664,18 @@ def render_kill_switch_report(
     lines.append(json.dumps(report.state_snapshot, indent=2))
     lines.append("```")
     return "\n".join(lines)
+
+
+def _db_clock_now(session: Session) -> datetime:
+    """Return the DB wall clock (``clock_timestamp()``) normalized to UTC.
+
+    Read inside the mutating transaction, after the row lock (D-11a), so the
+    value is never earlier than the transaction start recorded as ``started_at``.
+    """
+    value = session.execute(select(sa_func.clock_timestamp())).scalar_one()
+    if value.tzinfo is None:
+        raise ControlWriteError("control state database error: naive DB clock timestamp")
+    return value.astimezone(UTC)
 
 
 def _ensure_locked_strategy_record(session: Session, metadata: Any) -> Strategy:
