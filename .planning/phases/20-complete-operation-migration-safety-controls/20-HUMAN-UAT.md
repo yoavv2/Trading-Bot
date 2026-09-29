@@ -1,14 +1,14 @@
 ---
-status: diagnosed
+status: partial
 phase: 20-complete-operation-migration-safety-controls
 source: [20-VERIFICATION.md]
 started: 2026-09-28T23:15:00Z
-updated: 2026-09-29T11:10:00Z
+updated: 2026-09-29T12:20:00Z
 ---
 
 ## Current Test
 
-[testing complete]
+[awaiting human re-test of gap-closure fixes 20-25..20-28 — tests 6-9]
 
 ## Tests
 
@@ -101,6 +101,26 @@ evidence:
     - 2 concurrent requests on 4a792bc2 returned 202 + 200 replay, same job 3bcf395d, 1 row
     - a different key afterwards returned 409 retry_exists. Both queued retries were cancelled as cleanup
 
+### 6. Re-test gap 2 (fixed by 20-27): reconciliation, broker-order-sync and paper-session Jobs against live Alpaca paper
+expected: All three Jobs complete with no 422 "maximum is 100" error. list_fills sends page_size=100 and follows page_token; list_orders uses limit=500 + before_order_id. Note: the paper account has 0 orders / 0 fills, so this proves the 422 is gone only; multi-page cursor behaviour is covered by mock-transport tests (review IN-03).
+result: [pending]
+source: 20-VERIFICATION.md human_verification (re-verification 2026-09-29)
+
+### 7. Re-test gap 1 (fixed by 20-25): ingest-bars all-fail vs partial
+expected: ingest-bars with an invalid Polygon key, and with Polygon unreachable, ends with run FAILED and Job FAILED (handler_error, IngestionAllSymbolsFailedError; run error_message "0 of N symbols succeeded; failed: ..." with exception class names only). A run with >=1 ok and >=1 failed symbol still ends run PARTIAL / Job SUCCEEDED. Retry of the FAILED Job returns 202.
+result: [pending]
+source: 20-VERIFICATION.md human_verification (re-verification 2026-09-29)
+
+### 8. Re-test gap 3 (fixed by 20-26): real-browser re-open of every control, Cancel and Retry dialog
+expected: Every re-opening shows a clean first frame (prompt body, empty reason, confirm disabled, no stale role=alert or "Already X" notice). After unchanged -> Close -> re-open, focus lands on the Reason field (ControlConfirmDialog); RetryJobDialog still focuses Close. Check in Chromium (where the original focus bug reproduced).
+result: [pending]
+source: 20-VERIFICATION.md human_verification (re-verification 2026-09-29)
+
+### 9. Re-test gap 4 (fixed by 20-28): new OPERATOR_CONTROL rows are temporally consistent on the live DB
+expected: After a few kill-switch / strategy control actions, every NEW OPERATOR_CONTROL StrategyRun has completed_at >= started_at (READ ONLY query). The 25 legacy inverted rows remain as-is pending the open decision on optional migration 0022 CHECK ... NOT VALID.
+result: [pending]
+source: 20-VERIFICATION.md human_verification (re-verification 2026-09-29)
+
 ## Environment notes
 
 - Check `lsof -nP -iTCP:8000 -sTCP:LISTEN` first — a host uvicorn and the compose API can both bind :8000.
@@ -110,17 +130,18 @@ evidence:
 
 ## Summary
 
-total: 5
+total: 9
 passed: 4
 issues: 1
-pending: 0
+pending: 4
 skipped: 0
 blocked: 0
 
 ## Gaps
 
 - truth: "A failing ingest-bars Job (bad Polygon key or unreachable) shows its ingestion run as FAILED in Job resources"
-  status: failed
+  status: fix_applied
+  fixed_by: 20-25 (awaiting live re-test 7)
   reason: "Automated UAT: with an invalid key or an unreachable Polygon, every symbol fails inside the per-symbol try, the run finalizes PARTIAL and the Job SUCCEEDS. Only run-level errors (a missing key) give FAILED."
   severity: major
   test: 5
@@ -141,7 +162,8 @@ blocked: 0
     - "tests: predicate truth table; service all-fail/empty-bars/partial; handler all-fail and cancel-during-all-fail; E2E all-fail (job failed, handler_error, resources[0].status failed, run.job_id==job.id) and 1ok+1fail (job succeeded, run partial)"
   debug_session: .planning/debug/ingest-bars-all-symbols-failed-not-failed.md
 - truth: "reconciliation, broker-order-sync and paper-session Jobs complete against the live Alpaca paper broker and see the COMPLETE broker order and fill sets"
-  status: failed
+  status: fix_applied
+  fixed_by: 20-27 (awaiting live re-test 6)
   reason: "Found during test 3 (whose literal criteria passed): Jobs dbf6a335, 302020fc and 45b09f0d (and the earlier 52468936) FAILED with AlpacaClientError 422 'tried to set the page size to 500, but the maximum is 100'"
   severity: major
   test: 3
@@ -163,7 +185,8 @@ blocked: 0
     - "annotate 20-VERIFICATION SC1 (the E2E evidence used a fake broker) and REQUIREMENTS OPS-03/04/06 traceability until the fix lands and UAT test 3 re-runs"
   debug_session: .planning/debug/alpaca-fills-page-size-422.md
 - truth: "Every opening of a control or job confirmation dialog is clean on its first committed frame (prompt body, empty reason, confirm disabled, no stale alert), and focus goes to the reason field on every opening (WR-C-05)"
-  status: failed
+  status: fix_applied
+  fixed_by: 20-26 (awaiting live re-test 8)
   reason: "Found during tests 2 and 5a (whose literal criteria passed): a re-opened dialog first renders the previous opening's state; after an unchanged notice, Close and re-open, focus stays on 'Keep Current State'"
   severity: minor
   test: 5
@@ -182,7 +205,8 @@ blocked: 0
     - "amend 20-UI-SPEC shared-dialog and Retry mechanics sections, and the WR-C-05 text: clean first frame, focus on reason on every opening"
   debug_session: .planning/debug/control-dialog-stale-state-on-reopen.md
 - truth: "Every completed StrategyRun satisfies completed_at >= started_at (control audit rows are temporally consistent)"
-  status: failed
+  status: fix_applied
+  fixed_by: 20-28 (awaiting live re-test 9)
   reason: "UAT observation promoted after diagnosis: 25 of 25 operator_control runs in the live DB have completed_at < started_at (as much as -93ms); every other run type has 0 violations"
   severity: minor
   test: 4
