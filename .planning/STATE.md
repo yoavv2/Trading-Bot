@@ -4,13 +4,13 @@ milestone: v1.3
 milestone_name: Operator Platform
 status: executing
 stopped_at: Completed 20-22-PLAN.md
-last_updated: "2026-09-29T11:34:05.631Z"
-last_activity: 2026-09-29 -- Phase 20 execution started
+last_updated: "2026-09-29T11:40:40.395Z"
+last_activity: 2026-09-29
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 55
-  completed_plans: 51
+  completed_plans: 52
   percent: 60
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 ## Current Position
 
 Phase: 20 (complete-operation-migration-safety-controls) — EXECUTING
-Plan: 25 of 28 (gap closure 20-25..20-28)
-Status: Executing Phase 20
-Last activity: 2026-09-29 -- Phase 20 execution started
+Plan: 26 of 28 (gap closure 20-25..20-28)
+Status: Ready to execute
+Last activity: 2026-09-29
 **Progress (v1.3):** [██████░░░░] 60% — 3 of 5 phases complete (17, 18, 19); 20, 21 not started
 
 v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase race/test hardening done) → 19 ✓ → 20 → 21 → close v1.3. Scheduling deferred. Next milestone direction: Strategy Research / Strategy Lab.
@@ -97,6 +97,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase 
 | Phase 20 P22 | 15min | 2 tasks | 7 files |
 | Phase 20 P23 | 15min | 2 tasks | 9 files |
 | Phase 20 P24 | 15min | 2 tasks | 16 files |
+| Phase 20 P25 | 35min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -243,6 +244,7 @@ Recent decisions affecting current work:
 - [Phase 20]: 20-22: /controls page is a use-client component (renderAction is a function prop); Strategy section reads DB control state; CTRL-01/02 left open for 20-23
 - [Phase 20]: 20-23: banner armed/tripped share one JSX tree with isTripped as prop so trigger stays mounted (20-18 constraint); CTRL-01/02 closed
 - [Phase 20-24]: services/bootstrap.py reduced to ensure_strategy_record/_strategy_payload; closed-world boundary test pins scripts/, Makefile and worker mutating calls
+- [Phase 20-25]: D-08a: ingest-bars zero succeeded symbols means run FAILED and Job FAILED/handler_error; partial stays SUCCEEDED; all-fail wins over concurrent cancel
 
 ### Pending Todos
 
@@ -283,6 +285,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-28T19:32:30.429Z
+Last session: 2026-09-29T11:40:35.149Z
 Stopped at: Completed 20-22-PLAN.md
 Resume file: None
