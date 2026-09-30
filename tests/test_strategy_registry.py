@@ -19,12 +19,19 @@ def test_registry_lists_and_resolves_default_strategy() -> None:
 
     strategies = registry.list_public()
 
-    assert len(strategies) == 1
-    assert strategies[0]["strategy_id"] == "trend_following_daily"
-    assert strategies[0]["display_name"] == "TrendFollowingDailyV1"
-    assert strategies[0]["version"] == "v1"
-    assert strategies[0]["enabled"] is True
-    assert strategies[0]["config_reference"] == "config/strategies/trend_following_daily.yaml"
+    assert len(strategies) == 4
+    by_id = {strategy["strategy_id"]: strategy for strategy in strategies}
+    assert set(by_id) == {
+        "donchian_breakout_daily",
+        "rsi_mean_reversion_daily",
+        "time_series_momentum_daily",
+        "trend_following_daily",
+    }
+    trend = by_id["trend_following_daily"]
+    assert trend["display_name"] == "TrendFollowingDailyV1"
+    assert trend["version"] == "v1"
+    assert trend["enabled"] is True
+    assert trend["config_reference"] == "config/strategies/trend_following_daily.yaml"
 
     resolved = registry.resolve("trend_following_daily")
     assert resolved.metadata.display_name == "TrendFollowingDailyV1"
@@ -43,6 +50,6 @@ def test_strategies_route_uses_registry_metadata() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["count"] == 1
-    assert body["strategies"][0]["strategy_id"] == "trend_following_daily"
-    assert body["strategies"][0]["universe_size"] == 10
+    assert body["count"] == 4
+    by_id = {strategy["strategy_id"]: strategy for strategy in body["strategies"]}
+    assert by_id["trend_following_daily"]["universe_size"] == 10

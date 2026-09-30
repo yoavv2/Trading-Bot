@@ -6,10 +6,10 @@ import os
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -102,8 +102,94 @@ class TrendFollowingDailySettings(BaseModel):
     exits: TrendFollowingExitSettings = TrendFollowingExitSettings()
 
 
+class RsiMeanReversionIndicatorSettings(BaseModel):
+    rsi_window: int = Field(default=14, ge=1)
+    oversold: float = Field(default=30.0, ge=0.0, le=100.0)
+    overbought: float = Field(default=70.0, ge=0.0, le=100.0)
+    warmup_periods: int = Field(default=100, ge=2)
+
+    @model_validator(mode="after")
+    def validate_windows_and_thresholds(self) -> "RsiMeanReversionIndicatorSettings":
+        if self.oversold >= self.overbought:
+            raise ValueError("oversold must be lower than overbought")
+        if self.warmup_periods < self.rsi_window + 1:
+            raise ValueError("warmup_periods must be at least rsi_window + 1")
+        return self
+
+
+class RsiMeanReversionExitSettings(BaseModel):
+    rsi_above: Literal["overbought_threshold"] = "overbought_threshold"
+
+
+class RsiMeanReversionDailySettings(BaseModel):
+    strategy_id: str = "rsi_mean_reversion_daily"
+    display_name: str = "RsiMeanReversionDailyV1"
+    enabled: bool = True
+    universe: tuple[str, ...] = TrendFollowingDailySettings().universe
+    indicators: RsiMeanReversionIndicatorSettings = RsiMeanReversionIndicatorSettings()
+    risk: TrendFollowingRiskSettings = TrendFollowingRiskSettings()
+    exits: RsiMeanReversionExitSettings = RsiMeanReversionExitSettings()
+
+
+class DonchianBreakoutIndicatorSettings(BaseModel):
+    entry_window: int = Field(default=55, ge=1)
+    exit_window: int = Field(default=20, ge=1)
+    warmup_periods: int = Field(default=56, ge=2)
+
+    @model_validator(mode="after")
+    def validate_warmup(self) -> "DonchianBreakoutIndicatorSettings":
+        required_bars = max(self.entry_window, self.exit_window) + 1
+        if self.warmup_periods < required_bars:
+            raise ValueError(
+                "warmup_periods must include the current bar plus the longest channel window"
+            )
+        return self
+
+
+class DonchianBreakoutExitSettings(BaseModel):
+    close_below: Literal["preceding_exit_channel_low"] = "preceding_exit_channel_low"
+
+
+class DonchianBreakoutDailySettings(BaseModel):
+    strategy_id: str = "donchian_breakout_daily"
+    display_name: str = "DonchianBreakoutDailyV1"
+    enabled: bool = True
+    universe: tuple[str, ...] = TrendFollowingDailySettings().universe
+    indicators: DonchianBreakoutIndicatorSettings = DonchianBreakoutIndicatorSettings()
+    risk: TrendFollowingRiskSettings = TrendFollowingRiskSettings()
+    exits: DonchianBreakoutExitSettings = DonchianBreakoutExitSettings()
+
+
+class TimeSeriesMomentumIndicatorSettings(BaseModel):
+    lookback_periods: int = Field(default=252, ge=1)
+    warmup_periods: int = Field(default=253, ge=2)
+
+    @model_validator(mode="after")
+    def validate_warmup(self) -> "TimeSeriesMomentumIndicatorSettings":
+        if self.warmup_periods < self.lookback_periods + 1:
+            raise ValueError("warmup_periods must be at least lookback_periods + 1")
+        return self
+
+
+class TimeSeriesMomentumExitSettings(BaseModel):
+    close_at_or_below: Literal["lookback_close"] = "lookback_close"
+
+
+class TimeSeriesMomentumDailySettings(BaseModel):
+    strategy_id: str = "time_series_momentum_daily"
+    display_name: str = "TimeSeriesMomentumDailyV1"
+    enabled: bool = True
+    universe: tuple[str, ...] = TrendFollowingDailySettings().universe
+    indicators: TimeSeriesMomentumIndicatorSettings = TimeSeriesMomentumIndicatorSettings()
+    risk: TrendFollowingRiskSettings = TrendFollowingRiskSettings()
+    exits: TimeSeriesMomentumExitSettings = TimeSeriesMomentumExitSettings()
+
+
 class StrategyBundle(BaseModel):
     trend_following_daily: TrendFollowingDailySettings = TrendFollowingDailySettings()
+    rsi_mean_reversion_daily: RsiMeanReversionDailySettings = RsiMeanReversionDailySettings()
+    donchian_breakout_daily: DonchianBreakoutDailySettings = DonchianBreakoutDailySettings()
+    time_series_momentum_daily: TimeSeriesMomentumDailySettings = TimeSeriesMomentumDailySettings()
 
 
 class PolygonProviderSettings(BaseModel):
@@ -358,7 +444,9 @@ def _resolve_config_locations(
         return resolved_config_file, _resolve_path(env_strategy_dir)
 
     app_config = _load_yaml_file(resolved_config_file)
-    configured_dir = app_config.get("paths", {}).get("strategy_config_dir", DEFAULT_STRATEGY_CONFIG_DIR)
+    configured_dir = app_config.get("paths", {}).get(
+        "strategy_config_dir", DEFAULT_STRATEGY_CONFIG_DIR
+    )
     return resolved_config_file, _resolve_path(configured_dir)
 
 
@@ -396,7 +484,49 @@ def clear_settings_cache() -> None:
     load_settings.cache_clear()
 
 
-def get_strategy_config(settings: Settings, strategy_id: str) -> TrendFollowingDailySettings:  # noqa: E501
+@overload
+def get_strategy_config(
+    settings: Settings, strategy_id: Literal["trend_following_daily"]
+) -> TrendFollowingDailySettings: ...
+
+
+@overload
+def get_strategy_config(
+    settings: Settings, strategy_id: Literal["rsi_mean_reversion_daily"]
+) -> RsiMeanReversionDailySettings: ...
+
+
+@overload
+def get_strategy_config(
+    settings: Settings, strategy_id: Literal["donchian_breakout_daily"]
+) -> DonchianBreakoutDailySettings: ...
+
+
+@overload
+def get_strategy_config(
+    settings: Settings, strategy_id: Literal["time_series_momentum_daily"]
+) -> TimeSeriesMomentumDailySettings: ...
+
+
+@overload
+def get_strategy_config(
+    settings: Settings, strategy_id: str
+) -> (
+    TrendFollowingDailySettings
+    | RsiMeanReversionDailySettings
+    | DonchianBreakoutDailySettings
+    | TimeSeriesMomentumDailySettings
+): ...
+
+
+def get_strategy_config(
+    settings: Settings, strategy_id: str
+) -> (
+    TrendFollowingDailySettings
+    | RsiMeanReversionDailySettings
+    | DonchianBreakoutDailySettings
+    | TimeSeriesMomentumDailySettings
+):
     try:
         return getattr(settings.strategies, strategy_id)
     except AttributeError as exc:

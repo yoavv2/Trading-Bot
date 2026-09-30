@@ -6,6 +6,9 @@ from dataclasses import dataclass
 
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.strategies.base import BaseStrategy, StrategyMetadata
+from trading_platform.strategies.donchian_breakout_daily import DonchianBreakoutDailyStrategy
+from trading_platform.strategies.rsi_mean_reversion_daily import RsiMeanReversionDailyStrategy
+from trading_platform.strategies.time_series_momentum_daily import TimeSeriesMomentumDailyStrategy
 from trading_platform.strategies.trend_following_daily import TrendFollowingDailyStrategy
 
 
@@ -46,4 +49,7 @@ def build_default_registry(settings: Settings | None = None) -> StrategyRegistry
     resolved_settings = settings or load_settings()
     registry = StrategyRegistry()
     registry.register(TrendFollowingDailyStrategy(resolved_settings))
+    registry.register(RsiMeanReversionDailyStrategy(resolved_settings))
+    registry.register(DonchianBreakoutDailyStrategy(resolved_settings))
+    registry.register(TimeSeriesMomentumDailyStrategy(resolved_settings))
     return registry

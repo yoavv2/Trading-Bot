@@ -1,10 +1,9 @@
 import { StrategyOverviewPanel } from "@/components/strategy/StrategyOverviewPanel";
 
 /**
- * Strategy overview screen (STRA-01/STRA-02): shows TrendFollowingDailyV1's
- * enabled/disabled status and its declared config summary (universe,
- * entry/indicator rules, exit rules, risk params) without reading code or
- * the DB.
+ * Strategy overview screen (STRA-01/STRA-02): lets the operator select any
+ * registered strategy, then shows its live control status and declared config
+ * summary (universe, entry/indicator rules, exit rules, risk params).
  */
 export default function StrategyPage() {
   return (

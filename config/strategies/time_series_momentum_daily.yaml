@@ -1,0 +1,23 @@
+strategy_id: time_series_momentum_daily
+display_name: TimeSeriesMomentumDailyV1
+enabled: true
+universe:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMD
+  - META
+  - AMZN
+  - GOOGL
+  - TSLA
+indicators:
+  lookback_periods: 252
+  # Includes the current close and the close 252 sessions earlier.
+  warmup_periods: 253
+risk:
+  max_positions: 10
+  risk_per_trade: 0.01
+exits:
+  close_at_or_below: lookback_close
