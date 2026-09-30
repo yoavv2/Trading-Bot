@@ -48,17 +48,15 @@ const STRATEGY_DETAIL = {
 
 const STRATEGIES_LIST = {
   count: 1,
-  strategies: [
-    { strategy_id: "trend_following_daily", display_name: "Trend Following Daily" },
-  ],
+  strategies: [STRATEGY_DETAIL.strategy],
 };
 
 /**
  * Routes the console's single global fetch() by URL: GET /api/v1/job-types
  * (NewJobView, and useMutationCapability inside StrategyOverviewPanel),
- * GET /api/v1/strategies/trend_following_daily (StrategyOverviewPanel), and
- * GET /api/v1/strategies (BacktestJobForm's own strategy select) are all
- * dispatched through this one stub.
+ * GET /api/v1/strategies (StrategyOverviewPanel and BacktestJobForm) and the
+ * selected strategy's control-state read are all dispatched through this one
+ * stub.
  */
 function makeFetchRouter(
   options: { catalog?: JobTypesCatalog; jobTypesStatus?: number } = {},
@@ -72,6 +70,15 @@ function makeFetchRouter(
         jobTypesStatus === 200
           ? jsonResponse(200, catalog)
           : jsonResponse(jobTypesStatus, { detail: "boom" }),
+      );
+    }
+    if (url.includes("/backend/api/v1/controls/strategies/trend_following_daily")) {
+      return Promise.resolve(
+        jsonResponse(200, {
+          strategy_id: "trend_following_daily",
+          status: "enabled",
+          updated_at: null,
+        }),
       );
     }
     if (url.includes("/backend/api/v1/strategies/trend_following_daily")) {

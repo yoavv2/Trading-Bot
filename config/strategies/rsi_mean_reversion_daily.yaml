@@ -1,0 +1,25 @@
+strategy_id: rsi_mean_reversion_daily
+display_name: RsiMeanReversionDailyV1
+enabled: true
+universe:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMD
+  - META
+  - AMZN
+  - GOOGL
+  - TSLA
+indicators:
+  rsi_window: 14
+  oversold: 30
+  overbought: 70
+  # RSI(14) needs at least 15 closes; 100 lets Wilder smoothing stabilize.
+  warmup_periods: 100
+risk:
+  max_positions: 10
+  risk_per_trade: 0.01
+exits:
+  rsi_above: overbought_threshold

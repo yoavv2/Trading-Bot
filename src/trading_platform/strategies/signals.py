@@ -28,13 +28,21 @@ class SignalReason(str, Enum):
 
     # Entry reasons
     TREND_ENTRY = "trend_entry"  # close > SMA_long and SMA_short > SMA_long
+    RSI_OVERSOLD_ENTRY = "rsi_oversold_entry"
+    DONCHIAN_ENTRY_BREAKOUT = "donchian_entry_breakout"
+    TIME_SERIES_MOMENTUM_ENTRY = "time_series_momentum_entry"
 
     # Exit reasons
     CLOSE_BELOW_EXIT_MA = "close_below_exit_ma"  # close < exit moving average
+    RSI_OVERBOUGHT_EXIT = "rsi_overbought_exit"
+    DONCHIAN_EXIT_BREAKDOWN = "donchian_exit_breakdown"
+    TIME_SERIES_MOMENTUM_EXIT = "time_series_momentum_exit"
 
     # No-signal reasons
     INSUFFICIENT_HISTORY = "insufficient_history"  # fewer bars than warmup_periods
     TREND_NOT_CONFIRMED = "trend_not_confirmed"  # trend filters not satisfied
+    RSI_NEUTRAL = "rsi_neutral"
+    DONCHIAN_WITHIN_CHANNEL = "donchian_within_channel"
 
 
 @dataclass(frozen=True)
@@ -51,8 +59,13 @@ class IndicatorSnapshot:
     sma_short: Decimal | None  # SMA over indicators.short_window bars
     sma_long: Decimal | None  # SMA over indicators.long_window bars
     bars_available: int  # how many bars were available for computation
+    values: dict[str, Decimal | int | float | None] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        values = {
+            key: float(value) if isinstance(value, Decimal) else value
+            for key, value in self.values.items()
+        }
         return {
             "symbol": self.symbol,
             "session_date": self.session_date.isoformat(),
@@ -60,6 +73,7 @@ class IndicatorSnapshot:
             "sma_short": float(self.sma_short) if self.sma_short is not None else None,
             "sma_long": float(self.sma_long) if self.sma_long is not None else None,
             "bars_available": self.bars_available,
+            "values": values,
         }
 
 

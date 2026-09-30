@@ -466,6 +466,7 @@ def _execute_backtest_run(
                     {
                         "action": action_name,
                         "fill_session": fill_session.isoformat() if fill_session else None,
+                        "indicators": signal.indicators.to_dict()["values"],
                     }
                 )
                 session.add(

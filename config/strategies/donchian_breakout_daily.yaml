@@ -1,0 +1,24 @@
+strategy_id: donchian_breakout_daily
+display_name: DonchianBreakoutDailyV1
+enabled: true
+universe:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMD
+  - META
+  - AMZN
+  - GOOGL
+  - TSLA
+indicators:
+  entry_window: 55
+  exit_window: 20
+  # Includes the current close plus 55 completed channel sessions.
+  warmup_periods: 56
+risk:
+  max_positions: 10
+  risk_per_trade: 0.01
+exits:
+  close_below: preceding_exit_channel_low
