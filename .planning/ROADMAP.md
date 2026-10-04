@@ -371,7 +371,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 **Wave 8**
 
 - [x] 20.1-12-PLAN.md — Seeding and handover controls with account checks A1–A7 (PAPER-02)
-- [ ] 20.1-15-PLAN.md — Execution operation submission: sequential loop with pause points, per-intent permission, fresh price and risk checks (`revalidate_pinned_intent`), S3 executed-key guard, start-mode submit-time gates (REC-02)
+- [x] 20.1-15-PLAN.md — Execution operation submission: sequential loop with pause points, per-intent permission, fresh price and risk checks (`revalidate_pinned_intent`), S3 executed-key guard, start-mode submit-time gates (REC-02)
 
 **Wave 9**
 
@@ -455,7 +455,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 12/16 | In Progress | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 13/16 | In Progress | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
