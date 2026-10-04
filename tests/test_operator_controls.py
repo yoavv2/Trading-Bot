@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.support.paper_ownership import seed_registered_strategy  # noqa: E402
 from tests.test_paper_execution import (  # noqa: E402
     FakeBrokerClient,
     FakeExecutionService,
@@ -32,7 +33,6 @@ from trading_platform.db.models import (  # noqa: E402
 )
 from trading_platform.db.session import clear_engine_cache, session_scope  # noqa: E402
 from trading_platform.services.alpaca import BrokerAccountSnapshot  # noqa: E402
-from trading_platform.services.analytics import StrategyAnalyticsService  # noqa: E402
 from trading_platform.services.execution import (  # noqa: E402
     run_paper_order_submission,
     sync_paper_state,
@@ -54,6 +54,9 @@ def test_operator_control_service_persists_status_transitions_and_audit_events(
     migrated_paper_db: str,
 ) -> None:
     settings = load_settings()
+    # R-8: a new strategy row is created disabled; seed it enabled explicitly so
+    # this test exercises the enabled -> disabled -> enabled transitions.
+    seed_registered_strategy(settings, enabled=True)
     service = OperatorControlService(settings=settings)
 
     disable_report = service.disable_strategy(
@@ -105,6 +108,8 @@ def test_operator_status_report_surfaces_current_control_state_and_recent_blocks
 ) -> None:
     settings = load_settings()
     _seed_approved_risk_batch(session_date=date(2024, 1, 5))
+    # Explicit arrangement: enabled owner, then disabled by the operator.
+    seed_registered_strategy(settings, enabled=True, owner=True)
     control_service = OperatorControlService(settings=settings)
     control_service.disable_strategy(
         "trend_following_daily",
@@ -216,7 +221,9 @@ def test_operator_control_service_persists_kill_switch_trip_and_reset_with_audit
     assert control.state == KillSwitchState.ARMED
     assert control.last_change_actor == "pytest"
     assert control.last_change_reason == "incident resolved"
-    assert strategy.status == StrategyStatus.ACTIVE  # Strategy status must NOT be mutated
+    # Strategy status must NOT be mutated by the kill switch. R-8: the anchor row
+    # the audit run creates is a NEW row, so it is created disabled and stays so.
+    assert strategy.status == StrategyStatus.DISABLED
     assert [run.status for run in control_runs] == [
         StrategyRunStatus.SUCCEEDED,
         StrategyRunStatus.SUCCEEDED,
@@ -355,11 +362,12 @@ def test_kill_switch_trip_with_no_anchor_row_and_no_registry_entry_is_typed(
 
 
 def test_config_disabled_strategy_with_no_db_row_has_one_default_status_everywhere(
-    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+    migrated_paper_db: str,
 ) -> None:
-    """WR-B-06: the pure control read, the analytics summary and the mutating
-    get-or-create all agree for a strategy configured `enabled: false` that has
-    no `strategies` row yet."""
+    """WR-B-06 / R-8: the pure control read and the mutating get-or-create agree
+    (both `disabled`) for a strategy that has no `strategies` row yet. The
+    analytics leg moved to 20.1-03 (standalone) and the three-surface agreement
+    to 20.1-13 (`test_r8_no_row_status_agrees_everywhere`)."""
     from types import SimpleNamespace
 
     from trading_platform.strategies.registry import build_default_registry
@@ -369,20 +377,14 @@ def test_config_disabled_strategy_with_no_db_row_has_one_default_status_everywhe
     disabled_metadata = dataclasses.replace(real.metadata, enabled=False)
     registry = StrategyRegistry()
     registry.register(SimpleNamespace(strategy_id="trend_following_daily", metadata=disabled_metadata))
-    monkeypatch.setattr(
-        "trading_platform.services.analytics.build_default_registry", lambda _settings=None: registry
-    )
 
     control_read = OperatorControlService(settings=settings, registry=registry).get_strategy_state(
         "trend_following_daily"
     )
-    analytics_status = StrategyAnalyticsService(settings).summarize_strategy(
-        strategy_id="trend_following_daily"
-    )["strategy"]["status"]
     with session_scope(settings) as session:
-        assert session.execute(select(Strategy)).first() is None  # both reads wrote nothing
+        assert session.execute(select(Strategy)).first() is None  # the read wrote nothing
     ensured = OperatorControlService(settings=settings, registry=registry).ensure_strategy_state(
         "trend_following_daily"
     )
 
-    assert control_read.status == analytics_status == ensured.status
+    assert control_read.status == ensured.status == StrategyStatus.DISABLED.value  # R-8

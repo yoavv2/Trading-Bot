@@ -7,8 +7,8 @@ duplicate-registration ``ValueError``, and a typed unknown-key error.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
@@ -51,6 +51,25 @@ class InvalidJobPayloadError(ValueError):
         return f"Invalid payload for job type '{self.job_type}': {self.reason}"
 
 
+@dataclass(frozen=True)
+class JobSubmissionConflictError(ValueError):
+    """Raised by ``validate_payload`` for a state-dependent submission conflict.
+
+    Not a payload-shape error (that stays ``InvalidJobPayloadError``, HTTP
+    422): the payload is well formed but the platform state refuses it (for
+    example a strategy that is not the active paper strategy). Mapped to HTTP
+    409 ``{code, job_type, **detail}``. ``code`` is a member of the raising
+    spec's own closed conflict enum.
+    """
+
+    job_type: str
+    code: str
+    detail: Mapping[str, str] = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        return f"Job type '{self.job_type}' submission refused: {self.code}"
+
+
 @runtime_checkable
 class JobSubmissionSpec(Protocol):
     """Transport-neutral validation and normalization for a public Job type."""
@@ -80,6 +99,19 @@ def retry_prerequisite_for(spec: JobSubmissionSpec) -> str | None:
     """
 
     return getattr(spec, "retry_prerequisite_job_type", None)
+
+
+def admission_check_for(spec: JobSubmissionSpec) -> Callable[..., None] | None:
+    """SER: the optional admission hook of a broker-touching Job type.
+
+    Called inside the Job-insert transaction, as ``hook(payload, session=...)``,
+    BEFORE the Job row is inserted (``orchestration/job_mutations`` submit and
+    retry). The hook takes the active_paper_strategy singleton row FOR SHARE and
+    re-runs the type's ownership check, raising ``JobSubmissionConflictError``
+    on refusal. Optional spec attribute, deliberately not a Protocol member.
+    """
+
+    return getattr(spec, "check_admission", None)
 
 
 class JobRegistry:

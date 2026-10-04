@@ -312,7 +312,14 @@ class BrokerSettings(BaseModel):
 class PaperSessionRunnerSettings(BaseModel):
     """Scheduling metadata for the daily paper-session runner."""
 
-    default_strategy_id: str = "trend_following_daily"
+    default_strategy_id: str = Field(
+        default="trend_following_daily",
+        description=(
+            "Report-only fallback strategy id for legacy reconciliation/sync callers that omit one. "
+            "It is NOT a paper-trading default: paper sessions require an explicit strategy_id and only "
+            "the active paper strategy (the database singleton) may trade the account (PAPER-01)."
+        ),
+    )
     trigger_source: str = "paper_session_runner"
     cadence: Literal["daily"] = "daily"
     scheduled_hour_utc: int = Field(default=20, ge=0, le=23)

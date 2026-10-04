@@ -10,15 +10,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TypeVar
 
+from sqlalchemy import false as sa_false
 from sqlalchemy import func as sa_func
-from sqlalchemy import select
+from sqlalchemy import literal, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from trading_platform.core.logging import emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     GLOBAL_KILL_SWITCH_NAME,
+    ActivePaperStrategy,
     ExecutionEvent,
     KillSwitchState,
     Strategy,
@@ -28,7 +30,15 @@ from trading_platform.db.models import (
     StrategyStatus,
     SystemControl,
 )
+from trading_platform.db.models.active_paper_strategy import ACTIVE_PAPER_STRATEGY_SINGLETON_ID
 from trading_platform.db.session import session_scope
+from trading_platform.services.active_paper_strategy import (
+    ActivePaperStrategyState,
+    ActivePaperStrategyUnavailableError,
+    OwnershipBlock,
+    load_active_paper_strategy,
+    ownership_block_from_state,
+)
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
@@ -193,6 +203,140 @@ class KillSwitchControlReport:
         }
 
 
+@dataclass(frozen=True)
+class TradingGateState:
+    """Everything a trading gate decides on, read in ONE statement (R-Q1).
+
+    ``kill_switch``, ``owner`` and ``owner_status`` are the three gate inputs;
+    ``strategy`` is the requested strategy's own control state when the loader
+    was asked for one (``None`` when it has no DB row). ``kill_switch`` and
+    ``owner`` raise typed errors when their persisted row is missing, so a
+    gate can never read "absent" as "fine" (fail closed). ``owner.strategy_id``
+    is ``None`` when no strategy owns the account (D-02).
+    """
+
+    kill_switch_state: KillSwitchStateSnapshot | None
+    owner_state: ActivePaperStrategyState | None
+    owner_status: str | None
+    strategy: StrategyControlState | None = None
+
+    @property
+    def kill_switch(self) -> KillSwitchStateSnapshot:
+        if self.kill_switch_state is None:
+            raise ControlStateUnavailableError(
+                f"Missing global kill switch row '{GLOBAL_KILL_SWITCH_NAME}'; "
+                "database migrations may not be current."
+            )
+        return self.kill_switch_state
+
+    @property
+    def owner(self) -> ActivePaperStrategyState:
+        if self.owner_state is None:
+            raise ActivePaperStrategyUnavailableError(
+                "Missing active_paper_strategy singleton row; database migrations may not be current."
+            )
+        return self.owner_state
+
+    def ownership_block_for(self, strategy_id: str) -> OwnershipBlock | None:
+        """The existing pure ownership decision applied to this read."""
+
+        return ownership_block_from_state(self.owner, strategy_id)
+
+
+def load_trading_gate_state(session: Session, *, strategy_id: str | None = None) -> TradingGateState:
+    """R-Q1: kill switch + active paper strategy + owner status in ONE statement.
+
+    The statement starts from a constant one-row relation and LEFT JOINs each
+    persisted row, so a missing kill-switch row or a missing singleton row is
+    reported as ``None`` (and raised by the typed accessors) instead of
+    silently hiding the other facts. Column-level select: nothing is entered
+    into the session identity map, so a repeated read is always fresh.
+    ``strategy_id`` additionally returns that strategy's control state from
+    the same statement (``None`` when it has no DB row).
+    """
+
+    base = select(literal(1).label("one")).subquery("gate_base")
+    owner_strategy = aliased(Strategy)
+    subject = aliased(Strategy)
+    subject_match = (
+        subject.strategy_id == strategy_id if strategy_id is not None else sa_false()
+    )
+    row = session.execute(
+        select(
+            SystemControl.name.label("ks_name"),
+            SystemControl.state.label("ks_state"),
+            SystemControl.last_changed_at.label("ks_last_changed_at"),
+            SystemControl.last_change_actor.label("ks_actor"),
+            SystemControl.last_change_reason.label("ks_reason"),
+            SystemControl.last_change_run_id.label("ks_run_id"),
+            ActivePaperStrategy.id.label("owner_row_id"),
+            ActivePaperStrategy.since.label("owner_since"),
+            ActivePaperStrategy.reason.label("owner_reason"),
+            ActivePaperStrategy.set_by_run_id.label("owner_set_by_run_id"),
+            owner_strategy.strategy_id.label("owner_public_id"),
+            owner_strategy.display_name.label("owner_display_name"),
+            owner_strategy.status.label("owner_status"),
+            subject.strategy_id.label("subject_public_id"),
+            subject.display_name.label("subject_display_name"),
+            subject.status.label("subject_status"),
+            subject.updated_at.label("subject_updated_at"),
+        )
+        .select_from(base)
+        .outerjoin(SystemControl, SystemControl.name == GLOBAL_KILL_SWITCH_NAME)
+        .outerjoin(
+            ActivePaperStrategy, ActivePaperStrategy.id == ACTIVE_PAPER_STRATEGY_SINGLETON_ID
+        )
+        .outerjoin(owner_strategy, owner_strategy.id == ActivePaperStrategy.strategy_id)
+        .outerjoin(subject, subject_match)
+    ).one()
+
+    kill_switch = None
+    if row.ks_name is not None:
+        kill_switch = KillSwitchStateSnapshot(
+            name=row.ks_name,
+            state=row.ks_state.value,
+            is_tripped=row.ks_state == KillSwitchState.TRIPPED,
+            last_changed_at=row.ks_last_changed_at.isoformat(),
+            last_change_actor=row.ks_actor,
+            last_change_reason=row.ks_reason,
+            last_change_run_id=str(row.ks_run_id) if row.ks_run_id is not None else None,
+        )
+    owner = None
+    if row.owner_row_id is not None:
+        owner = ActivePaperStrategyState(
+            strategy_id=row.owner_public_id,
+            display_name=row.owner_display_name,
+            since=row.owner_since,
+            reason=row.owner_reason,
+            set_by_run_id=(
+                str(row.owner_set_by_run_id) if row.owner_set_by_run_id is not None else None
+            ),
+        )
+    strategy = None
+    if row.subject_public_id is not None:
+        strategy = StrategyControlState(
+            strategy_id=row.subject_public_id,
+            display_name=row.subject_display_name,
+            status=row.subject_status.value,
+            updated_at=row.subject_updated_at.isoformat(),
+        )
+    return TradingGateState(
+        kill_switch_state=kill_switch,
+        owner_state=owner,
+        owner_status=row.owner_status.value if row.owner_status is not None else None,
+        strategy=strategy,
+    )
+
+
+def read_trading_gate_state(
+    settings: Settings | None = None, *, strategy_id: str | None = None
+) -> TradingGateState:
+    """``load_trading_gate_state`` in its own short read session (fresh, uncached)."""
+
+    with session_scope(settings or load_settings()) as session:
+        return load_trading_gate_state(session, strategy_id=strategy_id)
+
+
 class OperatorControlService:
     def __init__(
         self,
@@ -213,28 +357,39 @@ class OperatorControlService:
 
     @_translate_db_errors(ControlStateUnavailableError)
     def get_strategy_state(self, strategy_id: str) -> StrategyControlState:
-        """Pure read (D-31): a plain select with a registry default, never a get-or-create.
+        """Pure read (D-31): one gate statement, a registry default, never a get-or-create.
 
-        The registry default below is the exact status the mutating sibling
-        method (`ensure_strategy_state`) would persist for a brand-new row
-        (always ACTIVE, regardless of StrategyMetadata.enabled -- config
-        trend_following_daily.yaml has enabled: true today), so the pure read
-        and the mutating path agree on an empty DB. This method never
-        creates a strategy row and never writes to the session.
+        The default below is the exact status the mutating sibling method
+        (`ensure_strategy_state`) persists for a brand-new row (always DISABLED,
+        regardless of StrategyMetadata.enabled -- R-8: a newly registered
+        strategy never trades until an operator enables it), so the pure read
+        and the mutating path agree on an empty DB. This method never creates
+        a strategy row and never writes to the session. It is a thin wrapper
+        over the shared gate loader (R-Q1).
         """
         metadata = self.registry.resolve(strategy_id).metadata
         with session_scope(self.settings) as session:
-            strategy_record = session.execute(
-                select(Strategy).where(Strategy.strategy_id == metadata.strategy_id)
-            ).scalar_one_or_none()
-            if strategy_record is not None:
-                return _serialize_strategy_control_state(strategy_record)
+            gate = load_trading_gate_state(session, strategy_id=metadata.strategy_id)
+            if gate.strategy is not None:
+                return gate.strategy
             return StrategyControlState(
                 strategy_id=metadata.strategy_id,
                 display_name=metadata.display_name,
-                status=StrategyStatus.ACTIVE.value,
+                status=StrategyStatus.DISABLED.value,
                 updated_at=None,
             )
+
+    @_translate_db_errors(ControlStateUnavailableError)
+    def get_active_paper_strategy_view(self) -> ActivePaperStrategyState:
+        """Read-only owner view (04 task 5 / R1): no write, no get-or-create.
+
+        A missing singleton row is reported as ``ControlStateUnavailableError``
+        (HTTP 503 ``control_state_unavailable``).
+        """
+        try:
+            return load_active_paper_strategy(self.settings)
+        except ActivePaperStrategyUnavailableError as exc:
+            raise ControlStateUnavailableError(str(exc)) from exc
 
     def ensure_strategy_state(self, strategy_id: str) -> StrategyControlState:
         """Get-or-create for mutating callers only (D-31)."""
@@ -402,9 +557,9 @@ class OperatorControlService:
         return report
 
     def get_kill_switch_state(self) -> KillSwitchStateSnapshot:
+        """Thin wrapper over the shared gate loader (R-Q1)."""
         with session_scope(self.settings) as session:
-            control = _load_global_kill_switch(session)
-            return _serialize_kill_switch(control)
+            return load_trading_gate_state(session).kill_switch
 
     def trip_kill_switch(
         self,

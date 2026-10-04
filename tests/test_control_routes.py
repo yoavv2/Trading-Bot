@@ -211,6 +211,9 @@ def test_reset_kill_switch_returns_armed(client: TestClient) -> None:
 
 
 def test_disable_strategy_is_idempotent_by_target_state_and_audited(client: TestClient) -> None:
+    # R-8: a new strategy row is created disabled, so enable it first for the
+    # first disable to be a real transition.
+    _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "enabled", "reason": "arrange"})
     before = _audit_counts()
 
     disabled = _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "disabled", "reason": "maintenance"})
@@ -352,14 +355,15 @@ def test_get_strategy_control_status_reflects_db_state_not_config_flag(
 
     control_view_before = client.get(f"/api/v1/controls/strategies/{_KNOWN_STRATEGY_ID}")
     assert control_view_before.status_code == 200
-    assert control_view_before.json()["status"] == "enabled"
+    # R-8: a strategy with no DB row reports `disabled` (never auto-enabled).
+    assert control_view_before.json()["status"] == "disabled"
     assert control_view_before.json()["updated_at"] is None
 
-    _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "disabled", "reason": "control view proof"})
+    _put_strategy(client, _KNOWN_STRATEGY_ID, {"status": "enabled", "reason": "control view proof"})
 
     control_view_after = client.get(f"/api/v1/controls/strategies/{_KNOWN_STRATEGY_ID}")
     assert control_view_after.status_code == 200
-    assert control_view_after.json()["status"] == "disabled"
+    assert control_view_after.json()["status"] == "enabled"
     assert control_view_after.json()["updated_at"] is not None
 
     still_config_enabled = client.get(f"/api/v1/strategies/{_KNOWN_STRATEGY_ID}")
@@ -508,7 +512,9 @@ def test_concurrent_first_use_strategy_ensure_does_not_raise(client: TestClient)
     thread.join(timeout=15)
 
     assert "error" not in outcome, outcome.get("error")
-    assert outcome["result"].changed is False
+    # R-8: the winner created the row disabled, so the loser's enable is a real
+    # transition on the winner's committed row.
+    assert outcome["result"].changed is True
     with session_scope(settings) as session:
         assert len(session.execute(select(Strategy)).scalars().all()) == 1
 

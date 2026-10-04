@@ -246,7 +246,7 @@ def test_operator_status_without_strategy_row_returns_registry_default(
     with write_spy() as spy:
         state = load_strategy_control_state("trend_following_daily", settings=settings)
 
-    assert state.status == "active"
+    assert state.status == "disabled"  # R-8: a strategy with no row reads as disabled
     assert state.updated_at is None
     assert spy.is_empty
     after = _row_counts(settings)
@@ -293,7 +293,7 @@ def test_ensure_strategy_control_state_preserves_get_or_create(
 
     state = ensure_strategy_control_state("trend_following_daily", settings=settings)
 
-    assert state.status == "active"
+    assert state.status == "disabled"  # R-8: new rows are created disabled
     after = _row_counts(settings)
     assert after["strategies"] == 1
 

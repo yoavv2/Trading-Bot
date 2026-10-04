@@ -179,3 +179,24 @@ async def get_strategy_control_status(
         "status": "enabled" if state.status == "active" else "disabled",
         "updated_at": state.updated_at,
     }
+
+
+@router.get("/active-paper-strategy")
+async def get_active_paper_strategy(request: Request) -> dict[str, Any]:
+    """PAPER-01 / R1: read-only view of the strategy that owns the paper account.
+
+    Returns ``{strategy_id, display_name, since, reason, set_by_run_id}``;
+    ``strategy_id`` is ``null`` when no strategy owns the account (the initial
+    state). Performs no write and no get-or-create; a missing singleton row is
+    a typed 503 ``control_state_unavailable``. Seeding/handover is a separate
+    mutating control (20.1-12) and is not part of this route.
+    """
+
+    service = OperatorControlService(settings=get_settings(request))
+    try:
+        state = await run_in_threadpool(service.get_active_paper_strategy_view)
+    except ControlStateUnavailableError as exc:
+        raise _error(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
+        ) from exc
+    return state.to_dict()

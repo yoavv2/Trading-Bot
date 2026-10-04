@@ -19,7 +19,12 @@ from trading_platform.api.dependencies import (
     require_mutations_enabled,
     serialize_job_filters,
 )
-from trading_platform.jobs.registry import InvalidJobPayloadError, JobRegistry, UnknownJobTypeError
+from trading_platform.jobs.registry import (
+    InvalidJobPayloadError,
+    JobRegistry,
+    JobSubmissionConflictError,
+    UnknownJobTypeError,
+)
 from trading_platform.orchestration.job_mutations import (
     IdempotencyConflictError,
     InvalidCancellationReasonError,
@@ -108,6 +113,13 @@ def submit_job(
             "invalid_job_payload",
             job_type=exc.job_type,
             reason=exc.reason,
+        ) from exc
+    except JobSubmissionConflictError as exc:
+        raise _error(
+            status.HTTP_409_CONFLICT,
+            exc.code,
+            job_type=exc.job_type,
+            **dict(exc.detail),
         ) from exc
     except IdempotencyConflictError as exc:
         raise _error(
@@ -205,6 +217,13 @@ def retry_job(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "unknown_job_type",
             job_type=exc.job_type,
+        ) from exc
+    except JobSubmissionConflictError as exc:
+        raise _error(
+            status.HTTP_409_CONFLICT,
+            exc.code,
+            job_type=exc.job_type,
+            **dict(exc.detail),
         ) from exc
     except IdempotencyConflictError as exc:
         raise _error(

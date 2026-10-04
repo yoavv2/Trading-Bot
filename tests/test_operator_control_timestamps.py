@@ -55,16 +55,16 @@ def _run_action(service: OperatorControlService, action: str) -> Any:
 
 
 # (action, changed, setup actions that establish the previous state).
-# The kill switch is armed and the strategy is ACTIVE by default.
+# The kill switch is armed and a NEW strategy row is DISABLED by default (R-8).
 _CASES = [
     ("trip", True, []),
     ("trip", False, ["trip"]),
     ("reset", True, ["trip"]),
     ("reset", False, []),
-    ("enable", True, ["disable"]),
-    ("enable", False, []),
-    ("disable", True, []),
-    ("disable", False, ["disable"]),
+    ("enable", True, []),
+    ("enable", False, ["enable"]),
+    ("disable", True, ["enable"]),
+    ("disable", False, []),
 ]
 
 
