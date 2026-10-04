@@ -725,10 +725,10 @@ def _load_intents(
         if job.job_type == PAPER_SESSION_JOB_TYPE and job.run_count > 0:
             # A linked paper_execution run with ZERO order rows proves nothing (E-5).
             classification = RecoveryClassification.UNRESOLVED
-            reason: UnresolvedReason | None = UnresolvedReason.EXECUTION_PATH_UNPROVEN
+            job_reason: UnresolvedReason | None = UnresolvedReason.EXECUTION_PATH_UNPROVEN
         else:
             classification = RecoveryClassification.NOTHING_SUBMITTED
-            reason = None
+            job_reason = None
         intents.append(
             IntentRecovery(
                 intent_id=None,
@@ -740,7 +740,7 @@ def _load_intents(
                 broker_status=None,
                 classification=classification,
                 broker_state=None,
-                unresolved_reason=reason,
+                unresolved_reason=job_reason,
                 attempts=(),
                 absence_evidence=(),
                 statement=None,
@@ -960,9 +960,11 @@ def account_recovery_status(
     as_of = now or clock.now_utc()
     jobs, intents = _load_intents(session, None, grace_seconds=_grace_seconds(grace_seconds))
     facts = _load_reconciliation_facts(session, None)
-    subjects: list[str | None] = sorted(
-        {j.strategy_id for j in jobs if j.strategy_id is not None}
-        | {i.strategy_id for i in intents if i.strategy_id is not None}
+    subjects: list[str | None] = list(
+        sorted(
+            {j.strategy_id for j in jobs if j.strategy_id is not None}
+            | {i.strategy_id for i in intents if i.strategy_id is not None}
+        )
     )
     if any(j.strategy_id is None for j in jobs):
         subjects.append(None)
@@ -1553,7 +1555,7 @@ def _local_net_fills(session: Session, order: PaperOrder) -> Decimal:
 
     from trading_platform.db.models import PaperFill
 
-    net = session.execute(
+    net: Any = session.execute(
         select(
             func.coalesce(
                 func.sum(
