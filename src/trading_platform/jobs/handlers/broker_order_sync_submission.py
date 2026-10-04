@@ -133,12 +133,17 @@ class BrokerOrderSyncSubmissionSpec:
             "as_of_session": as_of_session.isoformat(),
         }
 
+    def lock_admission(self, *, session: Any) -> None:
+        """SER lock step alone: the ownership singleton FOR SHARE (fails closed)."""
+
+        lock_active_paper_strategy_shared(session)
+
     def check_admission(self, payload: Mapping[str, Any], *, session: Any) -> None:
         """SER admission: broker-order-sync touches the broker, so its admission
         serializes with handover on the ownership singleton (FOR SHARE). It is
         NOT gated by ownership (D-03): no ownership check runs here."""
 
-        lock_active_paper_strategy_shared(session)
+        self.lock_admission(session=session)
 
     def submission_defaults(self) -> dict[str, str] | None:
         """Console pre-fill, computed at read time. Returns ``None`` when no

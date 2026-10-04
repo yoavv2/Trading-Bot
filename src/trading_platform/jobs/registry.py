@@ -119,6 +119,19 @@ def admission_check_for(spec: JobSubmissionSpec) -> Callable[..., None] | None:
     return getattr(spec, "check_admission", None)
 
 
+def admission_lock_for(spec: JobSubmissionSpec) -> Callable[..., None] | None:
+    """SER lock order: the lock step of the admission hook, callable on its own.
+
+    ``hook(session=...)`` takes the active_paper_strategy singleton row FOR SHARE
+    and nothing else. ``retry`` calls it BEFORE it row-locks the original Job, so
+    the global lock order stays "singleton first, then other rows" (the handover
+    and operation creation rely on it). Optional spec attribute, not a Protocol
+    member.
+    """
+
+    return getattr(spec, "lock_admission", None)
+
+
 class JobRegistry:
     """In-memory registry with explicit registration and resolution."""
 

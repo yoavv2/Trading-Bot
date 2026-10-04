@@ -154,12 +154,17 @@ class ReconciliationSubmissionSpec:
             "as_of_session": as_of_session.isoformat(),
         }
 
+    def lock_admission(self, *, session: Any) -> None:
+        """SER lock step alone: the ownership singleton FOR SHARE (fails closed)."""
+
+        lock_active_paper_strategy_shared(session)
+
     def check_admission(self, payload: Mapping[str, Any], *, session: Any) -> None:
         """SER admission (inside the Job-insert transaction, before the insert):
         lock the ownership singleton FOR SHARE, then re-run the same ownership
         check against the transaction's own view (strategy scope)."""
 
-        lock_active_paper_strategy_shared(session)
+        self.lock_admission(session=session)
         require_active_paper_strategy(
             self._settings,
             payload["strategy_id"],

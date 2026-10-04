@@ -29,6 +29,7 @@ from trading_platform.jobs.registry import (
     JobRegistry,
     UnknownJobTypeError,
     admission_check_for,
+    admission_lock_for,
     retry_prerequisite_for,
 )
 
@@ -485,6 +486,18 @@ class JobOrchestrationService:
 
         return RetryBlock(code=RETRY_BLOCKED_CODE, required_job_type=prerequisite, strategy_id=strategy_id)
 
+    def _lock_ownership_singleton_before_job_row(self, session: Any, job_id: UUID) -> None:
+        job_type = session.execute(select(Job.job_type).where(Job.id == job_id)).scalar_one_or_none()
+        if job_type is None:
+            return
+        try:
+            spec = self._registry.resolve_submission_spec(job_type)
+        except UnknownJobTypeError:
+            return
+        lock = admission_lock_for(spec)
+        if lock is not None:
+            lock(session=session)
+
     def retry_block(self, *, job_id: UUID) -> RetryBlock | None:
         """Read-only D-19/D-20 query: the current reconcile-first block for ``job_id``, or None."""
 
@@ -511,6 +524,13 @@ class JobOrchestrationService:
             )
             if existing is not None:
                 return existing
+
+            # SER lock order is "singleton first, then other rows": take the
+            # ownership singleton FOR SHARE BEFORE the original Job row is
+            # locked. The job type is read with a column-level select (no row
+            # lock, nothing enters the identity map); a missing Job or an
+            # unregistered type falls through to the existing errors below.
+            self._lock_ownership_singleton_before_job_row(session, job_id)
 
             original = self._require_job(session, job_id, lock=True)
 

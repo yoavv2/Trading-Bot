@@ -369,6 +369,54 @@ def test_broker_touching_non_gated_job_admission_also_serializes_on_the_singleto
     assert _job_count("broker-order-sync") == 1
 
 
+def test_retry_takes_the_singleton_before_locking_the_original_job_row(
+    paper_jobs_env: BrokerFakes,  # noqa: F811
+) -> None:
+    """SER lock order is singleton first, then other rows. A retry that is
+    waiting on the singleton (held FOR UPDATE by a handover) must NOT already
+    hold the original Job's row lock."""
+    from sqlalchemy import text
+
+    settings = load_settings()
+    _arrange_owner("owner")
+    with session_scope(settings) as session:
+        failed = Job(
+            job_type="paper-session",
+            payload=dict(PAYLOAD),
+            status=JobStatus.FAILED,
+            failure_reason=JobFailureReason.HANDLER_ERROR,
+            failure_message="arranged failure",
+            outcome_uncertain=False,
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+        )
+        session.add(failed)
+        session.flush()
+        failed_id = failed.id
+
+    service = _orchestration()
+    holder = get_session_factory(settings)()
+    probe = get_session_factory(settings)()
+    try:
+        _lock_singleton_for_update(holder)
+        thread, outcome = _run_in_thread(
+            lambda: service.retry(job_id=failed_id, idempotency_key="retry-lock-order")
+        )
+        thread.join(timeout=1.5)
+        assert thread.is_alive(), "retry must wait on the singleton"
+        # The waiting retry holds no lock on the original Job row.
+        probe.execute(text("SELECT id FROM jobs WHERE id = :id FOR UPDATE NOWAIT"), {"id": failed_id})
+        probe.rollback()
+        holder.commit()
+    finally:
+        probe.close()
+        holder.close()
+    thread.join(timeout=15)
+
+    assert "error" not in outcome, outcome.get("error")
+    assert outcome["result"].created is True
+
+
 def test_admission_fails_closed_when_the_singleton_row_is_missing(
     paper_jobs_env: BrokerFakes,  # noqa: F811
 ) -> None:
