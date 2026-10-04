@@ -23,6 +23,7 @@ from trading_platform.db.models import (
     GLOBAL_KILL_SWITCH_NAME,
     ActivePaperStrategy,
     ExecutionEvent,
+    ExecutionOperation,
     KillSwitchState,
     PaperOrder,
     Strategy,
@@ -42,6 +43,19 @@ from trading_platform.services.active_paper_strategy import (
     ownership_block_from_state,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.execution import operations as _operations
+
+# Re-exported for the execution-operation route adapter (REC-02), which may import only this
+# services module and ``operation_reads``.
+from trading_platform.services.execution.operations import (
+    OperationNotFoundError as OperationNotFoundError,
+)
+from trading_platform.services.execution.operations import (
+    OperationNotOpenError as OperationNotOpenError,
+)
+from trading_platform.services.execution.operations import (
+    OperationRunningError as OperationRunningError,
+)
 
 # Re-exported for the recovery route adapter, which may import only this services module.
 from trading_platform.services.recovery import (
@@ -217,6 +231,39 @@ class KillSwitchControlReport:
             "actor": self.actor,
             "state_snapshot": self.state_snapshot,
             "result_summary": self.result_summary,
+        }
+
+
+@dataclass(frozen=True)
+class EndOperationControlReport:
+    """Result of the REC-02 End control (D-20): an audited, synchronous operator control."""
+
+    run_id: str
+    operation_id: str
+    strategy_id: str
+    state: str
+    reason: str | None
+    changed: bool
+    ended_by_expiry: bool
+    unsent_cancelled: list[str]
+    working_orders: list[dict[str, Any]]
+    unresolved_intents: list[dict[str, Any]]
+    actor: str
+    trigger_source: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "operation_id": self.operation_id,
+            "state": self.state,
+            "reason": self.reason,
+            "changed": self.changed,
+            "ended_by_expiry": self.ended_by_expiry,
+            "unsent_cancelled": self.unsent_cancelled,
+            "working_orders": self.working_orders,
+            "unresolved_intents": self.unresolved_intents,
+            # End never changes the kill switch or the strategy status (J-2).
+            "trading_permission_changed": False,
+            "run_id": self.run_id,
         }
 
 
@@ -710,6 +757,132 @@ class OperatorControlService:
             statement=report.statement,
             actor=actor,
             changed=report.changed,
+            trigger_source=trigger_source,
+        )
+        return report
+
+    @_translate_db_errors(ControlWriteError)
+    def end_operation(
+        self,
+        operation_id: uuid.UUID,
+        *,
+        reason: str,
+        actor: str = "local_operator",
+        trigger_source: str = "api_control",
+    ) -> EndOperationControlReport:
+        """End an execution operation (REC-02 / D-20 / 05 R2).
+
+        Synchronous, no broker call, audited as an ``operator_control`` run attached to the
+        OPERATION'S OWN strategy with one ``execution_operation_ended`` ExecutionEvent (the
+        operator reason and the cancelled intent ids), all in one transaction. Only UNSENT
+        intents are cancelled; submitted orders are not cancelled at the broker, ambiguous
+        intents stay ambiguous and blocking, recovery records and attempt logs are untouched
+        and trading permission is unchanged. A refusal (``OperationNotFoundError``,
+        ``OperationRunningError``, ``OperationNotOpenError``) raises before anything is
+        committed, so it performs zero writes; ending an already terminated operation is an
+        idempotent ``changed=False`` (audited too).
+        """
+
+        with session_scope(self.settings) as session:
+            changed_at = _db_clock_now(session)
+            row = session.execute(
+                select(Strategy, ExecutionOperation.id)
+                .join(ExecutionOperation, ExecutionOperation.strategy_id == Strategy.id)
+                .where(ExecutionOperation.id == operation_id)
+            ).one_or_none()
+            if row is None:
+                raise OperationNotFoundError(operation_id)
+            strategy_record, _operation_pk = row
+            strategy_public_id = strategy_record.strategy_id
+            strategy_run = StrategyRun(
+                strategy_id=strategy_record.id,
+                run_type=StrategyRunType.OPERATOR_CONTROL,
+                status=StrategyRunStatus.PENDING,
+                trigger_source=trigger_source,
+                parameters_snapshot={
+                    "action": "end_operation",
+                    "actor": actor,
+                    "operation_id": str(operation_id),
+                    "reason": reason,
+                },
+                result_summary={
+                    "stage": "pending",
+                    "strategy_id": strategy_public_id,
+                    "action": "end_operation",
+                },
+            )
+            session.add(strategy_run)
+            session.flush()
+
+            # Raises (and rolls the whole transaction back, audit run included) on a refusal.
+            result = _operations.end_operation(
+                session, operation_id, operator_reason=reason, actor=actor
+            )
+
+            cancelled = [str(intent_id) for intent_id in result.unsent_cancelled]
+            result_summary = {
+                "stage": "completed",
+                "strategy_id": strategy_public_id,
+                "action": "end_operation",
+                "operation_id": str(operation_id),
+                "state": result.state.value,
+                "reason": result.reason,
+                "operator_reason": reason,
+                "changed": result.changed,
+                "ended_by_expiry": result.ended_by_expiry,
+                "cancelled_intent_ids": cancelled,
+                "remaining_working_orders": len(result.working_orders),
+                "unresolved_intents": len(result.unresolved_intents),
+                "actor": actor,
+                "changed_at": changed_at.isoformat(),
+            }
+            strategy_run.status = StrategyRunStatus.SUCCEEDED
+            strategy_run.completed_at = changed_at
+            strategy_run.result_summary = result_summary
+            session.add(
+                ExecutionEvent(
+                    strategy_run_id=strategy_run.id,
+                    paper_order_id=None,
+                    event_type="execution_operation_ended",
+                    severity="info",
+                    blocks_execution=False,
+                    event_at=changed_at,
+                    message=(
+                        f"Execution operation '{operation_id}' "
+                        f"{'ended' if result.changed else 'was already ended'} "
+                        f"({result.state.value}"
+                        f"{'/' + result.reason if result.reason else ''}); unsent intents only, "
+                        "no broker order was cancelled and trading permission is unchanged."
+                    ),
+                    details=result_summary,
+                )
+            )
+            session.flush()
+            report = EndOperationControlReport(
+                run_id=str(strategy_run.id),
+                operation_id=str(operation_id),
+                strategy_id=strategy_public_id,
+                state=result.state.value,
+                reason=result.reason,
+                changed=result.changed,
+                ended_by_expiry=result.ended_by_expiry,
+                unsent_cancelled=cancelled,
+                working_orders=list(result.working_orders),
+                unresolved_intents=list(result.unresolved_intents),
+                actor=actor,
+                trigger_source=trigger_source,
+            )
+
+        emit_structured_log(
+            self._logger,
+            logging.INFO,
+            "execution_operation_ended",
+            strategy_id=report.strategy_id,
+            run_id=report.run_id,
+            operation_id=report.operation_id,
+            state=report.state,
+            changed=report.changed,
+            actor=actor,
             trigger_source=trigger_source,
         )
         return report

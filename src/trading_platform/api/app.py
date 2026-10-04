@@ -10,6 +10,9 @@ from fastapi.responses import JSONResponse
 
 from trading_platform.api.routes.analytics import router as analytics_router
 from trading_platform.api.routes.controls import router as controls_router
+from trading_platform.api.routes.execution_operations import (
+    router as execution_operations_router,
+)
 from trading_platform.api.routes.health import router as health_router
 from trading_platform.api.routes.job_types import router as job_types_router
 from trading_platform.api.routes.jobs import router as jobs_router
@@ -95,6 +98,7 @@ def create_app(*, job_registry: JobRegistry | None = None) -> FastAPI:
     app.include_router(system_router)
     app.include_router(controls_router)
     app.include_router(recovery_router)
+    app.include_router(execution_operations_router)
     app.include_router(market_data_router)
     return app
 
