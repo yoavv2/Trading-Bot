@@ -102,6 +102,10 @@ def test_schema_columns_and_foreign_keys(migrated_db: str) -> None:
         "broker_message",
         "created_at",
         "updated_at",
+        # Migration 0027 (20.1-11, S1-R3) adds the fencing columns.
+        "execution_epoch",
+        "executor_job_id",
+        "authorization_deadline",
     }
     assert not columns["paper_order_id"]["nullable"]
     assert columns["strategy_run_id"]["nullable"]
