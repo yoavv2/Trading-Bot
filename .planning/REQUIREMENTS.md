@@ -72,7 +72,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Attribution & Account Checks (Phase 20.1)
 
 - [ ] **ACCT-01**: Account-level broker sync and reconciliation run with no owner and while trading is blocked; they submit nothing, change no ownership, lift no gate by themselves, never create positions or attributions, and store results in dedicated account-level storage — never attached to an arbitrary strategy
-- [ ] **COR-05**: Every broker order/fill is classified `owned` / `recorded_external` / `unrecognized` from local registration evidence (a recognizable ID alone is never ownership evidence); unexplained exposure (broker quantity minus attributed net fills) blocks new trading wherever it occurs in history; broker sync never adopts positions; page-cap overflow surfaces as unresolved, never truncation
+- [x] **COR-05**: Every broker order/fill is classified `owned` / `recorded_external` / `unrecognized` from local registration evidence (a recognizable ID alone is never ownership evidence); unexplained exposure (broker quantity minus attributed net fills) blocks new trading wherever it occurs in history; broker sync never adopts positions; page-cap overflow surfaces as unresolved, never truncation
 - [ ] **EXT-01**: "Record external activity" is an audited Job that re-fetches verified broker records, requires every listed external order terminal and net external exposure zero, stores immutable snapshots preserving external origin with no strategy or position, and runs a fresh account-level reconciliation in the same Job; recording alone never lifts a block; recorded items are re-verified on every check
 
 ### Submission Uncertainty & Recovery (Phase 20.1)
@@ -210,7 +210,7 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | PAPER-01 | Phase 20.1 | Complete |
 | PAPER-02 | Phase 20.1 | Pending |
 | ACCT-01 | Phase 20.1 | Pending |
-| COR-05 | Phase 20.1 | Pending |
+| COR-05 | Phase 20.1 | Complete |
 | EXT-01 | Phase 20.1 | Pending |
 | COR-06 | Phase 20.1 | Complete |
 | REC-01 | Phase 20.1 | Pending |
