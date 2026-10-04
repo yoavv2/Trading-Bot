@@ -1168,7 +1168,9 @@ def test_get_job_recovery_statement_count_is_bounded_independent_of_history(
     _grow_history(1)
     small = measure()
     _grow_history(10)
-    assert measure() == small <= 3
+    # Three statements (Job lookup + the two-statement status) plus ONE batched read of the
+    # operation context of every intent (DbOperationView.states_for_intents, 20.1-11).
+    assert measure() == small <= 4
 
 
 def test_reads_perform_no_writes(recovery_db: str) -> None:
@@ -1279,3 +1281,108 @@ def test_grace_setting_is_validated_non_negative_and_configurable() -> None:
     assert ExecutionSettings(recovery_absence_grace_seconds=0).recovery_absence_grace_seconds == 0
     with pytest.raises(ValidationError):
         ExecutionSettings(recovery_absence_grace_seconds=-1)
+
+
+# ---------------------------------------------------------------------------
+# 20.1-11: the real OperationView replaces NullOperationView
+# ---------------------------------------------------------------------------
+
+
+def _link_operation(session: Any, order_id: Any, *, state: str, reason: str | None) -> None:
+    from tests.support.operation_fixtures import seed_operation
+
+    from trading_platform.db.models import ExecutionOperationIntent
+
+    order = session.get(PaperOrder, order_id)
+    operation = seed_operation(session, state=state, reason=reason)
+    session.add(
+        ExecutionOperationIntent(
+            operation_id=operation.id,
+            sequence=1,
+            symbol_id=order.symbol_id,
+            side=order.side,
+            quantity=order.quantity,
+            client_order_id=order.client_order_id,
+            paper_order_id=order.id,
+            decision_fingerprint="f" * 64,
+            prior_execution_refs=[],
+            disposition="open",
+        )
+    )
+    session.flush()
+
+
+@pytest.mark.parametrize(
+    ("state", "reason", "expected"),
+    [
+        ("paused", "outcome_unresolved", "open"),
+        ("running", None, "open"),
+        ("requires_reevaluation", "evaluation_data_changed", "open"),
+        ("terminated", "cancelled_by_operator", "terminated"),
+        ("completed", None, "completed"),
+    ],
+)
+def test_real_operation_view_reports_the_operation_context(
+    recovery_db: str, state: str, reason: str | None, expected: str
+) -> None:
+    job, _, order = _arrange(lambda s: seed_uncertain_session(s, completed_at=at(0)))
+    _arrange(lambda s: _link_operation(s, order.id, state=state, reason=reason))
+    view = recovery.DbOperationView()
+    with session_scope(load_settings()) as session:
+        assert view.state_for_intent(session, order.id) == expected
+        assert view.states_for_intents(session, [order.id, uuid.uuid4()])[order.id] == expected
+        payload = get_job_recovery(session, job.id)  # the default view is the real one
+    (listed,) = payload["intents"]
+    assert listed["operation_state"] == expected
+    assert listed["blocking"] is True
+
+
+def test_real_view_reports_none_without_an_operation(recovery_db: str) -> None:
+    job, _, order = _arrange(lambda s: seed_uncertain_session(s, completed_at=at(0)))
+    with session_scope(load_settings()) as session:
+        assert recovery.DbOperationView().state_for_intent(session, order.id) == "none"
+        (listed,) = get_job_recovery(session, job.id)["intents"]
+    assert listed["operation_state"] == "none"
+
+
+def test_resubmission_is_never_permitted_whatever_the_real_operation_state(
+    recovery_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Open operation + open window + not_received statement + complete absence evidence:
+    still False with reason ``resubmission_unavailable``; a terminated operation too."""
+
+    job, _, order = _arrange(lambda s: seed_uncertain_session(s, completed_at=at(0)))
+    _arrange(lambda s: _link_operation(s, order.id, state="paused", reason="outcome_unresolved"))
+    timeline = Timeline(monkeypatch, at(2))
+    broker = LookupBroker()
+    _sync_account(broker)
+    timeline.advance(seconds=load_settings().execution.recovery_absence_grace_seconds + 1)
+    _sync_account(broker)
+    with session_scope(load_settings()) as session:
+        record_broker_statement(
+            session, order.id, "not_received", "ticket-9", "broker support: not received", "op"
+        )
+    status = _status(operation_view=recovery.DbOperationView(), now=timeline.now + timedelta(hours=1))
+    (intent,) = status.intents
+    assert intent.absence_evidence_complete and intent.statement is not None
+    assert intent.resubmission_permitted is False
+    with session_scope(load_settings()) as session:
+        (listed,) = get_job_recovery(session, job.id)["intents"]
+    assert listed["resubmission_permitted"] is False
+    assert listed["resubmission_reason"] == "resubmission_unavailable"
+    assert listed["operation_state"] == "open"
+    with session_scope(load_settings()) as session:
+        from sqlalchemy import update
+
+        from trading_platform.db.models import ExecutionOperation
+
+        session.execute(
+            update(ExecutionOperation).values(
+                state="terminated", reason="cancelled_by_operator", ended_by="op"
+            )
+        )
+    with session_scope(load_settings()) as session:
+        (ended,) = get_job_recovery(session, job.id)["intents"]
+    assert ended["operation_state"] == "terminated"
+    assert ended["resubmission_permitted"] is False and ended["blocking"] is True
+    assert broker.post_count == 0

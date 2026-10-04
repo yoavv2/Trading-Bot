@@ -80,6 +80,9 @@ def test_enum_member_sets_are_exact() -> None:
         "submitted",
         "ambiguous",
         "rejected",
+        # 20.1-11: the two stored unsent terminal dispositions of an execution operation.
+        "expired_unsent",
+        "cancelled_unsent",
     }
 
 

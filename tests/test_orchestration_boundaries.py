@@ -752,6 +752,17 @@ _MUTATING_ENTRY_POINTS = {
     "record_broker_statement",
     "assess_unestablished_intents",
     "record_scan_failure_for_unestablished",
+    # REC-02 (20.1-11): execution operation mutators, incl. the S1-R3 fencing primitives
+    # (they write the epoch / executor / attempt-row columns). Reachable only from services.
+    "create_operation",
+    "begin_continuation",
+    "touch_operation",
+    "end_operation",
+    "terminate_operation",
+    "transition",
+    "acquire_execution",
+    "authorize_send",
+    "complete_attempt_late",
     "ingest_daily_bars",
     "sync_symbol_metadata",
     "upsert_symbol_metadata",
