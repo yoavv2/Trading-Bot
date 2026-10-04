@@ -13,6 +13,10 @@ from trading_platform.db.models.backtest_signal import BacktestSignal
 from trading_platform.db.models.backtest_trade import BacktestTrade
 from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.models.execution_event import ExecutionEvent
+from trading_platform.db.models.external_broker_activity import (
+    ExternalActivityOriginTag,
+    ExternalBrokerActivity,
+)
 from trading_platform.db.models.job import Job, JobCancellationCause, JobFailureReason, JobStatus
 from trading_platform.db.models.job_dependency import JobDependency
 from trading_platform.db.models.job_event import JobEvent, JobEventType, JobTransitionOutcome
@@ -56,6 +60,8 @@ __all__ = [
     "BacktestTrade",
     "DailyBar",
     "ExecutionEvent",
+    "ExternalActivityOriginTag",
+    "ExternalBrokerActivity",
     "GLOBAL_KILL_SWITCH_NAME",
     "Job",
     "JobCancellationCause",
