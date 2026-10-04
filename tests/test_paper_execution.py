@@ -2526,3 +2526,190 @@ def test_unmapped_broker_status_records_reason_on_order_event(
         assert last.details["status_reason"] == "unmapped_broker_status"
     else:
         assert "status_reason" not in last.details
+
+
+# --- 20.1-07 (D-08): broker sync never adopts positions; they derive from owned fills ---
+
+
+def _flat_account() -> BrokerAccountSnapshot:
+    return BrokerAccountSnapshot(
+        cash=Decimal("100000"),
+        buying_power=Decimal("100000"),
+        equity=Decimal("100000"),
+        long_market_value=Decimal("0"),
+        short_market_value=Decimal("0"),
+        raw_payload={},
+    )
+
+
+def _derivation_fill(
+    fill_id: str, *, side: OrderSide, quantity: str, price: str, minute: int
+) -> BrokerFillSnapshot:
+    return BrokerFillSnapshot(
+        broker_fill_id=fill_id,
+        broker_order_id="existing-aapl-001",
+        symbol="AAPL",
+        side=side,
+        quantity=Decimal(quantity),
+        price=Decimal(price),
+        filled_at=datetime(2024, 1, 5, 14, minute, tzinfo=UTC),
+        raw_payload={"id": fill_id, "order_id": "existing-aapl-001"},
+    )
+
+
+def _broker_position_snapshot(symbol: str, quantity: str) -> BrokerPositionSnapshot:
+    return BrokerPositionSnapshot(
+        symbol=symbol,
+        quantity=Decimal(quantity),
+        average_entry_price=Decimal("999.000000"),
+        cost_basis=Decimal("9990.000000"),
+        market_value=Decimal("10000.000000"),
+        current_price=Decimal("1000.000000"),
+        raw_payload={"symbol": symbol},
+    )
+
+
+def _sync_with(
+    *,
+    fills: list[BrokerFillSnapshot] | None = None,
+    positions: list[BrokerPositionSnapshot] | None = None,
+):
+    return sync_paper_state(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=load_settings(),
+        broker_client=FakeBrokerClient(
+            orders=[],
+            fills=fills or [],
+            positions=positions or [],
+            account=_flat_account(),
+        ),
+    )
+
+
+def test_sync_creates_no_position_for_an_unknown_broker_position(migrated_paper_db: str) -> None:
+    _seed_approved_risk_batch()
+
+    report = _sync_with(positions=[_broker_position_snapshot("AAPL", "10")])
+
+    assert report.positions_opened == 0
+    assert report.positions_closed == 0
+    assert report.open_positions == 1
+    with session_scope(load_settings()) as session:
+        assert session.execute(select(Position)).scalars().all() == []
+        assert session.execute(select(PaperOrder)).scalars().all() == []
+
+
+def test_positions_derive_from_owned_fills_across_partial_and_sell(migrated_paper_db: str) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    buy_1 = _derivation_fill("f-1", side=OrderSide.BUY, quantity="4", price="100", minute=36)
+    buy_2 = _derivation_fill("f-2", side=OrderSide.BUY, quantity="6", price="110", minute=37)
+
+    # broker positions are deliberately different: they must never be copied
+    report = _sync_with(fills=[buy_1, buy_2], positions=[_broker_position_snapshot("AAPL", "10")])
+    assert (report.positions_opened, report.positions_closed) == (1, 0)
+    with session_scope(load_settings()) as session:
+        position = session.execute(select(Position)).scalar_one()
+        assert position.status == "open"
+        assert position.quantity == Decimal("10.000000")
+        assert position.average_entry_price == Decimal("106.000000")
+        assert position.cost_basis == Decimal("1060.000000")
+        assert position.opened_session_date == date(2024, 1, 5)
+
+    sell_part = _derivation_fill("f-3", side=OrderSide.SELL, quantity="3", price="120", minute=38)
+    report = _sync_with(fills=[buy_1, buy_2, sell_part])
+    assert (report.positions_opened, report.positions_closed) == (0, 0)
+    with session_scope(load_settings()) as session:
+        position = session.execute(select(Position)).scalar_one()
+        assert position.status == "open"
+        assert position.quantity == Decimal("7.000000")
+        assert position.average_entry_price == Decimal("106.000000")
+
+    sell_rest = _derivation_fill("f-4", side=OrderSide.SELL, quantity="7", price="125", minute=39)
+    report = _sync_with(fills=[buy_1, buy_2, sell_part, sell_rest])
+    assert (report.positions_opened, report.positions_closed) == (0, 1)
+    with session_scope(load_settings()) as session:
+        position = session.execute(select(Position)).scalar_one()
+        assert position.status == "closed"
+        assert position.closed_session_date == date(2024, 1, 5)
+        assert position.closed_at is not None
+
+
+def test_open_position_without_supporting_fills_is_closed_not_adopted(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    _seed_open_position(symbol="MSFT", quantity="5.000000")
+
+    # the broker reports a different MSFT position; local state must not adopt it
+    report = _sync_with(positions=[_broker_position_snapshot("MSFT", "8")])
+
+    assert (report.positions_opened, report.positions_closed) == (0, 1)
+    with session_scope(load_settings()) as session:
+        position = session.execute(select(Position)).scalar_one()
+        assert position.status == "closed"
+        assert position.quantity == Decimal("5.000000")
+        assert position.average_entry_price == Decimal("250.000000")
+
+
+def test_sync_never_derives_positions_from_other_strategies_fills(migrated_paper_db: str) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    settings = load_settings()
+    other_metadata = build_default_registry(settings).resolve("donchian_breakout_daily").metadata
+    with session_scope(settings) as session:
+        other = seed_strategy(session, other_metadata, enabled=True)
+        msft = session.execute(select(Symbol).where(Symbol.ticker == "MSFT")).scalar_one()
+        other_run = StrategyRun(
+            strategy_id=other.id,
+            run_type=StrategyRunType.PAPER_EXECUTION,
+            status=StrategyRunStatus.SUCCEEDED,
+            trigger_source="seed_other_strategy",
+            parameters_snapshot={},
+            result_summary={},
+        )
+        session.add(other_run)
+        session.flush()
+        other_order = PaperOrder(
+            strategy_run_id=other_run.id,
+            source_risk_event_id=approved_event_ids["MSFT"],
+            symbol_id=msft.id,
+            intended_session_date=date(2024, 1, 5),
+            side="buy",
+            quantity=Decimal("5"),
+            order_type="market",
+            time_in_force="day",
+            intent_hash="other-strategy-intent",
+            intent_version=1,
+            client_order_id="other-strategy-client-id",
+            broker_order_id="other-msft-001",
+            status="filled",
+            broker_status="filled",
+            broker_payload={},
+        )
+        session.add(other_order)
+        session.flush()
+        session.add(
+            PaperFill(
+                paper_order_id=other_order.id,
+                symbol_id=msft.id,
+                broker_fill_id="other-fill-1",
+                broker_order_id="other-msft-001",
+                side="buy",
+                quantity=Decimal("5"),
+                price=Decimal("300"),
+                filled_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
+                broker_payload={},
+            )
+        )
+
+    report = _sync_with(positions=[_broker_position_snapshot("MSFT", "5")])
+
+    assert report.positions_opened == 0
+    with session_scope(settings) as session:
+        assert session.execute(select(Position)).scalars().all() == []
