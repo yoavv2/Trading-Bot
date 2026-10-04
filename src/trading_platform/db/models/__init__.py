@@ -1,5 +1,10 @@
 """ORM model exports for the trading platform."""
 
+from trading_platform.db.models.account_reconciliation_run import (
+    AccountReconciliationRun,
+    AccountReconciliationScope,
+    AccountReconciliationStatus,
+)
 from trading_platform.db.models.account_snapshot import AccountSnapshot
 from trading_platform.db.models.active_paper_strategy import ActivePaperStrategy
 from trading_platform.db.models.backtest_equity_snapshot import BacktestEquitySnapshot
@@ -39,6 +44,9 @@ from trading_platform.db.models.system_control import (
 )
 
 __all__ = [
+    "AccountReconciliationRun",
+    "AccountReconciliationScope",
+    "AccountReconciliationStatus",
     "AccountSnapshot",
     "ActivePaperStrategy",
     "AttemptOutcomeClass",

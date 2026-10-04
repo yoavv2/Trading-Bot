@@ -76,7 +76,11 @@ def _insert(sql_values: str, params: dict[str, object]) -> None:
 
 def test_chain_is_linear_and_0023_follows_0022(migrated_db: str) -> None:
     script = ScriptDirectory.from_config(build_alembic_config())
-    assert script.get_heads() == [REVISION]
+    # Head-agnostic (20.1-08): later migrations extend the chain, so assert a single linear
+    # head that descends from REVISION rather than pinning REVISION as the head.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert REVISION in {r.revision for r in script.walk_revisions(base=PREVIOUS_REVISION, head=heads[0])}
     revision = script.get_revision(REVISION)
     assert revision is not None
     assert revision.down_revision == PREVIOUS_REVISION
