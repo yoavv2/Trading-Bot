@@ -774,6 +774,8 @@ _MUTATING_ENTRY_POINTS = {
     "upsert_market_sessions",
     "enable_strategy",
     "disable_strategy",
+    # PAPER-02 (20.1-12): seed / hand over / release the single paper owner (route only).
+    "set_active_paper_strategy",
     "trip_kill_switch",
     "reset_kill_switch",
     "ensure_strategy_record",

@@ -79,9 +79,7 @@ def _arrange(builder: Callable[[Any], Any]) -> Any:
         return builder(session)
 
 
-def _evaluate(
-    *, include_handover: bool = False, now: datetime | None = None
-) -> AccountChecks:
+def _evaluate(*, include_handover: bool = False, now: datetime | None = None) -> AccountChecks:
     with session_scope(load_settings()) as session:
         return evaluate_account_checks(session, now=now, include_handover=include_handover)
 
@@ -185,7 +183,10 @@ def _uncertain(session: Any) -> None:
 def _stale(session: Any) -> None:
     _quiet(session)
     seed_job(
-        session, job_type="paper-session", uncertain=False, status=JobStatus.SUCCEEDED,
+        session,
+        job_type="paper-session",
+        uncertain=False,
+        status=JobStatus.SUCCEEDED,
         completed_at=at(20),
     )
 
@@ -214,7 +215,13 @@ REASON_CASES: list[tuple[CheckReason, Callable[[Any], None], CheckId, set[Eviden
         False,
     ),
     (CheckReason.NO_BROKER_OBSERVED_SNAPSHOT, _only_run, CheckId.A3, set(), False),
-    (CheckReason.OPEN_POSITIONS, _open_positions, CheckId.A3, {EvidenceKind.ACCOUNT_SNAPSHOT}, False),
+    (
+        CheckReason.OPEN_POSITIONS,
+        _open_positions,
+        CheckId.A3,
+        {EvidenceKind.ACCOUNT_SNAPSHOT},
+        False,
+    ),
     (
         CheckReason.UNEXPLAINED_EXPOSURE,
         _exposure,
@@ -291,7 +298,12 @@ def test_quiet_account_passes_every_check_and_a7_needs_handover_with_an_owner(
 
     seeding = _evaluate()
     assert [check.id for check in seeding.checks] == [
-        CheckId.A1, CheckId.A2, CheckId.A3, CheckId.A4, CheckId.A5, CheckId.A6,
+        CheckId.A1,
+        CheckId.A2,
+        CheckId.A3,
+        CheckId.A4,
+        CheckId.A5,
+        CheckId.A6,
     ]
     assert seeding.all_passed and seeding.first_failed() is None
     assert all(check.reason_code is None and check.evidence_refs == () for check in seeding.checks)
@@ -601,21 +613,20 @@ def test_29_sep_fixture_fails_a5_and_a6_then_passes_after_fresh_clean_account_re
     assert after.all_passed and after.first_failed() is None
 
 
-def test_a5_not_received_statement_does_not_unblock_handover(
-    checks_db: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def arrange_not_received_world(monkeypatch: pytest.MonkeyPatch) -> tuple[LookupBroker, datetime]:
     """Only A5 fails: the operation ended, the outgoing owner is disabled, the account is
     flat, a fresh clean account reconciliation exists, and one never-found in-doubt intent
-    carries a recorded not_received statement and complete absence evidence."""
+    carries a recorded not_received statement and complete absence evidence.
+
+    Returns the (never-posting) broker and the patched clock instant.
+    """
 
     now = {"value": at(2)}
     monkeypatch.setattr(clock, "now_utc", lambda: now["value"])
 
     def build(session: Any) -> Any:
         _, _, order = seed_uncertain_session(session, completed_at=at(0))
-        operation = seed_operation(
-            session, state="terminated", reason="cancelled_by_operator"
-        )
+        operation = seed_operation(session, state="terminated", reason="cancelled_by_operator")
         operation.ended_by = "op"
         strategy_row(session, OWNER).status = StrategyStatus.DISABLED
         set_active_paper_strategy(session, OWNER)
@@ -639,8 +650,15 @@ def test_a5_not_received_statement_does_not_unblock_handover(
         seed_clean_account_run(session, completed_at=at(90))
 
     _arrange(quiet_after)
+    return broker, now["value"]
 
-    result = _evaluate(include_handover=True, now=now["value"])
+
+def test_a5_not_received_statement_does_not_unblock_handover(
+    checks_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broker, now = arrange_not_received_world(monkeypatch)
+
+    result = _evaluate(include_handover=True, now=now)
 
     assert result.failed_ids() == (CheckId.A5,)
     first = result.first_failed()
@@ -693,7 +711,13 @@ def _row_counts() -> tuple[int, ...]:
     with session_scope(load_settings()) as session:
         return tuple(
             session.execute(select(func.count()).select_from(model)).scalar_one()
-            for model in (Job, StrategyRun, ExecutionEvent, ExecutionOperation, AccountReconciliationRun)
+            for model in (
+                Job,
+                StrategyRun,
+                ExecutionEvent,
+                ExecutionOperation,
+                AccountReconciliationRun,
+            )
         )
 
 
@@ -755,7 +779,10 @@ def test_statement_count_is_independent_of_history_size(checks_db: str) -> None:
                 completed_at=at(-200 - minute),
             )
             seed_job(
-                session, job_type="reconciliation", uncertain=False, status=JobStatus.FAILED,
+                session,
+                job_type="reconciliation",
+                uncertain=False,
+                status=JobStatus.FAILED,
                 completed_at=at(-300 - minute),
             )
 

@@ -58,6 +58,10 @@ from trading_platform.services.execution.operations import (
 )
 
 # Re-exported for the recovery route adapter, which may import only this services module.
+from trading_platform.services.paper_account_checks import (
+    AccountChecks,
+    evaluate_account_checks,
+)
 from trading_platform.services.recovery import (
     IntentNotFoundError,
 )
@@ -123,6 +127,92 @@ class ControlStateUnavailableError(LookupError):
     Raised when the global kill-switch row is absent (migrations not current)
     or when no strategy row can be found/created to anchor the audit run.
     """
+
+
+class AccountCheckFailedError(Exception):
+    """A seeding, handover or release was refused by an account check (A1-A7, D-04).
+
+    Raised inside the control transaction BEFORE any write, so the refusal performs zero
+    writes. ``code`` is ``check_failed:<first failing check id>``; ``checks`` carries every
+    evaluated check (passed, reason code, evidence refs) and ``failed_checks`` all failing ids.
+    """
+
+    def __init__(self, checks: AccountChecks) -> None:
+        first = checks.first_failed()
+        if first is None:  # pragma: no cover - guarded by the caller
+            raise ValueError("AccountCheckFailedError requires a failing check")
+        super().__init__(f"Account check {first.id.value} failed: {first.reason_code}")
+        self.check = first.id.value
+        self.code = f"check_failed:{first.id.value}"
+        self.failed_checks = [check_id.value for check_id in checks.failed_ids()]
+        self.checks = checks.to_list()
+
+    def to_detail(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "check": self.check,
+            "failed_checks": list(self.failed_checks),
+            "checks": list(self.checks),
+        }
+
+
+#: Closed transition kinds of the owner control (``reaffirm`` = target equals current).
+OWNER_KIND_SEEDING = "seeding"
+OWNER_KIND_HANDOVER = "handover"
+OWNER_KIND_RELEASE = "release"
+OWNER_KIND_REAFFIRM = "reaffirm"
+
+ACTIVE_PAPER_STRATEGY_CHANGED_EVENT = "active_paper_strategy_changed"
+ACTIVE_PAPER_STRATEGY_UNCHANGED_EVENT = "active_paper_strategy_unchanged"
+
+
+@dataclass(frozen=True)
+class ActivePaperStrategyReport:
+    """Outcome of ``set_active_paper_strategy`` (the audited owner control)."""
+
+    run_id: str
+    kind: str
+    changed: bool
+    strategy_id: str | None
+    previous_strategy_id: str | None
+    since: str
+    new_owner_status: str | None
+    new_owner_disabled: bool
+    checks: list[dict[str, Any]]
+    reason: str
+    actor: str
+    trigger_source: str
+    anchor_only: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "active_paper_strategy": {"strategy_id": self.strategy_id, "since": self.since},
+            "previous_strategy_id": self.previous_strategy_id,
+            "changed": self.changed,
+            "kind": self.kind,
+            "new_owner_status": self.new_owner_status,
+            "run_id": self.run_id,
+        }
+
+
+@dataclass(frozen=True)
+class ActivePaperStrategyView:
+    """R1: the owner plus the readable account checks (read-only, no write)."""
+
+    state: ActivePaperStrategyState
+    checks: list[dict[str, Any]]
+    seeding_available: bool
+    handover_available: bool
+    as_of: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self.state.to_dict(),
+            "checks": list(self.checks),
+            "seeding_available": self.seeding_available,
+            "handover_available": self.handover_available,
+            "as_of": self.as_of.isoformat(),
+        }
 
 
 @dataclass(frozen=True)
@@ -468,16 +558,224 @@ class OperatorControlService:
             )
 
     @_translate_db_errors(ControlStateUnavailableError)
-    def get_active_paper_strategy_view(self) -> ActivePaperStrategyState:
-        """Read-only owner view (04 task 5 / R1): no write, no get-or-create.
+    def get_active_paper_strategy_view(self) -> ActivePaperStrategyView:
+        """Read-only owner view with the A1..A6 checks (A7 when an owner exists) (R1).
 
-        A missing singleton row is reported as ``ControlStateUnavailableError``
+        No write, no get-or-create, no broker call; a statement count independent of
+        history. A missing singleton row is reported as ``ControlStateUnavailableError``
         (HTTP 503 ``control_state_unavailable``).
         """
-        try:
-            return load_active_paper_strategy(self.settings)
-        except ActivePaperStrategyUnavailableError as exc:
-            raise ControlStateUnavailableError(str(exc)) from exc
+        with session_scope(self.settings) as session:
+            try:
+                state = load_active_paper_strategy(session=session)
+            except ActivePaperStrategyUnavailableError as exc:
+                raise ControlStateUnavailableError(str(exc)) from exc
+            has_owner = state.strategy_id is not None
+            checks = evaluate_account_checks(
+                session, include_handover=has_owner, settings=self.settings
+            )
+            return ActivePaperStrategyView(
+                state=state,
+                checks=checks.to_list(),
+                seeding_available=(not has_owner) and checks.all_passed,
+                handover_available=has_owner and checks.all_passed,
+                as_of=checks.as_of,
+            )
+
+    @_translate_db_errors(ControlWriteError)
+    def set_active_paper_strategy(
+        self,
+        strategy_id: str | None,
+        *,
+        reason: str,
+        actor: str = "local_operator",
+        trigger_source: str = "api_control",
+    ) -> ActivePaperStrategyReport:
+        """Seed (none -> B), hand over (A -> B), release (A -> none) or reaffirm the owner.
+
+        PAPER-02 / D-04. ONE transaction: the singleton row is locked FOR UPDATE (the same
+        lock Job admission takes FOR SHARE), the transition is computed from the locked
+        row, account checks A1-A7 are evaluated against persisted evidence and, only if all
+        pass, the owner is set, the NEW owner is left DISABLED, and one operator_control
+        run plus one ExecutionEvent are written. A refusal raises
+        ``AccountCheckFailedError`` before any write. Reaffirming the current owner evaluates
+        no checks and changes nothing but is audited. No broker access, no worker, no Job;
+        a handover or release never disables the outgoing owner (the operator does that first).
+        """
+
+        metadata = self.registry.resolve(strategy_id).metadata if strategy_id is not None else None
+        with session_scope(self.settings) as session:
+            singleton = session.execute(
+                select(ActivePaperStrategy)
+                .where(ActivePaperStrategy.id == ACTIVE_PAPER_STRATEGY_SINGLETON_ID)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if singleton is None:
+                raise ControlStateUnavailableError(
+                    "Missing active_paper_strategy singleton row; database migrations may not "
+                    "be current."
+                )
+            changed_at = _db_clock_now(session)
+            outgoing: Strategy | None = None
+            if singleton.strategy_id is not None:
+                outgoing = session.execute(
+                    select(Strategy).where(Strategy.id == singleton.strategy_id).with_for_update()
+                ).scalar_one()
+            target = _ensure_locked_strategy_record(session, metadata) if metadata else None
+
+            previous_public = outgoing.strategy_id if outgoing is not None else None
+            new_public = target.strategy_id if target is not None else None
+            if new_public == previous_public:
+                kind = OWNER_KIND_REAFFIRM
+            elif previous_public is None:
+                kind = OWNER_KIND_SEEDING
+            elif new_public is None:
+                kind = OWNER_KIND_RELEASE
+            else:
+                kind = OWNER_KIND_HANDOVER
+
+            if (
+                kind in (OWNER_KIND_SEEDING, OWNER_KIND_HANDOVER)
+                and target is not None
+                and target.status == StrategyStatus.ARCHIVED
+            ):
+                raise StrategyArchivedError(target.strategy_id)
+
+            checks_list: list[dict[str, Any]] = []
+            if kind != OWNER_KIND_REAFFIRM:
+                checks = evaluate_account_checks(
+                    session,
+                    include_handover=kind in (OWNER_KIND_HANDOVER, OWNER_KIND_RELEASE),
+                    settings=self.settings,
+                )
+                if not checks.all_passed:
+                    raise AccountCheckFailedError(checks)
+                checks_list = checks.to_list()
+
+            anchor_only = False
+            if kind in (OWNER_KIND_SEEDING, OWNER_KIND_HANDOVER):
+                audit_strategy = target
+            elif outgoing is not None:  # release or reaffirm of the current owner
+                audit_strategy = outgoing
+            else:  # none -> none: the documented kill-switch anchor strategy
+                audit_strategy = self._resolve_audit_strategy_record(session)
+                anchor_only = True
+            assert audit_strategy is not None
+
+            new_owner_disabled = False
+            if (
+                kind in (OWNER_KIND_SEEDING, OWNER_KIND_HANDOVER)
+                and target is not None
+                and target.status == StrategyStatus.ACTIVE
+            ):
+                target.status = StrategyStatus.DISABLED
+                new_owner_disabled = True
+
+            strategy_run = StrategyRun(
+                strategy_id=audit_strategy.id,
+                run_type=StrategyRunType.OPERATOR_CONTROL,
+                status=StrategyRunStatus.PENDING,
+                trigger_source=trigger_source,
+                parameters_snapshot={
+                    "action": "set_active_paper_strategy",
+                    "kind": kind,
+                    "actor": actor,
+                    "reason": reason,
+                    "previous_strategy_id": previous_public,
+                    "requested_strategy_id": new_public,
+                },
+                result_summary={
+                    "stage": "pending",
+                    "action": "set_active_paper_strategy",
+                    "kind": kind,
+                },
+            )
+            session.add(strategy_run)
+            session.flush()
+
+            changed = kind != OWNER_KIND_REAFFIRM
+            if changed:
+                singleton.strategy_id = target.id if target is not None else None
+                singleton.since = changed_at
+                singleton.reason = reason
+                singleton.set_by_run_id = strategy_run.id
+                session.flush()
+            since = changed_at if changed else singleton.since
+
+            details: dict[str, Any] = {
+                "kind": kind,
+                "previous_strategy_id": previous_public,
+                "new_strategy_id": new_public,
+                "reason": reason,
+                "actor": actor,
+                "anchor_only": anchor_only,
+            }
+            if changed:
+                details["checks"] = checks_list
+                details["new_owner_disabled"] = new_owner_disabled
+            result_summary = {
+                "stage": "completed",
+                "action": "set_active_paper_strategy",
+                "changed": changed,
+                "changed_at": changed_at.isoformat(),
+                **details,
+            }
+            strategy_run.status = StrategyRunStatus.SUCCEEDED
+            strategy_run.completed_at = changed_at
+            strategy_run.result_summary = result_summary
+            session.add(
+                ExecutionEvent(
+                    strategy_run_id=strategy_run.id,
+                    paper_order_id=None,
+                    event_type=(
+                        ACTIVE_PAPER_STRATEGY_CHANGED_EVENT
+                        if changed
+                        else ACTIVE_PAPER_STRATEGY_UNCHANGED_EVENT
+                    ),
+                    severity="info",
+                    blocks_execution=False,
+                    event_at=changed_at,
+                    message=_build_owner_message(
+                        kind=kind,
+                        previous=previous_public,
+                        new=new_public,
+                        new_owner_disabled=new_owner_disabled,
+                        reason=reason,
+                    ),
+                    details=details,
+                )
+            )
+            session.flush()
+            report = ActivePaperStrategyReport(
+                run_id=str(strategy_run.id),
+                kind=kind,
+                changed=changed,
+                strategy_id=new_public,
+                previous_strategy_id=previous_public,
+                since=since.isoformat(),
+                new_owner_status=StrategyStatus.DISABLED.value if new_owner_disabled else None,
+                new_owner_disabled=new_owner_disabled,
+                checks=checks_list,
+                reason=reason,
+                actor=actor,
+                trigger_source=trigger_source,
+                anchor_only=anchor_only,
+            )
+
+        emit_structured_log(
+            self._logger,
+            logging.INFO,
+            "active_paper_strategy_set",
+            run_id=report.run_id,
+            kind=report.kind,
+            changed=report.changed,
+            previous_strategy_id=report.previous_strategy_id,
+            strategy_id=report.strategy_id,
+            new_owner_disabled=report.new_owner_disabled,
+            actor=actor,
+            trigger_source=trigger_source,
+        )
+        return report
 
     def ensure_strategy_state(self, strategy_id: str) -> StrategyControlState:
         """Get-or-create for mutating callers only (D-31)."""
@@ -1264,6 +1562,27 @@ def _serialize_strategy_control_state(strategy_record: Strategy) -> StrategyCont
         status=strategy_record.status.value,
         updated_at=strategy_record.updated_at.isoformat(),
     )
+
+
+def _build_owner_message(
+    *,
+    kind: str,
+    previous: str | None,
+    new: str | None,
+    new_owner_disabled: bool,
+    reason: str,
+) -> str:
+    if kind == OWNER_KIND_REAFFIRM:
+        return (
+            f"Active paper strategy reaffirmed as {new or 'none'}: unchanged, no checks "
+            f"evaluated. Reason: {reason}"
+        )
+    suffix = " The new owner was left disabled." if new_owner_disabled else ""
+    if kind == OWNER_KIND_SEEDING:
+        return f"Active paper strategy seeded: none -> {new}.{suffix} Reason: {reason}"
+    if kind == OWNER_KIND_RELEASE:
+        return f"Active paper strategy released: {previous} -> none. Reason: {reason}"
+    return f"Active paper strategy handed over: {previous} -> {new}.{suffix} Reason: {reason}"
 
 
 def _build_control_message(
