@@ -13,6 +13,15 @@ from trading_platform.db.models.backtest_signal import BacktestSignal
 from trading_platform.db.models.backtest_trade import BacktestTrade
 from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.models.execution_event import ExecutionEvent
+from trading_platform.db.models.execution_operation import (
+    OPEN_OPERATION_STATES,
+    ExecutionOperation,
+    ExecutionOperationIntent,
+    ExecutionOperationJob,
+    IntentDisposition,
+    OperationJobMode,
+    OperationState,
+)
 from trading_platform.db.models.external_broker_activity import (
     ExternalActivityOriginTag,
     ExternalBrokerActivity,
@@ -74,9 +83,13 @@ __all__ = [
     "DailyBar",
     "EvidenceResult",
     "ExecutionEvent",
+    "ExecutionOperation",
+    "ExecutionOperationIntent",
+    "ExecutionOperationJob",
     "ExternalActivityOriginTag",
     "ExternalBrokerActivity",
     "GLOBAL_KILL_SWITCH_NAME",
+    "IntentDisposition",
     "Job",
     "JobCancellationCause",
     "JobDependency",
@@ -90,6 +103,9 @@ __all__ = [
     "KillSwitchState",
     "MarketDataIngestionRun",
     "MarketSession",
+    "OPEN_OPERATION_STATES",
+    "OperationJobMode",
+    "OperationState",
     "OrderEvent",
     "OrderLifecycleState",
     "OrderSubmissionAttempt",

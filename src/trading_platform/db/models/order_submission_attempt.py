@@ -78,3 +78,10 @@ class OrderSubmissionAttempt(TimestampedModel, Base):
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     broker_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    # S1-R3 (migration 0027): the authority under which the row was written and the latest
+    # time its POST may start. NULL for rows written before the operation fencing existed.
+    execution_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    executor_job_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    authorization_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
