@@ -32,6 +32,7 @@ from trading_platform.jobs.registry import (
     JobRegistry,
     retry_prerequisite_for,
 )
+from trading_platform.services.batch_outcomes import OperationFailureReason
 from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.symbol_metadata_sync import (
     MetadataSyncResult,
@@ -288,13 +289,42 @@ def test_result_summary_carries_expected_keys(monkeypatch: pytest.MonkeyPatch) -
         "synced_count": 2,
         "skipped_count": 0,
         "failed_count": 0,
+        # D-28/COR-03 additive keys
+        "outcome": "complete",
+        "failures": [],
+        "operation_failure": None,
         "produced_run_ids": [],
     }
     assert "succeeded" not in summary
     json.dumps(summary)
 
 
-def test_failed_tickers_raise_after_completion_log(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_partial_outcome_returns_normally_with_outcome_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # D-28: replaces test_failed_tickers_raise_after_completion_log. A partial
+    # result (one per-symbol failure, others synced) no longer raises.
+    result = _fake_result(
+        synced=["AAPL"],
+        failed=["ZZZZ"],
+        failures=[{"symbol": "ZZZZ", "reason": "not_found"}],
+    )
+
+    import trading_platform.jobs.handlers.sync_symbol_metadata as handler_module
+
+    monkeypatch.setattr(handler_module, "sync_symbol_metadata", lambda symbols, **kwargs: result)
+
+    context = _FakeContext()
+    summary = SyncSymbolMetadataJobHandler().run(context)
+
+    assert summary["outcome"] == "partial"
+    assert summary["failures"] == [{"symbol": "ZZZZ", "reason": "not_found"}]
+    assert summary["operation_failure"] is None
+    assert context.log_calls[-1]["context"]["outcome"] == "partial"
+    json.dumps(summary)
+
+
+def test_failed_outcome_raises_after_completion_log(monkeypatch: pytest.MonkeyPatch) -> None:
     result = _fake_result(synced=[], skipped=[], failed=["ZZZZ"])
 
     import trading_platform.jobs.handlers.sync_symbol_metadata as handler_module
@@ -310,6 +340,39 @@ def test_failed_tickers_raise_after_completion_log(monkeypatch: pytest.MonkeyPat
     assert any(
         call["event_code"] == "symbol_metadata_sync_completed" for call in context.log_calls
     )
+
+
+def test_operation_failure_raises_after_completion_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = _fake_result(synced=[], operation_failure=OperationFailureReason.PROVIDER_AUTH)
+
+    import trading_platform.jobs.handlers.sync_symbol_metadata as handler_module
+
+    monkeypatch.setattr(handler_module, "sync_symbol_metadata", lambda symbols, **kwargs: result)
+
+    context = _FakeContext()
+    with pytest.raises(SymbolMetadataSyncFailedError, match="provider_auth"):
+        SyncSymbolMetadataJobHandler().run(context)
+
+    completed = [c for c in context.log_calls if c["event_code"] == "symbol_metadata_sync_completed"]
+    assert completed and completed[0]["context"]["operation_failure"] == "provider_auth"
+    assert completed[0]["context"]["outcome"] == "failed"
+
+
+def test_cancel_checkpoints_unchanged_for_partial_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    # (c) the post-call cancel checkpoint still runs after a partial result.
+    result = _fake_result(synced=["AAPL"], failed=["ZZZZ"])
+
+    import trading_platform.jobs.handlers.sync_symbol_metadata as handler_module
+
+    def _fake_sync(symbols: list[str], **kwargs: Any) -> MetadataSyncResult:
+        context.cancelled = True
+        return result
+
+    monkeypatch.setattr(handler_module, "sync_symbol_metadata", _fake_sync)
+
+    context = _FakeContext()
+    with pytest.raises(JobCancelledError):
+        SyncSymbolMetadataJobHandler().run(context)
 
 
 def test_handler_declares_backtest_mode() -> None:

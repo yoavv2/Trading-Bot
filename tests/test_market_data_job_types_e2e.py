@@ -148,6 +148,10 @@ def market_jobs_env(job_operations_env: None, monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(ingestion_module, "PolygonClient", FakePolygonClient)
     monkeypatch.setattr(symbol_metadata_sync_module, "fetch_ticker_overview", _fake_overview)
+    # D-28: the metadata sync refuses to start without a configured key
+    # (invalid_configuration); the fetch seam above is faked, so the value is
+    # never used for a request.
+    monkeypatch.setenv("TRADING_PLATFORM_MARKET_DATA__POLYGON__API_KEY", "test-key-not-real")
     clear_settings_cache()
     try:
         yield
@@ -379,29 +383,95 @@ def test_sync_symbol_metadata_job_upserts_symbols(market_jobs_env: None) -> None
     assert rows["SPY"].metadata_provider == "polygon"
 
 
-def test_sync_symbol_metadata_job_fails_on_failed_ticker(
+def test_sync_symbol_metadata_one_unknown_ticker_is_succeeded_partial(
     market_jobs_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ORCH-02 semantics carried by the Job: one failing ticker lands the Job
-    FAILED handler_error and names that ticker in failure_message."""
+    """D-28 (replaces the old fail-on-any-failed-ticker test): one unknown
+    ticker is the per-symbol reason `not_found`; the other symbol is synced,
+    the Job SUCCEEDED and the read outcome is `partial`."""
 
-    def _fetch_failing_on_spy(ticker: str, settings: Any) -> dict[str, Any]:
+    def _fetch_unknown_spy(ticker: str, settings: Any) -> dict[str, Any] | None:
         if ticker == "SPY":
-            raise RuntimeError("simulated polygon failure")
+            return None
         return _fake_overview(ticker, settings)
 
-    monkeypatch.setattr(symbol_metadata_sync_module, "fetch_ticker_overview", _fetch_failing_on_spy)
+    monkeypatch.setattr(symbol_metadata_sync_module, "fetch_ticker_overview", _fetch_unknown_spy)
 
     with TestClient(create_app()) as client:
         detail = _submit_and_run(
-            client, "e2e-metadata-failure", "sync-symbol-metadata", METADATA_PAYLOAD
+            client, "e2e-metadata-partial", "sync-symbol-metadata", METADATA_PAYLOAD
+        )
+
+    assert detail["status"] == "succeeded", detail["failure_message"]
+    assert detail["outcome"] == "partial"
+    summary = detail["result_summary"]
+    assert summary["outcome"] == "partial"
+    assert summary["synced"] == ["QQQ"]
+    assert summary["failed"] == ["SPY"]
+    assert summary["failures"] == [{"symbol": "SPY", "reason": "not_found"}]
+    assert summary["operation_failure"] is None
+    assert detail["resources"] == []
+
+    with session_scope(load_settings()) as session:
+        synced = {
+            row.ticker
+            for row in session.execute(
+                select(Symbol).where(Symbol.metadata_provider == "polygon")
+            ).scalars()
+        }
+    assert synced == {"QQQ"}
+
+
+def test_sync_symbol_metadata_auth_failure_fails_job_and_marks_nothing(
+    market_jobs_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-28: an auth failure is operation-level: Job FAILED, read outcome
+    `failed`, and no Symbol row is marked with a metadata provider."""
+
+    def _fetch_auth_on_spy(ticker: str, settings: Any) -> dict[str, Any] | None:
+        if ticker == "SPY":
+            raise PolygonAuthError("simulated 401")
+        return _fake_overview(ticker, settings)
+
+    monkeypatch.setattr(symbol_metadata_sync_module, "fetch_ticker_overview", _fetch_auth_on_spy)
+
+    with TestClient(create_app()) as client:
+        detail = _submit_and_run(
+            client, "e2e-metadata-auth", "sync-symbol-metadata", METADATA_PAYLOAD
         )
 
     assert detail["status"] == "failed"
     assert detail["failure_reason"] == "handler_error"
-    assert "SPY" in detail["failure_message"]
-    assert "QQQ" not in detail["failure_message"]
+    assert "provider_auth" in detail["failure_message"]
+    assert detail["outcome"] == "failed"
     assert detail["resources"] == []
+
+    with session_scope(load_settings()) as session:
+        marked = session.execute(
+            select(Symbol).where(Symbol.metadata_provider.is_not(None))
+        ).scalars().all()
+    assert marked == []
+
+
+def test_sync_symbol_metadata_all_tickers_failing_fails_job(
+    market_jobs_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-28: when no ticker can be synced the Job lands FAILED (outcome
+    `failed`), naming the failed tickers."""
+
+    monkeypatch.setattr(
+        symbol_metadata_sync_module, "fetch_ticker_overview", lambda ticker, settings: None
+    )
+
+    with TestClient(create_app()) as client:
+        detail = _submit_and_run(
+            client, "e2e-metadata-allfail", "sync-symbol-metadata", METADATA_PAYLOAD
+        )
+
+    assert detail["status"] == "failed"
+    assert detail["failure_reason"] == "handler_error"
+    assert "QQQ" in detail["failure_message"] and "SPY" in detail["failure_message"]
+    assert detail["outcome"] == "failed"
 
 
 def test_sync_market_sessions_job_upserts_sessions(market_jobs_env: None) -> None:

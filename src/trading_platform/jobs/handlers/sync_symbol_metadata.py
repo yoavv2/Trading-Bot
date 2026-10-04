@@ -4,12 +4,14 @@ execution unit (OPS-05, ORCH-02, D-01, D-08).
 Calls the existing ``services.symbol_metadata_sync.sync_symbol_metadata``
 exactly once, bracketed by two cooperative-cancellation checkpoints (D-01).
 Progress is reported as step text only, never a fabricated completion
-fraction -- the framework owns the Job's own terminal-state progress. Any
-failed ticker lands the Job FAILED (``handler_error``) with the failed
-tickers named in the failure message, preserving the retired CLI's
-exit-1-on-any-failure semantics (ORCH-02) -- ``raise_for_failures()`` is
-called only after the completion log has already recorded the full
-synced/skipped/failed split, so the failure is never silent.
+fraction -- the framework owns the Job's own terminal-state progress.
+
+COR-03/D-28: the closed outcome ``complete | partial | failed`` comes from the
+domain result. A partial result (some tickers failed per-symbol, at least one
+synced) returns normally and the Job SUCCEEDED; an operation-level failure or a
+run in which no ticker synced raises via ``raise_if_failed()`` and lands the Job
+FAILED (``handler_error``). ``raise_if_failed()`` is called only after the
+completion log has recorded the full result, so a failure is never silent.
 """
 
 from __future__ import annotations
@@ -64,13 +66,14 @@ class SyncSymbolMetadataJobHandler:
                 "synced_count": counts["synced_count"],
                 "skipped_count": counts["skipped_count"],
                 "failed_count": counts["failed_count"],
+                "outcome": counts["outcome"],
+                "operation_failure": counts["operation_failure"],
             },
         )
 
-        # ORCH-02: any failed ticker raises after the completion log has
-        # already been written, landing the Job FAILED (handler_error) with
-        # the failed tickers named in the failure message.
-        result.raise_for_failures()
+        # D-28: only outcome `failed` raises (after the completion log); a
+        # partial result keeps the Job SUCCEEDED and is visible as outcome.
+        result.raise_if_failed()
 
         # D-01: post-call cancellation checkpoint -- a cancel requested
         # during the call is acknowledged here.
@@ -83,5 +86,8 @@ class SyncSymbolMetadataJobHandler:
             "synced_count": counts["synced_count"],
             "skipped_count": counts["skipped_count"],
             "failed_count": counts["failed_count"],
+            "outcome": counts["outcome"],
+            "failures": counts["failures"],
+            "operation_failure": counts["operation_failure"],
             "produced_run_ids": [],
         }
