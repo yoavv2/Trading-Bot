@@ -32,6 +32,16 @@ closed 409 codes ``calendar_data_unavailable`` > ``historical_execution_rejected
 services-layer ``paper_execution_eligibility`` read, judged at the injected clock.
 Research, backtests and evaluation of past sessions are never gated by it.
 
+Provenance (D-25, PROV-01): as the LAST validation step the risk run that will be
+used (the pinned ``risk_run_id``, else the latest eligible one) has its stored
+evaluation input manifest verified against the current source data and signal
+settings. A mismatch is a typed 409 ``evaluation_data_changed`` (data) or
+``strategy_settings_changed`` (signal settings); no eligible run, or a run with
+no manifest (evaluated before 20.1-06), is ``evaluation_data_not_ready``. Cash,
+positions, open orders and risk limits are NOT provenance (D-26): they are
+re-checked fresh at execution. The resolved run id is never written into the
+normalized payload.
+
 Ownership (D-03, PAPER-01): after every payload check, a strategy that is not
 the active paper strategy is refused with a typed ``JobSubmissionConflictError``
 (HTTP 409 ``strategy_not_active_paper_strategy``; ``no_active_paper_strategy``
@@ -74,7 +84,12 @@ from trading_platform.services.calendar_facts import (
     EligibilityRejection,
     paper_execution_eligibility,
 )
-from trading_platform.services.risk import is_eligible_risk_run
+from trading_platform.services.evaluation_manifest import ManifestVerificationStatus
+from trading_platform.services.risk import (
+    is_eligible_risk_run,
+    latest_eligible_risk_run_id,
+    verify_risk_run_manifest,
+)
 
 PAPER_SESSION_JOB_TYPE = "paper-session"
 
@@ -100,9 +115,10 @@ class PaperSessionPayloadRejection(StrEnum):
 
 class PaperSessionSubmitConflict(StrEnum):
     """Closed set of state-conflict codes (HTTP 409) ``paper-session`` submission
-    can raise via ``JobSubmissionConflictError`` (D-03, D-23): the two ownership
-    refusals and the four execution-eligibility refusals; later plans extend it.
-    One parametrized test case exists per value."""
+    can raise via ``JobSubmissionConflictError`` (D-03, D-23, D-25): the two ownership
+    refusals, the four execution-eligibility refusals and the two evaluation
+    provenance refusals; later plans extend it. One parametrized test case exists
+    per value."""
 
     NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
     STRATEGY_NOT_ACTIVE_PAPER_STRATEGY = "strategy_not_active_paper_strategy"
@@ -110,6 +126,8 @@ class PaperSessionSubmitConflict(StrEnum):
     OUTSIDE_EXECUTION_WINDOW = "outside_execution_window"
     EVALUATION_DATA_NOT_READY = "evaluation_data_not_ready"
     CALENDAR_DATA_UNAVAILABLE = "calendar_data_unavailable"
+    EVALUATION_DATA_CHANGED = "evaluation_data_changed"
+    STRATEGY_SETTINGS_CHANGED = "strategy_settings_changed"
 
 
 def _default_clock() -> datetime:
@@ -194,6 +212,7 @@ class PaperSessionSubmissionSpec:
         )
 
         canonical_risk_run_id: str | None = None
+        pinned_risk_run_id: uuid.UUID | None = None
         if risk_run_id is not None:
             try:
                 parsed_risk_run_id = uuid.UUID(risk_run_id)
@@ -213,6 +232,7 @@ class PaperSessionSubmissionSpec:
                     reason=PaperSessionPayloadRejection.RISK_RUN_NOT_ELIGIBLE.value,
                 )
             canonical_risk_run_id = str(parsed_risk_run_id)
+            pinned_risk_run_id = parsed_risk_run_id
 
         # D-03: state check LAST, after every shape/semantic payload check.
         require_active_paper_strategy(
@@ -243,11 +263,61 @@ class PaperSessionSubmissionSpec:
                 detail=detail,
             )
 
+        self._require_matching_manifest(
+            strategy_id=strategy_id,
+            as_of_session=as_of_session,
+            pinned_risk_run_id=pinned_risk_run_id,
+        )
+
         return {
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
             "risk_run_id": canonical_risk_run_id,
         }
+
+    def _require_matching_manifest(
+        self,
+        *,
+        strategy_id: str,
+        as_of_session: date,
+        pinned_risk_run_id: uuid.UUID | None,
+    ) -> None:
+        """D-25: the evaluation that will be executed must still reflect the
+        currently valid source data and signal settings (read-only)."""
+
+        detail: dict[str, str] = {
+            "strategy_id": strategy_id,
+            "as_of_session": as_of_session.isoformat(),
+        }
+        run_id = pinned_risk_run_id or latest_eligible_risk_run_id(
+            strategy_id=strategy_id, as_of_session=as_of_session, settings=self._settings
+        )
+        if run_id is None:
+            detail["reason"] = "no_eligible_risk_run"
+            raise JobSubmissionConflictError(
+                job_type=PAPER_SESSION_JOB_TYPE,
+                code=PaperSessionSubmitConflict.EVALUATION_DATA_NOT_READY.value,
+                detail=detail,
+            )
+        detail["risk_run_id"] = str(run_id)
+        verification = verify_risk_run_manifest(
+            risk_run_id=run_id, strategy_id=strategy_id, settings=self._settings
+        )
+        status = verification.status
+        if status is ManifestVerificationStatus.MATCHES:
+            return
+        if status is ManifestVerificationStatus.MANIFEST_MISSING:
+            detail["reason"] = "manifest_missing"
+            code = PaperSessionSubmitConflict.EVALUATION_DATA_NOT_READY
+        elif status is ManifestVerificationStatus.STRATEGY_SETTINGS_CHANGED:
+            code = PaperSessionSubmitConflict.STRATEGY_SETTINGS_CHANGED
+        else:
+            code = PaperSessionSubmitConflict.EVALUATION_DATA_CHANGED
+            if verification.mismatched_request is not None:
+                detail["request_kind"] = verification.mismatched_request.kind.value
+        raise JobSubmissionConflictError(
+            job_type=PAPER_SESSION_JOB_TYPE, code=code.value, detail=detail
+        )
 
     def lock_admission(self, *, session: Any) -> None:
         """SER lock step alone: the ownership singleton FOR SHARE (fails closed)."""
