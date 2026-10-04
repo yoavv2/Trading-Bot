@@ -57,19 +57,22 @@ def _evaluation_payload(
     metadata: dict[str, SymbolReadiness],
 ) -> dict[str, Any]:
     payload = evaluation.to_dict()
-    payload["symbols"] = [
-        {
-            "symbol": item.symbol,
-            "bars": "present" if item.has_bar else "missing",
-            "history": "sufficient" if item.history_sufficient else "insufficient",
-            "bars_through_session": item.bars_through_session,
-            "metadata": "ready" if metadata[item.symbol].ready else "not_ready",
-            "metadata_reason": (
-                metadata[item.symbol].reason.value if metadata[item.symbol].reason else None
-            ),
-        }
-        for item in evaluation.symbol_readiness
-    ]
+    rows: list[dict[str, Any]] = []
+    for item in evaluation.symbol_readiness:
+        symbol_metadata = metadata[item.symbol]
+        rows.append(
+            {
+                "symbol": item.symbol,
+                "bars": "present" if item.has_bar else "missing",
+                "history": "sufficient" if item.history_sufficient else "insufficient",
+                "bars_through_session": item.bars_through_session,
+                "metadata": "ready" if symbol_metadata.ready else "not_ready",
+                "metadata_reason": (
+                    symbol_metadata.reason.value if symbol_metadata.reason is not None else None
+                ),
+            }
+        )
+    payload["symbols"] = rows
     # ``symbols`` of the closed fact lists the symbols that fail the bar/history rule.
     payload["not_ready_symbols"] = list(evaluation.symbols)
     return payload
