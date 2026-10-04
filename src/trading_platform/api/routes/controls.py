@@ -1,6 +1,6 @@
 """Synchronous safety-control HTTP routes (CTRL-01/02, D-10/D-11).
 
-Both mutating routes here call ``OperatorControlService`` directly and
+The mutating routes here (kill switch, strategy status, active paper strategy) call ``OperatorControlService`` directly and
 synchronously (no Job, no worker) -- they are the immediate safety-control
 path the roadmap's D1 decision reserves alongside the Job orchestration
 path used by every long-running operation.
@@ -21,6 +21,7 @@ from trading_platform.api.dependencies import (
     require_mutations_enabled,
 )
 from trading_platform.services.operator_controls import (
+    AccountCheckFailedError,
     ControlStateUnavailableError,
     ControlWriteError,
     OperatorControlService,
@@ -185,18 +186,73 @@ async def get_strategy_control_status(
 async def get_active_paper_strategy(request: Request) -> dict[str, Any]:
     """PAPER-01 / R1: read-only view of the strategy that owns the paper account.
 
-    Returns ``{strategy_id, display_name, since, reason, set_by_run_id}``;
-    ``strategy_id`` is ``null`` when no strategy owns the account (the initial
-    state). Performs no write and no get-or-create; a missing singleton row is
-    a typed 503 ``control_state_unavailable``. Seeding/handover is a separate
-    mutating control (20.1-12) and is not part of this route.
+    Returns ``{strategy_id, display_name, since, reason, set_by_run_id}`` plus the
+    account ``checks`` (A1..A6, A7 only when an owner exists), ``seeding_available``,
+    ``handover_available`` and ``as_of``; ``strategy_id`` is ``null`` when no strategy owns
+    the account (the initial state). Performs no write, no get-or-create and no broker
+    call; a missing singleton row is a typed 503 ``control_state_unavailable``.
     """
 
     service = OperatorControlService(settings=get_settings(request))
     try:
-        state = await run_in_threadpool(service.get_active_paper_strategy_view)
+        view = await run_in_threadpool(service.get_active_paper_strategy_view)
     except ControlStateUnavailableError as exc:
         raise _error(
             status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
         ) from exc
-    return state.to_dict()
+    return view.to_dict()
+
+
+@router.put("/active-paper-strategy", dependencies=[Depends(require_mutations_enabled)])
+async def set_active_paper_strategy(
+    request: Request,
+    registry: Annotated[StrategyRegistry, Depends(get_strategy_registry)],
+    service: Annotated[OperatorControlService, Depends(get_operator_control_service)],
+) -> dict[str, Any]:
+    """PAPER-02 / D-04: seed (none -> B), hand over (A -> B), release (A -> none) or
+    reaffirm the single paper-account owner.
+
+    Synchronous, no Job, no worker, no broker call. The body is exactly
+    ``{"strategy_id": <registered id> | null, "reason": <text>}``; ``null`` releases. A
+    failing account check is a typed 409 ``check_failed:A1`` .. ``check_failed:A7`` naming the
+    first failing check, with every evaluated check in the body and zero writes. The new
+    owner is always left disabled; enabling is the separate strategy control.
+    """
+
+    body = await _read_body(request, {"strategy_id", "reason"})
+    if "strategy_id" not in body:
+        # A missing key is not the same as an explicit null (which releases the owner).
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_request")
+    target = body["strategy_id"]
+    if target is not None and not isinstance(target, str):
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_control_target")
+    if target is not None:
+        try:
+            registry.resolve(target)
+        except UnknownStrategyError as exc:
+            raise _error(
+                status.HTTP_404_NOT_FOUND, "strategy_not_found", strategy_id=target
+            ) from exc
+    reason = _validate_reason(body.get("reason"))
+
+    try:
+        report = await run_in_threadpool(
+            service.set_active_paper_strategy,
+            target,
+            reason=reason,
+            actor=CONTROL_ACTOR,
+            trigger_source=CONTROL_TRIGGER_SOURCE,
+        )
+    except AccountCheckFailedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=exc.to_detail()) from exc
+    except StrategyArchivedError as exc:
+        raise _error(
+            status.HTTP_409_CONFLICT, "strategy_archived", strategy_id=exc.strategy_id
+        ) from exc
+    except ControlStateUnavailableError as exc:
+        raise _error(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "control_state_unavailable"
+        ) from exc
+    except ControlWriteError as exc:
+        raise _error(status.HTTP_503_SERVICE_UNAVAILABLE, "control_write_failed") from exc
+    return report.to_dict()

@@ -286,12 +286,13 @@ def test_every_mutating_route_requires_mutation_guard() -> None:
             path = getattr(candidate, "path", "?")
             assert guarded, f"Route {methods} {path} is missing require_mutations_enabled"
 
-    # D-12: the mutating surface is pinned to exactly seven routes (POST
+    # D-12: the mutating surface is pinned to exactly eight routes (POST
     # /api/v1/jobs, /{job_id}/cancel, /{job_id}/retry, PUT
     # /api/v1/controls/kill-switch, /api/v1/controls/strategies/{id}, the REC-01
     # POST /api/v1/recovery/intents/{id}/broker-statement of 20.1-10 and the REC-02
-    # POST /api/v1/execution-operations/{id}/end of 20.1-11).
-    assert checked == 7
+    # POST /api/v1/execution-operations/{id}/end of 20.1-11 and the PAPER-02
+    # PUT /api/v1/controls/active-paper-strategy of 20.1-12: the final Phase 20.1 surface).
+    assert checked == 8
 
 
 @pytest.mark.parametrize(
@@ -300,6 +301,7 @@ def test_every_mutating_route_requires_mutation_guard() -> None:
         ("POST", "/api/v1/jobs/not-a-real-job-id/retry"),
         ("PUT", "/api/v1/controls/kill-switch"),
         ("PUT", "/api/v1/controls/strategies/not-a-real-strategy-id"),
+        ("PUT", "/api/v1/controls/active-paper-strategy"),
         ("POST", "/api/v1/recovery/intents/not-a-real-intent/broker-statement"),
         ("POST", "/api/v1/execution-operations/not-a-real-operation/end"),
     ],

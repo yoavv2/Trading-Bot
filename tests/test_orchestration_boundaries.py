@@ -184,9 +184,9 @@ def _effective_routes() -> dict[str, set[str]]:
 
 
 def test_api_route_modules_declare_only_allowlisted_mutation_decorators() -> None:
-    """D-12: the exact seven-route mutating-surface allowlist (P18/P19 "exactly two" pin
+    """D-12: the exact eight-route mutating-surface allowlist (P18/P19 "exactly two" pin
     + CTRL-01/02 and OPS-07 + the REC-01 broker statement of 20.1-10 + the REC-02 End
-    operation control of 20.1-11)."""
+    operation control of 20.1-11 + the PAPER-02 owner control of 20.1-12)."""
 
     routes_dir = _ROOT / "src/trading_platform/api/routes"
     mutation_decorators: set[tuple[str, str, str]] = set()
@@ -212,13 +212,14 @@ def test_api_route_modules_declare_only_allowlisted_mutation_decorators() -> Non
         ("jobs.py", "POST", "/{job_id}/retry"),
         ("controls.py", "PUT", "/kill-switch"),
         ("controls.py", "PUT", "/strategies/{strategy_id}"),
+        ("controls.py", "PUT", "/active-paper-strategy"),
         ("recovery.py", "POST", "/intents/{intent_id}/broker-statement"),
         ("execution_operations.py", "POST", "/{operation_id}/end"),
     }
 
 
 def test_runtime_application_mutating_routes_are_exactly_the_allowlist() -> None:
-    """D-12: the exact seven (method, path) pairs the runtime application serves."""
+    """D-12: the exact eight (method, path) pairs the runtime application serves."""
 
     routes = _effective_routes()
     mutations = {
@@ -233,13 +234,14 @@ def test_runtime_application_mutating_routes_are_exactly_the_allowlist() -> None
         ("POST", "/api/v1/jobs/{job_id}/retry"),
         ("PUT", "/api/v1/controls/kill-switch"),
         ("PUT", "/api/v1/controls/strategies/{strategy_id}"),
+        ("PUT", "/api/v1/controls/active-paper-strategy"),
         ("POST", "/api/v1/recovery/intents/{intent_id}/broker-statement"),
         ("POST", "/api/v1/execution-operations/{operation_id}/end"),
     }
 
 
 def test_every_allowlisted_route_declares_the_mutation_guard() -> None:
-    """D-12: every route in the seven-route allowlist carries
+    """D-12: every route in the eight-route allowlist carries
     require_mutations_enabled -- not just "every mutating route" generically
     (that's test_mutation_guard.py::test_every_mutating_route_requires_mutation_guard),
     but a route-by-route proof scoped to this exact set."""
@@ -253,6 +255,7 @@ def test_every_allowlisted_route_declares_the_mutation_guard() -> None:
         ("POST", "/api/v1/jobs/{job_id}/retry"),
         ("PUT", "/api/v1/controls/kill-switch"),
         ("PUT", "/api/v1/controls/strategies/{strategy_id}"),
+        ("PUT", "/api/v1/controls/active-paper-strategy"),
         ("POST", "/api/v1/recovery/intents/{intent_id}/broker-statement"),
         ("POST", "/api/v1/execution-operations/{operation_id}/end"),
     }

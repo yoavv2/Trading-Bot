@@ -14,6 +14,7 @@ from datetime import date, datetime
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from tests.support.account_check_fixtures import (
     seed_clean_account_run,
@@ -40,7 +41,8 @@ from tests.test_paper_session_job_e2e import (
     paper_jobs_env,  # noqa: F401
 )
 
-from trading_platform.core.settings import load_settings
+from trading_platform.api.app import create_app
+from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     ActivePaperStrategy,
     ExecutionEvent,
@@ -907,3 +909,356 @@ def test_job_queued_for_previous_owner_is_blocked_at_run_time_after_handover(
     assert result.action == "blocked_not_active_paper_strategy"
     assert result.result_summary["blocked_reason"] == BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY
     assert broker.calls == [] and execution.calls == [] and execution.submitted_intents == []
+
+
+# ===========================================================================
+# Part 2: HTTP (PUT / GET /api/v1/controls/active-paper-strategy)
+# ===========================================================================
+
+URL = "/api/v1/controls/active-paper-strategy"
+
+
+@pytest.fixture()
+def http(owner_db: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setenv("TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED", "true")
+    clear_settings_cache()
+    with TestClient(create_app()) as client:
+        yield client
+
+
+def _put(client: TestClient, strategy_id: object, reason: object = "operator choice") -> Any:
+    return client.put(URL, json={"strategy_id": strategy_id, "reason": reason})
+
+
+def test_e1_seeding_over_http_refused_a6_then_accepted_and_enabling_is_separate(
+    http: TestClient,
+) -> None:
+    _enable_all_strategies()
+    before = _fingerprint()
+
+    refused = _put(http, OTHER)
+
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["code"] == "check_failed:A6" and detail["check"] == "A6"
+    assert set(detail["failed_checks"]) == {"A2", "A3", "A4", "A6"}
+    assert [c["id"] for c in detail["checks"]] == ["A1", "A2", "A3", "A4", "A5", "A6"]
+    assert _fingerprint() == before
+
+    _quiet_account()
+    accepted = _put(http, OTHER, "go")
+
+    assert accepted.status_code == 200, accepted.text
+    body = accepted.json()
+    assert set(body) == {
+        "active_paper_strategy",
+        "previous_strategy_id",
+        "changed",
+        "kind",
+        "new_owner_status",
+        "run_id",
+    }
+    assert body["active_paper_strategy"]["strategy_id"] == OTHER
+    assert body["active_paper_strategy"]["since"]
+    assert body["previous_strategy_id"] is None
+    assert (body["changed"], body["kind"], body["new_owner_status"]) == (
+        True,
+        "seeding",
+        "disabled",
+    )
+    assert _status_of(OTHER) == "disabled"
+
+    enabled = http.put(
+        f"/api/v1/controls/strategies/{OTHER}", json={"status": "enabled", "reason": "live"}
+    )
+    assert enabled.status_code == 200 and enabled.json()["status"] == "enabled"
+    assert _owner_public_id() == OTHER
+
+
+_CHECK_CASE_REASONS = {
+    CheckReason.BROKER_JOB_ACTIVE,
+    CheckReason.NON_TERMINAL_ORDERS,
+    CheckReason.OPEN_POSITIONS,
+    CheckReason.UNRECOGNIZED_ITEMS,
+    CheckReason.UNRESOLVED_OUTCOME,
+    CheckReason.RECONCILIATION_STALE,
+    CheckReason.OUTGOING_OWNER_ENABLED,
+}
+_PER_CHECK_CASES = [case for case in REASON_CASES if case[0] in _CHECK_CASE_REASONS]
+
+
+def test_there_is_one_http_refusal_case_per_check() -> None:
+    assert [case[2] for case in _PER_CHECK_CASES] == list(CheckId)
+
+
+@pytest.mark.parametrize(
+    ("reason", "arrange", "check_id", "_kinds", "handover"),
+    _PER_CHECK_CASES,
+    ids=[case[2].value for case in _PER_CHECK_CASES],
+)
+def test_each_failing_check_is_a_typed_409_naming_it_with_zero_writes(
+    http: TestClient,
+    reason: CheckReason,
+    arrange: Callable[[Any], None],
+    check_id: CheckId,
+    _kinds: object,
+    handover: bool,
+) -> None:
+    _enable_all_strategies()
+    with session_scope(load_settings()) as session:
+        arrange(session)
+    before = _fingerprint()
+
+    response = _put(http, THIRD if handover else OTHER)
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == f"check_failed:{check_id.value}"
+    assert detail["check"] == check_id.value
+    expected_ids = ["A1", "A2", "A3", "A4", "A5", "A6"] + (["A7"] if handover else [])
+    assert [c["id"] for c in detail["checks"]] == expected_ids
+    assert all(set(c) == {"id", "passed", "reason_code", "evidence_refs"} for c in detail["checks"])
+    failing = [c for c in detail["checks"] if not c["passed"]]
+    assert [c["id"] for c in failing] == detail["failed_checks"]
+    named = next(c for c in failing if c["id"] == check_id.value)
+    assert named["reason_code"] == reason.value
+    assert _fingerprint() == before
+
+
+def test_e13_handover_with_a_position_is_refused_a3_then_accepted_when_flat(
+    http: TestClient,
+) -> None:
+    _handover_world(_open_position)
+
+    refused = _put(http, OTHER)
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "check_failed:A3"
+    assert _owner_public_id() == OWNER
+
+    with session_scope(load_settings()) as session:
+        seed_snapshot(session, snapshot_at=at(20), open_positions=0)
+        seed_clean_account_run(session, completed_at=at(30))
+    accepted = _put(http, OTHER, "rotate")
+
+    assert accepted.status_code == 200, accepted.text
+    body = accepted.json()
+    assert (body["kind"], body["changed"], body["new_owner_status"]) == (
+        "handover",
+        True,
+        "disabled",
+    )
+    assert body["previous_strategy_id"] == OWNER
+    assert _status_of(OTHER) == "disabled"
+
+
+def test_a5_not_received_statement_does_not_unblock_handover_over_http(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broker, _now = arrange_not_received_world(monkeypatch)
+
+    response = _put(http, OTHER)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "check_failed:A5" and detail["failed_checks"] == ["A5"]
+    assert _owner_public_id() == OWNER
+    assert broker.post_count == 0
+
+
+def test_release_and_reaffirm_over_http(http: TestClient) -> None:
+    _handover_world()
+
+    reaffirm = _put(http, OWNER, "still me")
+    assert reaffirm.status_code == 200
+    assert reaffirm.json()["changed"] is False and reaffirm.json()["kind"] == "reaffirm"
+    assert reaffirm.json()["new_owner_status"] is None
+
+    release = _put(http, None, "stand down")
+    assert release.status_code == 200
+    assert release.json()["kind"] == "release"
+    assert release.json()["active_paper_strategy"]["strategy_id"] is None
+    assert release.json()["previous_strategy_id"] == OWNER
+
+    again = _put(http, None, "still nobody")
+    assert again.status_code == 200
+    assert (again.json()["changed"], again.json()["kind"]) == (False, "reaffirm")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "code"),
+    [
+        ({"content": b"[1]"}, "invalid_control_request"),
+        ({"content": b'"x"'}, "invalid_control_request"),
+        ({"content": b"not json"}, "invalid_control_request"),
+        ({"json": {"strategy_id": OTHER, "reason": "r", "extra": 1}}, "invalid_control_request"),
+        ({"json": {"reason": "r"}}, "invalid_control_request"),
+        ({"content": b"[" * 100000}, "invalid_control_request"),
+        ({"json": {"strategy_id": 123, "reason": "r"}}, "invalid_control_target"),
+        ({"json": {"strategy_id": ["a"], "reason": "r"}}, "invalid_control_target"),
+        ({"json": {"strategy_id": {"a": 1}, "reason": "r"}}, "invalid_control_target"),
+        ({"json": {"strategy_id": True, "reason": "r"}}, "invalid_control_target"),
+        ({"json": {"strategy_id": OTHER}}, "invalid_control_reason"),
+        ({"json": {"strategy_id": OTHER, "reason": 5}}, "invalid_control_reason"),
+        ({"json": {"strategy_id": OTHER, "reason": "   "}}, "invalid_control_reason"),
+        ({"json": {"strategy_id": OTHER, "reason": "x" * 501}}, "invalid_control_reason"),
+        ({"json": {"strategy_id": OTHER, "reason": "a\u0000b"}}, "invalid_control_reason"),
+    ],
+)
+def test_strict_body_validation_is_typed_422_with_zero_writes(
+    http: TestClient, kwargs: dict[str, Any], code: str
+) -> None:
+    _enable_all_strategies()
+    _quiet_account()
+    before = _fingerprint()
+    if "content" in kwargs:
+        kwargs = {**kwargs, "headers": {"Content-Type": "application/json"}}
+
+    response = http.put(URL, **kwargs)
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == {"code": code}
+    assert _fingerprint() == before
+
+
+def test_unregistered_strategy_is_404_and_archived_is_409_with_zero_writes(
+    http: TestClient,
+) -> None:
+    _quiet_account()
+    with session_scope(load_settings()) as session:
+        strategy_row(session, OTHER).status = StrategyStatus.ARCHIVED
+    before = _fingerprint()
+
+    missing = _put(http, "not_a_registered_strategy")
+    archived = _put(http, OTHER)
+
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == {
+        "code": "strategy_not_found",
+        "strategy_id": "not_a_registered_strategy",
+    }
+    assert archived.status_code == 409
+    assert archived.json()["detail"] == {"code": "strategy_archived", "strategy_id": OTHER}
+    assert _fingerprint() == before
+
+
+def test_mutations_disabled_is_403_with_zero_writes(
+    owner_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED", "false")
+    clear_settings_cache()
+    _quiet_account()
+    before = _fingerprint()
+
+    with TestClient(create_app()) as client:
+        response = client.put(URL, json={"not": "valid"})
+        valid = _put(client, OTHER)
+
+    assert response.status_code == valid.status_code == 403
+    assert response.json()["detail"] == {"code": "mutations_disabled"}
+    assert _fingerprint() == before
+
+
+def test_missing_singleton_row_is_503_and_a_write_failure_is_503(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy import text
+
+    from trading_platform.services.operator_controls import ControlWriteError
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise ControlWriteError("db down")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(OperatorControlService, "set_active_paper_strategy", _boom)
+        failed = _put(http, OTHER)
+    assert failed.status_code == 503
+    assert failed.json()["detail"] == {"code": "control_write_failed"}
+
+    with session_scope(load_settings()) as session:
+        session.execute(text("DELETE FROM active_paper_strategy"))
+    unavailable = _put(http, OTHER)
+    assert unavailable.status_code == 503
+    assert unavailable.json()["detail"] == {"code": "control_state_unavailable"}
+
+
+def test_get_shape_with_and_without_an_owner(http: TestClient) -> None:
+    _enable_all_strategies()
+    _quiet_account()
+
+    without = http.get(URL).json()
+    assert [c["id"] for c in without["checks"]] == ["A1", "A2", "A3", "A4", "A5", "A6"]
+    assert without["strategy_id"] is None
+    assert without["seeding_available"] is True and without["handover_available"] is False
+    assert without["as_of"]
+    assert all(c["passed"] and c["reason_code"] is None for c in without["checks"])
+
+    _own(OWNER, enabled=True)
+    with_owner = http.get(URL).json()
+    assert [c["id"] for c in with_owner["checks"]][-1] == "A7"
+    assert with_owner["strategy_id"] == OWNER
+    assert with_owner["seeding_available"] is False
+    assert with_owner["handover_available"] is False
+    a7 = with_owner["checks"][-1]
+    assert a7["passed"] is False and a7["reason_code"] == "outgoing_owner_enabled"
+    assert a7["evidence_refs"] == [{"kind": "strategy", "id": OWNER}]
+    for key in ("strategy_id", "display_name", "since", "reason", "set_by_run_id"):
+        assert key in with_owner
+
+    _own(OWNER, enabled=False)
+    assert http.get(URL).json()["handover_available"] is True
+
+
+def test_get_is_read_only_bounded_and_makes_no_broker_call(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.support.query_counter import count_queries
+
+    from trading_platform.db.session import get_engine
+    from trading_platform.services import alpaca as alpaca_module
+
+    def _no_client(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the read must never construct a broker client")
+
+    monkeypatch.setattr(alpaca_module.AlpacaClient, "__init__", _no_client)
+    _enable_all_strategies()
+    _quiet_account()
+    _own(OWNER, enabled=False)
+    engine = get_engine(load_settings())
+
+    def statements() -> list[str]:
+        with count_queries(engine) as counter:
+            assert http.get(URL).status_code == 200
+        return counter.statements
+
+    small = statements()
+    assert all(s.lstrip().upper().startswith(("SELECT", "WITH")) for s in small)
+    assert not any(k in s.upper() for s in small for k in ("INSERT ", "UPDATE ", "DELETE "))
+
+    with session_scope(load_settings()) as session:
+        for minute in range(25):
+            seed_clean_account_run(session, completed_at=at(-100 - minute))
+            seed_snapshot(session, snapshot_at=at(-100 - minute))
+            seed_job(
+                session,
+                job_type="broker-order-sync",
+                uncertain=False,
+                status=JobStatus.SUCCEEDED,
+                completed_at=at(-300 - minute),
+            )
+    before = _fingerprint()
+    assert len(statements()) == len(small)
+    assert _fingerprint() == before
+
+
+def test_put_makes_no_broker_call(http: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from trading_platform.services import alpaca as alpaca_module
+
+    def _no_client(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the control must never construct a broker client")
+
+    monkeypatch.setattr(alpaca_module.AlpacaClient, "__init__", _no_client)
+    _enable_all_strategies()
+    _quiet_account()
+
+    assert _put(http, OTHER).status_code == 200

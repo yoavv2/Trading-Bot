@@ -630,3 +630,29 @@ def test_unhandled_errors_on_mutation_routes_are_json_with_a_code(
     assert response.status_code == 500
     assert response.headers["content-type"].startswith("application/json")
     assert response.json() == {"detail": {"code": "internal_error"}}
+
+
+def test_final_mutating_surface_is_exactly_the_eight_routes_without_withdrawal() -> None:
+    """20.1-12: the final Phase 20.1 mutating surface (route count 7 -> 8); no withdrawal route."""
+
+    from tests.test_orchestration_boundaries import _effective_routes
+
+    routes = _effective_routes()
+    mutations = {
+        (method, path)
+        for path, methods in routes.items()
+        for method in methods.intersection({"POST", "PUT", "PATCH", "DELETE"})
+    }
+
+    assert mutations == {
+        ("POST", "/api/v1/jobs"),
+        ("POST", "/api/v1/jobs/{job_id}/cancel"),
+        ("POST", "/api/v1/jobs/{job_id}/retry"),
+        ("PUT", "/api/v1/controls/kill-switch"),
+        ("PUT", "/api/v1/controls/strategies/{strategy_id}"),
+        ("PUT", "/api/v1/controls/active-paper-strategy"),
+        ("POST", "/api/v1/recovery/intents/{intent_id}/broker-statement"),
+        ("POST", "/api/v1/execution-operations/{operation_id}/end"),
+    }
+    assert len(mutations) == 8
+    assert not any("withdraw" in path.lower() for path in routes)

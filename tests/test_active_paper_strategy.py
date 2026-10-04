@@ -310,7 +310,9 @@ def test_get_active_paper_strategy_with_no_owner_is_null(client: TestClient) -> 
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"strategy_id", "display_name", "since", "reason", "set_by_run_id"}
+    # 20.1-12 extends the read additively (R1): every 20.1-01 field stays.
+    assert {"strategy_id", "display_name", "since", "reason", "set_by_run_id"} <= set(body)
+    assert {"checks", "seeding_available", "handover_available", "as_of"} <= set(body)
     assert body["strategy_id"] is None
     assert body["display_name"] is None
     assert body["set_by_run_id"] is None
@@ -345,14 +347,19 @@ def test_get_active_paper_strategy_performs_no_write(client: TestClient) -> None
         response = client.get("/api/v1/controls/active-paper-strategy")
     assert response.status_code == 200
     assert counter.statements
-    assert all(statement.lstrip().upper().startswith("SELECT") for statement in counter.statements)
+    # SELECTs and read-only CTEs (the 20.1-10 recovery predicate behind check A5).
+    assert all(
+        statement.lstrip().upper().startswith(("SELECT", "WITH"))
+        for statement in counter.statements
+    )
     with session_scope(settings) as session:
         assert session.execute(select(ActivePaperStrategy.strategy_id)).scalar_one() is None
         assert session.execute(select(Strategy)).first() is None
 
 
-def test_active_paper_strategy_route_is_not_a_mutator(client: TestClient) -> None:
-    for method in ("put", "post", "delete", "patch"):
+def test_active_paper_strategy_route_has_no_post_delete_or_patch(client: TestClient) -> None:
+    # The PUT is the 20.1-12 owner control (tests/test_paper_ownership_controls.py).
+    for method in ("post", "delete", "patch"):
         response = getattr(client, method)("/api/v1/controls/active-paper-strategy")
         assert response.status_code == 405
 
