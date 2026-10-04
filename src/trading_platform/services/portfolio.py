@@ -5,12 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import ROUND_DOWN, Decimal
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from trading_platform.core.settings import PortfolioSettings, Settings, load_settings
 from trading_platform.db.models import AccountSnapshot, Position, Strategy
+from trading_platform.services.account_baseline import latest_broker_observed_account_snapshot
 from trading_platform.services.market_data_access import (
     bars_for_session_date,
     latest_completed_session,
@@ -52,6 +54,44 @@ class PortfolioState:
     @property
     def position_count(self) -> int:
         return len(self.open_positions)
+
+
+BasisSource = Literal["broker_sync", "configured_starting_cash"]
+
+
+@dataclass(frozen=True)
+class PortfolioBasis:
+    """Where an evaluation's portfolio inputs came from (D-27).
+
+    ``source`` is closed: ``broker_sync`` when cash came from the latest
+    broker-observed account snapshot, ``configured_starting_cash`` when no such
+    snapshot exists (the fallback is recorded, never silent).
+    """
+
+    source: BasisSource
+    cash: Decimal
+    gross_exposure: Decimal
+    total_equity: Decimal
+    positions: tuple[dict[str, Any], ...]
+    total_open_positions: int
+    as_of_session: date | None
+    snapshot_id: str | None
+    snapshot_at: datetime | None
+    age_seconds: float | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "cash": str(self.cash),
+            "gross_exposure": str(self.gross_exposure),
+            "total_equity": str(self.total_equity),
+            "positions": [dict(position) for position in self.positions],
+            "total_open_positions": self.total_open_positions,
+            "as_of_session": self.as_of_session.isoformat() if self.as_of_session else None,
+            "snapshot_id": self.snapshot_id,
+            "snapshot_at": self.snapshot_at.isoformat() if self.snapshot_at else None,
+            "age_seconds": self.age_seconds,
+        }
 
 
 @dataclass(frozen=True)
@@ -99,15 +139,33 @@ class PortfolioService:
         strategy_id: str,
         as_of_session: date | None = None,
     ) -> PortfolioState:
+        state, _basis = self.load_state_with_basis(
+            session, strategy_id=strategy_id, as_of_session=as_of_session
+        )
+        return state
+
+    def load_state_with_basis(
+        self,
+        session: Session,
+        *,
+        strategy_id: str,
+        as_of_session: date | None = None,
+        now: datetime | None = None,
+    ) -> tuple[PortfolioState, PortfolioBasis]:
+        """Compute the portfolio state and record where its cash came from (D-27).
+
+        Cash comes only from the latest broker-observed account snapshot
+        (``snapshot_source == 'broker_sync'``), falling back to the configured
+        starting cash. ``buying_power`` is never read.
+        """
+
         strategy_record = session.execute(
             select(Strategy).where(Strategy.strategy_id == strategy_id)
         ).scalar_one_or_none()
         if strategy_record is None:
             raise LookupError(f"Unknown strategy '{strategy_id}'.")
 
-        latest_snapshot = session.execute(
-            select(AccountSnapshot).order_by(AccountSnapshot.snapshot_at.desc()).limit(1)
-        ).scalar_one_or_none()
+        latest_snapshot = latest_broker_observed_account_snapshot(session)
         cash = _money(
             latest_snapshot.cash if latest_snapshot is not None else self.settings.starting_cash_decimal
         )
@@ -129,6 +187,7 @@ class PortfolioService:
             else {}
         )
 
+        basis_positions: list[dict[str, Any]] = []
         strategy_positions: list[PositionSnapshot] = []
         strategy_symbols: set[str] = set()
         gross_exposure = Decimal("0")
@@ -141,6 +200,14 @@ class PortfolioService:
             )
             market_value = _money(position.quantity * market_price)
             gross_exposure += market_value
+            basis_positions.append(
+                {
+                    "symbol": ticker,
+                    "quantity": str(_money(position.quantity)),
+                    "market_value": str(market_value),
+                    "strategy_id": owner_strategy_id,
+                }
+            )
 
             if owner_strategy_id != strategy_id:
                 continue
@@ -161,7 +228,7 @@ class PortfolioService:
 
         gross_exposure = _money(gross_exposure)
         strategy_exposure = _money(strategy_exposure)
-        return PortfolioState(
+        state = PortfolioState(
             cash=cash,
             gross_exposure=gross_exposure,
             total_equity=_money(cash + gross_exposure),
@@ -171,6 +238,27 @@ class PortfolioService:
             open_symbols=frozenset(strategy_symbols),
             total_open_positions=len(open_rows),
         )
+        reference_now = now or datetime.now(UTC)
+        basis_source: BasisSource = (
+            "broker_sync" if latest_snapshot is not None else "configured_starting_cash"
+        )
+        basis = PortfolioBasis(
+            source=basis_source,
+            cash=state.cash,
+            gross_exposure=state.gross_exposure,
+            total_equity=state.total_equity,
+            positions=tuple(basis_positions),
+            total_open_positions=state.total_open_positions,
+            as_of_session=valuation_session,
+            snapshot_id=str(latest_snapshot.id) if latest_snapshot is not None else None,
+            snapshot_at=latest_snapshot.snapshot_at if latest_snapshot is not None else None,
+            age_seconds=(
+                max((reference_now - latest_snapshot.snapshot_at).total_seconds(), 0.0)
+                if latest_snapshot is not None
+                else None
+            ),
+        )
+        return state, basis
 
     def record_snapshot(
         self,
@@ -182,6 +270,8 @@ class PortfolioService:
         snapshot_source: str = "derived",
         snapshot_at: datetime | None = None,
     ) -> AccountSnapshot:
+        """Persist a snapshot of ``state``. No production caller since 20.1-03 (D-27)."""
+
         strategy_record = None
         if strategy_id is not None:
             strategy_record = session.execute(

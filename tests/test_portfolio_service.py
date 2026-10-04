@@ -25,7 +25,7 @@ from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.calendar import upsert_market_sessions
-from trading_platform.services.portfolio import PortfolioService, PortfolioState
+from trading_platform.services.portfolio import PortfolioBasis, PortfolioService, PortfolioState
 from trading_platform.strategies.registry import build_default_registry
 
 
@@ -214,7 +214,8 @@ def test_load_state_marks_open_positions_from_persisted_bars(migrated_portfolio_
         session.add(
             AccountSnapshot(
                 strategy_id=strategy.id,
-                snapshot_source="seed",
+                # D-27: only broker-observed snapshots are a cash source.
+                snapshot_source="broker_sync",
                 snapshot_at=datetime(2024, 1, 5, tzinfo=UTC),
                 cash=Decimal("90000"),
                 gross_exposure=Decimal("0"),
@@ -265,3 +266,164 @@ def test_record_snapshot_persists_current_portfolio_state(migrated_portfolio_db:
     assert persisted.snapshot_source == "risk_evaluation"
     assert persisted.open_positions == 2
     assert persisted.buying_power == Decimal("95000.000000")
+
+
+def _add_snapshot(
+    session: Session,
+    *,
+    source: str,
+    at: datetime,
+    cash: str,
+    buying_power: str | None = None,
+) -> AccountSnapshot:
+    snapshot = AccountSnapshot(
+        strategy_id=None,
+        snapshot_source=source,
+        snapshot_at=at,
+        cash=Decimal(cash),
+        gross_exposure=Decimal("0"),
+        total_equity=Decimal(cash),
+        buying_power=Decimal(buying_power if buying_power is not None else cash),
+        open_positions=0,
+    )
+    session.add(snapshot)
+    session.flush()
+    return snapshot
+
+
+def test_load_state_ignores_newer_risk_evaluation_snapshot_for_cash(
+    migrated_portfolio_db: str,
+) -> None:
+    settings = load_settings()
+    service = PortfolioService(settings)
+
+    with session_scope(settings) as session:
+        _seed_strategy(session)
+        _add_snapshot(session, source="broker_sync", at=datetime(2024, 1, 5, tzinfo=UTC), cash="80000")
+        _add_snapshot(session, source="risk_evaluation", at=datetime(2024, 1, 6, tzinfo=UTC), cash="1")
+        _add_snapshot(session, source="seed", at=datetime(2024, 1, 7, tzinfo=UTC), cash="2")
+        state, basis = service.load_state_with_basis(
+            session, strategy_id="trend_following_daily", as_of_session=date(2024, 1, 5)
+        )
+
+    assert state.cash == Decimal("80000.000000")
+    assert basis.source == "broker_sync"
+
+
+def test_no_broker_observed_snapshot_falls_back_to_configured_starting_cash_and_records_it(
+    migrated_portfolio_db: str,
+) -> None:
+    settings = load_settings()
+    service = PortfolioService(settings)
+
+    with session_scope(settings) as session:
+        _seed_strategy(session)
+        # Only a derived snapshot exists: it must not become the cash source.
+        _add_snapshot(session, source="risk_evaluation", at=datetime(2024, 1, 6, tzinfo=UTC), cash="5")
+        state, basis = service.load_state_with_basis(
+            session, strategy_id="trend_following_daily", as_of_session=date(2024, 1, 5)
+        )
+
+    assert state.cash == Decimal(str(settings.portfolio.starting_cash_decimal)).quantize(Decimal("0.000001"))
+    assert basis.source == "configured_starting_cash"
+    assert basis.snapshot_id is None
+    assert basis.snapshot_at is None
+    assert basis.age_seconds is None
+    assert basis.to_dict()["source"] == "configured_starting_cash"
+
+
+def test_basis_carries_snapshot_id_and_age_for_a_broker_snapshot(
+    migrated_portfolio_db: str,
+) -> None:
+    settings = load_settings()
+    service = PortfolioService(settings)
+    snapshot_at = datetime(2024, 1, 5, 12, 0, tzinfo=UTC)
+    now = datetime(2024, 1, 5, 12, 5, tzinfo=UTC)
+
+    with session_scope(settings) as session:
+        _seed_strategy(session)
+        snapshot = _add_snapshot(session, source="broker_sync", at=snapshot_at, cash="70000")
+        _state, basis = service.load_state_with_basis(
+            session,
+            strategy_id="trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            now=now,
+        )
+        snapshot_id = str(snapshot.id)
+
+    assert isinstance(basis, PortfolioBasis)
+    assert basis.source == "broker_sync"
+    assert basis.snapshot_id == snapshot_id
+    assert basis.age_seconds == 300.0
+    payload = basis.to_dict()
+    assert payload["cash"] == "70000.000000"
+    assert payload["snapshot_id"] == snapshot_id
+    assert payload["snapshot_at"] == snapshot_at.isoformat()
+    assert set(payload) == {
+        "source",
+        "cash",
+        "gross_exposure",
+        "total_equity",
+        "positions",
+        "total_open_positions",
+        "as_of_session",
+        "snapshot_id",
+        "snapshot_at",
+        "age_seconds",
+    }
+
+
+_CASH_BUYING_POWER_GRID = [
+    ("100000", "400000"),
+    ("100000", "100000"),
+    ("100000", "50000"),
+    ("100000", "0"),
+    ("25000", "100000"),
+    ("25000", "10000"),
+    ("5000", "20000"),
+    ("5000", "1000"),
+    ("1000", "4000"),
+    ("1000", "999"),
+    ("250000", "1000000"),
+    ("250000", "125000"),
+    ("40000", "160000"),
+    ("40000", "39999.5"),
+]
+
+
+@pytest.mark.parametrize(("cash", "buying_power"), _CASH_BUYING_POWER_GRID)
+def test_sizing_never_uses_buying_power(
+    migrated_portfolio_db: str, cash: str, buying_power: str
+) -> None:
+    """D-27: PortfolioState.cash is the snapshot cash; sizing ignores buying power."""
+
+    assert len(_CASH_BUYING_POWER_GRID) >= 12
+    settings = load_settings()
+    service = PortfolioService(settings)
+
+    sizings = []
+    for index, power in enumerate((buying_power, str(Decimal(cash) * 7))):
+        with session_scope(settings) as session:
+            if index == 0:
+                _seed_strategy(session)
+            else:
+                session.query(AccountSnapshot).delete()
+            _add_snapshot(
+                session,
+                source="broker_sync",
+                at=datetime(2024, 1, 5, tzinfo=UTC),
+                cash=cash,
+                buying_power=power,
+            )
+            state = service.load_state(
+                session, strategy_id="trend_following_daily", as_of_session=date(2024, 1, 5)
+            )
+        assert state.cash == Decimal(cash).quantize(Decimal("0.000001"))
+        assert state.total_equity == state.cash
+        sizings.append(
+            service.compute_entry_size(
+                state, candidate_price=Decimal("123"), risk_per_trade=Decimal("0.01")
+            )
+        )
+
+    assert sizings[0] == sizings[1]

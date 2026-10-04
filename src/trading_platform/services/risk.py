@@ -514,17 +514,12 @@ def run_risk_evaluation(
             symbol_map = _ensure_symbol_rows(session, metadata.universe)
             batch = strategy.generate_signals(session, as_of_session)
             portfolio_service = PortfolioService(resolved_settings)
-            portfolio_state = portfolio_service.load_state(
+            # D-27: evaluation persists no account snapshot; the basis is
+            # recorded on this run's result_summary instead.
+            portfolio_state, portfolio_basis = portfolio_service.load_state_with_basis(
                 session,
                 strategy_id=metadata.strategy_id,
                 as_of_session=as_of_session,
-            )
-            portfolio_service.record_snapshot(
-                session,
-                strategy_id=metadata.strategy_id,
-                state=portfolio_state,
-                source_run_id=run_id,
-                snapshot_source="risk_evaluation",
             )
             risk_result = PortfolioRiskService(resolved_settings).validate(
                 RiskEvaluationRequest(
@@ -561,6 +556,7 @@ def run_risk_evaluation(
             "decision_count": len(risk_result.decisions),
             "decision_codes": [decision.code.value for decision in risk_result.decisions],
             "portfolio": resolved_settings.portfolio.model_dump(mode="json"),
+            "portfolio_basis": portfolio_basis.to_dict(),
         }
     except Exception as exc:
         _update_risk_run(
