@@ -48,7 +48,7 @@ _LOCAL_TO_BROKER = {
 class SeededBasis:
     sync_job_id: uuid.UUID
     snapshot_id: uuid.UUID
-    reconciliation_id: uuid.UUID
+    reconciliation_id: uuid.UUID | None
     sync_completed_at: datetime
     reconciliation_completed_at: datetime
     risk_completed_at: datetime
@@ -62,6 +62,7 @@ def seed_verified_basis(
     positions: Sequence[tuple[str, str]] = (),
     base: datetime | None = None,
     clean_reconciliation: bool = True,
+    with_reconciliation: bool = True,
     applied_status: Mapping[uuid.UUID, str] | None = None,
     broker_filled_qty: Mapping[uuid.UUID, str] | None = None,
 ) -> SeededBasis:
@@ -140,7 +141,8 @@ def seed_verified_basis(
         blocks_execution=not clean_reconciliation,
         unresolved_reasons=[],
     )
-    session.add(reconciliation)
+    if with_reconciliation:
+        session.add(reconciliation)
     risk_run.completed_at = risk_at
     summary = dict(risk_run.result_summary or {})
     summary["portfolio_basis"] = {
@@ -156,7 +158,7 @@ def seed_verified_basis(
     return SeededBasis(
         sync_job_id=sync_job.id,
         snapshot_id=snapshot.id,
-        reconciliation_id=reconciliation.id,
+        reconciliation_id=reconciliation.id if with_reconciliation else None,
         sync_completed_at=sync_at,
         reconciliation_completed_at=recon_at,
         risk_completed_at=risk_at,
