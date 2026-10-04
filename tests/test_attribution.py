@@ -7,6 +7,7 @@ inputs, so every case constructs the dataclasses directly.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -32,6 +33,7 @@ from trading_platform.services.attribution import (
 )
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
 from trading_platform.services.execution.idempotency import build_client_order_id
+from trading_platform.services.external_snapshot import RecordedExternalItem, content_hash
 
 PREFIX = "tp"
 REGISTERED = datetime(2024, 1, 5, 14, 30, tzinfo=UTC)
@@ -144,7 +146,7 @@ def _classify(
     positions: list[BrokerPositionSnapshot] | None = None,
     intents: list[LocalIntentRecord] | None = None,
     periods: tuple[OwnershipPeriod, ...] = (),
-    recorded_external: frozenset[str] = frozenset(),
+    recorded_external: Mapping[str, RecordedExternalItem] | None = None,
     unresolved: tuple[UnresolvedReason, ...] = (),
 ) -> AttributionResult:
     return classify_broker_activity(
@@ -153,7 +155,7 @@ def _classify(
         broker_positions=positions or [],
         local_intents=intents or [],
         ownership_periods=periods,
-        recorded_external_order_ids=recorded_external,
+        recorded_external=recorded_external or {},
         platform_prefix=PREFIX,
         unresolved_reasons=unresolved,
     )
@@ -252,18 +254,68 @@ def test_replaced_original_with_a_local_record_stays_owned() -> None:
     assert order.anomaly is None
 
 
-def test_unrecognized_recorded_external_hook() -> None:
-    result = _classify(
-        orders=[_order(client_order_id="manual-9", broker_order_id="b-9")],
-        fills=[_fill(order_id="b-9")],
-        positions=[_position()],
-        recorded_external=frozenset({"b-9"}),
+def _recorded_item(
+    order: BrokerOrderSnapshot,
+    fills: list[BrokerFillSnapshot],
+    *,
+    origin_tag: str = "external_format",
+) -> RecordedExternalItem:
+    return RecordedExternalItem(
+        broker_order_id=order.broker_order_id,
+        content_hash=content_hash(order, fills),
+        origin_tag=origin_tag,
+        symbol=order.symbol,
+        side=str(order.side),
+        filled_qty=Decimal("10"),
     )
-    order = _only_order(result)
-    assert order.order_class is OrderClass.RECORDED_EXTERNAL
+
+
+def test_recorded_external_with_matching_hash_is_explained() -> None:
+    order = _order(client_order_id="manual-9", broker_order_id="b-9")
+    fills = [_fill(order_id="b-9")]
+    result = _classify(
+        orders=[order],
+        fills=fills,
+        positions=[_position()],
+        recorded_external={"b-9": _recorded_item(order, fills)},
+    )
+    classified = _only_order(result)
+    assert classified.order_class is OrderClass.RECORDED_EXTERNAL
+    assert classified.recorded_snapshot_mismatch is False
     assert result.fills[0].order_class is OrderClass.RECORDED_EXTERNAL
     assert result.unexplained_exposure == {}
     assert result.blocks_execution is False
+
+
+def test_recorded_external_with_changed_broker_data_is_unrecognized_again() -> None:
+    order = _order(client_order_id="manual-9", broker_order_id="b-9")
+    fills = [_fill(order_id="b-9")]
+    item = _recorded_item(order, fills, origin_tag="platform_format_unverified")
+    result = _classify(
+        orders=[replace(order, quantity=Decimal("11"))],
+        fills=fills,
+        positions=[_position()],
+        recorded_external={"b-9": item},
+    )
+    classified = _only_order(result)
+    assert classified.order_class is OrderClass.UNRECOGNIZED
+    assert classified.origin_tag is OriginTag.PLATFORM_FORMAT_UNVERIFIED
+    assert classified.recorded_snapshot_mismatch is True
+    assert result.blocks_execution is True
+    assert result.to_dict()["unrecognized_orders"][0]["recorded_snapshot_mismatch"] is True
+
+
+def test_recorded_external_missing_from_broker_history_blocks() -> None:
+    order = _order(client_order_id="manual-9", broker_order_id="b-9")
+    result = _classify(recorded_external={"b-9": _recorded_item(order, [])})
+    assert result.recorded_external_missing == ("b-9",)
+    assert result.blocks_execution is True
+    assert result.to_dict()["recorded_external_missing"] == ["b-9"]
+
+
+def test_to_dict_shape_is_unchanged_without_recorded_external() -> None:
+    payload = _classify(orders=[_order()]).to_dict()
+    assert "recorded_external_missing" not in payload
 
 
 # --- owned evidence -------------------------------------------------------------------

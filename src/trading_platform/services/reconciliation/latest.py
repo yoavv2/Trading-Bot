@@ -23,18 +23,23 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from trading_platform.db.models import (
     AccountReconciliationRun,
+    ExternalBrokerActivity,
     Job,
     Strategy,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
 )
-from trading_platform.services.broker_jobs import RECONCILIATION_JOB_TYPE
+from trading_platform.services.broker_jobs import (
+    RECONCILIATION_JOB_TYPE,
+    RECORD_EXTERNAL_ACTIVITY_JOB_TYPE,
+    STATE_CHANGING_BROKER_JOB_TYPES,
+)
 
 ReconciliationScopeFilter = Literal["either", "account", "strategy"]
 
@@ -73,6 +78,30 @@ def latest_account_reconciliation_run(session: Session) -> AccountReconciliation
         )
         .limit(1)
     ).scalar_one_or_none()
+
+
+def latest_broker_effect_at(session: Session) -> datetime | None:
+    """Newest moment a broker-touching action last changed local state (A6 boundary).
+
+    The newest of: ``completed_at`` of paper-session / broker-order-sync Jobs, and the
+    newest ``external_broker_activity.created_at`` (a recording's effect time).
+    ``record-external-activity`` Jobs are EXCLUDED from the Job side on purpose: the
+    handler runs its own fresh account reconciliation before the Job completes, so the
+    Job's ``completed_at`` always postdates that fresh check and would make it
+    non-qualifying. ``None`` when neither exists. Two statements, read-only.
+    """
+
+    job_types = STATE_CHANGING_BROKER_JOB_TYPES - {RECORD_EXTERNAL_ACTIVITY_JOB_TYPE}
+    job_time = session.execute(
+        select(func.max(Job.completed_at)).where(
+            Job.job_type.in_(sorted(job_types)), Job.completed_at.is_not(None)
+        )
+    ).scalar_one_or_none()
+    record_time = session.execute(
+        select(func.max(ExternalBrokerActivity.created_at))
+    ).scalar_one_or_none()
+    candidates = [value for value in (job_time, record_time) if value is not None]
+    return max(candidates) if candidates else None
 
 
 def latest_standalone_reconciliation(
@@ -165,5 +194,6 @@ __all__ = [
     "ReconciliationScopeFilter",
     "StandaloneReconciliation",
     "latest_account_reconciliation_run",
+    "latest_broker_effect_at",
     "latest_standalone_reconciliation",
 ]

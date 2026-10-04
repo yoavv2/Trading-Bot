@@ -712,6 +712,8 @@ _MUTATING_ENTRY_POINTS = {
     # ACCT-01 (20.1-08): the owner-less account-level entry points.
     "sync_account_state",
     "reconcile_account",
+    # EXT-01 (20.1-09): audited recording of external broker activity (Job handler only).
+    "record_external_orders",
     "ingest_daily_bars",
     "sync_symbol_metadata",
     "upsert_symbol_metadata",

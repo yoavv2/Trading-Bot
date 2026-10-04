@@ -600,12 +600,12 @@ def test_load_local_intent_records_is_one_statement_regardless_of_order_count(
     assert all(r.registered_at == REGISTERED for r in records)
 
 
-def test_loaders_report_owner_period_and_empty_external_hook(attribution_db: str) -> None:
+def test_loaders_report_owner_period_and_empty_recorded_external(attribution_db: str) -> None:
     settings = load_settings()
     _ensure_strategy(OWNER)
     with session_scope(settings) as session:
         assert attribution_inputs.load_ownership_periods(session) == ()
-        assert attribution_inputs.load_recorded_external_order_ids(session) == frozenset()
+        assert attribution_inputs.load_recorded_external(session) == {}
     set_active_paper_strategy(settings, OWNER)
     with session_scope(settings) as session:
         periods = attribution_inputs.load_ownership_periods(session)

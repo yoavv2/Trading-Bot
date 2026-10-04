@@ -8,8 +8,12 @@ Every broker order is classified ``owned`` / ``recorded_external`` / ``unrecogni
   registration, and whose registration is covered by an ownership period of its own
   strategy (once periods exist). A mismatch is a BLOCKING anomaly from a closed set; an
   id (or an id FORMAT) alone is never ownership evidence.
-- ``recorded_external`` is a hook: ids supplied by the caller (empty until the external
-  activity record exists).
+- ``recorded_external`` is a stored, VERIFIED snapshot (EXT-01, D-10): the caller supplies
+  the latest recorded item per broker order id, and the class applies only while the
+  content hash recomputed from the CURRENT broker order and its fills still equals the
+  stored one. A mismatch is ``unrecognized`` again (preserved origin tag plus
+  ``recorded_snapshot_mismatch``); a recorded id that no longer appears in the broker
+  orders is a blocking ``recorded_external_missing`` item. Nothing here calls the broker.
 - everything else is ``unrecognized`` with a closed origin tag.
 
 Fills inherit their order's class through ``broker_order_id``; a fill whose order is
@@ -24,16 +28,18 @@ under ``TYPE_CHECKING`` only).
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from trading_platform.services.broker_status import BrokerStatusClass, classify_broker_status
 from trading_platform.services.config.tolerances import QUANTITY_TOLERANCE
 from trading_platform.services.execution.idempotency import client_order_id_prefix_fragment
+from trading_platform.services.external_snapshot import RecordedExternalItem, content_hash
 
 if TYPE_CHECKING:
     from trading_platform.services.alpaca import (
@@ -110,6 +116,9 @@ class OrderAttribution:
     owner_strategy_id: str | None = None
     origin_tag: OriginTag | None = None
     anomaly: AttributionAnomaly | None = None
+    # True when a recorded external snapshot exists for this order but the broker data
+    # no longer matches its stored content hash (EXT-01); the order is then unrecognized.
+    recorded_snapshot_mismatch: bool = False
 
 
 @dataclass(frozen=True)
@@ -129,6 +138,8 @@ class AttributionResult:
     fills: tuple[FillAttribution, ...] = ()
     unexplained_exposure: dict[str, Decimal] = field(default_factory=dict)
     unresolved_reasons: tuple[UnresolvedReason, ...] = ()
+    # Recorded external orders (latest stored snapshot) absent from the broker orders.
+    recorded_external_missing: tuple[str, ...] = ()
 
     @property
     def unrecognized_orders(self) -> tuple[OrderAttribution, ...]:
@@ -150,6 +161,7 @@ class AttributionResult:
             or self.anomalies
             or self.unexplained_exposure
             or self.unresolved_reasons
+            or self.recorded_external_missing
         )
 
     def excluded_order_ids_for(self, strategy_id: str) -> frozenset[str]:
@@ -187,7 +199,7 @@ class AttributionResult:
         unrecognized_orders = self.unrecognized_orders
         unrecognized_fills = self.unrecognized_fills
         anomalies = self.anomalies
-        return {
+        payload: dict[str, Any] = {
             "blocks_execution": self.blocks_execution,
             "orders": order_counts,
             "fills": fill_counts,
@@ -199,6 +211,10 @@ class AttributionResult:
                     "side": o.side,
                     "quantity": str(o.quantity),
                     "origin_tag": o.origin_tag.value if o.origin_tag is not None else None,
+                    # Only when true, so the item shape is unchanged for every other order.
+                    **(
+                        {"recorded_snapshot_mismatch": True} if o.recorded_snapshot_mismatch else {}
+                    ),
                 }
                 for o in unrecognized_orders[:MAX_REPORTED_ITEMS]
             ],
@@ -230,13 +246,21 @@ class AttributionResult:
             },
             "unresolved_reasons": [reason.value for reason in self.unresolved_reasons],
         }
+        if self.recorded_external_missing:
+            # Only when non-empty: the key is absent (and the shape unchanged) otherwise.
+            payload["recorded_external_missing"] = list(
+                self.recorded_external_missing[:MAX_REPORTED_ITEMS]
+            )
+        return payload
 
 
 def looks_like_platform_client_order_id(client_order_id: str, *, prefix: str) -> bool:
     """True iff the id has the platform shape for ``prefix`` (shape only; NEVER ownership)."""
 
     fragment = re.escape(client_order_id_prefix_fragment(prefix))
-    return bool(re.fullmatch(rf"{fragment}-\d{{8}}-[a-z0-9]{{1,8}}-[0-9a-f]{{18}}", client_order_id))
+    return bool(
+        re.fullmatch(rf"{fragment}-\d{{8}}-[a-z0-9]{{1,8}}-[0-9a-f]{{18}}", client_order_id)
+    )
 
 
 def _aware(value: datetime) -> datetime:
@@ -305,17 +329,28 @@ def classify_broker_activity(
     broker_positions: Iterable[BrokerPositionSnapshot],
     local_intents: Iterable[LocalIntentRecord],
     ownership_periods: Sequence[OwnershipPeriod] = (),
-    recorded_external_order_ids: Collection[str] = frozenset(),
+    recorded_external: Mapping[str, RecordedExternalItem] = MappingProxyType({}),
     platform_prefix: str,
     unresolved_reasons: Iterable[UnresolvedReason] = (),
 ) -> AttributionResult:
-    """Classify all broker orders and fills and compute unexplained exposure per symbol."""
+    """Classify all broker orders and fills and compute unexplained exposure per symbol.
+
+    ``recorded_external`` maps broker order id to the latest stored snapshot; it explains
+    an order only while the hash recomputed from ``broker_orders``/``broker_fills`` still
+    matches (no broker call, no extra query).
+    """
 
     intents = tuple(local_intents)
     by_client_id = {r.client_order_id: r for r in intents if r.client_order_id}
     by_broker_id = {r.broker_order_id: r for r in intents if r.broker_order_id}
     periods = tuple(ownership_periods)
     earliest_start = min((_aware(p.start) for p in periods), default=None)
+
+    fills_by_order: dict[str, list[BrokerFillSnapshot]] = {}
+    if recorded_external:
+        for broker_fill in broker_fills:
+            fills_by_order.setdefault(broker_fill.broker_order_id, []).append(broker_fill)
+    seen_order_ids: set[str] = set()
 
     order_results: list[OrderAttribution] = []
     class_by_broker_order_id: dict[str, OrderAttribution] = {}
@@ -340,14 +375,21 @@ def classify_broker_activity(
                     earliest_period_start=earliest_start,
                 ),
             )
-        elif order.broker_order_id in recorded_external_order_ids:
+        elif order.broker_order_id in recorded_external:
+            item = recorded_external[order.broker_order_id]
+            verified = (
+                content_hash(order, fills_by_order.get(order.broker_order_id, ()))
+                == item.content_hash
+            )
             result = OrderAttribution(
                 broker_order_id=order.broker_order_id,
                 client_order_id=order.client_order_id,
                 symbol=order.symbol,
                 side=str(order.side),
                 quantity=order.quantity,
-                order_class=OrderClass.RECORDED_EXTERNAL,
+                order_class=OrderClass.RECORDED_EXTERNAL if verified else OrderClass.UNRECOGNIZED,
+                origin_tag=None if verified else OriginTag(item.origin_tag),
+                recorded_snapshot_mismatch=not verified,
             )
         else:
             result = OrderAttribution(
@@ -361,6 +403,7 @@ def classify_broker_activity(
             )
         order_results.append(result)
         class_by_broker_order_id[order.broker_order_id] = result
+        seen_order_ids.add(order.broker_order_id)
 
     fill_results: list[FillAttribution] = []
     explained_net: dict[str, Decimal] = {}
@@ -400,4 +443,5 @@ def classify_broker_activity(
         fills=tuple(fill_results),
         unexplained_exposure=unexplained,
         unresolved_reasons=tuple(unresolved_reasons),
+        recorded_external_missing=tuple(sorted(set(recorded_external) - seen_order_ids)),
     )

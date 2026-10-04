@@ -44,7 +44,7 @@ from trading_platform.services.attribution import (
 from trading_platform.services.attribution_inputs import (
     load_local_intent_records,
     load_ownership_periods,
-    load_recorded_external_order_ids,
+    load_recorded_external,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.config.tolerances import MONEY_TOLERANCE, QUANTITY_TOLERANCE
@@ -515,7 +515,7 @@ def _reconcile_against_broker_state(
         broker_positions=broker_state.positions,
         local_intents=load_local_intent_records(session),
         ownership_periods=load_ownership_periods(session),
-        recorded_external_order_ids=load_recorded_external_order_ids(session),
+        recorded_external=load_recorded_external(session),
         platform_prefix=platform_prefix,
     )
     excluded_order_ids = attribution.excluded_order_ids_for(strategy_record.strategy_id)

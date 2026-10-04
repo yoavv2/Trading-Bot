@@ -11,12 +11,14 @@ from sqlalchemy.orm import Session
 
 from trading_platform.db.models import (
     ActivePaperStrategy,
+    ExternalBrokerActivity,
     PaperOrder,
     Strategy,
     StrategyRun,
     Symbol,
 )
 from trading_platform.services.attribution import LocalIntentRecord, OwnershipPeriod
+from trading_platform.services.external_snapshot import RecordedExternalItem
 
 
 def load_local_intent_records(session: Session) -> tuple[LocalIntentRecord, ...]:
@@ -77,11 +79,39 @@ def load_ownership_periods(session: Session) -> tuple[OwnershipPeriod, ...]:
     return (OwnershipPeriod(strategy_id=row[0], start=row[1], end=None),)
 
 
-def load_recorded_external_order_ids(session: Session) -> frozenset[str]:
-    """Broker order ids recorded as verified external activity (D-10 hook).
+def load_recorded_external(session: Session) -> dict[str, RecordedExternalItem]:
+    """Latest recorded external snapshot per broker order id, in ONE statement (D-10).
 
-    Always empty until 20.1-09 supplies verified external-activity items; nothing in
-    this plan writes such a record.
+    The latest row (``created_at``, then ``id``) per ``broker_order_id`` is the one a
+    check compares; an older row never keeps an item explained once a newer divergent
+    one exists. Pure read: no broker call, no write. The caller's classification
+    recomputes the content hash from the broker lists it already loaded.
     """
 
-    return frozenset()
+    rows = session.execute(
+        select(
+            ExternalBrokerActivity.broker_order_id,
+            ExternalBrokerActivity.content_hash,
+            ExternalBrokerActivity.origin_tag,
+            ExternalBrokerActivity.symbol,
+            ExternalBrokerActivity.side,
+            ExternalBrokerActivity.filled_qty,
+        )
+        .distinct(ExternalBrokerActivity.broker_order_id)
+        .order_by(
+            ExternalBrokerActivity.broker_order_id,
+            ExternalBrokerActivity.created_at.desc(),
+            ExternalBrokerActivity.id.desc(),
+        )
+    ).all()
+    return {
+        row[0]: RecordedExternalItem(
+            broker_order_id=row[0],
+            content_hash=row[1],
+            origin_tag=row[2],
+            symbol=row[3],
+            side=row[4],
+            filled_qty=row[5],
+        )
+        for row in rows
+    }

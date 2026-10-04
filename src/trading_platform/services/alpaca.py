@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Final, Literal, TypeVar
+from urllib.parse import quote
 
 import httpx
 
@@ -161,9 +162,7 @@ class AlpacaPaginationStalledError(AlpacaPaginationError):
         self.endpoint = endpoint
         self.cursor = cursor
         self.detail = detail
-        super().__init__(
-            f"Alpaca pagination stalled for {endpoint} at cursor {cursor!r}: {detail}"
-        )
+        super().__init__(f"Alpaca pagination stalled for {endpoint} at cursor {cursor!r}: {detail}")
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -281,6 +280,9 @@ class BrokerOrderSnapshot:
     # 20.1-08: the broker's cumulative filled quantity (payload ``filled_qty``). Recorded
     # per applied order by broker-order-sync as basis evidence; ``None`` when absent.
     filled_quantity: Decimal | None = None
+    # 20.1-09: the broker's average fill price (payload ``filled_avg_price``), part of the
+    # verified external-activity snapshot hash; ``None`` when absent.
+    filled_avg_price: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -337,6 +339,7 @@ def _normalized_order_snapshot(payload: dict[str, Any]) -> BrokerOrderSnapshot:
         replaces_order_id=_optional_text(payload.get("replaces")),
         successor_order_id=_optional_text(payload.get("replaced_by")),
         filled_quantity=_optional_quantity(payload.get("filled_qty")),
+        filled_avg_price=_optional_quantity(payload.get("filled_avg_price")),
     )
 
 
@@ -708,6 +711,28 @@ class AlpacaClient:
             "GET",
             "/v2/orders:by_client_order_id",
             params={"client_order_id": client_order_id},
+            allow_not_found=True,
+        )
+        if payload is _NOT_FOUND:
+            return None
+        if not isinstance(payload, dict):
+            raise AlpacaClientError("Alpaca order lookup returned a non-object payload.")
+        return _normalized_order_snapshot(payload)
+
+    def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrderSnapshot | None:
+        """GET one order by broker order id; ``None`` ONLY for HTTP 404.
+
+        Same rules as ``get_order_by_client_order_id``: GET retries apply, and only a
+        404 is evidence of absence. The id is an operator-supplied path segment, so it
+        is percent-encoded (no path traversal or query injection).
+        """
+
+        if not order_id.strip():
+            # An empty segment would address the LIST endpoint, never one order.
+            raise ValueError("order_id must be a non-blank broker order id.")
+        payload = self._request_with_retry(
+            "GET",
+            f"/v2/orders/{quote(order_id, safe='')}",
             allow_not_found=True,
         )
         if payload is _NOT_FOUND:

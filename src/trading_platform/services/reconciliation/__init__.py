@@ -28,6 +28,7 @@ from trading_platform.services.reconciliation.findings import Finding, Reconcili
 from trading_platform.services.reconciliation.latest import (
     StandaloneReconciliation,
     latest_account_reconciliation_run,
+    latest_broker_effect_at,
     latest_standalone_reconciliation,
 )
 from trading_platform.services.reconciliation.matcher import (
@@ -61,6 +62,7 @@ __all__ = [
     "AccountReconciliationReport",
     "latest_standalone_reconciliation",
     "latest_account_reconciliation_run",
+    "latest_broker_effect_at",
     "StandaloneReconciliation",
     "apply_reconciliation_corrections",
     "recover_inflight_paper_orders",

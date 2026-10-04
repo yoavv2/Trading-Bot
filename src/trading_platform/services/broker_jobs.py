@@ -15,6 +15,7 @@ from types import MappingProxyType
 PAPER_SESSION_JOB_TYPE = "paper-session"
 BROKER_ORDER_SYNC_JOB_TYPE = "broker-order-sync"
 RECONCILIATION_JOB_TYPE = "reconciliation"
+RECORD_EXTERNAL_ACTIVITY_JOB_TYPE = "record-external-activity"
 
 
 class BrokerEffect(StrEnum):
@@ -32,20 +33,28 @@ BROKER_TOUCHING_JOB_TYPES = MappingProxyType(
         PAPER_SESSION_JOB_TYPE: BrokerEffect.SUBMITS_ORDERS,
         BROKER_ORDER_SYNC_JOB_TYPE: BrokerEffect.READS_BROKER,
         RECONCILIATION_JOB_TYPE: BrokerEffect.READS_BROKER,
+        RECORD_EXTERNAL_ACTIVITY_JOB_TYPE: BrokerEffect.READS_BROKER,
     }
 )
 
 #: Job types that CHANGE local state from the broker's (they apply orders, fills or
 #: submit). "After the latest broker-touching Job" rules look at these only: a standalone
 #: reconciliation is report-only and never counts as the Job a later reconciliation must
-#: follow. 20.1-09 extends both collections with ``record-external-activity``.
-STATE_CHANGING_BROKER_JOB_TYPES = frozenset({PAPER_SESSION_JOB_TYPE, BROKER_ORDER_SYNC_JOB_TYPE})
-
+#: follow. ``record-external-activity`` changes local state (it stores recorded rows), so
+#: it is a member, but its EFFECT TIME is the newest recorded row's ``created_at``, NOT
+#: ``Job.completed_at`` (see ``reconciliation.latest.latest_broker_effect_at``): the
+#: handler runs its own fresh account reconciliation before the Job completes, so
+#: ``completed_at`` would always postdate that fresh check and nothing could ever qualify
+#: as "after the latest broker-touching Job" (03 section 3.3 A6).
+STATE_CHANGING_BROKER_JOB_TYPES = frozenset(
+    {PAPER_SESSION_JOB_TYPE, BROKER_ORDER_SYNC_JOB_TYPE, RECORD_EXTERNAL_ACTIVITY_JOB_TYPE}
+)
 __all__ = [
     "BROKER_ORDER_SYNC_JOB_TYPE",
     "BROKER_TOUCHING_JOB_TYPES",
     "PAPER_SESSION_JOB_TYPE",
     "RECONCILIATION_JOB_TYPE",
+    "RECORD_EXTERNAL_ACTIVITY_JOB_TYPE",
     "STATE_CHANGING_BROKER_JOB_TYPES",
     "BrokerEffect",
 ]

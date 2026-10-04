@@ -48,7 +48,7 @@ from trading_platform.services.attribution import (
 from trading_platform.services.attribution_inputs import (
     load_local_intent_records,
     load_ownership_periods,
-    load_recorded_external_order_ids,
+    load_recorded_external,
 )
 from trading_platform.services.reconciliation.findings import Finding
 from trading_platform.services.reconciliation.matcher import match_snapshots
@@ -158,7 +158,15 @@ def reconcile_account(
                 )
 
         finding_dicts = [_finding_event_dict(finding) for finding in findings]
-        blocking_count = sum(1 for finding in findings if finding.blocks_execution)
+        # EXT-01: a recorded external order that vanished from broker history is a
+        # BLOCKING finding of its own (the closed matcher categories do not cover it).
+        finding_dicts.extend(
+            _recorded_external_missing_finding(order_id)
+            for order_id in attribution.recorded_external_missing
+        )
+        blocking_count = sum(1 for finding in findings if finding.blocks_execution) + len(
+            attribution.recorded_external_missing
+        )
         unresolved_values = [reason.value for reason in attribution.unresolved_reasons]
         blocks_execution = (
             bool(findings)
@@ -174,7 +182,7 @@ def reconcile_account(
             "stage": "completed",
             "scope": "account",
             "as_of_session": as_of_session.isoformat() if as_of_session is not None else None,
-            "finding_count": len(findings),
+            "finding_count": len(finding_dicts),
             "blocking_count": blocking_count,
             "blocks_execution": blocks_execution,
             "account_divergence": account_divergence,
@@ -188,7 +196,7 @@ def reconcile_account(
             status=AccountReconciliationStatus.SUCCEEDED,
             completed_at=checked_at,
             blocks_execution=blocks_execution,
-            finding_count=len(findings),
+            finding_count=len(finding_dicts),
             blocking_count=blocking_count,
             findings=finding_dicts,
             account_divergence=account_divergence,
@@ -238,7 +246,7 @@ def reconcile_account(
         run_id=str(run_id),
         as_of_session=as_of_session.isoformat() if as_of_session is not None else None,
         checked_at=checked_at.isoformat(),
-        finding_count=len(findings),
+        finding_count=len(finding_dicts),
         blocking_count=blocking_count,
         blocks_execution=blocks_execution,
         unresolved_reasons=tuple(unresolved_values),
@@ -246,6 +254,24 @@ def reconcile_account(
         classification_summary=classification,
         findings=tuple(finding_dicts),
     )
+
+
+#: ``event_type`` of the stored finding for a recorded external order missing at the broker.
+RECORDED_EXTERNAL_MISSING = "recorded_external_missing"
+
+
+def _recorded_external_missing_finding(broker_order_id: str) -> dict[str, Any]:
+    return {
+        "event_type": RECORDED_EXTERNAL_MISSING,
+        "severity": "error",
+        "blocks_execution": True,
+        "message": (
+            f"Recorded external order '{broker_order_id}' is no longer present in the "
+            "broker order history."
+        ),
+        "paper_order_id": None,
+        "details": {"broker_order_id": broker_order_id},
+    }
 
 
 def _evaluate_account(
@@ -293,7 +319,7 @@ def _evaluate_account(
         broker_positions=broker_state.positions,
         local_intents=load_local_intent_records(session),
         ownership_periods=load_ownership_periods(session),
-        recorded_external_order_ids=load_recorded_external_order_ids(session),
+        recorded_external=load_recorded_external(session),
         platform_prefix=platform_prefix,
     )
     # Account scope: orders owned by ANY strategy match their own local records, so only
