@@ -66,7 +66,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Paper-Account Ownership (Phase 20.1)
 
-- [ ] **PAPER-01**: At most one active paper strategy owns the Alpaca paper account (persisted singleton; two owners unrepresentable at the DB level); the initial state is **no owner**; `paper-session` and strategy-scoped `reconciliation` for any other strategy are rejected at submit with a typed conflict and re-checked immediately before every broker action; registered, research-available, enabled and active are distinct states; new strategies are created disabled
+- [x] **PAPER-01**: At most one active paper strategy owns the Alpaca paper account (persisted singleton; two owners unrepresentable at the DB level); the initial state is **no owner**; `paper-session` and strategy-scoped `reconciliation` for any other strategy are rejected at submit with a typed conflict and re-checked immediately before every broker action; registered, research-available, enabled and active are distinct states; new strategies are created disabled
 - [ ] **PAPER-02**: Seeding (from none) and handover (A → B or none) are synchronous, audited, idempotent controls that succeed only when checks A1–A7 pass from persisted evidence (no broker-touching work in flight and no open operation; all broker orders terminal; flat with zero unexplained exposure; no unrecognized items; no unresolved outcome for any strategy; a fresh clean account-level reconciliation after the latest broker-touching Job; outgoing owner disabled); the new owner starts disabled; each failing check yields a typed refusal naming it
 
 ### Attribution & Account Checks (Phase 20.1)
@@ -207,7 +207,7 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | CTRL-01 | Phase 20 | Complete |
 | CTRL-02 | Phase 20 | Complete |
 | ORCH-08 | Phase 20 | Complete |
-| PAPER-01 | Phase 20.1 | Pending |
+| PAPER-01 | Phase 20.1 | Complete |
 | PAPER-02 | Phase 20.1 | Pending |
 | ACCT-01 | Phase 20.1 | Pending |
 | COR-05 | Phase 20.1 | Pending |
