@@ -32,6 +32,10 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import session_scope
+from trading_platform.services.active_paper_strategy import (
+    BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
+    OwnershipBlock,
+)
 from trading_platform.services.alpaca import AlpacaClient, AlpacaExecutionService
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError, session_run_lock
@@ -61,7 +65,7 @@ from trading_platform.services.operator_controls import (
     BLOCKED_REASON_GLOBAL_KILL_SWITCH,
     KillSwitchStateSnapshot,
     ensure_strategy_control_state,
-    load_kill_switch_state,
+    read_trading_gate_state,
 )
 from trading_platform.services.reconciliation import (
     apply_reconciliation_corrections,
@@ -218,10 +222,9 @@ def _run_paper_order_submission_guarded(
         settings=resolved_settings,
         registry=resolved_registry,
     )
-    kill_switch_state = load_kill_switch_state(
-        settings=resolved_settings,
-        registry=resolved_registry,
-    )
+    # R-Q1: kill switch, owner and owner status come from ONE gate statement.
+    gate = read_trading_gate_state(resolved_settings)
+    kill_switch_state = gate.kill_switch
     if kill_switch_state.is_tripped:
         report = _finalize_blocked_paper_execution_run(
             resolved_settings,
@@ -248,6 +251,42 @@ def _run_paper_order_submission_guarded(
             strategy_status=control_state.status,
             kill_switch_state=kill_switch_state.state,
             blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+            trigger_source=trigger_source,
+        )
+        return report
+    # D-03: ownership is re-read (fresh, uncached) immediately before any
+    # broker action, after the kill-switch check and before the disabled check.
+    ownership_block = gate.ownership_block_for(strategy_id)
+    if ownership_block is not None:
+        report = _finalize_blocked_paper_execution_run(
+            resolved_settings,
+            run_id,
+            strategy_id=strategy_id,
+            as_of_session=as_of_session,
+            requested_risk_run_id=risk_run_id,
+            trigger_source=trigger_source,
+            strategy_status=control_state.status,
+            blocked_reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
+            action="blocked_not_active_paper_strategy",
+            message=(
+                f"Strategy '{strategy_id}' is not the active paper strategy "
+                f"({ownership_block.value}); paper execution halted before broker submission begins."
+            ),
+            extra_details={
+                "ownership_block": ownership_block.value,
+                "active_paper_strategy": gate.owner.to_dict(),
+            },
+        )
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_execution_blocked",
+            strategy_id=strategy_id,
+            run_id=report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
+            ownership_block=ownership_block.value,
             trigger_source=trigger_source,
         )
         return report
@@ -311,14 +350,17 @@ def _run_paper_order_submission_guarded(
         reused_orders: list[dict[str, Any]] = []
         versioned_orders: list[dict[str, Any]] = []
         skipped_by_kill_switch: list[dict[str, Any]] = []
+        skipped_by_ownership: list[dict[str, Any]] = []
         safety_threshold = resolved_settings.execution.safety.repeated_failure_threshold
         mid_run_kill_switch: KillSwitchStateSnapshot | None = None
+        mid_run_ownership_block: OwnershipBlock | None = None
 
         for candidate in candidates:
-            mid_run_kill_switch = load_kill_switch_state(
-                settings=resolved_settings,
-                registry=resolved_registry,
-            )
+            # R-Q1 + D-03: one fresh gate statement per candidate yields the
+            # kill switch AND the owner, read before registering the intent
+            # and before the broker call.
+            mid_run_gate = read_trading_gate_state(resolved_settings)
+            mid_run_kill_switch = mid_run_gate.kill_switch
             if mid_run_kill_switch.is_tripped:
                 skipped_by_kill_switch.append(
                     {
@@ -339,6 +381,32 @@ def _run_paper_order_submission_guarded(
                     symbol=candidate.symbol,
                     kill_switch_state=mid_run_kill_switch.state,
                     blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
+                    trigger_source=trigger_source,
+                )
+                continue
+
+            mid_run_ownership_block = mid_run_gate.ownership_block_for(strategy_id)
+            if mid_run_ownership_block is not None:
+                skipped_by_ownership.append(
+                    {
+                        "symbol": candidate.symbol,
+                        "side": candidate.side.value,
+                        "quantity": float(candidate.quantity),
+                        "session_date": candidate.session_date.isoformat(),
+                        "source_risk_event_id": str(candidate.risk_event_id),
+                        "ownership_block": mid_run_ownership_block.value,
+                    }
+                )
+                emit_structured_log(
+                    logger,
+                    logging.WARNING,
+                    "paper_execution_skipped",
+                    strategy_id=strategy_id,
+                    run_id=str(run_id),
+                    session_date=as_of_session.isoformat(),
+                    symbol=candidate.symbol,
+                    blocked_reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
+                    ownership_block=mid_run_ownership_block.value,
                     trigger_source=trigger_source,
                 )
                 continue
@@ -574,8 +642,15 @@ def _run_paper_order_submission_guarded(
         halted_mid_run = bool(skipped_by_kill_switch) and (
             mid_run_kill_switch is not None and mid_run_kill_switch.is_tripped
         )
+        # D-03: ownership lost mid-run halts the remaining candidates. Kill
+        # switch has precedence when both halted (guarded-body order).
+        halted_by_ownership = (
+            not halted_mid_run
+            and bool(skipped_by_ownership)
+            and mid_run_ownership_block is not None
+        )
         summary: dict[str, Any] = {
-            "stage": "blocked_mid_run" if halted_mid_run else "completed",
+            "stage": "blocked_mid_run" if (halted_mid_run or halted_by_ownership) else "completed",
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
             "requested_risk_run_id": risk_run_id,
@@ -586,11 +661,13 @@ def _run_paper_order_submission_guarded(
             "reused_count": len(reused_orders),
             "versioned_count": len(versioned_orders),
             "skipped_by_kill_switch_count": len(skipped_by_kill_switch),
+            "skipped_by_ownership_count": len(skipped_by_ownership),
             "submitted_orders": submitted_orders,
             "existing_orders": existing_orders,
             "reused_orders": reused_orders,
             "versioned_orders": versioned_orders,
             "skipped_by_kill_switch": skipped_by_kill_switch,
+            "skipped_by_ownership": skipped_by_ownership,
             "broker_provider": resolved_settings.broker.provider,
             "execution_defaults": resolved_settings.execution.model_dump(mode="json"),
         }
@@ -604,6 +681,16 @@ def _run_paper_order_submission_guarded(
             summary["action"] = "blocked_mid_run_global_kill_switch"
             summary["message"] = halted_message
             summary["kill_switch"] = mid_run_kill_switch.to_dict()
+        elif halted_by_ownership and mid_run_ownership_block is not None:
+            halted_message = (
+                "Strategy is no longer the active paper strategy "
+                f"({mid_run_ownership_block.value}); "
+                f"{len(skipped_by_ownership)} pending candidate(s) halted before broker submission."
+            )
+            summary["blocked_reason"] = BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY
+            summary["action"] = "blocked_mid_run_not_active_paper_strategy"
+            summary["message"] = halted_message
+            summary["ownership_block"] = mid_run_ownership_block.value
     except Exception as exc:
         _update_paper_execution_run(
             resolved_settings,
@@ -640,8 +727,32 @@ def _run_paper_order_submission_guarded(
             broker_execution.close()
 
     completed_at = datetime.now(UTC)
+    if halted_by_ownership and mid_run_ownership_block is not None:
+        report = _finalize_mid_run_halt(
+            resolved_settings,
+            run_id,
+            completed_at=completed_at,
+            summary=summary,
+            message=halted_message
+            or "Strategy lost paper ownership during session; pending candidates halted before broker submission.",
+        )
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_execution_blocked",
+            strategy_id=strategy_id,
+            run_id=report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
+            ownership_block=mid_run_ownership_block.value,
+            trigger_source=trigger_source,
+            submitted_count=summary["submitted_count"],
+            skipped_by_ownership_count=summary["skipped_by_ownership_count"],
+        )
+        return report
     if halted_mid_run and mid_run_kill_switch is not None:
-        report = _finalize_mid_run_kill_switch_halt(
+        report = _finalize_mid_run_halt(
             resolved_settings,
             run_id,
             completed_at=completed_at,
@@ -688,7 +799,7 @@ def _run_paper_order_submission_guarded(
 
 
 def run_paper_session(
-    strategy_id: str | None = None,
+    strategy_id: str,
     *,
     as_of_session: date,
     risk_run_id: str | None = None,
@@ -710,7 +821,7 @@ def run_paper_session(
     logger = get_logger("trading_platform.paper_execution")
     resolved_settings = settings or load_settings()
     runner_settings = resolved_settings.execution.paper_session_runner
-    resolved_strategy_id = strategy_id or runner_settings.default_strategy_id
+    resolved_strategy_id = strategy_id
     resolved_trigger_source = trigger_source or runner_settings.trigger_source
     reconciliation_report = None
 
@@ -729,10 +840,11 @@ def run_paper_session(
         settings=resolved_settings,
         registry=registry,
     )
-    kill_switch_state = load_kill_switch_state(
-        settings=resolved_settings,
-        registry=registry,
-    )
+    # R-Q1: kill switch and owner from ONE fresh gate statement; the owner is
+    # read BEFORE load_broker_state so a non-owner makes zero broker calls.
+    session_gate = read_trading_gate_state(resolved_settings)
+    kill_switch_state = session_gate.kill_switch
+    session_ownership_block = session_gate.ownership_block_for(resolved_strategy_id)
     existing_orders = list(session_plan.existing_orders)
     base_summary = {
         "strategy_id": resolved_strategy_id,
@@ -745,6 +857,45 @@ def run_paper_session(
         "strategy_status": control_state.status,
         "kill_switch": kill_switch_state.to_dict(),
     }
+
+    if session_ownership_block is not None:
+        # The guarded body of run_paper_order_submission re-reads ownership and
+        # creates the blocked paper_execution run; no broker call is made here.
+        blocked_execution_report = run_paper_order_submission(
+            resolved_strategy_id,
+            as_of_session=as_of_session,
+            risk_run_id=str(session_plan.source_risk_run_id),
+            trigger_source=resolved_trigger_source,
+            settings=resolved_settings,
+            registry=registry,
+            execution_service=execution_service,
+            job_id=job_id,
+        )
+        result_summary = dict(blocked_execution_report.result_summary)
+        result_summary["session_preflight"] = base_summary
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_session_blocked",
+            strategy_id=resolved_strategy_id,
+            run_id=blocked_execution_report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
+            ownership_block=session_ownership_block.value,
+            trigger_source=resolved_trigger_source,
+        )
+        return PaperSessionRunReport(
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            trigger_source=resolved_trigger_source,
+            source_risk_run_id=str(session_plan.source_risk_run_id),
+            action="blocked_not_active_paper_strategy",
+            execution_run_id=blocked_execution_report.run_id,
+            execution_status=blocked_execution_report.status,
+            result_summary=result_summary,
+            reconciliation_run_id=None,
+        )
 
     if not control_state.is_execution_enabled:
         blocked_execution_report = run_paper_order_submission(
@@ -1630,7 +1781,7 @@ def _finalize_blocked_paper_execution_run(
         )
 
 
-def _finalize_mid_run_kill_switch_halt(
+def _finalize_mid_run_halt(
     settings: Settings,
     run_id: uuid.UUID,
     *,

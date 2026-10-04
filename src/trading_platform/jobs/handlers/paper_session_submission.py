@@ -25,6 +25,13 @@ retry prerequisite: a FAILED, outcome-uncertain ``paper-session`` Job may
 only be retried after a newer SUCCEEDED ``reconciliation`` Job exists for
 the same strategy.
 
+Ownership (D-03, PAPER-01): after every payload check, a strategy that is not
+the active paper strategy is refused with a typed ``JobSubmissionConflictError``
+(HTTP 409 ``strategy_not_active_paper_strategy``; ``no_active_paper_strategy``
+when no strategy owns the account). The check is repeated inside the Job-insert
+transaction under the ownership singleton lock (``check_admission``) and again
+at run time before every broker action.
+
 Field-level parsing and the shared semantic checks are delegated to
 ``jobs/handlers/payload_fields.py`` (P19 D-08/D-09 precedent, generalized
 in Phase 20).
@@ -45,10 +52,12 @@ from trading_platform.jobs.handlers.payload_fields import (
     latest_completed_session_default,
     map_validation_error,
     parse_iso_date,
+    require_active_paper_strategy,
     require_registered_strategy,
     require_trading_session_not_future,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
+from trading_platform.services.active_paper_strategy import lock_active_paper_strategy_shared
 from trading_platform.services.risk import is_eligible_risk_run
 
 PAPER_SESSION_JOB_TYPE = "paper-session"
@@ -71,6 +80,16 @@ class PaperSessionPayloadRejection(StrEnum):
     AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
     INVALID_RISK_RUN_ID = "invalid_risk_run_id"
     RISK_RUN_NOT_ELIGIBLE = "risk_run_not_eligible"
+
+
+class PaperSessionSubmitConflict(StrEnum):
+    """Closed set of state-conflict codes (HTTP 409) ``paper-session`` submission
+    can raise via ``JobSubmissionConflictError`` (D-03). Initially exactly the
+    two ownership refusals; later plans extend it. One parametrized test case
+    exists per value."""
+
+    NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
+    STRATEGY_NOT_ACTIVE_PAPER_STRATEGY = "strategy_not_active_paper_strategy"
 
 
 def _default_clock() -> datetime:
@@ -175,11 +194,33 @@ class PaperSessionSubmissionSpec:
                 )
             canonical_risk_run_id = str(parsed_risk_run_id)
 
+        # D-03: state check LAST, after every shape/semantic payload check.
+        require_active_paper_strategy(
+            self._settings,
+            strategy_id,
+            job_type=PAPER_SESSION_JOB_TYPE,
+            conflict_enum=PaperSessionSubmitConflict,
+        )
+
         return {
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
             "risk_run_id": canonical_risk_run_id,
         }
+
+    def check_admission(self, payload: Mapping[str, Any], *, session: Any) -> None:
+        """SER admission (inside the Job-insert transaction, before the insert):
+        lock the ownership singleton FOR SHARE, then re-run the same ownership
+        check against the transaction's own view."""
+
+        lock_active_paper_strategy_shared(session)
+        require_active_paper_strategy(
+            self._settings,
+            payload["strategy_id"],
+            job_type=PAPER_SESSION_JOB_TYPE,
+            conflict_enum=PaperSessionSubmitConflict,
+            session=session,
+        )
 
     def submission_defaults(self) -> dict[str, str] | None:
         """Console pre-fill, computed at read time. Returns ``None`` when no

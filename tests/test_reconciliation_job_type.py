@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Mapping
 
 import pytest
+from tests.support.paper_ownership import seed_registered_strategy, set_active_paper_strategy
 from tests.test_backtest_runner import (
     _seed_market_data,
     migrated_backtest_db,
@@ -36,11 +37,13 @@ from trading_platform.jobs.handlers.reconciliation import (
 from trading_platform.jobs.handlers.reconciliation_submission import (
     ReconciliationPayloadRejection,
     ReconciliationSubmissionSpec,
+    ReconciliationSubmitConflict,
 )
 from trading_platform.jobs.registry import (
     InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
+    JobSubmissionConflictError,
     retry_prerequisite_for,
 )
 from trading_platform.services.config.validation import ExecutionMode
@@ -138,7 +141,8 @@ def test_validate_payload_rejects(
     assert exc_info.value.reason == expected_reason.value
 
 
-def test_validate_payload_normalizes() -> None:
+def test_validate_payload_normalizes(migrated_backtest_db: str) -> None:
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)  # explicit owner (D-03)
     spec = ReconciliationSubmissionSpec(load_settings())
 
     normalized = spec.validate_payload(
@@ -149,6 +153,43 @@ def test_validate_payload_normalizes() -> None:
         "strategy_id": "trend_following_daily",
         "as_of_session": "2024-01-10",
     }
+
+
+def test_reconciliation_submit_conflict_is_a_closed_set() -> None:
+    assert {member.value for member in ReconciliationSubmitConflict} == {
+        "no_active_paper_strategy",
+        "strategy_not_active_paper_strategy",
+    }
+
+
+@pytest.mark.parametrize(
+    ("conflict", "owner"),
+    [
+        pytest.param(
+            ReconciliationSubmitConflict.NO_ACTIVE_PAPER_STRATEGY, None, id="no_active_paper_strategy"
+        ),
+        pytest.param(
+            ReconciliationSubmitConflict.STRATEGY_NOT_ACTIVE_PAPER_STRATEGY,
+            "donchian_breakout_daily",
+            id="strategy_not_active_paper_strategy",
+        ),
+    ],
+)
+def test_validate_payload_raises_each_ownership_conflict(
+    migrated_backtest_db: str, conflict: ReconciliationSubmitConflict, owner: str | None
+) -> None:
+    settings = load_settings()
+    seed_registered_strategy(settings, "trend_following_daily")
+    seed_registered_strategy(settings, "donchian_breakout_daily")
+    set_active_paper_strategy(settings, owner)
+    spec = ReconciliationSubmissionSpec(settings)
+
+    with pytest.raises(JobSubmissionConflictError) as exc_info:
+        spec.validate_payload(dict(_VALID_PAYLOAD))
+
+    assert exc_info.value.job_type == "reconciliation"
+    assert exc_info.value.code == conflict.value
+    assert dict(exc_info.value.detail) == {"strategy_id": "trend_following_daily"}
 
 
 def test_submission_defaults_none_without_sessions(migrated_backtest_db: str) -> None:

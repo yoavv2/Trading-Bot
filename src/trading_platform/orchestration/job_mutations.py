@@ -28,6 +28,7 @@ from trading_platform.jobs.registry import (
     JobCancellationMode,
     JobRegistry,
     UnknownJobTypeError,
+    admission_check_for,
     retry_prerequisite_for,
 )
 
@@ -224,6 +225,14 @@ def _is_named_uniqueness_error(exc: IntegrityError, *, constraint_name: str) -> 
     return getattr(diagnostic, "constraint_name", None) == constraint_name
 
 
+def _run_admission_check(spec: Any, payload: Mapping[str, Any], *, session: Any) -> None:
+    """Run the spec's optional SER admission hook inside the Job-insert transaction."""
+
+    hook = admission_check_for(spec)
+    if hook is not None:
+        hook(payload, session=session)
+
+
 class JobOrchestrationService:
     """Own Job mutation validation, identity, transaction composition, and references."""
 
@@ -306,6 +315,11 @@ class JobOrchestrationService:
             )
             if existing is not None:
                 return existing
+            # SER: admission of a broker-touching type takes the ownership
+            # singleton FOR SHARE and re-checks ownership BEFORE the Job row
+            # is inserted, in this same transaction (validate_payload above ran
+            # in its own session, so it cannot guarantee this).
+            _run_admission_check(spec, normalized_payload, session=session)
             try:
                 with session.begin_nested():
                     job_id = submit_job(
@@ -539,6 +553,9 @@ class JobOrchestrationService:
             # D-18: the stored payload is only ever revalidated, never
             # modified -- the new Job's payload is a verbatim copy.
             retry_payload = dict(original.payload)
+
+            # SER: same admission lock + ownership re-check as submit.
+            _run_admission_check(spec, retry_payload, session=session)
 
             try:
                 with session.begin_nested():

@@ -17,6 +17,13 @@ it writes broker-derived state inside one opaque service call, so a
 RUNNING Job of this type is never cancellable
 (``JobOrchestrationService`` rejects the request per D-02).
 
+Ownership (D-03, PAPER-01): strategy-scoped reconciliation for a strategy that
+is not the active paper strategy is refused with a typed
+``JobSubmissionConflictError`` (HTTP 409; ``no_active_paper_strategy`` when no
+strategy owns the account), at validation and again inside the Job-insert
+transaction under the ownership singleton lock. The owner-less account scope is
+added by 20.1-08.
+
 Field-level parsing and the shared semantic checks are delegated to
 ``jobs/handlers/payload_fields.py`` (P19 D-08/D-09 precedent, generalized
 in Phase 20).
@@ -36,10 +43,12 @@ from trading_platform.jobs.handlers.payload_fields import (
     latest_completed_session_default,
     map_validation_error,
     parse_iso_date,
+    require_active_paper_strategy,
     require_registered_strategy,
     require_trading_session_not_future,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
+from trading_platform.services.active_paper_strategy import lock_active_paper_strategy_shared
 
 RECONCILIATION_JOB_TYPE = "reconciliation"
 
@@ -57,6 +66,17 @@ class ReconciliationPayloadRejection(StrEnum):
     AS_OF_SESSION_IN_FUTURE = "as_of_session_in_future"
     AS_OF_SESSION_NOT_TRADING_SESSION = "as_of_session_not_trading_session"
     AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
+
+
+class ReconciliationSubmitConflict(StrEnum):
+    """Closed set of state-conflict codes (HTTP 409) strategy-scoped
+    ``reconciliation`` submission can raise via ``JobSubmissionConflictError``
+    (D-03). Initially exactly the two ownership refusals (every payload is
+    strategy scope today; 20.1-08 adds the owner-less account scope). One
+    parametrized test case exists per value."""
+
+    NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
+    STRATEGY_NOT_ACTIVE_PAPER_STRATEGY = "strategy_not_active_paper_strategy"
 
 
 def _default_clock() -> datetime:
@@ -120,10 +140,33 @@ class ReconciliationSubmissionSpec:
             self._settings, self._clock, as_of_session, job_type=RECONCILIATION_JOB_TYPE
         )
 
+        # D-03: strategy-scoped reconciliation is for the active paper strategy
+        # only. State check LAST, after every payload check.
+        require_active_paper_strategy(
+            self._settings,
+            strategy_id,
+            job_type=RECONCILIATION_JOB_TYPE,
+            conflict_enum=ReconciliationSubmitConflict,
+        )
+
         return {
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
         }
+
+    def check_admission(self, payload: Mapping[str, Any], *, session: Any) -> None:
+        """SER admission (inside the Job-insert transaction, before the insert):
+        lock the ownership singleton FOR SHARE, then re-run the same ownership
+        check against the transaction's own view (strategy scope)."""
+
+        lock_active_paper_strategy_shared(session)
+        require_active_paper_strategy(
+            self._settings,
+            payload["strategy_id"],
+            job_type=RECONCILIATION_JOB_TYPE,
+            conflict_enum=ReconciliationSubmitConflict,
+            session=session,
+        )
 
     def submission_defaults(self) -> dict[str, str] | None:
         """Console pre-fill, computed at read time. Returns ``None`` when no

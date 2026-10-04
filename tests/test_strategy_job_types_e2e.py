@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from tests.support.paper_ownership import seed_registered_strategy
 from tests.test_analytics_service import _seed_paper_operational_state
 from tests.test_job_operations_e2e import (
     _counts,
@@ -114,6 +115,10 @@ def strategy_jobs_env(
     monkeypatch.setenv("TRADING_PLATFORM_BROKER__ALPACA__API_KEY", _FAKE_API_KEY)
     monkeypatch.setenv("TRADING_PLATFORM_BROKER__ALPACA__API_SECRET", _FAKE_API_SECRET)
     clear_settings_cache()
+
+    # Explicit arrangement (20.1-01): the strategy under test is enabled AND the
+    # active paper strategy, so strategy-scoped reconciliation is admitted (D-03).
+    seed_registered_strategy(load_settings(), STRATEGY_ID, enabled=True, owner=True)
 
     script = BrokerScript()
     monkeypatch.setattr(reconciliation_report_module, "AlpacaClient", script.build)

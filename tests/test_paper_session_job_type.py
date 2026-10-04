@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 import pytest
 from sqlalchemy import select
+from tests.support.paper_ownership import seed_registered_strategy, set_active_paper_strategy
 from tests.test_paper_execution import (
     ExplodingBrokerClient,
     FakeBrokerClient,
@@ -45,11 +46,13 @@ from trading_platform.jobs.handlers.paper_session import (
 from trading_platform.jobs.handlers.paper_session_submission import (
     PaperSessionPayloadRejection,
     PaperSessionSubmissionSpec,
+    PaperSessionSubmitConflict,
 )
 from trading_platform.jobs.registry import (
     InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
+    JobSubmissionConflictError,
     retry_prerequisite_for,
 )
 from trading_platform.services.alpaca import BrokerAccountSnapshot, BrokerOrderSnapshot
@@ -329,7 +332,47 @@ def test_paper_session_validate_payload_rejects(
     assert exc_info.value.reason == expected_reason.value
 
 
-def test_paper_session_validate_payload_normalizes_null_risk_run_id() -> None:
+def test_paper_session_submit_conflict_is_a_closed_set() -> None:
+    assert {member.value for member in PaperSessionSubmitConflict} == {
+        "no_active_paper_strategy",
+        "strategy_not_active_paper_strategy",
+    }
+
+
+@pytest.mark.parametrize(
+    ("conflict", "owner"),
+    [
+        pytest.param(
+            PaperSessionSubmitConflict.NO_ACTIVE_PAPER_STRATEGY, None, id="no_active_paper_strategy"
+        ),
+        pytest.param(
+            PaperSessionSubmitConflict.STRATEGY_NOT_ACTIVE_PAPER_STRATEGY,
+            "donchian_breakout_daily",
+            id="strategy_not_active_paper_strategy",
+        ),
+    ],
+)
+def test_paper_session_validate_payload_raises_each_ownership_conflict(
+    migrated_paper_db: str, conflict: PaperSessionSubmitConflict, owner: str | None
+) -> None:
+    settings = load_settings()
+    seed_registered_strategy(settings, "trend_following_daily")
+    seed_registered_strategy(settings, "donchian_breakout_daily")
+    set_active_paper_strategy(settings, owner)
+    spec = PaperSessionSubmissionSpec(settings)
+
+    with pytest.raises(JobSubmissionConflictError) as exc_info:
+        spec.validate_payload(
+            {"strategy_id": "trend_following_daily", "as_of_session": "2024-01-10", "risk_run_id": None}
+        )
+
+    assert exc_info.value.job_type == "paper-session"
+    assert exc_info.value.code == conflict.value
+    assert dict(exc_info.value.detail) == {"strategy_id": "trend_following_daily"}
+
+
+def test_paper_session_validate_payload_normalizes_null_risk_run_id(migrated_paper_db: str) -> None:
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)  # explicit owner (D-03)
     spec = PaperSessionSubmissionSpec(load_settings())
 
     normalized = spec.validate_payload(

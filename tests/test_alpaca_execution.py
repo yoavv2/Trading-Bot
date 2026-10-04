@@ -18,6 +18,7 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 
 from trading_platform.core.settings import AlpacaBrokerSettings, clear_settings_cache, load_settings
 from trading_platform.db.models import (
@@ -30,7 +31,6 @@ from trading_platform.db.models import (
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.alpaca import AlpacaAuthError, AlpacaClient, AlpacaExecutionService
-from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution import (
     ExecutionOrderStatus,
     ExecutionService,
@@ -250,12 +250,14 @@ class FakeExecutionService(ExecutionService):
 
 
 def _seed_approved_risk_batch() -> tuple[uuid.UUID, uuid.UUID]:
+    # Explicit arrangement (20.1-01): enabled strategy row + direct owner write.
     settings = load_settings()
     registry = build_default_registry(settings)
     strategy = registry.resolve("trend_following_daily")
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
+        set_active_paper_strategy(session, strategy.metadata.strategy_id)
         aapl = Symbol(ticker="AAPL", active=True)
         msft = Symbol(ticker="MSFT", active=True)
         session.add_all([aapl, msft])
@@ -311,7 +313,7 @@ def _seed_followup_risk_event(*, quantity: str) -> tuple[uuid.UUID, uuid.UUID]:
     strategy = registry.resolve("trend_following_daily")
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
         aapl = session.execute(select(Symbol).where(Symbol.ticker == "AAPL")).scalar_one()
         risk_run = StrategyRun(
             strategy_id=strategy_record.id,

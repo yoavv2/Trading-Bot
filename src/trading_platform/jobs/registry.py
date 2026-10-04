@@ -8,7 +8,7 @@ duplicate-registration ``ValueError``, and a typed unknown-key error.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
@@ -51,7 +51,6 @@ class InvalidJobPayloadError(ValueError):
         return f"Invalid payload for job type '{self.job_type}': {self.reason}"
 
 
-@dataclass(frozen=True)
 class JobSubmissionConflictError(ValueError):
     """Raised by ``validate_payload`` for a state-dependent submission conflict.
 
@@ -60,11 +59,17 @@ class JobSubmissionConflictError(ValueError):
     example a strategy that is not the active paper strategy). Mapped to HTTP
     409 ``{code, job_type, **detail}``. ``code`` is a member of the raising
     spec's own closed conflict enum.
+
+    Deliberately NOT a frozen dataclass: the admission re-check raises inside
+    ``session_scope`` (a contextmanager), and ``contextlib`` re-assigns
+    ``__traceback__`` on the exception, which a frozen dataclass forbids.
     """
 
-    job_type: str
-    code: str
-    detail: Mapping[str, str] = field(default_factory=dict)
+    def __init__(self, job_type: str, code: str, detail: Mapping[str, str] | None = None) -> None:
+        self.job_type = job_type
+        self.code = code
+        self.detail: Mapping[str, str] = dict(detail or {})
+        super().__init__(job_type, code, self.detail)
 
     def __str__(self) -> str:
         return f"Job type '{self.job_type}' submission refused: {self.code}"

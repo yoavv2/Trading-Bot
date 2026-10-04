@@ -18,6 +18,7 @@ from sqlalchemy import event, select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 
 import trading_platform.services.execution.submit_orders as paper_submit_orders_module
 import trading_platform.services.execution.sync_orders as paper_sync_orders_module
@@ -49,7 +50,6 @@ from trading_platform.services.alpaca import (
     BrokerOrderSnapshot,
     BrokerPositionSnapshot,
 )
-from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError, session_run_lock
 from trading_platform.services.execution import (
     ExecutionOrderStatus,
@@ -347,13 +347,23 @@ def _seed_market_data(session_date: date) -> None:
         )
 
 
-def _seed_approved_risk_batch(*, session_date: date = date(2024, 1, 5)) -> tuple[uuid.UUID, dict[str, uuid.UUID]]:
+def _seed_approved_risk_batch(
+    *, session_date: date = date(2024, 1, 5), owner: bool = True
+) -> tuple[uuid.UUID, dict[str, uuid.UUID]]:
+    """Seed an approved risk batch for trend_following_daily.
+
+    Explicit arrangement (20.1-01, R-8 / PAPER-01): the strategy row is created
+    ENABLED and, unless ``owner=False``, is made the active paper strategy by a
+    direct test-only write. Nothing here relies on an implicit default.
+    """
     settings = load_settings()
     registry = build_default_registry(settings)
     strategy = registry.resolve("trend_following_daily")
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
+        if owner:
+            set_active_paper_strategy(session, strategy.metadata.strategy_id)
         aapl = Symbol(ticker="AAPL", active=True)
         msft = Symbol(ticker="MSFT", active=True)
         session.add_all([aapl, msft])
@@ -422,7 +432,7 @@ def _seed_existing_paper_order(
     strategy = registry.resolve("trend_following_daily")
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
         symbol_row = session.execute(select(Symbol).where(Symbol.ticker == symbol)).scalar_one()
         risk_event = session.get(RiskEvent, risk_event_id)
         if risk_event is None:
@@ -506,7 +516,7 @@ def _seed_followup_risk_event(
     strategy = registry.resolve("trend_following_daily")
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
         symbol_row = session.execute(select(Symbol).where(Symbol.ticker == symbol)).scalar_one()
         risk_run = StrategyRun(
             strategy_id=strategy_record.id,
@@ -545,7 +555,7 @@ def _seed_open_position(*, symbol: str, quantity: str) -> None:
     strategy = registry.resolve("trend_following_daily")
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
         symbol_row = session.execute(select(Symbol).where(Symbol.ticker == symbol)).scalar_one_or_none()
         if symbol_row is None:
             symbol_row = Symbol(ticker=symbol, active=True)
@@ -1821,7 +1831,7 @@ def test_run_paper_order_submission_running_row_first_and_reclaims_stale_predece
     session_date = date(2024, 1, 5)
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
         stale_predecessor = StrategyRun(
             strategy_id=strategy_record.id,
             run_type=StrategyRunType.PAPER_EXECUTION,

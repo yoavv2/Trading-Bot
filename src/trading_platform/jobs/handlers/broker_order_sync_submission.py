@@ -43,6 +43,7 @@ from trading_platform.jobs.handlers.payload_fields import (
     require_trading_session_not_future,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
+from trading_platform.services.active_paper_strategy import lock_active_paper_strategy_shared
 
 BROKER_ORDER_SYNC_JOB_TYPE = "broker-order-sync"
 
@@ -131,6 +132,13 @@ class BrokerOrderSyncSubmissionSpec:
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
         }
+
+    def check_admission(self, payload: Mapping[str, Any], *, session: Any) -> None:
+        """SER admission: broker-order-sync touches the broker, so its admission
+        serializes with handover on the ownership singleton (FOR SHARE). It is
+        NOT gated by ownership (D-03): no ownership check runs here."""
+
+        lock_active_paper_strategy_shared(session)
 
     def submission_defaults(self) -> dict[str, str] | None:
         """Console pre-fill, computed at read time. Returns ``None`` when no

@@ -30,6 +30,7 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
@@ -42,7 +43,6 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
-from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.concurrency_guard import (
     ConcurrentRunLockedError,
     advisory_lock_key,
@@ -186,7 +186,8 @@ def _seed_approved_risk_batch(*, session_date: date = date(2024, 1, 5)) -> tuple
     strategy = registry.resolve("trend_following_daily")
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
+        set_active_paper_strategy(session, strategy.metadata.strategy_id)  # explicit owner (20.1-01)
         aapl = Symbol(ticker="AAPL", active=True)
         msft = Symbol(ticker="MSFT", active=True)
         session.add_all([aapl, msft])
@@ -312,7 +313,7 @@ def test_run_paper_order_submission_acquires_cleanly_after_crash_and_reclaims_st
     # (2) ...that durably left a `running` row behind, committed on a
     # SEPARATE connection (session_scope) before the crash.
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
         stale_predecessor = StrategyRun(
             strategy_id=strategy_record.id,
             run_type=StrategyRunType.PAPER_EXECUTION,

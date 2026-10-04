@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 from tests.test_job_operations_e2e import (
     _run_worker_once,
     job_operations_env,
@@ -50,7 +51,6 @@ from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.handlers import paper_session as paper_session_handler_module
 from trading_platform.services.alpaca import BrokerAccountSnapshot
-from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.concurrency_guard import session_run_lock
 from trading_platform.services.execution import submit_orders as submit_orders_module
 from trading_platform.services.reconciliation import report as reconciliation_report_module
@@ -120,7 +120,8 @@ def _seed_approved_risk_run(session_date: date = SESSION_DATE) -> None:
     strategy = build_default_registry(settings).resolve(STRATEGY_ID)
 
     with session_scope(settings) as session:
-        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        strategy_record = seed_strategy(session, strategy.metadata, enabled=True)
+        set_active_paper_strategy(session, strategy.metadata.strategy_id)  # explicit owner (20.1-01)
         aapl = session.execute(select(Symbol).where(Symbol.ticker == "AAPL")).scalar_one()
         msft = session.execute(select(Symbol).where(Symbol.ticker == "MSFT")).scalar_one()
 

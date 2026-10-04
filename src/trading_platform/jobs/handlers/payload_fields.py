@@ -31,7 +31,8 @@ from pydantic_core import PydanticCustomError
 
 from trading_platform.core.settings import Settings
 from trading_platform.db.session import session_scope
-from trading_platform.jobs.registry import InvalidJobPayloadError
+from trading_platform.jobs.registry import InvalidJobPayloadError, JobSubmissionConflictError
+from trading_platform.services.active_paper_strategy import ownership_block_for
 from trading_platform.services.calendar import get_calendar, is_trading_session
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.strategies.registry import UnknownStrategyError
@@ -287,3 +288,29 @@ __all__ = [
     "require_registered_strategy",
     "require_trading_session_not_future",
 ]
+
+
+def require_active_paper_strategy(
+    settings: Settings,
+    strategy_id: str,
+    *,
+    job_type: str,
+    conflict_enum: type[StrEnum],
+    session: Any = None,
+) -> None:
+    """D-03: refuse a non-owner (``strategy_not_active_paper_strategy``) or an
+    ownerless account (``no_active_paper_strategy``) with a typed conflict.
+
+    ``conflict_enum`` is the raising spec's own closed conflict enum, so a code
+    outside that set cannot be raised. Pass ``session`` to evaluate inside the
+    Job-insert transaction (SER admission re-check); the predicate is the same
+    ``ownership_block_for`` callable either way and re-reads ownership each time.
+    """
+
+    block = ownership_block_for(strategy_id, settings=settings, session=session)
+    if block is not None:
+        raise JobSubmissionConflictError(
+            job_type=job_type,
+            code=conflict_enum(block.value).value,
+            detail={"strategy_id": strategy_id},
+        )
