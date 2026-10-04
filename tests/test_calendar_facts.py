@@ -9,7 +9,7 @@ weekend 2025-11-29.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -30,6 +30,7 @@ from trading_platform.services import calendar_facts as facts
 from trading_platform.services.calendar import (
     CalendarOutOfBoundsError,
     calendar_horizon_end,
+    get_calendar,
     next_session_date,
     previous_session_date,
 )
@@ -502,8 +503,9 @@ def test_horizon_end_is_the_nth_session_after_today_and_clips_to_the_library() -
     assert calendar_horizon_end(five, date(2025, 12, 2)) == date(2025, 12, 9)
     assert calendar_horizon_end(five, date(2025, 11, 29)) == date(2025, 12, 5)
     near_end = _with_calendar(settings, coverage_horizon_sessions=500)
-    clipped = calendar_horizon_end(near_end, date(2027, 9, 1))
-    assert clipped <= date(2027, 10, 4)
+    last = get_calendar(settings.market_data.calendar.exchange).last_session.date()
+    # the library window rolls with the real date: derive the edge, never hardcode it
+    assert calendar_horizon_end(near_end, last - timedelta(days=30)) == last
 
 
 def test_persisted_accessors(seeded: Settings) -> None:
