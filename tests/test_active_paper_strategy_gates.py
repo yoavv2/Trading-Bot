@@ -865,8 +865,9 @@ def test_no_other_module_calls_ownership_decision_inline() -> None:
 
 def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
     expected = {member.value for member in OwnershipBlock}
-    # paper-session adds the four execution-eligibility refusals (COR-04, D-23)
-    # and the two evaluation-provenance refusals (PROV-01, D-25)
+    # paper-session adds the four execution-eligibility refusals (COR-04, D-23), the two
+    # evaluation-provenance refusals (PROV-01, D-25) and the three uncertain-outcome recovery
+    # gate codes (REC-01, D-15 / 20.1-10)
     assert {m.value for m in PaperSessionSubmitConflict} == expected | {
         "historical_execution_rejected",
         "outside_execution_window",
@@ -874,5 +875,8 @@ def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
         "calendar_data_unavailable",
         "evaluation_data_changed",
         "strategy_settings_changed",
+        "outcome_unresolved",
+        "reconciliation_required",
+        "reconciliation_not_clean",
     }
     assert {m.value for m in ReconciliationSubmitConflict} == expected

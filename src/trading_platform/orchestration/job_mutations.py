@@ -24,13 +24,15 @@ from trading_platform.db.session import session_scope
 from trading_platform.jobs.cancellation import JobNotCancellableError, request_cancellation
 from trading_platform.jobs.dependencies import submit_job
 from trading_platform.jobs.registry import (
+    RECOVERY_CONFLICT_CODES,
     InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
+    JobSubmissionConflictError,
     UnknownJobTypeError,
     admission_check_for,
     admission_lock_for,
-    retry_prerequisite_for,
+    recovery_gated_for,
 )
 
 SUBMIT_ENDPOINT_ID = "POST:/api/v1/jobs"
@@ -41,7 +43,8 @@ MAX_IDEMPOTENCY_KEY_LENGTH = 255
 MAX_CANCELLATION_REASON_LENGTH = 500
 IDEMPOTENCY_CONFLICT_CODE = "idempotency_key_conflict"
 INVALID_JOB_PAYLOAD_CODE = "invalid_job_payload"
-RETRY_BLOCKED_CODE = "reconciliation_required"
+#: D-15: the operator action that clears a recovery gate (retry_blocked.required_job_type).
+RECOVERY_REQUIRED_JOB_TYPE = "reconciliation"
 JOB_MUTATION_ENDPOINT_KEY_CONSTRAINT = "uq_job_mutations_endpoint_key"
 JOB_RETRY_LINEAGE_CONSTRAINT = "uq_jobs_retry_of_job_id"
 
@@ -160,7 +163,12 @@ class RetryAlreadyExistsError(ValueError):
 
 @dataclass(frozen=True)
 class RetryBlock:
-    """D-19: the reconcile-first block preventing retry of an uncertain FAILED Job."""
+    """D-15: the recovery block preventing retry of a recovery-gated FAILED/CANCELLED Job.
+
+    ``code`` is one of the three recovery gate codes (outcome_unresolved,
+    reconciliation_required, reconciliation_not_clean); ``required_job_type`` is
+    ``reconciliation``.
+    """
 
     code: str
     required_job_type: str
@@ -175,14 +183,15 @@ class RetryBlock:
 
 
 class RetryBlockedError(ValueError):
-    """Raised when D-19's reconcile-first predicate blocks a retry."""
+    """Raised when the D-15 recovery gate blocks a retry."""
 
-    def __init__(self, *, job_id: UUID, block: RetryBlock) -> None:
+    def __init__(self, *, job_id: UUID, block: RetryBlock, job_type: str | None = None) -> None:
         self.job_id = job_id
         self.block = block
+        self.job_type = job_type
         super().__init__(
-            f"Job '{job_id}' retry is blocked pending a successful '{block.required_job_type}' "
-            f"Job for strategy '{block.strategy_id}'."
+            f"Job '{job_id}' retry is blocked ({block.code}); a clean '{block.required_job_type}' "
+            f"is required for strategy '{block.strategy_id}'."
         )
 
 
@@ -448,16 +457,32 @@ class JobOrchestrationService:
                 created=True,
             )
 
-    def _retry_block_for(self, session: Any, job: Job) -> RetryBlock | None:
-        """D-19: reconcile-first predicate, reading only the ``jobs`` table.
+    @staticmethod
+    def _block_from_conflict(job: Job, exc: JobSubmissionConflictError) -> RetryBlock | None:
+        """Map a recovery-gate conflict to a ``RetryBlock``; any other conflict is not a block."""
 
-        Returns ``None`` unless ``job`` is FAILED with ``outcome_uncertain``
-        True, its type declares a ``retry_prerequisite_job_type``, and no Job
-        of that prerequisite type has SUCCEEDED for the same ``strategy_id``
-        with a later ``completed_at``.
+        if exc.code not in RECOVERY_CONFLICT_CODES:
+            return None
+        payload = job.payload if isinstance(job.payload, Mapping) else {}
+        strategy_id = payload.get("strategy_id")
+        return RetryBlock(
+            code=exc.code,
+            required_job_type=RECOVERY_REQUIRED_JOB_TYPE,
+            strategy_id=strategy_id if isinstance(strategy_id, str) else None,
+        )
+
+    def _retry_block_for(self, session: Any, job: Job) -> RetryBlock | None:
+        """D-15: the recovery block of a FAILED or CANCELLED Job of a ``recovery_gated`` type.
+
+        Recomputed by re-running the spec's ``validate_payload`` on the Job's payload (the
+        spec calls the domain predicate; this layer imports no service): a conflict whose
+        code is one of the three recovery codes becomes
+        ``RetryBlock(code, 'reconciliation', strategy_id)``; any other outcome (another
+        conflict, an invalid payload or success) is not a block. The old "a later SUCCEEDED
+        reconciliation Job" rule is gone.
         """
 
-        if job.status is not JobStatus.FAILED or not job.outcome_uncertain:
+        if job.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
             return None
 
         try:
@@ -465,26 +490,16 @@ class JobOrchestrationService:
         except UnknownJobTypeError:
             return None
 
-        prerequisite = retry_prerequisite_for(spec)
-        if prerequisite is None:
+        if not recovery_gated_for(spec):
             return None
 
-        strategy_id = job.payload.get("strategy_id") if isinstance(job.payload, Mapping) else None
-
-        satisfied = session.execute(
-            select(Job.id)
-            .where(
-                Job.job_type == prerequisite,
-                Job.status == JobStatus.SUCCEEDED,
-                Job.completed_at > job.completed_at,
-                Job.payload["strategy_id"].as_string() == strategy_id,
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        if satisfied is not None:
+        try:
+            spec.validate_payload(job.payload)
+        except JobSubmissionConflictError as exc:
+            return self._block_from_conflict(job, exc)
+        except InvalidJobPayloadError:
             return None
-
-        return RetryBlock(code=RETRY_BLOCKED_CODE, required_job_type=prerequisite, strategy_id=strategy_id)
+        return None
 
     def _lock_ownership_singleton_before_job_row(self, session: Any, job_id: UUID) -> None:
         job_type = session.execute(select(Job.job_type).where(Job.id == job_id)).scalar_one_or_none()
@@ -499,7 +514,7 @@ class JobOrchestrationService:
             lock(session=session)
 
     def retry_block(self, *, job_id: UUID) -> RetryBlock | None:
-        """Read-only D-19/D-20 query: the current reconcile-first block for ``job_id``, or None."""
+        """Read-only D-15 query: the current recovery block for ``job_id``, or None."""
 
         with session_scope(self._settings) as session:
             job = self._require_job(session, job_id)
@@ -561,12 +576,18 @@ class JobOrchestrationService:
             except UnknownJobTypeError as exc:
                 raise UnknownJobTypeForSubmissionError(job_type=original.job_type) from exc
 
-            block = self._retry_block_for(session, original)
-            if block is not None:
-                raise RetryBlockedError(job_id=job_id, block=block)
-
+            # D-15: ONE validation serves the retry. A recovery-gate conflict of a
+            # ``recovery_gated`` type is the retry block (409 with required_job_type);
+            # every other conflict propagates to the route's 409 mapping unchanged.
             try:
                 spec.validate_payload(original.payload)
+            except JobSubmissionConflictError as exc:
+                block = self._block_from_conflict(original, exc) if recovery_gated_for(spec) else None
+                if block is not None:
+                    raise RetryBlockedError(
+                        job_id=job_id, block=block, job_type=original.job_type
+                    ) from exc
+                raise
             except InvalidJobPayloadError as exc:
                 raise InvalidRetryPayloadError(job_id=job_id, reason=exc.reason) from exc
 

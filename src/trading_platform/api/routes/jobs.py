@@ -207,6 +207,8 @@ def retry_job(
         ) from exc
     except RetryBlockedError as exc:
         block_detail: dict[str, str] = {"required_job_type": exc.block.required_job_type}
+        if exc.job_type is not None:
+            block_detail["job_type"] = exc.job_type
         if exc.block.strategy_id is not None:
             block_detail["strategy_id"] = exc.block.strategy_id
         raise _error(status.HTTP_409_CONFLICT, exc.block.code, **block_detail) from exc

@@ -438,6 +438,11 @@ def test_lock_conflict_lands_as_domain_conflict(paper_jobs_env: BrokerFakes) -> 
     assert paper_jobs_env.execution.submitted_intents == []
 
 
+def _job_count() -> int:
+    with session_scope(load_settings()) as session:
+        return len(session.execute(select(Job.id)).scalars().all())
+
+
 def _completed_at(job_id: str) -> datetime:
     with session_scope(load_settings()) as session:
         job = session.execute(select(Job).where(Job.id == job_id)).scalar_one()
@@ -465,15 +470,19 @@ def _insert_succeeded_reconciliation_row(*, strategy_id: str, completed_at: date
 def test_uncertain_failure_requires_later_reconciliation_before_retry(
     paper_jobs_env: BrokerFakes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """D-19/T-20-20-02: a paper-session that fails after its external marker
-    is outcome-uncertain and cannot be retried until a SUCCEEDED
-    reconciliation Job for the SAME strategy completes AFTER the failure."""
+    """D-15 / 20.1-10 (supersedes the Phase 20 D-19 reconcile-first rule): a paper-session that
+    fails after its external marker is outcome-uncertain. EVERY paper-session submission for the
+    strategy, fresh or retry, is refused (typed 409 with ``required_job_type: reconciliation``)
+    until the predicate resolves: the Job has no linked paper_execution run (``nothing_submitted``)
+    so a fresh clean STANDALONE reconciliation completed AFTER the failure resolves it. An earlier
+    reconciliation, a reconciliation that never ran, or one for another strategy does not."""
 
     expected_block = {
         "code": "reconciliation_required",
         "required_job_type": "reconciliation",
         "strategy_id": STRATEGY_ID,
     }
+    expected_conflict = {**expected_block, "job_type": "paper-session"}
 
     def _submission_explodes(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("simulated failure after the broker session started")
@@ -502,13 +511,18 @@ def test_uncertain_failure_requires_later_reconciliation_before_retry(
                 f"/api/v1/jobs/{failed_id}/retry", headers={"Idempotency-Key": key}
             )
             assert blocked.status_code == 409
-            assert blocked.json()["detail"] == expected_block
+            assert blocked.json()["detail"] == expected_conflict
+            # D-15: a FRESH submission is refused the same way, writing nothing.
+            fresh = _submit(client, f"{key}-fresh")
+            assert fresh.status_code == 409
+            assert fresh.json()["detail"]["code"] == "reconciliation_required"
+            assert fresh.json()["detail"]["required_job_type"] == "reconciliation"
             # The rejected retry created nothing.
             assert client.get(f"/api/v1/jobs/{failed_id}").json()["retried_as_job_id"] is None
 
         _assert_still_blocked("retry-blocked-early-recon")
 
-        # A SUCCEEDED reconciliation for a DIFFERENT strategy, completed
+        # A SUCCEEDED reconciliation Job row for a DIFFERENT strategy, completed
         # after the failure, does not lift the block.
         _insert_succeeded_reconciliation_row(
             strategy_id="some_other_strategy",
@@ -531,8 +545,8 @@ def test_uncertain_failure_requires_later_reconciliation_before_retry(
         _run_worker_once()
         _assert_still_blocked("retry-blocked-cancelled-recon")
 
-        # Reconcile first: a later SUCCEEDED reconciliation for the same
-        # strategy lifts the block and the retry is accepted.
+        # Reconcile first: a later clean STANDALONE reconciliation of the same
+        # strategy (completed after the failure) lifts the block.
         later = _submit_and_run(
             client, "e2e-recon-lift", job_type="reconciliation", payload=RECONCILIATION_PAYLOAD
         )
@@ -559,8 +573,9 @@ def test_ambiguous_submission_lands_job_failed_outcome_uncertain_and_never_resen
     """COR-06/D-12 end to end: a read timeout after the POST was sent goes
     through the REAL AlpacaExecutionService (httpx.MockTransport). Exactly one
     POST, the intent is parked UNKNOWN, one attempt row is `ambiguous`, the Job
-    lands failed with outcome_uncertain=true, and a second paper-session run for
-    the same session sends zero further POSTs."""
+    lands failed with outcome_uncertain=true, and a second paper-session submission
+    for the same strategy is refused (D-15 `outcome_unresolved`, superseding the
+    earlier "second run sends zero POSTs" shape) so zero further POSTs happen."""
 
     from trading_platform.db.models import OrderLifecycleState, OrderSubmissionAttempt, PaperOrder
     from trading_platform.services.alpaca import AlpacaClient, AlpacaExecutionService
@@ -582,10 +597,9 @@ def test_ambiguous_submission_lands_job_failed_outcome_uncertain_and_never_resen
 
     monkeypatch.setattr(submit_orders_module, "AlpacaExecutionService", _build_real_service)
 
-    # One approved candidate only. A SECOND approved candidate is a different, new
-    # intent: refusing it while this strategy has an unresolved uncertain outcome is
-    # the D-15 submission gate owned by 20.1-10, not by this plan. This test pins the
-    # COR-06 guarantee: the ambiguous intent itself is never re-sent.
+    # One approved candidate only: this test pins the COR-06 guarantee that the ambiguous
+    # intent itself is never re-sent. A SECOND approved candidate is a different, new intent;
+    # the D-15 gate (20.1-10) refuses any further submission while this one is unresolved.
     with session_scope(load_settings()) as session:
         msft_event = session.execute(
             select(RiskEvent).join(Symbol, RiskEvent.symbol_id == Symbol.id).where(
@@ -610,8 +624,14 @@ def test_ambiguous_submission_lands_job_failed_outcome_uncertain_and_never_resen
         assert orders[0].broker_order_id is None
         assert [(a.attempt_number, a.outcome_class) for a in attempts] == [(1, "ambiguous")]
 
-        # A second run for the same session never re-sends the ambiguous intent.
-        _submit_and_run(client, "e2e-paper-ambiguous-second")
+        # D-15 / 20.1-10: while the ambiguous intent is unresolved, a second submission for
+        # the strategy is refused (typed 409, zero Jobs written) and nothing is ever re-sent.
+        jobs_before = _job_count()
+        second = _submit(client, "e2e-paper-ambiguous-second")
+        assert second.status_code == 409
+        assert second.json()["detail"]["code"] == "outcome_unresolved"
+        assert second.json()["detail"]["required_job_type"] == "reconciliation"
+        assert _job_count() == jobs_before
         assert len(posts) == 1
         with session_scope(load_settings()) as session:
             assert len(session.execute(select(OrderSubmissionAttempt)).scalars().all()) == 1

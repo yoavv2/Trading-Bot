@@ -15,10 +15,10 @@ validation and never raises for a bad payload (there is none to validate).
 The ``broker-order-sync`` Job type is cancellable only while queued (D-01):
 it writes broker-derived state inside one opaque service call, so a
 RUNNING Job of this type is never cancellable
-(``JobOrchestrationService`` rejects the request per D-02). It also
-declares a D-19 reconcile-first retry prerequisite: a FAILED,
-outcome-uncertain ``broker-order-sync`` Job may only be retried after a
-newer SUCCEEDED reconciliation Job exists for the same strategy.
+(``JobOrchestrationService`` rejects the request per D-02). Since 20.1-10 (D-15,
+superseding Phase 20 D-19) it declares NO retry prerequisite and is never gated by
+uncertain outcomes: a failed uncertain sync is retried freely, and a sync neither
+resolves an uncertain outcome nor changes the recovery predicate by itself.
 
 Scope (ACCT-01, D-09): ``scope`` is ``strategy`` (the default when omitted --
 today's payload and behaviour, byte-identical) or ``account``. Account scope is
@@ -128,10 +128,9 @@ class BrokerOrderSyncSubmissionSpec:
     )
     cancellation_mode = JobCancellationMode.QUEUED_ONLY
     broker_effect = BrokerEffect.READS_BROKER
-    # D-19: a FAILED, outcome_uncertain broker-order-sync Job may only be
-    # retried after a newer SUCCEEDED reconciliation Job exists for the
-    # same strategy.
-    retry_prerequisite_job_type = "reconciliation"
+    # D-15 (supersedes Phase 20 D-19): broker sync is NEVER gated by uncertain outcomes and
+    # never resolves one by itself, so a failed uncertain sync is retried without any
+    # reconcile-first prerequisite (and the spec is not ``recovery_gated``).
 
     def __init__(self, settings: Settings, *, clock: Callable[[], datetime] | None = None) -> None:
         self._settings = settings

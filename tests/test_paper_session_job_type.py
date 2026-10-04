@@ -357,7 +357,50 @@ def test_paper_session_submit_conflict_is_a_closed_set() -> None:
         "calendar_data_unavailable",
         "evaluation_data_changed",
         "strategy_settings_changed",
+        # D-15 / 20.1-10: the three uncertain-outcome recovery gate codes. The exact-set pin
+        # is extended (six + three recovery) because the recovery gate supersedes Phase 20
+        # D-19 and raises through the same typed conflict.
+        "outcome_unresolved",
+        "reconciliation_required",
+        "reconciliation_not_clean",
     }
+
+
+@pytest.mark.parametrize(
+    "gate_code",
+    ["outcome_unresolved", "reconciliation_required", "reconciliation_not_clean"],
+)
+def test_paper_session_raises_each_recovery_gate_code_as_a_typed_conflict(
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch, gate_code: str
+) -> None:
+    """D-15: one case per recovery code (the predicate itself is tested in
+    tests/test_recovery_predicate.py; the HTTP shape in tests/test_recovery_gates.py)."""
+
+    from trading_platform.services.recovery import GateCode
+
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)
+
+    class _Status:
+        pass
+
+    status = _Status()
+    status.gate_code = GateCode(gate_code)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "trading_platform.jobs.handlers.paper_session_submission.strategy_recovery_status",
+        lambda session, strategy_id: status,
+    )
+    spec = PaperSessionSubmissionSpec(load_settings())
+
+    with pytest.raises(JobSubmissionConflictError) as exc_info:
+        spec.validate_payload(
+            {"strategy_id": "trend_following_daily", "as_of_session": "2024-01-10", "risk_run_id": None}
+        )
+
+    assert exc_info.value.code == gate_code
+    assert exc_info.value.job_type == "paper-session"
+    assert exc_info.value.detail["strategy_id"] == "trend_following_daily"
+    assert exc_info.value.detail["required_job_type"] == "reconciliation"
+    assert all(isinstance(value, str) for value in exc_info.value.detail.values())
 
 
 @pytest.mark.parametrize(
@@ -557,10 +600,16 @@ def test_paper_session_spec_satisfies_registry_contract() -> None:
     assert registry.list_job_types() == ["paper-session"]
 
 
-def test_paper_session_spec_declares_reconciliation_retry_prerequisite() -> None:
+def test_paper_session_spec_declares_no_retry_prerequisite_but_is_recovery_gated() -> None:
+    """Superseded by D-15 / 20.1-10: the reconcile-first retry prerequisite is replaced by the
+    recovery gate inside validate_payload (the ``recovery_gated`` marker)."""
+
+    from trading_platform.jobs.registry import recovery_gated_for
+
     spec = PaperSessionSubmissionSpec(load_settings())
 
-    assert retry_prerequisite_for(spec) == "reconciliation"
+    assert retry_prerequisite_for(spec) is None
+    assert recovery_gated_for(spec) is True
 
 
 def test_paper_session_cancellation_mode_is_queued_only() -> None:

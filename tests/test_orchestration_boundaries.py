@@ -449,8 +449,10 @@ def test_default_registry_execution_modes_are_pinned() -> None:
 
 
 def test_default_registry_retry_prerequisites_are_pinned() -> None:
-    """D-19: the retry_prerequisite_for map is exact, and every declared
-    prerequisite is itself a registered job type."""
+    """The retry_prerequisite_for map is exact, and every declared prerequisite is itself a
+    registered job type. Superseded by D-15 / 20.1-10: the reconcile-first retry prerequisite
+    is gone for EVERY type (the paper-session retry is gated by the recovery predicate through
+    ``recovery_gated``, see the next test)."""
     from trading_platform.core.settings import load_settings
     from trading_platform.jobs.registry import build_default_registry, retry_prerequisite_for
 
@@ -458,9 +460,9 @@ def test_default_registry_retry_prerequisites_are_pinned() -> None:
 
     expected = {
         "backtest": None,
-        "broker-order-sync": "reconciliation",
+        "broker-order-sync": None,
         "ingest-bars": None,
-        "paper-session": "reconciliation",
+        "paper-session": None,
         "reconciliation": None,
         "record-external-activity": None,
         "risk-evaluation": None,
@@ -475,6 +477,30 @@ def test_default_registry_retry_prerequisites_are_pinned() -> None:
     for prerequisite in actual.values():
         if prerequisite is not None:
             assert prerequisite in registry.list_job_types()
+
+
+def test_default_registry_recovery_gated_map_is_pinned() -> None:
+    """D-15: only paper-session is recovery gated; broker sync and every other type are not."""
+    from trading_platform.core.settings import load_settings
+    from trading_platform.jobs.registry import build_default_registry, recovery_gated_for
+
+    registry = build_default_registry(load_settings())
+
+    actual = {
+        job_type: recovery_gated_for(registry.resolve_submission_spec(job_type))
+        for job_type in registry.list_job_types()
+    }
+    assert actual == {
+        "backtest": False,
+        "broker-order-sync": False,
+        "ingest-bars": False,
+        "paper-session": True,
+        "reconciliation": False,
+        "record-external-activity": False,
+        "risk-evaluation": False,
+        "sync-market-sessions": False,
+        "sync-symbol-metadata": False,
+    }
 
 
 def test_market_data_specs_have_no_mode_flags() -> None:

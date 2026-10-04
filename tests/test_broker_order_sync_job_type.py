@@ -263,10 +263,16 @@ def test_spec_satisfies_registry_contract() -> None:
     assert registry.list_job_types() == ["broker-order-sync"]
 
 
-def test_spec_declares_reconciliation_retry_prerequisite() -> None:
+def test_spec_declares_no_retry_prerequisite_and_is_never_recovery_gated() -> None:
+    """Superseded by D-15 / 20.1-10: broker sync is never gated and never resolves an
+    uncertain outcome by itself, so its reconcile-first prerequisite is gone."""
+
+    from trading_platform.jobs.registry import recovery_gated_for
+
     spec = BrokerOrderSyncSubmissionSpec(load_settings())
 
-    assert retry_prerequisite_for(spec) == "reconciliation"
+    assert retry_prerequisite_for(spec) is None
+    assert recovery_gated_for(spec) is False
 
 
 def test_cancellation_mode_is_queued_only() -> None:

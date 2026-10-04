@@ -1,5 +1,5 @@
 """PaperSessionSubmissionSpec: the public input contract for the
-``paper-session`` Job type (D-01, D-03, D-19, D-23, D-28).
+``paper-session`` Job type (D-01, D-03, D-15, D-23, D-28).
 
 Validation is strict and typed: unknown payload keys, a missing required
 field, a wrong-typed/blank ``strategy_id``, a malformed ``as_of_session``,
@@ -20,10 +20,19 @@ NOT defaulted here (D-23) -- the console form always sends an explicit
 The ``paper-session`` Job type is cancellable only while queued (D-01):
 it performs broker submission inside one opaque service call, so a
 RUNNING Job of this type is never cancellable (``JobOrchestrationService``
-rejects the request per D-02). It also declares a D-19 reconcile-first
-retry prerequisite: a FAILED, outcome-uncertain ``paper-session`` Job may
-only be retried after a newer SUCCEEDED ``reconciliation`` Job exists for
-the same strategy.
+rejects the request per D-02).
+
+Recovery gate (D-15, supersedes Phase 20 D-19; REC-01): after the eligibility check,
+EVERY submission -- fresh or OPS-07 retry, since ``submit()`` and ``retry()`` both call
+``validate_payload`` -- is refused with a typed ``JobSubmissionConflictError`` (HTTP 409)
+while an uncertain outcome of the strategy is unresolved: ``outcome_unresolved`` (some
+registered intent is not established), ``reconciliation_required`` (all established but no
+clean standalone reconciliation completed after the latest broker-touching effect) or
+``reconciliation_not_clean`` (the newest qualifying one is blocking, failed or has
+unresolved reasons). The body carries ``required_job_type='reconciliation'``. The spec
+declares ``recovery_gated = True`` so the Job detail ``retry_blocked`` field and ``retry()``
+recompute the block by re-running this validation. Validation precedes the idempotent
+replay lookup, so a replayed key re-evaluates the gate.
 
 Eligibility (D-23, COR-04): after the ownership check a paper session is accepted
 only for the fresh evaluation session inside its execution window. The
@@ -85,6 +94,7 @@ from trading_platform.services.calendar_facts import (
     paper_execution_eligibility,
 )
 from trading_platform.services.evaluation_manifest import ManifestVerificationStatus
+from trading_platform.services.recovery import REQUIRED_JOB_TYPE, strategy_recovery_status
 from trading_platform.services.risk import (
     is_eligible_risk_run,
     latest_eligible_risk_run_id,
@@ -115,10 +125,10 @@ class PaperSessionPayloadRejection(StrEnum):
 
 class PaperSessionSubmitConflict(StrEnum):
     """Closed set of state-conflict codes (HTTP 409) ``paper-session`` submission
-    can raise via ``JobSubmissionConflictError`` (D-03, D-23, D-25): the two ownership
-    refusals, the four execution-eligibility refusals and the two evaluation
-    provenance refusals; later plans extend it. One parametrized test case exists
-    per value."""
+    can raise via ``JobSubmissionConflictError`` (D-03, D-15, D-23, D-25): the two
+    ownership refusals, the four execution-eligibility refusals, the two evaluation
+    provenance refusals and the three recovery gate codes; later plans extend it. One
+    parametrized test case exists per value."""
 
     NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
     STRATEGY_NOT_ACTIVE_PAPER_STRATEGY = "strategy_not_active_paper_strategy"
@@ -128,6 +138,10 @@ class PaperSessionSubmitConflict(StrEnum):
     CALENDAR_DATA_UNAVAILABLE = "calendar_data_unavailable"
     EVALUATION_DATA_CHANGED = "evaluation_data_changed"
     STRATEGY_SETTINGS_CHANGED = "strategy_settings_changed"
+    # D-15 (20.1-10): the three uncertain-outcome recovery gate codes.
+    OUTCOME_UNRESOLVED = "outcome_unresolved"
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+    RECONCILIATION_NOT_CLEAN = "reconciliation_not_clean"
 
 
 def _default_clock() -> datetime:
@@ -182,10 +196,9 @@ class PaperSessionSubmissionSpec:
         "Cancellable only while queued; once running, the session runs to completion."
     )
     cancellation_mode = JobCancellationMode.QUEUED_ONLY
-    # D-19: a FAILED, outcome_uncertain paper-session Job may only be
-    # retried after a newer SUCCEEDED reconciliation Job exists for the
-    # same strategy.
-    retry_prerequisite_job_type = "reconciliation"
+    # D-15: submission and retry are gated by the uncertain-outcome recovery predicate
+    # inside ``validate_payload``; read by ``recovery_gated_for(spec)``.
+    recovery_gated = True
 
     def __init__(self, settings: Settings, *, clock: Callable[[], datetime] | None = None) -> None:
         self._settings = settings
@@ -263,6 +276,11 @@ class PaperSessionSubmissionSpec:
                 detail=detail,
             )
 
+        # D-15: an unresolved uncertain outcome of this strategy refuses EVERY submission
+        # (fresh or retry). Placed before the (expensive) manifest verification so the
+        # safety refusal wins over provenance.
+        self._require_recovery_resolved(strategy_id=strategy_id, as_of_session=as_of_session)
+
         self._require_matching_manifest(
             strategy_id=strategy_id,
             as_of_session=as_of_session,
@@ -274,6 +292,22 @@ class PaperSessionSubmissionSpec:
             "as_of_session": as_of_session.isoformat(),
             "risk_run_id": canonical_risk_run_id,
         }
+
+    def _require_recovery_resolved(self, *, strategy_id: str, as_of_session: date) -> None:
+        """D-15 gate: the domain predicate (read-only, two statements) decides."""
+
+        with session_scope(self._settings) as db_session:
+            status = strategy_recovery_status(db_session, strategy_id)
+        if status.gate_code is not None:
+            raise JobSubmissionConflictError(
+                job_type=PAPER_SESSION_JOB_TYPE,
+                code=PaperSessionSubmitConflict(status.gate_code.value).value,
+                detail={
+                    "strategy_id": strategy_id,
+                    "as_of_session": as_of_session.isoformat(),
+                    "required_job_type": REQUIRED_JOB_TYPE,
+                },
+            )
 
     def _require_matching_manifest(
         self,

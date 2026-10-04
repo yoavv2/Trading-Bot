@@ -96,14 +96,39 @@ class JobSubmissionSpec(Protocol):
 
 
 def retry_prerequisite_for(spec: JobSubmissionSpec) -> str | None:
-    """D-19: the Job type that must SUCCEED (same strategy_id, completed
-    after the original) before a FAILED outcome_uncertain Job of this type
-    may be retried; None = no reconcile-first block.
+    """Phase 20 D-19 (SUPERSEDED by D-15 / 20.1-10): the Job type that had to SUCCEED
+    before a FAILED outcome_uncertain Job could be retried.
+
+    No registered type declares it any more (every type returns ``None``): the
+    reconcile-first rule was replaced by the recovery predicate, see
+    ``recovery_gated_for``. The helper and the registration validation stay so a future
+    type could still declare a plain prerequisite.
 
     Optional spec attribute, deliberately not a Protocol member.
     """
 
     return getattr(spec, "retry_prerequisite_job_type", None)
+
+
+#: The three typed 409 codes of the D-15 recovery gate. A ``JobSubmissionConflictError``
+#: carrying one of these, raised by a ``recovery_gated`` spec, is what the orchestration
+#: layer maps to a retry block. Equal to ``services.recovery.RECOVERY_GATE_CODES``
+#: (a test pins the equality; orchestration may not import services).
+RECOVERY_CONFLICT_CODES: frozenset[str] = frozenset(
+    {"outcome_unresolved", "reconciliation_required", "reconciliation_not_clean"}
+)
+
+
+def recovery_gated_for(spec: JobSubmissionSpec) -> bool:
+    """D-15: True when ``validate_payload`` of this type is gated by the uncertain-outcome
+    recovery predicate (only ``paper-session``). Drives the retry block of the Job detail
+    and of ``retry()``: they re-run ``validate_payload`` and map a recovery conflict code.
+
+    Optional boolean spec attribute (``recovery_gated``), default False; deliberately not
+    a Protocol member (same pattern as ``retry_prerequisite_for``).
+    """
+
+    return getattr(spec, "recovery_gated", False) is True
 
 
 def admission_check_for(spec: JobSubmissionSpec) -> Callable[..., None] | None:
@@ -187,6 +212,12 @@ class JobRegistry:
                         f"Job type '{job_type}': submission spec "
                         "'retry_prerequisite_job_type' must be None or a nonblank string."
                     )
+            if hasattr(submission_spec, "recovery_gated") and not isinstance(
+                submission_spec.recovery_gated, bool
+            ):
+                raise ValueError(
+                    f"Job type '{job_type}': submission spec 'recovery_gated' must be a bool."
+                )
         self._handlers[job_type] = handler
         if submission_spec is not None:
             self._submission_specs[job_type] = submission_spec

@@ -470,12 +470,12 @@ def test_retry_failed_risk_evaluation_end_to_end(
     assert len(calls) == 2
 
 
-def test_broker_order_sync_uncertain_failure_requires_reconciliation(
+def test_broker_order_sync_uncertain_failure_retry_is_never_gated(
     strategy_jobs_env: BrokerScript,
 ) -> None:
-    """D-19 / T-20-19-01: a broker sync that fails after its external marker
-    is outcome_uncertain, retry is gated behind a successful reconciliation
-    for the same strategy, and the gate lifts once one completes."""
+    """D-15 / 20.1-10 (supersedes Phase 20 D-19 / T-20-19-01): a broker sync that fails after
+    its external marker is outcome_uncertain, but broker sync is NEVER gated and never resolves
+    anything by itself: ``retry_blocked`` is null and the retry is accepted without reconciling."""
 
     strategy_jobs_env.fail = True
 
@@ -485,35 +485,11 @@ def test_broker_order_sync_uncertain_failure_requires_reconciliation(
         assert failed["status"] == "failed"
         assert failed["failure_reason"] == "handler_error"
         assert failed["outcome_uncertain"] is True
-        expected_block = {
-            "code": "reconciliation_required",
-            "required_job_type": "reconciliation",
-            "strategy_id": STRATEGY_ID,
-        }
-        assert failed["retry_blocked"] == expected_block
+        assert failed["retry_blocked"] is None
 
-        blocked = client.post(
-            f"/api/v1/jobs/{failed_id}/retry", headers={"Idempotency-Key": "retry-blocked"}
-        )
-        assert blocked.status_code == 409
-        assert blocked.json()["detail"] == {
-            "code": "reconciliation_required",
-            "required_job_type": "reconciliation",
-            "strategy_id": STRATEGY_ID,
-        }
-        # The block created nothing: no retry Job exists yet.
-        assert client.get(f"/api/v1/jobs/{failed_id}").json()["retried_as_job_id"] is None
-
-        # Reconcile first (broker healthy again), then the gate lifts.
-        strategy_jobs_env.fail = False
-        reconciled = _submit_and_run(client, "reconciliation", "e2e-recon-lift")
-        assert reconciled["status"] == "succeeded", reconciled["failure_message"]
-
-        lifted = client.get(f"/api/v1/jobs/{failed_id}").json()
-        assert lifted["retry_blocked"] is None
-
+        # No reconciliation first: the retry is accepted straight away.
         retry = client.post(
-            f"/api/v1/jobs/{failed_id}/retry", headers={"Idempotency-Key": "retry-after-recon"}
+            f"/api/v1/jobs/{failed_id}/retry", headers={"Idempotency-Key": "retry-no-gate"}
         )
         assert retry.status_code == 202, retry.text
         retry_detail = client.get(f"/api/v1/jobs/{retry.json()['job_id']}").json()

@@ -30,6 +30,7 @@ from trading_platform.jobs.registry import (
     InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
+    JobSubmissionConflictError,
     build_default_registry,
 )
 from trading_platform.orchestration.job_mutations import (
@@ -107,7 +108,10 @@ def _service_with_queued_only() -> JobOrchestrationService:
     return JobOrchestrationService(load_settings(), _registry_with_queued_only())
 
 
-_PREREQUISITE_JOB_TYPE = "phase20_10_prereq_probe"
+# D-15 / 20.1-10 (supersedes Phase 20 D-19): the probe type is ``recovery_gated`` and its
+# ``validate_payload`` raises the typed conflict named by the payload ``gate`` key, exactly as
+# the paper-session spec does while the recovery predicate is unresolved.
+_RECOVERY_REQUIRED_JOB_TYPE = "reconciliation"
 
 
 class _RetryProbeHandler:
@@ -119,11 +123,23 @@ class _RetryProbeHandler:
 
 class _RetryProbeSubmissionSpec:
     job_type = _RetryProbeHandler.job_type
-    description = "Retry probe submission spec declaring a D-19 retry prerequisite."
+    description = "Retry probe submission spec that is recovery gated (D-15)."
     cancellation_mode = JobCancellationMode.STEP_BOUNDARY
-    retry_prerequisite_job_type = _PREREQUISITE_JOB_TYPE
+    recovery_gated = True
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        if payload.get("message") == "invalid":
+            raise InvalidJobPayloadError(job_type=self.job_type, reason="message is not accepted")
+        gate = payload.get("gate")
+        if gate is not None:
+            raise JobSubmissionConflictError(
+                job_type=self.job_type,
+                code=str(gate),
+                detail={
+                    "strategy_id": str(payload.get("strategy_id")),
+                    "required_job_type": _RECOVERY_REQUIRED_JOB_TYPE,
+                },
+            )
         return dict(payload)
 
     def submission_defaults(self) -> None:
@@ -805,96 +821,89 @@ def _d19_time(offset_seconds: int) -> datetime:
 
 @pytest.mark.usefixtures("migrated_job_orchestration_db")
 @pytest.mark.parametrize(
-    ("case", "expect_blocked"),
+    ("case", "gate", "status", "uncertain", "job_kind", "expectation"),
     [
-        ("no_prerequisite_job", True),
-        ("prerequisite_succeeded_same_strategy_completed_later", False),
-        ("prerequisite_succeeded_other_strategy", True),
-        ("prerequisite_succeeded_completed_earlier", True),
-        ("prerequisite_failed", True),
-        ("original_not_uncertain", False),
-        ("original_cancelled", False),
-        ("spec_without_prerequisite", False),
+        # A recovery code on a FAILED or CANCELLED recovery-gated Job is the block.
+        ("failed_outcome_unresolved", "outcome_unresolved", JobStatus.FAILED, True, "gated", "blocked"),
+        ("failed_reconciliation_required", "reconciliation_required", JobStatus.FAILED, True, "gated", "blocked"),
+        ("failed_reconciliation_not_clean", "reconciliation_not_clean", JobStatus.FAILED, True, "gated", "blocked"),
+        ("cancelled_gate", "reconciliation_required", JobStatus.CANCELLED, False, "gated", "blocked"),
+        # outcome_uncertain is no longer an input (the predicate decides), so a Job that is
+        # not flagged uncertain is still blocked while the gate holds.
+        ("failed_not_uncertain_still_blocked", "outcome_unresolved", JobStatus.FAILED, False, "gated", "blocked"),
+        # A resolved gate is no block, whatever the uncertain flag says.
+        ("resolved_gate_uncertain", None, JobStatus.FAILED, True, "gated", "free"),
+        # Another conflict code is not a retry block: retry() propagates the typed conflict.
+        ("other_conflict", "outside_execution_window", JobStatus.FAILED, True, "gated", "conflict"),
+        # Only FAILED/CANCELLED Jobs are recomputed.
+        ("succeeded_job", "outcome_unresolved", JobStatus.SUCCEEDED, True, "gated", "none_not_retryable"),
+        # A type that is not recovery gated is never blocked.
+        ("not_gated_type", None, JobStatus.FAILED, True, "plain", "free"),
+        # An invalid stored payload is not a block (retry reports it as invalid).
+        ("invalid_payload", None, JobStatus.FAILED, True, "gated_invalid", "invalid"),
     ],
 )
-def test_retry_block_d19_matrix(case: str, expect_blocked: bool) -> None:
-    """D-19/D-20: retry_block()/retry() agree on the reconcile-first predicate,
-    reading only the jobs table."""
+def test_retry_block_d15_matrix(
+    case: str,
+    gate: str | None,
+    status: JobStatus,
+    uncertain: bool,
+    job_kind: str,
+    expectation: str,
+) -> None:
+    """D-15: retry_block()/retry() agree on the recovery gate. ``_retry_block_for`` re-runs the
+    spec's ``validate_payload`` for ``recovery_gated`` types only, FAILED/CANCELLED Jobs only,
+    and maps one of the three recovery codes to ``RetryBlock(code, 'reconciliation')``."""
 
     service = _service_with_retry_prerequisite()
-    base_completed_at = _d19_time(1_000)
-
-    if case == "spec_without_prerequisite":
-        original_id = _seed_job(
-            status=JobStatus.FAILED,
-            job_type=_ProbeHandler.job_type,
-            payload={"message": "hello", "strategy_id": "strat-a"},
-            completed_at=base_completed_at,
-            outcome_uncertain=True,
-        )
-    else:
-        original_status = JobStatus.CANCELLED if case == "original_cancelled" else JobStatus.FAILED
-        outcome_uncertain = case != "original_not_uncertain"
-        original_id = _seed_job(
-            status=original_status,
-            job_type=_RetryProbeHandler.job_type,
-            payload={"message": "hello", "strategy_id": "strat-a"},
-            completed_at=base_completed_at,
-            outcome_uncertain=outcome_uncertain,
-        )
-
-        if case == "prerequisite_succeeded_same_strategy_completed_later":
-            _seed_job(
-                status=JobStatus.SUCCEEDED,
-                job_type=_PREREQUISITE_JOB_TYPE,
-                payload={"strategy_id": "strat-a"},
-                completed_at=base_completed_at + timedelta(seconds=60),
-            )
-        elif case == "prerequisite_succeeded_other_strategy":
-            _seed_job(
-                status=JobStatus.SUCCEEDED,
-                job_type=_PREREQUISITE_JOB_TYPE,
-                payload={"strategy_id": "strat-b"},
-                completed_at=base_completed_at + timedelta(seconds=60),
-            )
-        elif case == "prerequisite_succeeded_completed_earlier":
-            _seed_job(
-                status=JobStatus.SUCCEEDED,
-                job_type=_PREREQUISITE_JOB_TYPE,
-                payload={"strategy_id": "strat-a"},
-                completed_at=base_completed_at - timedelta(seconds=60),
-            )
-        elif case == "prerequisite_failed":
-            _seed_job(
-                status=JobStatus.FAILED,
-                job_type=_PREREQUISITE_JOB_TYPE,
-                payload={"strategy_id": "strat-a"},
-                completed_at=base_completed_at + timedelta(seconds=60),
-                outcome_uncertain=True,
-            )
-        # "no_prerequisite_job" and "original_not_uncertain"/"original_cancelled"
-        # seed no prerequisite Job row.
+    payload: dict[str, Any] = {"message": "hello", "strategy_id": "strat-a"}
+    if gate is not None:
+        payload["gate"] = gate
+    if job_kind == "gated_invalid":
+        payload["message"] = "invalid"
+    job_type = _ProbeHandler.job_type if job_kind == "plain" else _RetryProbeHandler.job_type
+    original_id = _seed_job(
+        status=status,
+        job_type=job_type,
+        payload=payload,
+        completed_at=_d19_time(1_000),
+        outcome_uncertain=uncertain,
+    )
 
     before = _counts()
     block = service.retry_block(job_id=original_id)
-    # retry_block() is read-only (D-19/D-20): it must never write, whether or
-    # not it finds a block.
+    # retry_block() is read-only: it must never write, whether or not it finds a block.
     assert _counts() == before
 
-    if expect_blocked:
+    if expectation == "blocked":
         assert block is not None
-        assert block.code == "reconciliation_required"
-        assert block.required_job_type == _PREREQUISITE_JOB_TYPE
+        assert block.code == gate
+        assert block.required_job_type == _RECOVERY_REQUIRED_JOB_TYPE
         assert block.strategy_id == "strat-a"
         with pytest.raises(RetryBlockedError) as exc_info:
             service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
         assert exc_info.value.block == block
+        assert exc_info.value.job_type == _RetryProbeHandler.job_type
         # A blocked retry() rejects before session.begin_nested() -- zero rows.
         assert _counts() == before
-    else:
-        assert block is None
+        return
+
+    assert block is None
+    if expectation == "free":
         result = service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
         assert result.created is True
+    elif expectation == "conflict":
+        with pytest.raises(JobSubmissionConflictError) as conflict:
+            service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
+        assert conflict.value.code == gate
+        assert _counts() == before
+    elif expectation == "none_not_retryable":
+        with pytest.raises(JobNotRetryableError):
+            service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
+    elif expectation == "invalid":
+        with pytest.raises(InvalidRetryPayloadError):
+            service.retry(job_id=original_id, idempotency_key=f"retry-{case}")
+        assert _counts() == before
 
 
 @pytest.mark.usefixtures("migrated_job_orchestration_db")

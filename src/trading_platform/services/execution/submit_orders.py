@@ -86,6 +86,7 @@ from trading_platform.services.reconciliation import (
     reconcile_paper_execution,
     recover_inflight_paper_orders,
 )
+from trading_platform.services.recovery import REQUIRED_JOB_TYPE, strategy_recovery_status
 from trading_platform.services.stale_runs import reclaim_stale_runs
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
@@ -904,6 +905,18 @@ def _run_paper_order_submission_guarded(
     return report
 
 
+#: Domain action of a paper session refused by the D-15 recovery defence.
+BLOCKED_ACTION_OUTCOME_UNRESOLVED = "blocked_outcome_unresolved"
+
+
+def _recovery_gate_code(settings: Settings, strategy_id: str) -> str | None:
+    """The unresolved-outcome gate code of ``strategy_id`` (read-only, 2 statements), or None."""
+
+    with session_scope(settings) as session:
+        gate = strategy_recovery_status(session, strategy_id).gate_code
+    return gate.value if gate is not None else None
+
+
 def run_paper_session(
     strategy_id: str,
     *,
@@ -1033,6 +1046,68 @@ def run_paper_session(
             trigger_source=resolved_trigger_source,
             source_risk_run_id=str(session_plan.source_risk_run_id),
             action="blocked_strategy_disabled",
+            execution_run_id=blocked_execution_report.run_id,
+            execution_status=blocked_execution_report.status,
+            result_summary=result_summary,
+            reconciliation_run_id=None,
+        )
+
+    session_recovery_gate = _recovery_gate_code(resolved_settings, resolved_strategy_id)
+    if session_recovery_gate is not None:
+        # D-15 run-time defence (REC-01): a Job queued before an uncertain outcome appeared
+        # must not reach the broker while that outcome is unresolved. Zero broker reads and
+        # zero POSTs: the blocked paper_execution run (linked to the Job) is created and
+        # finalized right here, before any broker call and without entering the submission
+        # body (the 20.1-02 per-intent guard there is unchanged).
+        metadata = (
+            (registry or build_default_registry(resolved_settings))
+            .resolve(resolved_strategy_id)
+            .metadata
+        )
+        blocked_run_id = _create_paper_execution_run(
+            resolved_settings,
+            metadata,
+            trigger_source=resolved_trigger_source,
+            as_of_session=as_of_session,
+            requested_risk_run_id=str(session_plan.source_risk_run_id),
+            job_id=job_id,
+        )
+        blocked_execution_report = _finalize_blocked_paper_execution_run(
+            resolved_settings,
+            blocked_run_id,
+            strategy_id=resolved_strategy_id,
+            as_of_session=as_of_session,
+            requested_risk_run_id=str(session_plan.source_risk_run_id),
+            trigger_source=resolved_trigger_source,
+            strategy_status=control_state.status,
+            blocked_reason=session_recovery_gate,
+            action=BLOCKED_ACTION_OUTCOME_UNRESOLVED,
+            message=(
+                f"An uncertain order outcome of strategy '{resolved_strategy_id}' is unresolved "
+                f"({session_recovery_gate}); paper execution halted before broker submission "
+                "begins."
+            ),
+            extra_details={"required_job_type": REQUIRED_JOB_TYPE},
+        )
+        result_summary = dict(blocked_execution_report.result_summary)
+        result_summary["session_preflight"] = base_summary
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_session_blocked",
+            strategy_id=resolved_strategy_id,
+            run_id=blocked_execution_report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason=session_recovery_gate,
+            trigger_source=resolved_trigger_source,
+        )
+        return PaperSessionRunReport(
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            trigger_source=resolved_trigger_source,
+            source_risk_run_id=str(session_plan.source_risk_run_id),
+            action=BLOCKED_ACTION_OUTCOME_UNRESOLVED,
             execution_run_id=blocked_execution_report.run_id,
             execution_status=blocked_execution_report.status,
             result_summary=result_summary,

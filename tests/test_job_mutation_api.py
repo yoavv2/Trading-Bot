@@ -29,6 +29,7 @@ from trading_platform.jobs.registry import (  # noqa: E402
     InvalidJobPayloadError,
     JobCancellationMode,
     JobRegistry,
+    JobSubmissionConflictError,
 )
 
 
@@ -83,7 +84,10 @@ class _QueuedOnlySubmissionSpec:
         return None
 
 
-_RETRY_PREREQUISITE_JOB_TYPE = "phase20_reconciliation_probe"
+# D-15 / 20.1-10 (supersedes Phase 20 D-19): the probe type below is ``recovery_gated``; the
+# domain predicate itself is exercised in tests/test_recovery_*.py. The retry block now
+# reports ``required_job_type == "reconciliation"`` with one of the three recovery codes.
+_RECOVERY_REQUIRED_JOB_TYPE = "reconciliation"
 
 
 class _RetryPrerequisiteHandler:
@@ -94,17 +98,29 @@ class _RetryPrerequisiteHandler:
 
 
 class _RetryPrerequisiteSubmissionSpec:
-    """D-19: declares a retry_prerequisite_job_type so retry_block()/retry()
-    apply the reconcile-first block for a FAILED, outcome_uncertain Job."""
+    """D-15: a ``recovery_gated`` probe. A payload ``gate`` key makes ``validate_payload`` raise
+    the typed conflict with that code (a recovery code, or another conflict code), exactly as
+    the paper-session spec does when the predicate is unresolved; without it the payload is
+    accepted (the predicate is resolved)."""
 
     job_type = _RetryPrerequisiteHandler.job_type
-    description = "Retry-prerequisite probe submission spec."
+    description = "Recovery-gated probe submission spec."
     cancellation_mode = JobCancellationMode.STEP_BOUNDARY
-    retry_prerequisite_job_type = _RETRY_PREREQUISITE_JOB_TYPE
+    recovery_gated = True
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         if not isinstance(payload, Mapping) or "strategy_id" not in payload:
             raise InvalidJobPayloadError(job_type=self.job_type, reason="strategy_id is required")
+        gate = payload.get("gate")
+        if gate is not None:
+            raise JobSubmissionConflictError(
+                job_type=self.job_type,
+                code=str(gate),
+                detail={
+                    "strategy_id": str(payload["strategy_id"]),
+                    "required_job_type": _RECOVERY_REQUIRED_JOB_TYPE,
+                },
+            )
         return dict(payload)
 
     def submission_defaults(self) -> None:
@@ -523,11 +539,17 @@ def test_retry_of_already_retried_job_returns_409_with_existing_retry_id(
     }
 
 
-def test_retry_blocked_by_reconcile_first_predicate_returns_409(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    "gate_code", ["outcome_unresolved", "reconciliation_required", "reconciliation_not_clean"]
+)
+def test_retry_blocked_by_the_recovery_gate_returns_409(client: TestClient, gate_code: str) -> None:
+    """Superseded by D-15 / 20.1-10: the reconcile-first rule is replaced by the recovery
+    gate; the 409 body gains ``job_type`` and one of the three recovery codes."""
+
     blocked = _seed_job(
         status=JobStatus.FAILED,
         job_type=_RetryPrerequisiteHandler.job_type,
-        payload={"strategy_id": "trend_following_daily"},
+        payload={"strategy_id": "trend_following_daily", "gate": gate_code},
         completed_at=datetime.now(UTC),
         outcome_uncertain=True,
     )
@@ -540,11 +562,54 @@ def test_retry_blocked_by_reconcile_first_predicate_returns_409(client: TestClie
 
     assert response.status_code == 409
     assert response.json()["detail"] == {
-        "code": "reconciliation_required",
-        "required_job_type": _RETRY_PREREQUISITE_JOB_TYPE,
+        "code": gate_code,
+        "job_type": _RetryPrerequisiteHandler.job_type,
+        "required_job_type": _RECOVERY_REQUIRED_JOB_TYPE,
         "strategy_id": "trend_following_daily",
     }
     assert _counts() == before
+
+
+def test_retry_with_a_non_recovery_conflict_is_a_plain_409_not_a_retry_block(
+    client: TestClient,
+) -> None:
+    failed = _seed_job(
+        status=JobStatus.FAILED,
+        job_type=_RetryPrerequisiteHandler.job_type,
+        payload={"strategy_id": "trend_following_daily", "gate": "outside_execution_window"},
+        completed_at=datetime.now(UTC),
+        outcome_uncertain=True,
+    )
+    before = _counts()
+
+    response = client.post(
+        f"/api/v1/jobs/{failed.id}/retry", headers={"Idempotency-Key": "plain-conflict"}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "outside_execution_window"
+    assert client.get(f"/api/v1/jobs/{failed.id}").json()["retry_blocked"] is None
+    assert _counts() == before
+
+
+def test_retry_of_a_recovery_gated_job_succeeds_once_the_gate_is_resolved(
+    client: TestClient,
+) -> None:
+    """The predicate is resolved (no gate): retry proceeds whatever outcome_uncertain says."""
+
+    failed = _seed_job(
+        status=JobStatus.FAILED,
+        job_type=_RetryPrerequisiteHandler.job_type,
+        payload={"strategy_id": "trend_following_daily"},
+        completed_at=datetime.now(UTC),
+        outcome_uncertain=True,
+    )
+
+    response = client.post(
+        f"/api/v1/jobs/{failed.id}/retry", headers={"Idempotency-Key": "resolved-retry"}
+    )
+
+    assert response.status_code == 202
 
 
 def test_retry_rejects_payload_that_fails_current_validation(client: TestClient) -> None:
@@ -638,13 +703,13 @@ def test_job_detail_reports_cancellation_mode_per_registered_spec(client: TestCl
     assert unregistered_detail["cancellation_mode"] is None
 
 
-def test_job_detail_reports_retry_blocked_object_for_blocked_uncertain_failed_job(
+def test_job_detail_reports_retry_blocked_object_for_blocked_failed_job(
     client: TestClient,
 ) -> None:
     blocked = _seed_job(
         status=JobStatus.FAILED,
         job_type=_RetryPrerequisiteHandler.job_type,
-        payload={"strategy_id": "trend_following_daily"},
+        payload={"strategy_id": "trend_following_daily", "gate": "reconciliation_not_clean"},
         completed_at=datetime.now(UTC),
         outcome_uncertain=True,
     )
@@ -652,16 +717,16 @@ def test_job_detail_reports_retry_blocked_object_for_blocked_uncertain_failed_jo
     detail = client.get(f"/api/v1/jobs/{blocked.id}").json()
 
     assert detail["retry_blocked"] == {
-        "code": "reconciliation_required",
-        "required_job_type": _RETRY_PREREQUISITE_JOB_TYPE,
+        "code": "reconciliation_not_clean",
+        "required_job_type": _RECOVERY_REQUIRED_JOB_TYPE,
         "strategy_id": "trend_following_daily",
     }
 
 
-def test_job_detail_reports_retry_blocked_null_for_non_uncertain_failed_job(
+def test_job_detail_reports_retry_blocked_null_for_a_job_whose_gate_is_resolved(
     client: TestClient,
 ) -> None:
-    not_uncertain = _seed_job(
+    resolved = _seed_job(
         status=JobStatus.FAILED,
         job_type=_RetryPrerequisiteHandler.job_type,
         payload={"strategy_id": "trend_following_daily"},
@@ -669,6 +734,21 @@ def test_job_detail_reports_retry_blocked_null_for_non_uncertain_failed_job(
         outcome_uncertain=False,
     )
 
-    detail = client.get(f"/api/v1/jobs/{not_uncertain.id}").json()
+    detail = client.get(f"/api/v1/jobs/{resolved.id}").json()
 
     assert detail["retry_blocked"] is None
+
+
+def test_job_detail_retry_blocked_is_null_for_a_succeeded_job_and_a_non_gated_type(
+    client: TestClient,
+) -> None:
+    succeeded = _seed_job(
+        status=JobStatus.SUCCEEDED,
+        job_type=_RetryPrerequisiteHandler.job_type,
+        payload={"strategy_id": "trend_following_daily", "gate": "outcome_unresolved"},
+        completed_at=datetime.now(UTC),
+    )
+    non_gated = _seed_job(status=JobStatus.FAILED, outcome_uncertain=True)
+
+    assert client.get(f"/api/v1/jobs/{succeeded.id}").json()["retry_blocked"] is None
+    assert client.get(f"/api/v1/jobs/{non_gated.id}").json()["retry_blocked"] is None
