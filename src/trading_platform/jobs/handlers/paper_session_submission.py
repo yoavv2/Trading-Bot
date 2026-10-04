@@ -25,6 +25,13 @@ retry prerequisite: a FAILED, outcome-uncertain ``paper-session`` Job may
 only be retried after a newer SUCCEEDED ``reconciliation`` Job exists for
 the same strategy.
 
+Eligibility (D-23, COR-04): after the ownership check a paper session is accepted
+only for the fresh evaluation session inside its execution window. The
+closed 409 codes ``calendar_data_unavailable`` > ``historical_execution_rejected``
+> ``evaluation_data_not_ready`` > ``outside_execution_window`` come from the
+services-layer ``paper_execution_eligibility`` read, judged at the injected clock.
+Research, backtests and evaluation of past sessions are never gated by it.
+
 Ownership (D-03, PAPER-01): after every payload check, a strategy that is not
 the active paper strategy is refused with a typed ``JobSubmissionConflictError``
 (HTTP 409 ``strategy_not_active_paper_strategy``; ``no_active_paper_strategy``
@@ -48,16 +55,25 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
 
 from trading_platform.core.settings import Settings
+from trading_platform.db.session import session_scope
 from trading_platform.jobs.handlers.payload_fields import (
-    latest_completed_session_default,
+    evaluation_session_default,
     map_validation_error,
     parse_iso_date,
     require_active_paper_strategy,
     require_registered_strategy,
     require_trading_session_not_future,
 )
-from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
+from trading_platform.jobs.registry import (
+    InvalidJobPayloadError,
+    JobCancellationMode,
+    JobSubmissionConflictError,
+)
 from trading_platform.services.active_paper_strategy import lock_active_paper_strategy_shared
+from trading_platform.services.calendar_facts import (
+    EligibilityRejection,
+    paper_execution_eligibility,
+)
 from trading_platform.services.risk import is_eligible_risk_run
 
 PAPER_SESSION_JOB_TYPE = "paper-session"
@@ -84,12 +100,16 @@ class PaperSessionPayloadRejection(StrEnum):
 
 class PaperSessionSubmitConflict(StrEnum):
     """Closed set of state-conflict codes (HTTP 409) ``paper-session`` submission
-    can raise via ``JobSubmissionConflictError`` (D-03). Initially exactly the
-    two ownership refusals; later plans extend it. One parametrized test case
-    exists per value."""
+    can raise via ``JobSubmissionConflictError`` (D-03, D-23): the two ownership
+    refusals and the four execution-eligibility refusals; later plans extend it.
+    One parametrized test case exists per value."""
 
     NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
     STRATEGY_NOT_ACTIVE_PAPER_STRATEGY = "strategy_not_active_paper_strategy"
+    HISTORICAL_EXECUTION_REJECTED = "historical_execution_rejected"
+    OUTSIDE_EXECUTION_WINDOW = "outside_execution_window"
+    EVALUATION_DATA_NOT_READY = "evaluation_data_not_ready"
+    CALENDAR_DATA_UNAVAILABLE = "calendar_data_unavailable"
 
 
 def _default_clock() -> datetime:
@@ -166,7 +186,7 @@ class PaperSessionSubmissionSpec:
         as_of_session = parsed.as_of_session
         risk_run_id = parsed.risk_run_id
 
-        require_registered_strategy(
+        strategy = require_registered_strategy(
             self._settings, strategy_id, job_type=PAPER_SESSION_JOB_TYPE
         )
         require_trading_session_not_future(
@@ -202,6 +222,27 @@ class PaperSessionSubmissionSpec:
             conflict_enum=PaperSessionSubmitConflict,
         )
 
+        # D-23: execution eligibility at the injected clock (read-only).
+        with session_scope(self._settings) as db_session:
+            eligibility = paper_execution_eligibility(
+                db_session,
+                now=self._clock(),
+                settings=self._settings,
+                strategy=strategy,
+                as_of_session=as_of_session,
+            )
+        if eligibility.rejection is not None:
+            detail = {"strategy_id": strategy_id, "as_of_session": as_of_session.isoformat()}
+            if eligibility.rejection is EligibilityRejection.EVALUATION_DATA_NOT_READY:
+                evaluation = eligibility.evaluation_session
+                detail["reason"] = evaluation.reason.value if evaluation.reason else ""
+                detail["symbols"] = ",".join(evaluation.symbols)
+            raise JobSubmissionConflictError(
+                job_type=PAPER_SESSION_JOB_TYPE,
+                code=PaperSessionSubmitConflict(eligibility.rejection.value).value,
+                detail=detail,
+            )
+
         return {
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
@@ -228,12 +269,13 @@ class PaperSessionSubmissionSpec:
         )
 
     def submission_defaults(self) -> dict[str, str] | None:
-        """Console pre-fill, computed at read time. Returns ``None`` when no
-        completed session exists to derive a value from. Deliberately never
+        """Console pre-fill, computed at read time (D-24): the EVALUATION candidate
+        session (latest calendar-completed persisted session), never "latest session
+        with bars". Returns ``None`` when the calendar does not cover the clock's date. Deliberately never
         includes ``risk_run_id`` (D-23) -- the form sends an explicit
         ``null`` for it."""
 
-        latest = latest_completed_session_default(self._settings)
+        latest = evaluation_session_default(self._settings, self._clock)
         if latest is None:
             return None
         return {"as_of_session": latest.isoformat()}

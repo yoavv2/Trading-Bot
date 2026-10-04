@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, f
 
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.handlers.payload_fields import (
-    latest_completed_session_default,
+    evaluation_session_default,
     map_validation_error,
     parse_iso_date,
     require_registered_strategy,
@@ -120,10 +120,11 @@ class RiskEvaluationSubmissionSpec:
         }
 
     def submission_defaults(self) -> dict[str, str] | None:
-        """Console pre-fill, computed at read time. Returns ``None`` when no
-        completed session exists to derive a value from."""
+        """Console pre-fill, computed at read time (D-24): the EVALUATION candidate
+        session (latest calendar-completed persisted session), never "latest session
+        with bars". Returns ``None`` when the calendar does not cover the clock's date."""
 
-        latest = latest_completed_session_default(self._settings)
+        latest = evaluation_session_default(self._settings, self._clock)
         if latest is None:
             return None
         return {"as_of_session": latest.isoformat()}

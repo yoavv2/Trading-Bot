@@ -15,8 +15,8 @@ from datetime import UTC, date, datetime
 from typing import Any, Mapping
 
 import pytest
+from tests.support.calendar_facts import clock_at, et, seed_bars, seed_calendar
 from tests.test_backtest_runner import (
-    _seed_market_data,
     migrated_backtest_db,
     strategy_config_override,
 )
@@ -39,7 +39,6 @@ from trading_platform.jobs.registry import (
     retry_prerequisite_for,
 )
 from trading_platform.services.config.validation import ExecutionMode
-from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.risk import RiskRunReport
 from trading_platform.worker.commands.run_jobs import required_mode_preflight
 
@@ -152,18 +151,30 @@ def test_submission_defaults_none_without_sessions(migrated_backtest_db: str) ->
     assert spec.submission_defaults() is None
 
 
-def test_submission_defaults_from_latest_session(migrated_backtest_db: str) -> None:
-    _seed_market_data()
+def test_submission_defaults_are_the_evaluation_candidate_session(
+    migrated_backtest_db: str,
+) -> None:
+    """D-24: the pre-fill is the calendar-completed evaluation candidate
+    (latest persisted session closed before the clock), never the latest
+    session that merely has bars."""
+
+    seed_calendar(date(2025, 11, 20), date(2026, 3, 31))
+    seed_bars(["AAA"], [date(2025, 12, 2), date(2025, 12, 3)])
     settings = load_settings()
-    spec = RiskEvaluationSubmissionSpec(settings)
+    spec = RiskEvaluationSubmissionSpec(settings, clock=clock_at(et(2025, 12, 2, 10, 0)))
 
-    from trading_platform.db.session import session_scope
+    assert spec.submission_defaults() == {"as_of_session": "2025-12-01"}
 
-    with session_scope(settings) as session:
-        latest = latest_completed_session(session, exchange=settings.market_data.calendar.exchange)
-    assert latest is not None
 
-    assert spec.submission_defaults() == {"as_of_session": latest.isoformat()}
+def test_defaults_are_none_when_calendar_unavailable(migrated_backtest_db: str) -> None:
+    """D-24/04 acceptance: the calendar ending 2026-03-13 evaluated at
+    2026-09-29 offers NO default (never 2026-03-13), even with bars for it."""
+
+    seed_calendar(date(2026, 1, 2), date(2026, 3, 13))
+    seed_bars(["AAA"], [date(2026, 3, 13)])
+    spec = RiskEvaluationSubmissionSpec(load_settings(), clock=clock_at(et(2026, 9, 29, 10, 0)))
+
+    assert spec.submission_defaults() is None
 
 
 def test_spec_satisfies_registry_contract() -> None:

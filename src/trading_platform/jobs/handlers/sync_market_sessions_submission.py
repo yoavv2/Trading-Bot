@@ -33,8 +33,8 @@ from trading_platform.jobs.handlers.payload_fields import (
     exchange_today,
     map_validation_error,
     parse_iso_date,
-    require_date_range,
     require_date_range_within_calendar,
+    require_date_range_within_horizon,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
 
@@ -61,7 +61,7 @@ class SyncMarketSessionsPayloadRejection(StrEnum):
     INVALID_FIELD_TYPE = "invalid_field_type"
     INVALID_DATE = "invalid_date"
     FROM_DATE_AFTER_TO_DATE = "from_date_after_to_date"
-    TO_DATE_IN_FUTURE = "to_date_in_future"
+    TO_DATE_BEYOND_COVERAGE_HORIZON = "to_date_beyond_coverage_horizon"
     DATE_RANGE_OUT_OF_CALENDAR_RANGE = "date_range_out_of_calendar_range"
 
 
@@ -110,7 +110,7 @@ class SyncMarketSessionsSubmissionSpec:
         from_date = parsed.from_date
         to_date = parsed.to_date
 
-        require_date_range(
+        require_date_range_within_horizon(
             self._settings,
             self._clock,
             from_date,

@@ -7,13 +7,14 @@ weekend 2025-11-29/30.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from tests.support.symbol_metadata import ready_symbol_fields
 
 from trading_platform.core.settings import Settings, load_settings
@@ -75,20 +76,33 @@ def seed_bars(
                 symbol = Symbol(ticker=ticker, **fields)
                 session.add(symbol)
                 session.flush()
-            for session_date in dates:
-                session.add(
-                    DailyBar(
-                        symbol_id=symbol.id,
-                        session_date=session_date,
-                        open=Decimal("100"),
-                        high=Decimal("101"),
-                        low=Decimal("99"),
-                        close=Decimal("100.5"),
-                        volume=1000,
-                        adjusted=True,
-                        provider="polygon",
+            existing = set(
+                session.execute(
+                    select(DailyBar.session_date).where(
+                        DailyBar.symbol_id == symbol.id,
+                        DailyBar.adjusted.is_(True),
+                        DailyBar.provider == "polygon",
                     )
-                )
+                ).scalars()
+            )
+            rows = [
+                {
+                    "id": uuid.uuid4(),
+                    "symbol_id": symbol.id,
+                    "session_date": session_date,
+                    "open": Decimal("100"),
+                    "high": Decimal("101"),
+                    "low": Decimal("99"),
+                    "close": Decimal("100.5"),
+                    "volume": 1000,
+                    "adjusted": True,
+                    "provider": "polygon",
+                }
+                for session_date in dates
+                if session_date not in existing
+            ]
+            if rows:
+                session.execute(insert(DailyBar), rows)
 
 
 def sessions_between(start: date, end: date) -> list[date]:

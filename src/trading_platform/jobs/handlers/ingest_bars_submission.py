@@ -29,8 +29,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.handlers.payload_fields import (
+    evaluation_session_default,
     format_symbols_default,
-    latest_completed_session_default,
     map_validation_error,
     normalize_symbols,
     parse_iso_date,
@@ -124,10 +124,11 @@ class IngestBarsSubmissionSpec:
         }
 
     def submission_defaults(self) -> dict[str, str] | None:
-        """D-24: console pre-fill, computed at read time. Returns ``None``
-        when no completed session exists to derive a window from."""
+        """D-24: console pre-fill, computed at read time. The window ends at the
+        EVALUATION candidate session (never "latest session with bars");
+        ``None`` when the calendar does not cover the clock's date."""
 
-        latest = latest_completed_session_default(self._settings)
+        latest = evaluation_session_default(self._settings, self._clock)
         if latest is None:
             return None
 

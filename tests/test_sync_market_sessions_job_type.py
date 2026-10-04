@@ -11,12 +11,15 @@ from __future__ import annotations
 import inspect
 import json
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Mapping
 
 import pytest
+from tests.support.migrated_db import migrated_database
 
 from trading_platform.core.settings import load_settings
+from trading_platform.db.session import session_scope
 from trading_platform.jobs.contracts import JobCancelledError
 from trading_platform.jobs.handlers.sync_market_sessions import (
     STEP_RECORDING,
@@ -33,7 +36,13 @@ from trading_platform.jobs.registry import (
     JobRegistry,
     retry_prerequisite_for,
 )
-from trading_platform.services.calendar import MarketSessionSyncResult
+from trading_platform.services.calendar import (
+    MarketSessionSyncResult,
+    calendar_horizon_end,
+    next_session_date,
+    sync_market_sessions,
+)
+from trading_platform.services.calendar_facts import calendar_coverage
 from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.worker.commands.run_jobs import required_mode_preflight
 
@@ -52,7 +61,7 @@ def test_rejection_enum_is_closed() -> None:
         "invalid_field_type",
         "invalid_date",
         "from_date_after_to_date",
-        "to_date_in_future",
+        "to_date_beyond_coverage_horizon",
         "date_range_out_of_calendar_range",
     }
 
@@ -122,9 +131,9 @@ def test_invalid_field_type_member_is_map_validation_error_fallback() -> None:
             id="from_date_after_to_date",
         ),
         pytest.param(
-            {"from_date": "2026-01-01", "to_date": "2026-01-10"},
-            SyncMarketSessionsPayloadRejection.TO_DATE_IN_FUTURE,
-            id="to_date_in_future",
+            {"from_date": "2026-01-01", "to_date": "2026-12-31"},
+            SyncMarketSessionsPayloadRejection.TO_DATE_BEYOND_COVERAGE_HORIZON,
+            id="to_date_beyond_coverage_horizon",
         ),
         pytest.param(
             {"from_date": "2006-09-27", "to_date": "2024-01-10"},
@@ -150,6 +159,64 @@ def test_validate_payload_rejects(
 
     assert exc_info.value.job_type == "sync-market-sessions"
     assert exc_info.value.reason == expected_reason.value
+
+
+def test_to_date_in_future_is_no_longer_a_sync_rejection() -> None:
+    """D-24: the calendar may be synced AHEAD (``ingest-bars`` keeps
+    ``to_date_in_future``)."""
+
+    spec = SyncMarketSessionsSubmissionSpec(
+        load_settings(), clock=lambda: datetime(2026, 1, 6, 3, 0, tzinfo=UTC)
+    )
+
+    normalized = spec.validate_payload({"from_date": "2026-01-01", "to_date": "2026-01-10"})
+
+    assert normalized["to_date"] == "2026-01-10"
+
+
+def test_horizon_boundary_is_exactly_n_sessions_ahead() -> None:
+    settings = load_settings()
+    clock = lambda: datetime(2026, 1, 6, 15, 0, tzinfo=UTC)  # noqa: E731 - 2026-01-06 ET
+    spec = SyncMarketSessionsSubmissionSpec(settings, clock=clock)
+    horizon_end = calendar_horizon_end(settings, date(2026, 1, 6))
+    after = next_session_date(horizon_end)
+
+    spec.validate_payload({"from_date": "2026-01-06", "to_date": horizon_end.isoformat()})
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        spec.validate_payload({"from_date": "2026-01-06", "to_date": after.isoformat()})
+    assert exc_info.value.reason == "to_date_beyond_coverage_horizon"
+
+
+@pytest.fixture()
+def _sync_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    with migrated_database(monkeypatch, "syncahead") as name:
+        yield name
+
+
+def test_sync_ahead_to_today_plus_horizon_succeeds(_sync_db: str) -> None:
+    """D-24: the spec accepts ``to_date`` = today + horizon sessions, the sync
+    persists the rows and the calendar runway afterwards covers the horizon."""
+
+    settings = load_settings()
+    now = datetime(2026, 1, 6, 15, 0, tzinfo=UTC)
+    spec = SyncMarketSessionsSubmissionSpec(settings, clock=lambda: now)
+    horizon_end = calendar_horizon_end(settings, date(2026, 1, 6))
+
+    payload = spec.validate_payload(
+        {"from_date": "2026-01-02", "to_date": horizon_end.isoformat()}
+    )
+    result = sync_market_sessions(
+        from_date=date.fromisoformat(payload["from_date"]),
+        to_date=date.fromisoformat(payload["to_date"]),
+        settings=settings,
+    )
+
+    assert result.sessions_upserted > 0
+    with session_scope(settings) as session:
+        coverage = calendar_coverage(session, now=now, settings=settings)
+    assert coverage.runway_sessions >= settings.market_data.calendar.coverage_horizon_sessions
+    assert coverage.last_persisted_session == horizon_end
+    assert coverage.runway_low is False
 
 
 def test_validate_payload_normalizes() -> None:

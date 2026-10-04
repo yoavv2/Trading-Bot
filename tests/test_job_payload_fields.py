@@ -9,11 +9,14 @@ precedence rules in ``map_validation_error`` are proven against a real
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
+from tests.support.calendar_facts import clock_at, et, seed_bars, seed_calendar
+from tests.support.migrated_db import migrated_database
 
 from trading_platform.core.settings import load_settings
 from trading_platform.jobs.handlers import payload_fields as pf
@@ -64,6 +67,7 @@ def test_payload_field_rejection_is_closed() -> None:
         "as_of_session_out_of_calendar_range",
         "from_date_after_to_date",
         "to_date_in_future",
+        "to_date_beyond_coverage_horizon",
         "date_range_out_of_calendar_range",
         "empty_symbols",
         "invalid_symbol",
@@ -305,3 +309,98 @@ def test_require_registered_strategy_accepts_known_id() -> None:
 
 def test_format_symbols_default_normalizes_and_joins() -> None:
     assert pf.format_symbols_default(("spy", "AAPL")) == "AAPL,SPY"
+
+
+# ---------------------------------------------------------------------------
+# COR-04 (D-24): coverage horizon, strategy return, evaluation-session default
+# ---------------------------------------------------------------------------
+
+
+def test_require_registered_strategy_returns_the_resolved_strategy() -> None:
+    settings = load_settings()
+
+    strategy = pf.require_registered_strategy(settings, "trend_following_daily", job_type="test")
+
+    assert strategy.strategy_id == "trend_following_daily"
+
+
+def _horizon_settings(sessions: int) -> Any:
+    settings = load_settings()
+    calendar = settings.market_data.calendar.model_copy(update={"coverage_horizon_sessions": sessions})
+    return settings.model_copy(
+        update={"market_data": settings.market_data.model_copy(update={"calendar": calendar})}
+    )
+
+
+def test_horizon_helper_allows_exactly_n_sessions_ahead_and_rejects_n_plus_one() -> None:
+    from trading_platform.services.calendar import next_session_date, sessions_in_range
+
+    settings = _horizon_settings(5)
+    today = date(2026, 1, 5)
+    ahead = sessions_in_range(date(2026, 1, 6), date(2026, 1, 31))
+    fifth, sixth = ahead[4], ahead[5]
+    assert next_session_date(fifth) == sixth
+
+    pf.require_date_range_within_horizon(
+        settings, _clock_2026_01_06, today, fifth, job_type="test"
+    )
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        pf.require_date_range_within_horizon(
+            settings, _clock_2026_01_06, today, sixth, job_type="test"
+        )
+    assert exc_info.value.reason == pf.PayloadFieldRejection.TO_DATE_BEYOND_COVERAGE_HORIZON.value
+
+
+def test_horizon_helper_checks_the_inverted_range_first() -> None:
+    settings = _horizon_settings(5)
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        pf.require_date_range_within_horizon(
+            settings, _clock_2026_01_06, date(2030, 1, 5), date(2026, 1, 1), job_type="test"
+        )
+    assert exc_info.value.reason == pf.PayloadFieldRejection.FROM_DATE_AFTER_TO_DATE.value
+
+
+def test_horizon_helper_clips_to_the_library_window() -> None:
+    """A horizon larger than the library window cannot extend past its last session."""
+
+    settings = _horizon_settings(100_000)
+    calendar = get_calendar(settings.market_data.calendar.exchange)
+    last = calendar.last_session.date()
+
+    pf.require_date_range_within_horizon(
+        settings, _clock_2026_01_06, date(2026, 1, 5), last, job_type="test"
+    )
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        pf.require_date_range_within_horizon(
+            settings, _clock_2026_01_06, date(2026, 1, 5), last + timedelta(days=7), job_type="test"
+        )
+    assert exc_info.value.reason == pf.PayloadFieldRejection.TO_DATE_BEYOND_COVERAGE_HORIZON.value
+
+
+@pytest.fixture()
+def _defaults_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    with migrated_database(monkeypatch, "payloaddef") as name:
+        yield name
+
+
+def test_evaluation_session_default_is_the_candidate_never_the_latest_session_with_bars(
+    _defaults_db: str,
+) -> None:
+    seed_calendar(date(2025, 11, 20), date(2026, 3, 31))
+    # bars exist only for a session LATER than the candidate: must be ignored
+    seed_bars(["AAA"], [date(2025, 12, 2)])
+    settings = load_settings()
+
+    candidate = pf.evaluation_session_default(settings, clock_at(et(2025, 12, 2, 10, 0)))
+
+    assert candidate == date(2025, 12, 1)
+
+
+def test_evaluation_session_default_is_none_when_the_calendar_does_not_cover_now(
+    _defaults_db: str,
+) -> None:
+    seed_calendar(date(2026, 1, 2), date(2026, 3, 13))
+    seed_bars(["AAA"], [date(2026, 3, 13)])
+    settings = load_settings()
+
+    assert pf.evaluation_session_default(settings, clock_at(et(2026, 9, 29, 10, 0))) is None

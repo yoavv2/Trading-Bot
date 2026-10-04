@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import select
+from tests.support.calendar_facts import clock_at, et, seed_calendar
 from tests.test_market_data_ingestion import (
     FIXTURE_PATH,
     _make_market_data_settings,
@@ -191,25 +192,45 @@ def test_submission_defaults_none_without_sessions(migrated_ingest_db: str) -> N
     assert spec.submission_defaults() is None
 
 
-def test_submission_defaults_from_latest_session(migrated_ingest_db: str) -> None:
+def test_submission_defaults_window_ends_at_the_evaluation_candidate(migrated_ingest_db: str) -> None:
+    """D-24: the window ends at the calendar-completed evaluation candidate."""
+
+    seed_calendar(date(2025, 11, 20), date(2026, 3, 31))
     settings = load_settings()
-    from trading_platform.services.calendar import upsert_market_sessions
+    spec = IngestBarsSubmissionSpec(settings, clock=clock_at(et(2025, 12, 2, 10, 0)))
 
-    with session_scope(settings) as session:
-        upsert_market_sessions(session, date(2024, 1, 3), date(2024, 1, 5))
-        _seed_bar(session, ticker="AAPL", session_date=date(2024, 1, 5), close="100")
-
-    spec = IngestBarsSubmissionSpec(settings)
     defaults = spec.submission_defaults()
 
     assert defaults is not None
-    assert defaults["to_date"] == "2024-01-05"
+    assert defaults["to_date"] == "2025-12-01"
     lookback_days = settings.market_data.ingest.default_lookback_days
-    expected_from = (date(2024, 1, 5) - timedelta(days=lookback_days)).isoformat()
+    expected_from = (date(2025, 12, 1) - timedelta(days=lookback_days)).isoformat()
     assert defaults["from_date"] == expected_from
     assert defaults["symbols"] == ",".join(
         sorted({s.upper() for s in settings.market_data.ingest.universe})
     )
+
+
+def test_defaults_are_none_when_calendar_unavailable(migrated_ingest_db: str) -> None:
+    seed_calendar(date(2026, 1, 2), date(2026, 3, 13))
+    spec = IngestBarsSubmissionSpec(load_settings(), clock=clock_at(et(2026, 9, 29, 10, 0)))
+
+    assert spec.submission_defaults() is None
+
+
+def test_bar_ingest_into_the_future_is_still_rejected() -> None:
+    """D-24: only the CALENDAR may be synced ahead; bars cannot exist in the future."""
+
+    spec = IngestBarsSubmissionSpec(
+        load_settings(), clock=lambda: datetime(2026, 1, 6, 3, 0, tzinfo=UTC)
+    )
+
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        spec.validate_payload(
+            {"from_date": "2026-01-01", "to_date": "2026-01-10", "symbols": ["AAPL"]}
+        )
+
+    assert exc_info.value.reason == "to_date_in_future"
 
 
 def test_spec_satisfies_registry_contract() -> None:

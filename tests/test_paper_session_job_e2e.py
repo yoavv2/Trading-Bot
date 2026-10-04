@@ -29,6 +29,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 from tests.test_job_operations_e2e import (
     _run_worker_once,
@@ -80,6 +81,15 @@ RECONCILIATION_PAYLOAD: dict[str, str] = {
 
 _FAKE_API_KEY = "fake-key-not-a-secret"  # pragma: allowlist secret
 _FAKE_API_SECRET = "fake-secret-not-a-secret"  # pragma: allowlist secret
+
+
+@pytest.fixture(autouse=True)
+def _eligible_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This module's subject is not eligibility (COR-04): see
+    tests/support/paper_eligibility.py. Real eligibility is tested in
+    tests/test_paper_session_eligibility.py."""
+
+    allow_paper_execution(monkeypatch)
 
 
 def _empty_account() -> BrokerAccountSnapshot:

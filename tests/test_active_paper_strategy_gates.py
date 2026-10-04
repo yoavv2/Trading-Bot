@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
+from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_ownership import (
     clear_active_paper_strategy,
     seed_registered_strategy,
@@ -114,6 +115,15 @@ _STATES = {
     "non_owner": (OTHER, "strategy_not_active_paper_strategy"),
     "no_owner": (None, "no_active_paper_strategy"),
 }
+
+
+@pytest.fixture(autouse=True)
+def _eligible_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This module's subject is not eligibility (COR-04): see
+    tests/support/paper_eligibility.py. Real eligibility is tested in
+    tests/test_paper_session_eligibility.py."""
+
+    allow_paper_execution(monkeypatch)
 
 
 def _arrange_owner(state: str) -> str | None:
@@ -855,5 +865,11 @@ def test_no_other_module_calls_ownership_decision_inline() -> None:
 
 def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
     expected = {member.value for member in OwnershipBlock}
-    assert {m.value for m in PaperSessionSubmitConflict} == expected
+    # paper-session adds the four execution-eligibility refusals (COR-04, D-23)
+    assert {m.value for m in PaperSessionSubmitConflict} == expected | {
+        "historical_execution_rejected",
+        "outside_execution_window",
+        "evaluation_data_not_ready",
+        "calendar_data_unavailable",
+    }
     assert {m.value for m in ReconciliationSubmitConflict} == expected

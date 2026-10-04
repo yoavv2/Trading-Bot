@@ -13,9 +13,11 @@ precedent (P19 D-08/D-09). Each spec still declares its own closed
 values it can actually emit.
 
 Nothing here defaults a payload value (P19 D-08) -- every function either
-validates/normalizes an explicit input or raises. ``latest_completed_session_default``
+validates/normalizes an explicit input or raises. ``evaluation_session_default``
 and ``format_symbols_default`` are the read-only ``submission_defaults()``
 helpers a spec calls separately, never from inside ``validate_payload``.
+Session-scoped defaults come from the calendar-completed EVALUATION candidate
+session (D-24), never from "the latest session that has bars".
 """
 
 from __future__ import annotations
@@ -33,8 +35,14 @@ from trading_platform.core.settings import Settings
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobSubmissionConflictError
 from trading_platform.services.active_paper_strategy import ownership_block_for
-from trading_platform.services.calendar import get_calendar, is_trading_session
-from trading_platform.services.market_data_access import latest_completed_session
+from trading_platform.services.calendar import (
+    CalendarOutOfBoundsError,
+    calendar_horizon_end,
+    get_calendar,
+    is_trading_session,
+)
+from trading_platform.services.calendar_facts import evaluation_candidate_session
+from trading_platform.strategies.base import BaseStrategy
 from trading_platform.strategies.registry import UnknownStrategyError
 from trading_platform.strategies.registry import (
     build_default_registry as build_default_strategy_registry,
@@ -61,6 +69,7 @@ class PayloadFieldRejection(StrEnum):
     AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
     FROM_DATE_AFTER_TO_DATE = "from_date_after_to_date"
     TO_DATE_IN_FUTURE = "to_date_in_future"
+    TO_DATE_BEYOND_COVERAGE_HORIZON = "to_date_beyond_coverage_horizon"
     DATE_RANGE_OUT_OF_CALENDAR_RANGE = "date_range_out_of_calendar_range"
     EMPTY_SYMBOLS = "empty_symbols"
     INVALID_SYMBOL = "invalid_symbol"
@@ -154,13 +163,14 @@ def exchange_today(settings: Settings, clock: Callable[[], datetime]) -> date:
 
 def require_registered_strategy(
     settings: Settings, strategy_id: str, *, job_type: str
-) -> None:
+) -> BaseStrategy:
     """Raise ``InvalidJobPayloadError(UNKNOWN_STRATEGY_ID)`` unless
-    ``strategy_id`` resolves against the strategy registry (D-22)."""
+    ``strategy_id`` resolves against the strategy registry (D-22); return the
+    resolved strategy (callers that only validate may ignore it)."""
 
     registry = build_default_strategy_registry(settings)
     try:
-        registry.resolve(strategy_id)
+        return registry.resolve(strategy_id)
     except UnknownStrategyError as exc:
         raise InvalidJobPayloadError(
             job_type=job_type,
@@ -232,6 +242,40 @@ def require_date_range(
         )
 
 
+def require_date_range_within_horizon(
+    settings: Settings,
+    clock: Callable[[], datetime],
+    from_date: date,
+    to_date: date,
+    *,
+    job_type: str,
+) -> None:
+    """D-24: ``sync-market-sessions`` may sync AHEAD. An inverted range first,
+    then a ``to_date`` beyond the date of the N-th session after the
+    exchange-local today (N = ``coverage_horizon_sessions``, clipped to the
+    calendar library's last session) is ``to_date_beyond_coverage_horizon``.
+    ``ingest-bars`` keeps ``require_date_range`` (bars cannot exist in the future)."""
+
+    if from_date > to_date:
+        raise InvalidJobPayloadError(
+            job_type=job_type,
+            reason=PayloadFieldRejection.FROM_DATE_AFTER_TO_DATE.value,
+        )
+    today = exchange_today(settings, clock)
+    try:
+        horizon_end = calendar_horizon_end(settings, today)
+    except CalendarOutOfBoundsError as exc:
+        raise InvalidJobPayloadError(
+            job_type=job_type,
+            reason=PayloadFieldRejection.DATE_RANGE_OUT_OF_CALENDAR_RANGE.value,
+        ) from exc
+    if to_date > horizon_end:
+        raise InvalidJobPayloadError(
+            job_type=job_type,
+            reason=PayloadFieldRejection.TO_DATE_BEYOND_COVERAGE_HORIZON.value,
+        )
+
+
 def require_date_range_within_calendar(
     settings: Settings,
     from_date: date,
@@ -254,15 +298,18 @@ def require_date_range_within_calendar(
         )
 
 
-def latest_completed_session_default(settings: Settings) -> date | None:
-    """Read-only ``submission_defaults()`` helper -- the same "latest
-    completed session" query ``BacktestSubmissionSpec.submission_defaults``
-    uses. Never called from inside ``validate_payload`` (P19 D-08)."""
+def evaluation_session_default(
+    settings: Settings, clock: Callable[[], datetime]
+) -> date | None:
+    """Read-only ``submission_defaults()`` helper (D-24): the EVALUATION
+    candidate session -- the latest calendar-completed persisted session at
+    the injected clock -- or ``None`` when the calendar does not cover it
+    (``unknown(calendar_data_unavailable)``). Never the latest session that
+    merely has bars. Never called from inside ``validate_payload`` (P19 D-08)."""
 
     with session_scope(settings) as session:
-        return latest_completed_session(
-            session, exchange=settings.market_data.calendar.exchange
-        )
+        candidate = evaluation_candidate_session(session, now=clock(), settings=settings)
+    return candidate if isinstance(candidate, date) else None
 
 
 def format_symbols_default(symbols: Iterable[str]) -> str:
@@ -277,14 +324,15 @@ __all__ = [
     "MAX_SYMBOLS",
     "SYMBOL_PATTERN",
     "PayloadFieldRejection",
+    "evaluation_session_default",
     "exchange_today",
     "format_symbols_default",
-    "latest_completed_session_default",
     "map_validation_error",
     "normalize_symbols",
     "parse_iso_date",
     "require_date_range",
     "require_date_range_within_calendar",
+    "require_date_range_within_horizon",
     "require_registered_strategy",
     "require_trading_session_not_future",
 ]

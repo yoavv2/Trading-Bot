@@ -22,6 +22,8 @@ from typing import Any, Mapping
 
 import pytest
 from sqlalchemy import select
+from tests.support.calendar_facts import clock_at, et, seed_bars, seed_calendar
+from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_ownership import seed_registered_strategy, set_active_paper_strategy
 from tests.test_paper_execution import (
     ExplodingBrokerClient,
@@ -29,7 +31,6 @@ from tests.test_paper_execution import (
     FakeExecutionService,
     _seed_approved_risk_batch,
     _seed_existing_paper_order,
-    _seed_market_data,
     migrated_paper_db,
 )
 
@@ -65,11 +66,19 @@ from trading_platform.services.execution import (
     build_client_order_id,
     run_paper_session,
 )
-from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.worker.commands.run_jobs import required_mode_preflight
 
 __all__ = ["migrated_paper_db"]
+
+
+@pytest.fixture(autouse=True)
+def _eligible_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This module's subject is not eligibility (COR-04): see
+    tests/support/paper_eligibility.py. Real eligibility is tested in
+    tests/test_paper_session_eligibility.py."""
+
+    allow_paper_execution(monkeypatch)
 
 
 def _seed_job(*, job_type: str = "paper-session") -> uuid.UUID:
@@ -336,6 +345,10 @@ def test_paper_session_submit_conflict_is_a_closed_set() -> None:
     assert {member.value for member in PaperSessionSubmitConflict} == {
         "no_active_paper_strategy",
         "strategy_not_active_paper_strategy",
+        "historical_execution_rejected",
+        "outside_execution_window",
+        "evaluation_data_not_ready",
+        "calendar_data_unavailable",
     }
 
 
@@ -435,21 +448,27 @@ def test_paper_session_submission_defaults_none_without_sessions(
     assert spec.submission_defaults() is None
 
 
-def test_paper_session_submission_defaults_from_latest_session_omits_risk_run_id(
+def test_paper_session_submission_defaults_are_the_candidate_and_omit_risk_run_id(
     migrated_paper_db: str,
 ) -> None:
-    _seed_market_data(date(2024, 1, 5))
-    settings = load_settings()
-    spec = PaperSessionSubmissionSpec(settings)
+    """D-24: candidate session, never "latest session with bars"; D-23: no risk_run_id."""
 
-    with session_scope(settings) as session:
-        latest = latest_completed_session(session, exchange=settings.market_data.calendar.exchange)
-    assert latest is not None
+    seed_calendar(date(2025, 11, 20), date(2026, 3, 31))
+    seed_bars(["AAA"], [date(2025, 12, 2)])
+    spec = PaperSessionSubmissionSpec(load_settings(), clock=clock_at(et(2025, 12, 2, 10, 0)))
 
     defaults = spec.submission_defaults()
 
-    assert defaults == {"as_of_session": latest.isoformat()}
+    assert defaults == {"as_of_session": "2025-12-01"}
     assert "risk_run_id" not in (defaults or {})
+
+
+def test_defaults_are_none_when_calendar_unavailable(migrated_paper_db: str) -> None:
+    seed_calendar(date(2026, 1, 2), date(2026, 3, 13))
+    seed_bars(["AAA"], [date(2026, 3, 13)])
+    spec = PaperSessionSubmissionSpec(load_settings(), clock=clock_at(et(2026, 9, 29, 10, 0)))
+
+    assert spec.submission_defaults() is None
 
 
 def test_paper_session_spec_satisfies_registry_contract() -> None:
