@@ -62,13 +62,27 @@ class ConcurrentRunLockedError(RuntimeError):
         )
 
 
+@dataclass(frozen=True)
+class RunLock:
+    """Proof that the advisory lock of ``(strategy_id, session_date)`` is held.
+
+    ``backend_pid`` is the PostgreSQL backend that holds the session-level lock;
+    ``verify_run_lock_held`` (execution operations, S1-R3) checks ``pg_locks`` against it.
+    """
+
+    strategy_id: str
+    session_date: date
+    key: int
+    backend_pid: int
+
+
 @contextmanager
 def session_run_lock(
     *,
     strategy_id: str,
     session_date: date,
     settings: Settings | None = None,
-) -> Iterator[None]:
+) -> Iterator[RunLock]:
     """Acquire the non-blocking advisory lock for the guarded region.
 
     Opens ONE dedicated connection (autocommit, no long-lived transaction)
@@ -85,9 +99,7 @@ def session_run_lock(
     acquired = False
     try:
         acquired = bool(
-            connection.execute(
-                text("SELECT pg_try_advisory_lock(:key)"), {"key": key}
-            ).scalar_one()
+            connection.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": key}).scalar_one()
         )
         if not acquired:
             emit_structured_log(
@@ -98,7 +110,10 @@ def session_run_lock(
                 session_date=session_date.isoformat(),
             )
             raise ConcurrentRunLockedError(strategy_id, session_date)
-        yield
+        backend_pid = int(connection.execute(text("SELECT pg_backend_pid()")).scalar_one())
+        yield RunLock(
+            strategy_id=strategy_id, session_date=session_date, key=key, backend_pid=backend_pid
+        )
     finally:
         if acquired:
             connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})

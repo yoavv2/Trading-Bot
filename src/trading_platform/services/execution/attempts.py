@@ -18,9 +18,11 @@ Taxonomy (closed):
   evidence, recorded by the sending executor, that the request never left the
   process). A later pre_connection or deadline_expired attempt never downgrades
   an earlier or later ambiguous or incomplete attempt.
-* ``SubmissionIntentState`` (derived from the local order + attempt log):
-  planned, registered_unsent, not_sent, submitted, ambiguous, rejected. Later
-  plans extend it with expired_unsent / cancelled_unsent.
+* ``SubmissionIntentState`` (derived from the local order + attempt log, plus the two
+  stored unsent terminal dispositions of an execution operation, 20.1-11):
+  planned, registered_unsent, not_sent, submitted, ambiguous, rejected,
+  expired_unsent, cancelled_unsent. (Round 5 removed ``broker_confirmed_not_received``:
+  a broker statement never changes an intent state.)
 
 This module deliberately does not import the Alpaca client module (the client
 imports this one) and nothing under ``jobs/``. The attempt table is append-only here: there is
@@ -74,9 +76,11 @@ class SubmissionClass(StrEnum):
 
 
 class SubmissionIntentState(StrEnum):
-    """Closed intent state derived from the local order and its attempt log.
+    """Closed intent state (eight values).
 
-    Later plans extend this set with ``expired_unsent`` and ``cancelled_unsent``.
+    ``derive_intent_state`` yields the first six from the local order and attempt log;
+    ``expired_unsent`` / ``cancelled_unsent`` are the two stored dispositions an execution
+    operation (20.1-11) writes for intents it proved were never sent.
     """
 
     PLANNED = "planned"
@@ -85,6 +89,8 @@ class SubmissionIntentState(StrEnum):
     SUBMITTED = "submitted"
     AMBIGUOUS = "ambiguous"
     REJECTED = "rejected"
+    EXPIRED_UNSENT = "expired_unsent"
+    CANCELLED_UNSENT = "cancelled_unsent"
 
 
 class AttemptAlreadyCompletedError(RuntimeError):
@@ -209,6 +215,57 @@ def derive_intent_state(
     if submission_class == SubmissionClass.NOT_SENT:
         return SubmissionIntentState.NOT_SENT
     return SubmissionIntentState.REGISTERED_UNSENT
+
+
+def _has_broker_evidence(order: PaperOrder) -> bool:
+    """Broker evidence on the order: a broker id, a broker-applied status or a REJECTED state."""
+
+    return bool(
+        order.broker_order_id
+        or order.status in _SUBMITTED_STATUSES
+        or order.status == OrderLifecycleState.REJECTED
+    )
+
+
+def proven_not_sent(
+    order: PaperOrder | None,
+    attempts: Sequence[AttemptRecord],
+    *,
+    attempt_log_registered: bool,
+) -> bool:
+    """True only with POSITIVE evidence that no request for this intent ever left the process.
+
+    S1-R3 (round 5): an intent is proven not sent only when EVERY attempt of its whole
+    history is ``pre_connection`` or ``deadline_expired`` with a complete outcome. Zero
+    attempt rows prove it ONLY for an intent registered under the attempt-log invariant
+    (``attempt_log_registered``: it is operation-bound, i.e. registered as the realisation
+    of a pinned operation intent, or it has at least one attempt row), because that
+    invariant makes a POST without an earlier committed attempt row impossible. A LEGACY
+    order (registered before the attempt log: no attempt rows, not operation-bound) is
+    NEVER proven not sent, and neither is a NULL outcome, a timeout or transport error
+    after connect, a 5xx/429, exists_reported, accepted or rejected, nor any broker
+    evidence (broker id, broker-applied status, fills). No order at all (a planned
+    intent) was never sent.
+    """
+
+    if order is None:
+        return True
+    if _has_broker_evidence(order):
+        return False
+    if attempts:
+        return classify_submission(attempts) is SubmissionClass.NOT_SENT
+    return attempt_log_registered and order.status == OrderLifecycleState.PENDING_SUBMISSION
+
+
+def reached_or_may_have_reached_broker(
+    order: PaperOrder | None,
+    attempts: Sequence[AttemptRecord],
+    *,
+    attempt_log_registered: bool,
+) -> bool:
+    """S3-R4 'reached or may have reached the broker': exactly the negation of ``proven_not_sent``."""
+
+    return not proven_not_sent(order, attempts, attempt_log_registered=attempt_log_registered)
 
 
 # ---------------------------------------------------------------------------

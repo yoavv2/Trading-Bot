@@ -52,6 +52,8 @@ from trading_platform.db.models import (
     BrokerState,
     BrokerStatementKind,
     EvidenceResult,
+    ExecutionOperation,
+    ExecutionOperationIntent,
     Job,
     OrderLifecycleState,
     PaperOrder,
@@ -130,11 +132,13 @@ _ESTABLISHED_CLASSIFICATIONS = frozenset(
 BROKER_STATEMENT_MAX_CHARS = 500
 RECOVERY_RECORD_ACTOR_SYNC = "broker_sync"
 
-OperationState = Literal["open", "terminated", "none"]
+#: Operation context of an intent: ``open`` (running, paused or requires_reevaluation),
+#: ``terminated``, ``completed`` or ``none`` (the order belongs to no operation).
+OperationState = Literal["open", "terminated", "completed", "none"]
 
 
 class OperationView(Protocol):
-    """Seam to the execution-operation record that arrives in 20.1-11.
+    """Seam to the execution-operation record (the real view is ``DbOperationView``).
 
     Only used to REPORT the operation context of an intent; the predicate itself never
     reads it (ending or expiring an operation resolves nothing, J-2).
@@ -144,10 +148,55 @@ class OperationView(Protocol):
 
 
 class NullOperationView:
-    """Default view: no execution operation exists."""
+    """A view reporting no operation (tests and callers without an operation record)."""
 
     def state_for_intent(self, session: Session, paper_order_id: uuid.UUID) -> OperationState:
         return "none"
+
+
+class DbOperationView:
+    """The real view: reads the operation record (``execution_operation_intents`` ->
+    ``execution_operations``). An order in several operations reports the most relevant one:
+    an open operation first, else the newest. One statement for any number of intents via
+    ``states_for_intents`` (the Job recovery read uses it so its statement count stays
+    independent of the number of intents)."""
+
+    def state_for_intent(self, session: Session, paper_order_id: uuid.UUID) -> OperationState:
+        return self.states_for_intents(session, [paper_order_id]).get(paper_order_id, "none")
+
+    def states_for_intents(
+        self, session: Session, paper_order_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, OperationState]:
+        if not paper_order_ids:
+            return {}
+        rows = session.execute(
+            select(
+                ExecutionOperationIntent.paper_order_id,
+                ExecutionOperation.state,
+                ExecutionOperation.created_at,
+            )
+            .join(
+                ExecutionOperation,
+                ExecutionOperation.id == ExecutionOperationIntent.operation_id,
+            )
+            .where(ExecutionOperationIntent.paper_order_id.in_(list(paper_order_ids)))
+        ).all()
+        best: dict[uuid.UUID, tuple[int, datetime, OperationState]] = {}
+        for order_id, state, created_at in rows:
+            if order_id is None:
+                continue
+            mapped: OperationState
+            if state in ("running", "paused", "requires_reevaluation"):
+                mapped, rank = "open", 1
+            elif state == "completed":
+                mapped, rank = "completed", 0
+            else:
+                mapped, rank = "terminated", 0
+            candidate = (rank, created_at, mapped)
+            current = best.get(order_id)
+            if current is None or candidate[:2] > current[:2]:
+                best[order_id] = candidate
+        return {order_id: value[2] for order_id, value in best.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -1046,11 +1095,18 @@ def _record_dict(record: RecordView) -> dict[str, Any]:
 
 
 def _intent_dict(
-    intent: IntentRecovery, *, session: Session, operation_view: OperationView
+    intent: IntentRecovery,
+    *,
+    session: Session,
+    operation_view: OperationView,
+    prefetched: Mapping[uuid.UUID, OperationState] | None = None,
 ) -> dict[str, Any]:
     operation_state: OperationState = "none"
     if intent.intent_id is not None:
-        operation_state = operation_view.state_for_intent(session, intent.intent_id)
+        if prefetched is not None:
+            operation_state = prefetched.get(intent.intent_id, "none")
+        else:
+            operation_state = operation_view.state_for_intent(session, intent.intent_id)
     return {
         "intent_id": str(intent.intent_id) if intent.intent_id is not None else None,
         "client_order_id": intent.client_order_id,
@@ -1120,7 +1176,7 @@ def get_job_recovery(
     before and after any execution operation ends (the operation is never an input).
     """
 
-    view = operation_view or NullOperationView()
+    view = operation_view or DbOperationView()
     grace = _grace_seconds(grace_seconds)
     job = session.execute(
         select(Job.id, Job.job_type, Job.payload).where(Job.id == job_id)
@@ -1156,6 +1212,10 @@ def get_job_recovery(
         )
 
     own = tuple(i for i in status.intents if i.job_id == job_id)
+    prefetched: dict[uuid.UUID, OperationState] | None = None
+    batch = getattr(view, "states_for_intents", None)
+    if callable(batch):
+        prefetched = batch(session, [i.intent_id for i in own if i.intent_id is not None])
     job_is_uncertain = any(j.job_id == job_id for j in status.jobs)
     if not job_is_uncertain:
         gate: GateCode | None = None
@@ -1174,7 +1234,10 @@ def get_job_recovery(
         "strategy_id": strategy_id,
         "resolved": gate is None,
         "gate_code": gate.value if gate else None,
-        "intents": [_intent_dict(i, session=session, operation_view=view) for i in own],
+        "intents": [
+            _intent_dict(i, session=session, operation_view=view, prefetched=prefetched)
+            for i in own
+        ],
         "evidence_package": [_evidence_package(i, grace) for i in own if i.on_missing_order_path],
         "as_of": status.as_of.isoformat(),
     }
@@ -1615,6 +1678,7 @@ __all__ = [
     "IntentNotOnMissingOrderPathError",
     "IntentRecovery",
     "InvalidBrokerStatementError",
+    "DbOperationView",
     "NullOperationView",
     "OperationView",
     "OutcomeIssueInput",
