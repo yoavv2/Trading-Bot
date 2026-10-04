@@ -86,7 +86,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **COR-01**: Risk evaluation persists no account snapshot; the reconciliation baseline is the latest broker-observed snapshot; sizing uses broker-observed cash, never margin buying power (replaying evaluate → reconcile against an unchanged broker account yields no divergence)
 - [x] **COR-03**: Batch operations (`ingest-bars`, `sync-symbol-metadata`) report `complete | partial | failed` from the domain result (never stored on the Job); symbol-level vs operation-level failures are distinguished; a symbol missing required metadata is `not_ready(missing_metadata)` and its candidates are rejected `symbol_not_ready`
 - [x] **COR-04**: Trading day, evaluation session (latest completed session with ready data) and execution window are separate facts with explicit `unknown(calendar_data_unavailable)`; the initial execution policy (regular hours of the session after the evaluation session) is a named setting; historical execution is rejected while research/backtests/evaluation of past sessions remain; the calendar may sync ahead to a configurable horizon; session-scoped defaults never fall back to "latest session with bars"
-- [ ] **PROV-01**: A risk evaluation records an input manifest (every read request through the shared accessors with result digests, including empty results and resolved as-of bounds, plus the signal-settings digest); corrected, added or removed source data or changed signal settings make it stale; expected portfolio changes (including earlier fills in the same operation) never do
+- [x] **PROV-01**: A risk evaluation records an input manifest (every read request through the shared accessors with result digests, including empty results and resolved as-of bounds, plus the signal-settings digest); corrected, added or removed source data or changed signal settings make it stale; expected portfolio changes (including earlier fills in the same operation) never do
 
 ### Legacy Console Compatibility (Phase 20.1)
 
@@ -218,7 +218,7 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | COR-01 | Phase 20.1 | Complete |
 | COR-03 | Phase 20.1 | Complete |
 | COR-04 | Phase 20.1 | Complete |
-| PROV-01 | Phase 20.1 | Pending |
+| PROV-01 | Phase 20.1 | Complete |
 | COMPAT-01 | Phase 20.1 | Pending |
 | AUD-01 | Phase 21 | Pending |
 | OPR-01 | Phase 21 | Pending |
