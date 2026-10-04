@@ -26,7 +26,9 @@ def list_runs(
     operator_reads: Annotated[OperatorReadService, Depends(get_operator_read_service)],
     registry: Annotated[StrategyRegistry, Depends(get_strategy_registry)],
 ) -> dict[str, object]:
-    resolve_strategy_metadata(strategy_id=filters.strategy_id, registry=registry)
+    if filters.scope == "strategy":
+        # Account-scope runs carry no strategy reference: nothing to resolve.
+        resolve_strategy_metadata(strategy_id=filters.strategy_id, registry=registry)
     return build_collection_response(
         filters=filters,
         items=operator_reads.list_runs(filters),

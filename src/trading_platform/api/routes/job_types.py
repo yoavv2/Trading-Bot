@@ -45,6 +45,12 @@ def list_job_types(
             "description": spec.description,
             "cancellation_mode": spec.cancellation_mode.value,
         }
+        # ACCT-01: additive, only when the spec declares what it does at the broker.
+        # The declared value is a closed StrEnum; read through ``getattr`` so this
+        # module imports no service or ORM layer.
+        broker_effect = getattr(spec, "broker_effect", None)
+        if broker_effect is not None:
+            entry["broker_effect"] = str(getattr(broker_effect, "value", broker_effect))
         try:
             defaults = spec.submission_defaults()
         except Exception as exc:  # noqa: BLE001 - resilience boundary, never fail the catalog

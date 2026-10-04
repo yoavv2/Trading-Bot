@@ -568,3 +568,117 @@ def test_account_module_source_stays_report_only() -> None:
         "session.add_all",
     ):
         assert forbidden not in source, forbidden
+
+
+# --- reads: /api/v1/runs and analytics ---------------------------------------------------
+
+
+def _client():
+    from fastapi.testclient import TestClient
+
+    from trading_platform.api.app import create_app
+    from trading_platform.core.settings import clear_settings_cache
+
+    clear_settings_cache()
+    return TestClient(create_app())
+
+
+def test_runs_route_lists_account_runs_with_the_same_item_keys(account_db: str) -> None:
+    report = _reconcile(FakeBroker(positions=[_broker_position("AAPL", "5")]))
+    strategy_run = _insert_strategy_run(
+        trigger_source="job", job_type="reconciliation", completed_at=NOW
+    )
+
+    with _client() as client:
+        account = client.get("/api/v1/runs", params={"scope": "account", "run_type": "reconciliation"})
+        default = client.get("/api/v1/runs", params={"strategy_id": OWNER})
+        detail = client.get(f"/api/v1/runs/{report.run_id}")
+        bad_scope = client.get("/api/v1/runs", params={"scope": "everything"})
+
+    assert account.status_code == 200
+    body = account.json()
+    assert body["filters"]["scope"] == "account"
+    assert body["count"] == 1
+    (item,) = body["items"]
+    assert item["run_id"] == report.run_id
+    assert item["scope"] == "account"
+    assert item["strategy_id"] is None
+    assert item["run_type"] == "reconciliation"
+    assert item["status"] == "succeeded"
+    assert item["result_summary"]["blocks_execution"] is True
+
+    # default scope is unchanged: strategy items, no echoed scope filter, additive item scope
+    assert default.status_code == 200
+    default_body = default.json()
+    assert "scope" not in default_body["filters"]
+    assert [i["run_id"] for i in default_body["items"]] == [str(strategy_run.id)]
+    assert default_body["items"][0]["scope"] == "strategy"
+    assert set(default_body["items"][0]) == set(item)
+
+    assert detail.status_code == 200
+    assert detail.json()["run"]["run_id"] == report.run_id
+    assert detail.json()["run"]["scope"] == "account"
+    assert set(detail.json()["artifact_counts"].values()) == {0}
+
+    assert bad_scope.status_code == 422
+
+
+def test_runs_route_account_scope_applies_run_type_and_status_filters(account_db: str) -> None:
+    _reconcile(FakeBroker())
+    with _client() as client:
+        wrong_type = client.get(
+            "/api/v1/runs", params={"scope": "account", "run_type": "paper_execution"}
+        )
+        wrong_status = client.get("/api/v1/runs", params={"scope": "account", "status": "failed"})
+        right_status = client.get(
+            "/api/v1/runs", params={"scope": "account", "status": "succeeded"}
+        )
+    assert wrong_type.json()["items"] == []
+    assert wrong_status.json()["items"] == []
+    assert right_status.json()["count"] == 1
+
+
+def _analytics_paper(strategy_id: str = OWNER) -> dict[str, object]:
+    from trading_platform.services.analytics import StrategyAnalyticsService
+
+    return StrategyAnalyticsService(load_settings()).summarize_strategy(strategy_id=strategy_id)[
+        "paper"
+    ]
+
+
+def test_analytics_latest_reconciliation_consults_both_scopes(account_db: str) -> None:
+    _ensure_strategy(OWNER)
+    assert _analytics_paper()["latest_reconciliation"] is None
+
+    strategy_run = _insert_strategy_run(
+        trigger_source="job", job_type="reconciliation", completed_at=NOW
+    )
+    latest = _analytics_paper()["latest_reconciliation"]
+    assert latest["run_id"] == str(strategy_run.id)
+    assert latest["scope"] == "strategy"
+
+    report = _reconcile(FakeBroker())  # newer than the seeded strategy run
+    latest = _analytics_paper()["latest_reconciliation"]
+    assert latest["run_id"] == report.run_id
+    assert latest["scope"] == "account"
+    assert latest["blocks_execution"] is False
+    assert latest["as_of_session"] == SESSION.isoformat()
+
+
+def test_analytics_reconciliation_read_adds_at_most_one_statement(
+    account_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trading_platform.db.session import get_engine
+    from trading_platform.services import analytics as analytics_module
+
+    _ensure_strategy(OWNER)
+    _reconcile(FakeBroker())
+
+    settings = load_settings()
+    with count_queries(get_engine(settings)) as with_account:
+        _analytics_paper()
+    monkeypatch.setattr(analytics_module, "latest_account_reconciliation_run", lambda session: None)
+    with count_queries(get_engine(settings)) as without_account:
+        _analytics_paper()
+
+    assert 0 < with_account.count - without_account.count <= 1

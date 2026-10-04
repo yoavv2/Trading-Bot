@@ -71,6 +71,8 @@ def test_rejection_enum_is_closed() -> None:
         "as_of_session_in_future",
         "as_of_session_not_trading_session",
         "as_of_session_out_of_calendar_range",
+        "invalid_scope",
+        "account_scope_forbids_strategy_id",
     }
 
 
@@ -122,6 +124,41 @@ def test_rejection_enum_is_closed() -> None:
             BrokerOrderSyncPayloadRejection.AS_OF_SESSION_OUT_OF_CALENDAR_RANGE,
             id="as_of_session_out_of_calendar_range_0001-01-01",
         ),
+        pytest.param(
+            {**_VALID_PAYLOAD, "scope": "everything"},
+            BrokerOrderSyncPayloadRejection.INVALID_SCOPE,
+            id="invalid_scope",
+        ),
+        pytest.param(
+            {**_VALID_PAYLOAD, "scope": 7},
+            BrokerOrderSyncPayloadRejection.INVALID_SCOPE,
+            id="invalid_scope_non_string",
+        ),
+        pytest.param(
+            {"scope": "account", "strategy_id": "trend_following_daily"},
+            BrokerOrderSyncPayloadRejection.ACCOUNT_SCOPE_FORBIDS_STRATEGY_ID,
+            id="account_scope_forbids_strategy_id",
+        ),
+        pytest.param(
+            {"scope": "account", "extra": 1},
+            BrokerOrderSyncPayloadRejection.UNKNOWN_PAYLOAD_KEYS,
+            id="account_scope_unknown_payload_keys",
+        ),
+        pytest.param(
+            {"scope": "account", "as_of_session": "2024-13-01"},
+            BrokerOrderSyncPayloadRejection.INVALID_DATE,
+            id="account_scope_invalid_date",
+        ),
+        pytest.param(
+            {"scope": "account", "as_of_session": "2026-01-06"},
+            BrokerOrderSyncPayloadRejection.AS_OF_SESSION_IN_FUTURE,
+            id="account_scope_as_of_session_in_future",
+        ),
+        pytest.param(
+            {"scope": "account", "as_of_session": "2024-01-06"},
+            BrokerOrderSyncPayloadRejection.AS_OF_SESSION_NOT_TRADING_SESSION,
+            id="account_scope_as_of_session_not_trading_session",
+        ),
     ],
 )
 def test_validate_payload_rejects(
@@ -149,6 +186,34 @@ def test_validate_payload_normalizes() -> None:
         "strategy_id": "trend_following_daily",
         "as_of_session": "2024-01-10",
     }
+
+
+def test_omitted_and_explicit_strategy_scope_normalize_identically() -> None:
+    spec = BrokerOrderSyncSubmissionSpec(load_settings())
+
+    assert (
+        spec.validate_payload(dict(_VALID_PAYLOAD))
+        == spec.validate_payload({**_VALID_PAYLOAD, "scope": "strategy"})
+        == _VALID_PAYLOAD
+    )
+
+
+def test_account_scope_normalizes_with_and_without_a_session() -> None:
+    spec = BrokerOrderSyncSubmissionSpec(
+        load_settings(), clock=lambda: datetime(2026, 1, 6, 3, 0, tzinfo=UTC)
+    )
+
+    assert spec.validate_payload({"scope": "account"}) == {"scope": "account"}
+    assert spec.validate_payload({"scope": "account", "as_of_session": "2024-01-10"}) == {
+        "scope": "account",
+        "as_of_session": "2024-01-10",
+    }
+
+
+def test_spec_declares_reads_broker_effect() -> None:
+    from trading_platform.services.broker_jobs import BrokerEffect
+
+    assert BrokerOrderSyncSubmissionSpec(load_settings()).broker_effect is BrokerEffect.READS_BROKER
 
 
 def test_submission_defaults_none_without_sessions(migrated_backtest_db: str) -> None:
@@ -438,6 +503,99 @@ def test_result_summary_carries_expected_keys(monkeypatch: pytest.MonkeyPatch) -
         "positions_closed": 0,
         "open_positions": 4,
         "account_snapshot_id": report.account_snapshot_id,
+        "snapshot_id": report.account_snapshot_id,
+        "applied_orders": [],
+        "produced_run_ids": [],
+    }
+    json.dumps(result)
+
+
+_APPLIED = [
+    {
+        "paper_order_id": "11111111-1111-1111-1111-111111111111",
+        "broker_status": "filled",
+        "broker_filled_qty": "10.000000",
+        "applied_at": "2024-01-10T00:05:00+00:00",
+    },
+    {
+        "paper_order_id": "22222222-2222-2222-2222-222222222222",
+        "broker_status": "canceled",
+        "broker_filled_qty": "0.000000",
+        "applied_at": "2024-01-10T00:05:00+00:00",
+    },
+]
+
+
+def test_strategy_result_records_basis_traceability(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S3-R4: snapshot_id and applied_orders for a sync that applied a filled and a canceled order."""
+
+    report = _fake_report(orders_synced=2, applied_orders=tuple(_APPLIED))
+
+    import trading_platform.jobs.handlers.broker_order_sync as broker_order_sync_module
+
+    monkeypatch.setattr(
+        broker_order_sync_module,
+        "sync_paper_state",
+        lambda strategy_id=None, **kwargs: report,
+    )
+
+    result = BrokerOrderSyncJobHandler().run(_FakeContext())
+
+    assert result["snapshot_id"] == report.account_snapshot_id
+    assert result["applied_orders"] == _APPLIED
+    assert {record["broker_status"] for record in result["applied_orders"]} == {
+        "filled",
+        "canceled",
+    }
+    for record in result["applied_orders"]:
+        assert set(record) == {"paper_order_id", "broker_status", "broker_filled_qty", "applied_at"}
+    json.dumps(result)
+
+
+def test_account_scope_handler_calls_sync_account_state_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading_platform.jobs.handlers.broker_order_sync as broker_order_sync_module
+    from trading_platform.services.execution import AccountStateSyncReport
+
+    report = AccountStateSyncReport(
+        session_date=None,
+        synced_at="2024-01-10T00:05:00+00:00",
+        orders_synced=2,
+        fills_ingested=1,
+        open_positions=3,
+        account_snapshot_id=str(uuid.uuid4()),
+        applied_orders=tuple(_APPLIED),
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_sync_account_state(*, as_of_session=None, settings=None, broker_client=None):
+        captured["as_of_session"] = as_of_session
+        return report
+
+    def _fail(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("strategy-scope sync must not run at account scope")
+
+    monkeypatch.setattr(broker_order_sync_module, "sync_account_state", _fake_sync_account_state)
+    monkeypatch.setattr(broker_order_sync_module, "sync_paper_state", _fail)
+
+    context = _FakeContext(payload={"scope": "account"})
+    result = BrokerOrderSyncJobHandler().run(context)
+
+    assert captured["as_of_session"] is None
+    assert [log["event_code"] for log in context.log_calls][0] == "external_broker_sync_started"
+    assert result == {
+        "scope": "account",
+        "strategy_id": None,
+        "as_of_session": None,
+        "orders_synced": 2,
+        "fills_ingested": 1,
+        "positions_opened": 0,
+        "positions_closed": 0,
+        "open_positions": 3,
+        "account_snapshot_id": report.account_snapshot_id,
+        "snapshot_id": report.account_snapshot_id,
+        "applied_orders": _APPLIED,
         "produced_run_ids": [],
     }
     json.dumps(result)

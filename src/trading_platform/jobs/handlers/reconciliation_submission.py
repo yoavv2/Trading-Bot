@@ -21,8 +21,16 @@ Ownership (D-03, PAPER-01): strategy-scoped reconciliation for a strategy that
 is not the active paper strategy is refused with a typed
 ``JobSubmissionConflictError`` (HTTP 409; ``no_active_paper_strategy`` when no
 strategy owns the account), at validation and again inside the Job-insert
-transaction under the ownership singleton lock. The owner-less account scope is
-added by 20.1-08.
+transaction under the ownership singleton lock.
+
+Scope (ACCT-01, D-09): ``scope`` is ``strategy`` (the default when omitted --
+today's payload and behaviour, byte-identical) or ``account``. Account scope is
+the owner-less, report-only account-level reconciliation: it forbids
+``strategy_id`` (``account_scope_forbids_strategy_id``), makes ``as_of_session``
+optional (validated exactly as before when present, absent otherwise), is never
+gated by ownership, and under admission only takes the ownership singleton
+FOR SHARE lock (it serializes with handover but needs no owner). The spec
+declares ``broker_effect = reads_broker`` (catalog field).
 
 Field-level parsing and the shared semantic checks are delegated to
 ``jobs/handlers/payload_fields.py`` (P19 D-08/D-09 precedent, generalized
@@ -40,15 +48,18 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, f
 
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.handlers.payload_fields import (
+    JobScope,
     evaluation_session_default,
     map_validation_error,
     parse_iso_date,
     require_active_paper_strategy,
     require_registered_strategy,
     require_trading_session_not_future,
+    split_scope,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
 from trading_platform.services.active_paper_strategy import lock_active_paper_strategy_shared
+from trading_platform.services.broker_jobs import BrokerEffect
 
 RECONCILIATION_JOB_TYPE = "reconciliation"
 
@@ -66,14 +77,17 @@ class ReconciliationPayloadRejection(StrEnum):
     AS_OF_SESSION_IN_FUTURE = "as_of_session_in_future"
     AS_OF_SESSION_NOT_TRADING_SESSION = "as_of_session_not_trading_session"
     AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
+    # ACCT-01: the ``scope`` field.
+    INVALID_SCOPE = "invalid_scope"
+    ACCOUNT_SCOPE_FORBIDS_STRATEGY_ID = "account_scope_forbids_strategy_id"
 
 
 class ReconciliationSubmitConflict(StrEnum):
     """Closed set of state-conflict codes (HTTP 409) strategy-scoped
     ``reconciliation`` submission can raise via ``JobSubmissionConflictError``
-    (D-03). Initially exactly the two ownership refusals (every payload is
-    strategy scope today; 20.1-08 adds the owner-less account scope). One
-    parametrized test case exists per value."""
+    (D-03). Exactly the two ownership refusals; the owner-less account scope
+    (ACCT-01) is never gated by ownership and raises neither. One parametrized
+    test case exists per value."""
 
     NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
     STRATEGY_NOT_ACTIVE_PAPER_STRATEGY = "strategy_not_active_paper_strategy"
@@ -106,6 +120,19 @@ class _ReconciliationPayload(BaseModel):
         return parse_iso_date(value)
 
 
+class _ReconciliationAccountPayload(BaseModel):
+    """Account scope: no ``strategy_id``; ``as_of_session`` is optional."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    as_of_session: date | None = None
+
+    @field_validator("as_of_session", mode="before")
+    @classmethod
+    def _parse_as_of_session(cls, value: Any) -> date:
+        return parse_iso_date(value)
+
+
 class ReconciliationSubmissionSpec:
     """Transport-neutral validation and normalization for the
     ``reconciliation`` public Job type (``JobSubmissionSpec`` protocol)."""
@@ -113,17 +140,23 @@ class ReconciliationSubmissionSpec:
     job_type = RECONCILIATION_JOB_TYPE
     description = (
         "Reconcile local paper orders, fills and positions against the broker for one "
-        "session (report-only). Cancellable only while queued."
+        "session (report-only); scope 'account' reconciles the whole account without an "
+        "owner. Cancellable only while queued."
     )
     cancellation_mode = JobCancellationMode.QUEUED_ONLY
+    broker_effect = BrokerEffect.READS_BROKER
 
     def __init__(self, settings: Settings, *, clock: Callable[[], datetime] | None = None) -> None:
         self._settings = settings
         self._clock = clock or _default_clock
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        scope, body = split_scope(payload, job_type=RECONCILIATION_JOB_TYPE)
+        if scope is JobScope.ACCOUNT:
+            return self._validate_account_payload(body)
+
         try:
-            parsed = _ReconciliationPayload.model_validate(dict(payload))
+            parsed = _ReconciliationPayload.model_validate(body)
         except ValidationError as exc:
             reason = ReconciliationPayloadRejection(map_validation_error(exc).value)
             raise InvalidJobPayloadError(
@@ -154,6 +187,28 @@ class ReconciliationSubmissionSpec:
             "as_of_session": as_of_session.isoformat(),
         }
 
+    def _validate_account_payload(self, body: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Account scope: payload checks only. NEVER an ownership check (D-09)."""
+
+        try:
+            parsed = _ReconciliationAccountPayload.model_validate(dict(body))
+        except ValidationError as exc:
+            reason = ReconciliationPayloadRejection(map_validation_error(exc).value)
+            raise InvalidJobPayloadError(
+                job_type=RECONCILIATION_JOB_TYPE, reason=reason.value
+            ) from exc
+
+        normalized: dict[str, Any] = {"scope": JobScope.ACCOUNT.value}
+        if parsed.as_of_session is not None:
+            require_trading_session_not_future(
+                self._settings,
+                self._clock,
+                parsed.as_of_session,
+                job_type=RECONCILIATION_JOB_TYPE,
+            )
+            normalized["as_of_session"] = parsed.as_of_session.isoformat()
+        return normalized
+
     def lock_admission(self, *, session: Any) -> None:
         """SER lock step alone: the ownership singleton FOR SHARE (fails closed)."""
 
@@ -162,9 +217,12 @@ class ReconciliationSubmissionSpec:
     def check_admission(self, payload: Mapping[str, Any], *, session: Any) -> None:
         """SER admission (inside the Job-insert transaction, before the insert):
         lock the ownership singleton FOR SHARE, then re-run the same ownership
-        check against the transaction's own view (strategy scope)."""
+        check against the transaction's own view (strategy scope). Account scope takes
+        the lock only: it needs no owner (D-09)."""
 
         self.lock_admission(session=session)
+        if payload.get("scope") == JobScope.ACCOUNT.value:
+            return
         require_active_paper_strategy(
             self._settings,
             payload["strategy_id"],

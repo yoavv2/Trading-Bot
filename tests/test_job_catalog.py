@@ -129,9 +129,34 @@ def test_catalog_item_keys_are_minimal() -> None:
     response = client.get("/api/v1/job-types")
 
     assert response.status_code == 200
-    allowed_keys = {"job_type", "description", "cancellation_mode", "submission_defaults"}
+    # 20.1-08 (ACCT-01): ``broker_effect`` joins the pinned set as an additive field,
+    # present only for specs that declare what they do at the broker.
+    allowed_keys = {
+        "job_type",
+        "description",
+        "cancellation_mode",
+        "submission_defaults",
+        "broker_effect",
+    }
     for item in response.json()["items"]:
         assert set(item).issubset(allowed_keys)
+        assert "broker_effect" not in item  # the probe spec declares none
+
+
+def test_catalog_exposes_broker_effect_for_the_broker_reading_job_types() -> None:
+    from trading_platform.jobs.registry import build_default_registry
+
+    registry = build_default_registry()
+    client = _build_client(registry, mutations_enabled=True)
+    response = client.get("/api/v1/job-types")
+
+    assert response.status_code == 200
+    effects = {item["job_type"]: item.get("broker_effect") for item in response.json()["items"]}
+    assert effects["reconciliation"] == "reads_broker"
+    assert effects["broker-order-sync"] == "reads_broker"
+    assert all(
+        value in {None, "none", "reads_broker", "submits_orders"} for value in effects.values()
+    )
 
 
 def test_catalog_omits_defaults_when_none_or_raising() -> None:

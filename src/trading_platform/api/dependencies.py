@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, Query, Request
 
@@ -117,6 +117,7 @@ def get_operator_read_filters(
     session_start: date | None = Query(None),
     session_end: date | None = Query(None),
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    scope: Literal["strategy", "account"] = Query("strategy"),
 ) -> OperatorReadFilters:
     return OperatorReadFilters(
         strategy_id=strategy_id,
@@ -125,6 +126,7 @@ def get_operator_read_filters(
         session_start=session_start,
         session_end=session_end,
         limit=limit,
+        scope=scope,
     )
 
 
@@ -140,7 +142,7 @@ def resolve_strategy_metadata(
 
 
 def serialize_operator_filters(filters: OperatorReadFilters) -> dict[str, Any]:
-    return {
+    serialized: dict[str, Any] = {
         "strategy_id": filters.strategy_id,
         "run_type": filters.run_type,
         "status": filters.status,
@@ -150,6 +152,11 @@ def serialize_operator_filters(filters: OperatorReadFilters) -> dict[str, Any]:
         "session_end": filters.session_end.isoformat() if filters.session_end is not None else None,
         "limit": filters.limit,
     }
+    if filters.scope != "strategy":
+        # Additive (ACCT-01): echoed only for a non-default scope, so every existing
+        # strategy-scope response stays byte-identical.
+        serialized["scope"] = filters.scope
+    return serialized
 
 
 def serialize_job_filters(filters: JobReadFilters) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from sqlalchemy import distinct, func, select
 
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
+    AccountReconciliationRun,
     AccountSnapshot,
     ExecutionEvent,
     PaperFill,
@@ -29,6 +30,7 @@ from trading_platform.db.session import session_scope
 from trading_platform.services.account_baseline import latest_broker_observed_account_snapshot
 from trading_platform.services.backtest_reporting import build_backtest_report
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
+from trading_platform.services.reconciliation.latest import latest_account_reconciliation_run
 from trading_platform.strategies.registry import UnknownStrategyError, build_default_registry
 
 
@@ -178,7 +180,7 @@ class StrategyAnalyticsService(AnalyticsService):
                 strategy_id=strategy.id,
                 paper_run_id=paper_run_id,
             )
-            latest_reconciliation = session.execute(
+            latest_strategy_reconciliation = session.execute(
                 select(StrategyRun)
                 .where(
                     StrategyRun.strategy_id == strategy.id,
@@ -186,6 +188,9 @@ class StrategyAnalyticsService(AnalyticsService):
                 )
                 .order_by(StrategyRun.started_at.desc())
             ).scalars().first()
+            # ACCT-01: the owner-less account-level result is consulted too (one extra
+            # statement); the newest of the two scopes is reported with its ``scope``.
+            latest_account_reconciliation = latest_account_reconciliation_run(session)
 
             submitted_order_count = session.execute(
                 select(func.count(PaperOrder.id))
@@ -248,7 +253,9 @@ class StrategyAnalyticsService(AnalyticsService):
         return {
             "latest_account_snapshot": _serialize_account_snapshot(latest_snapshot),
             "latest_paper_run": _serialize_run(latest_paper_run),
-            "latest_reconciliation": _serialize_reconciliation(latest_reconciliation),
+            "latest_reconciliation": _serialize_newest_reconciliation(
+                latest_strategy_reconciliation, latest_account_reconciliation
+            ),
             "submitted_order_count": submitted_order_count,
             "filled_order_count": filled_order_count,
             "fill_count": fill_count,
@@ -340,11 +347,38 @@ def _serialize_account_snapshot(snapshot: AccountSnapshot | None) -> dict[str, A
     }
 
 
+def _serialize_newest_reconciliation(
+    strategy_run: StrategyRun | None,
+    account_run: AccountReconciliationRun | None,
+) -> dict[str, Any] | None:
+    """The newest (by start time) of the strategy-scope and account-scope runs."""
+
+    if account_run is not None and (
+        strategy_run is None or account_run.started_at > strategy_run.started_at
+    ):
+        return _serialize_account_reconciliation(account_run)
+    return _serialize_reconciliation(strategy_run)
+
+
+def _serialize_account_reconciliation(run: AccountReconciliationRun) -> dict[str, Any]:
+    return {
+        "scope": "account",
+        "run_id": str(run.id),
+        "status": run.status,
+        "as_of_session": run.result_summary.get("as_of_session"),
+        "finding_count": run.finding_count,
+        "blocking_count": run.blocking_count,
+        "blocks_execution": run.blocks_execution,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
 def _serialize_reconciliation(strategy_run: StrategyRun | None) -> dict[str, Any] | None:
     if strategy_run is None:
         return None
     result_summary = strategy_run.result_summary
     return {
+        "scope": "strategy",
         "run_id": str(strategy_run.id),
         "status": strategy_run.status.value,
         "as_of_session": result_summary.get("as_of_session"),

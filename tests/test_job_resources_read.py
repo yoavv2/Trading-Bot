@@ -195,6 +195,7 @@ def test_resource_kind_enum_is_closed() -> None:
     assert {member.value for member in JobResourceKind} == {
         "strategy_run",
         "market_data_ingestion_run",
+        "account_reconciliation_run",
     }
 
 
@@ -404,3 +405,71 @@ def test_detail_payload_and_retry_lineage(migrated_job_resources_db: str) -> Non
 
     assert child_detail["retry_of_job_id"] == parent_id
     assert child_detail["retried_as_job_id"] is None
+
+
+class _AccountJobContext:
+    """Minimal real-shape JobContext stand-in: a persisted Job row's id and payload."""
+
+    def __init__(self, job_id: uuid.UUID, payload: dict[str, object]) -> None:
+        self.job_id = job_id
+        self.payload = payload
+
+    def report_progress(self, **_kwargs: object) -> None:
+        return None
+
+    def log(self, **_kwargs: object) -> None:
+        return None
+
+
+def test_account_scope_jobs_resources_match_produced_run_ids(
+    migrated_job_resources_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-09 generalization: an account reconciliation Job lists its run as an
+    ``account_reconciliation_run`` resource and set(produced_run_ids) == resources ids;
+    an account sync Job produces no run and lists no resource."""
+
+    from tests.test_attribution_reconciliation import FakeBroker
+
+    from trading_platform.jobs.handlers.broker_order_sync import BrokerOrderSyncJobHandler
+    from trading_platform.jobs.handlers.reconciliation import ReconciliationJobHandler
+    from trading_platform.services.execution import sync_orders as sync_orders_module
+    from trading_platform.services.reconciliation import report as report_module
+
+    monkeypatch.setattr(report_module, "AlpacaClient", lambda *_a, **_k: FakeBroker())
+    monkeypatch.setattr(sync_orders_module, "AlpacaClient", lambda *_a, **_k: FakeBroker())
+    settings = load_settings()
+
+    with session_scope(settings) as session:
+        reconciliation_job = _seed_job(
+            session, job_type="reconciliation", payload={"scope": "account"}
+        )
+        sync_job = _seed_job(session, job_type="broker-order-sync", payload={"scope": "account"})
+        reconciliation_job_id, sync_job_id = reconciliation_job.id, sync_job.id
+
+    reconciliation_result = ReconciliationJobHandler(settings).run(
+        _AccountJobContext(reconciliation_job_id, {"scope": "account"})
+    )
+    sync_result = BrokerOrderSyncJobHandler(settings).run(
+        _AccountJobContext(sync_job_id, {"scope": "account"})
+    )
+    with session_scope(settings) as session:
+        for job_id, result in (
+            (reconciliation_job_id, reconciliation_result),
+            (sync_job_id, sync_result),
+        ):
+            session.get(Job, job_id).result_summary = result
+
+    service = JobReadService(settings)
+    reconciliation_detail = service.get_job_detail(str(reconciliation_job_id))
+    resources = reconciliation_detail["resources"]
+    assert [resource["kind"] for resource in resources] == ["account_reconciliation_run"]
+    assert resources[0]["links"] == {"self": f"/api/v1/runs/{resources[0]['id']}"}
+    assert set(reconciliation_detail["result_summary"]["produced_run_ids"]) == {
+        resource["id"] for resource in resources
+    }
+
+    sync_detail = service.get_job_detail(str(sync_job_id))
+    assert sync_detail["resources"] == []
+    assert sync_detail["result_summary"]["produced_run_ids"] == []
+    assert sync_detail["result_summary"]["snapshot_id"]
+    assert sync_detail["result_summary"]["applied_orders"] == []

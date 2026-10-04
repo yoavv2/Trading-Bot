@@ -23,7 +23,7 @@ session (D-24), never from "the latest session that has bars".
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
@@ -49,6 +49,7 @@ from trading_platform.strategies.registry import (
 )
 
 MAX_SYMBOLS = 500
+SCOPE_KEY = "scope"
 SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.\-]{0,14}$")
 
 _ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -74,6 +75,54 @@ class PayloadFieldRejection(StrEnum):
     EMPTY_SYMBOLS = "empty_symbols"
     INVALID_SYMBOL = "invalid_symbol"
     TOO_MANY_SYMBOLS = "too_many_symbols"
+
+
+class JobScope(StrEnum):
+    """Closed ``scope`` vocabulary of the broker-touching report Job types (ACCT-01).
+
+    ``strategy`` is the default when ``scope`` is omitted (today's behaviour,
+    byte-identical); ``account`` is the owner-less account-level scope (D-09).
+    """
+
+    STRATEGY = "strategy"
+    ACCOUNT = "account"
+
+
+class ScopeRejection(StrEnum):
+    """Rejection reasons added by the ``scope`` field (kept out of the shared
+    ``PayloadFieldRejection`` set: only the two scope-aware specs can emit them)."""
+
+    INVALID_SCOPE = "invalid_scope"
+    ACCOUNT_SCOPE_FORBIDS_STRATEGY_ID = "account_scope_forbids_strategy_id"
+
+
+def split_scope(
+    payload: Mapping[str, Any], *, job_type: str
+) -> tuple[JobScope, dict[str, Any]]:
+    """Resolve the optional ``scope`` field and return ``(scope, payload_without_scope)``.
+
+    Omitted ``scope`` means ``strategy``. A non-string or out-of-set value is
+    ``invalid_scope``. Account scope forbids ``strategy_id`` outright
+    (``account_scope_forbids_strategy_id``, T-20.1-08-05): an account-level result
+    must never be attributed to a strategy by payload. Every other key is left for
+    the spec's own strict model (unknown keys still ``unknown_payload_keys``).
+    """
+
+    body = dict(payload)
+    if SCOPE_KEY not in body:
+        return JobScope.STRATEGY, body
+    raw = body.pop(SCOPE_KEY)
+    try:
+        scope = JobScope(raw) if isinstance(raw, str) else None
+    except ValueError:
+        scope = None
+    if scope is None:
+        raise InvalidJobPayloadError(job_type=job_type, reason=ScopeRejection.INVALID_SCOPE.value)
+    if scope is JobScope.ACCOUNT and "strategy_id" in body:
+        raise InvalidJobPayloadError(
+            job_type=job_type, reason=ScopeRejection.ACCOUNT_SCOPE_FORBIDS_STRATEGY_ID.value
+        )
+    return scope, body
 
 
 def parse_iso_date(value: Any) -> date:
@@ -322,8 +371,11 @@ def format_symbols_default(symbols: Iterable[str]) -> str:
 
 __all__ = [
     "MAX_SYMBOLS",
+    "SCOPE_KEY",
     "SYMBOL_PATTERN",
+    "JobScope",
     "PayloadFieldRejection",
+    "ScopeRejection",
     "evaluation_session_default",
     "exchange_today",
     "format_symbols_default",
@@ -335,6 +387,7 @@ __all__ = [
     "require_date_range_within_horizon",
     "require_registered_strategy",
     "require_trading_session_not_future",
+    "split_scope",
 ]
 
 

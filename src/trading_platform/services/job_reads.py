@@ -28,6 +28,7 @@ from sqlalchemy import select
 
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
+    AccountReconciliationRun,
     Job,
     JobDependency,
     JobEvent,
@@ -49,12 +50,14 @@ class JobResourceKind(StrEnum):
     """Closed vocabulary of resources a Job may link to (D-04).
 
     Phase 19 defined exactly one member. Phase 20 adds
-    market_data_ingestion_run; nothing outside this module may add a member
+    market_data_ingestion_run; 20.1-08 adds account_reconciliation_run; nothing outside this module may add a member
     without a resources[] builder here.
     """
 
     STRATEGY_RUN = "strategy_run"
     MARKET_DATA_INGESTION_RUN = "market_data_ingestion_run"
+    # 20.1-08 (ACCT-01, D-09 generalization): the owner-less account-level result.
+    ACCOUNT_RECONCILIATION_RUN = "account_reconciliation_run"
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,17 @@ class JobReadService:
                 .scalars()
                 .all()
             )
+            linked_account_runs = (
+                session.execute(
+                    select(AccountReconciliationRun)
+                    .where(AccountReconciliationRun.job_id == job_uuid)
+                    .order_by(
+                        AccountReconciliationRun.started_at.asc(), AccountReconciliationRun.id.asc()
+                    )
+                )
+                .scalars()
+                .all()
+            )
             resources: list[dict[str, Any]] = [
                 {
                     "kind": JobResourceKind.STRATEGY_RUN.value,
@@ -158,6 +172,15 @@ class JobReadService:
                 }
                 for run in linked_runs
             ]
+            resources.extend(
+                {
+                    "kind": JobResourceKind.ACCOUNT_RECONCILIATION_RUN.value,
+                    "id": str(run.id),
+                    "status": run.status,
+                    "links": {"self": f"/api/v1/runs/{run.id}"},
+                }
+                for run in linked_account_runs
+            )
             resources.extend(
                 {
                     "kind": JobResourceKind.MARKET_DATA_INGESTION_RUN.value,

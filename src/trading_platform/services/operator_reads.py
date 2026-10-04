@@ -14,6 +14,7 @@ from sqlalchemy.orm import aliased
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     GLOBAL_KILL_SWITCH_NAME,
+    AccountReconciliationRun,
     AccountSnapshot,
     BacktestEquitySnapshot,
     BacktestSignal,
@@ -42,6 +43,19 @@ class OperatorReadFilters:
     session_start: date | None = None
     session_end: date | None = None
     limit: int = 20
+    # ACCT-01: ``strategy`` (default) or ``account`` (owner-less account reconciliation runs).
+    scope: str = "strategy"
+
+
+_ARTIFACT_COUNT_KEYS = (
+    "backtest_signals",
+    "backtest_trades",
+    "backtest_equity_snapshots",
+    "risk_events",
+    "paper_orders",
+    "paper_fills",
+    "execution_events",
+)
 
 
 class OperatorReadService:
@@ -77,6 +91,8 @@ class OperatorReadService:
         resolved_filters = filters or OperatorReadFilters()
         run_type = _coerce_run_type(resolved_filters.run_type)
         status = _coerce_run_status(resolved_filters.status)
+        if resolved_filters.scope == "account":
+            return self._list_account_runs(resolved_filters, run_type=run_type, status=status)
 
         with session_scope(self.settings) as session:
             stmt = (
@@ -95,6 +111,34 @@ class OperatorReadService:
         items = [_serialize_run_summary(strategy_run, strategy) for strategy_run, strategy in rows]
         return _apply_window_and_limit(items, resolved_filters, key_fn=_run_payload_date)
 
+    def _list_account_runs(
+        self,
+        filters: OperatorReadFilters,
+        *,
+        run_type: StrategyRunType | None,
+        status: StrategyRunStatus | None,
+    ) -> list[dict[str, Any]]:
+        """Owner-less account reconciliation runs, newest first (read-only)."""
+
+        if run_type is not None and run_type is not StrategyRunType.RECONCILIATION:
+            return []
+        with session_scope(self.settings) as session:
+            stmt = select(AccountReconciliationRun)
+            if status is not None:
+                stmt = stmt.where(AccountReconciliationRun.status == status.value)
+            account_runs = (
+                session.execute(
+                    stmt.order_by(
+                        AccountReconciliationRun.started_at.desc(),
+                        AccountReconciliationRun.created_at.desc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            items = [_serialize_account_run_summary(run) for run in account_runs]
+        return _apply_window_and_limit(items, filters, key_fn=_run_payload_date)
+
     def get_run_detail(self, run_id: str) -> dict[str, Any]:
         run_uuid = uuid.UUID(run_id)
 
@@ -105,7 +149,13 @@ class OperatorReadService:
                 .where(StrategyRun.id == run_uuid)
             ).one_or_none()
             if row is None:
-                raise LookupError(f"Run '{run_id}' was not found.")
+                account_run = session.get(AccountReconciliationRun, run_uuid)
+                if account_run is None:
+                    raise LookupError(f"Run '{run_id}' was not found.")
+                return {
+                    "run": _serialize_account_run_summary(account_run),
+                    "artifact_counts": {key: 0 for key in _ARTIFACT_COUNT_KEYS},
+                }
 
             strategy_run, strategy = row
             artifact_counts = {
@@ -498,10 +548,34 @@ def _serialize_filters(filters: OperatorReadFilters) -> dict[str, Any]:
     }
 
 
+def _serialize_account_run_summary(run: AccountReconciliationRun) -> dict[str, Any]:
+    """Same keys as a strategy run item; no strategy reference (``strategy_id`` null)."""
+
+    return {
+        "run_id": str(run.id),
+        "scope": "account",
+        "strategy_id": None,
+        "display_name": None,
+        "run_type": StrategyRunType.RECONCILIATION.value,
+        "status": run.status,
+        "trigger_source": run.trigger_source,
+        "job_id": str(run.job_id) if run.job_id is not None else None,
+        "as_of_session": run.as_of_session.isoformat()
+        if run.as_of_session is not None
+        else run.started_at.date().isoformat(),
+        "started_at": run.started_at.isoformat(),
+        "completed_at": _dt_value(run.completed_at),
+        "parameters_snapshot": {},
+        "result_summary": run.result_summary,
+        "error_message": run.error_message,
+    }
+
+
 def _serialize_run_summary(strategy_run: StrategyRun, strategy: Strategy) -> dict[str, Any]:
     as_of_session = _run_session_date(strategy_run)
     return {
         "run_id": str(strategy_run.id),
+        "scope": "strategy",
         "strategy_id": strategy.strategy_id,
         "display_name": strategy.display_name,
         "run_type": strategy_run.run_type.value,

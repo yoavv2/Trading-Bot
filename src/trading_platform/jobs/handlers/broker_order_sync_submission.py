@@ -20,6 +20,13 @@ declares a D-19 reconcile-first retry prerequisite: a FAILED,
 outcome-uncertain ``broker-order-sync`` Job may only be retried after a
 newer SUCCEEDED reconciliation Job exists for the same strategy.
 
+Scope (ACCT-01, D-09): ``scope`` is ``strategy`` (the default when omitted --
+today's payload and behaviour, byte-identical) or ``account``. Account scope is
+the owner-less account-level sync: it forbids ``strategy_id``
+(``account_scope_forbids_strategy_id``) and makes ``as_of_session`` optional
+(validated exactly as before when present, absent otherwise). The spec declares
+``broker_effect = reads_broker`` (catalog field).
+
 Field-level parsing and the shared semantic checks are delegated to
 ``jobs/handlers/payload_fields.py`` (P19 D-08/D-09 precedent, generalized
 in Phase 20).
@@ -36,14 +43,17 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, f
 
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.handlers.payload_fields import (
+    JobScope,
     evaluation_session_default,
     map_validation_error,
     parse_iso_date,
     require_registered_strategy,
     require_trading_session_not_future,
+    split_scope,
 )
 from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
 from trading_platform.services.active_paper_strategy import lock_active_paper_strategy_shared
+from trading_platform.services.broker_jobs import BrokerEffect
 
 BROKER_ORDER_SYNC_JOB_TYPE = "broker-order-sync"
 
@@ -61,6 +71,9 @@ class BrokerOrderSyncPayloadRejection(StrEnum):
     AS_OF_SESSION_IN_FUTURE = "as_of_session_in_future"
     AS_OF_SESSION_NOT_TRADING_SESSION = "as_of_session_not_trading_session"
     AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
+    # ACCT-01: the ``scope`` field.
+    INVALID_SCOPE = "invalid_scope"
+    ACCOUNT_SCOPE_FORBIDS_STRATEGY_ID = "account_scope_forbids_strategy_id"
 
 
 def _default_clock() -> datetime:
@@ -90,6 +103,19 @@ class _BrokerOrderSyncPayload(BaseModel):
         return parse_iso_date(value)
 
 
+class _BrokerOrderSyncAccountPayload(BaseModel):
+    """Account scope: no ``strategy_id``; ``as_of_session`` is optional."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    as_of_session: date | None = None
+
+    @field_validator("as_of_session", mode="before")
+    @classmethod
+    def _parse_as_of_session(cls, value: Any) -> date:
+        return parse_iso_date(value)
+
+
 class BrokerOrderSyncSubmissionSpec:
     """Transport-neutral validation and normalization for the
     ``broker-order-sync`` public Job type (``JobSubmissionSpec`` protocol)."""
@@ -97,9 +123,11 @@ class BrokerOrderSyncSubmissionSpec:
     job_type = BROKER_ORDER_SYNC_JOB_TYPE
     description = (
         "Sync paper order lifecycle, fills, positions and account state from the broker "
-        "for one session. Cancellable only while queued."
+        "for one session; scope 'account' syncs known orders and fills without an owner. "
+        "Cancellable only while queued."
     )
     cancellation_mode = JobCancellationMode.QUEUED_ONLY
+    broker_effect = BrokerEffect.READS_BROKER
     # D-19: a FAILED, outcome_uncertain broker-order-sync Job may only be
     # retried after a newer SUCCEEDED reconciliation Job exists for the
     # same strategy.
@@ -110,8 +138,12 @@ class BrokerOrderSyncSubmissionSpec:
         self._clock = clock or _default_clock
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        scope, body = split_scope(payload, job_type=BROKER_ORDER_SYNC_JOB_TYPE)
+        if scope is JobScope.ACCOUNT:
+            return self._validate_account_payload(body)
+
         try:
-            parsed = _BrokerOrderSyncPayload.model_validate(dict(payload))
+            parsed = _BrokerOrderSyncPayload.model_validate(body)
         except ValidationError as exc:
             reason = BrokerOrderSyncPayloadRejection(map_validation_error(exc).value)
             raise InvalidJobPayloadError(
@@ -132,6 +164,26 @@ class BrokerOrderSyncSubmissionSpec:
             "strategy_id": strategy_id,
             "as_of_session": as_of_session.isoformat(),
         }
+
+    def _validate_account_payload(self, body: Mapping[str, Any]) -> Mapping[str, Any]:
+        try:
+            parsed = _BrokerOrderSyncAccountPayload.model_validate(dict(body))
+        except ValidationError as exc:
+            reason = BrokerOrderSyncPayloadRejection(map_validation_error(exc).value)
+            raise InvalidJobPayloadError(
+                job_type=BROKER_ORDER_SYNC_JOB_TYPE, reason=reason.value
+            ) from exc
+
+        normalized: dict[str, Any] = {"scope": JobScope.ACCOUNT.value}
+        if parsed.as_of_session is not None:
+            require_trading_session_not_future(
+                self._settings,
+                self._clock,
+                parsed.as_of_session,
+                job_type=BROKER_ORDER_SYNC_JOB_TYPE,
+            )
+            normalized["as_of_session"] = parsed.as_of_session.isoformat()
+        return normalized
 
     def lock_admission(self, *, session: Any) -> None:
         """SER lock step alone: the ownership singleton FOR SHARE (fails closed)."""

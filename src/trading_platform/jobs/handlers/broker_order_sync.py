@@ -21,6 +21,16 @@ external broker-sync start. Any log ``event_code`` beginning with the
 which in turn gates retry behind a reconcile-first block
 (``retry_prerequisite_job_type = "reconciliation"``, declared on the
 submission spec), enforced outside this handler.
+
+Basis traceability (20.1-08, S3-R4): every sync Job -- account and strategy scope --
+records ``snapshot_id`` (the broker-observed account snapshot it wrote) and
+``applied_orders`` (``paper_order_id``, ``broker_status``, ``broker_filled_qty``,
+``applied_at`` for every local order whose broker state it applied) in its
+result_summary. JSON only: account snapshots have no Job link.
+
+Scope (ACCT-01, D-09): payload ``scope == "account"`` runs the owner-less
+``sync_account_state`` (known orders and fills only; no position, no new order, no
+strategy assignment). Omitted ``scope`` is ``strategy`` -- the behaviour above.
 """
 
 from __future__ import annotations
@@ -31,7 +41,7 @@ from typing import Any
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.contracts import JobContext
 from trading_platform.services.config.validation import ExecutionMode
-from trading_platform.services.execution import sync_paper_state
+from trading_platform.services.execution import sync_account_state, sync_paper_state
 
 STEP_RESOLVING = "resolving strategy"
 STEP_SYNCING = "syncing broker orders"
@@ -49,6 +59,9 @@ class BrokerOrderSyncJobHandler:
         self._settings = settings
 
     def run(self, context: JobContext) -> dict[str, Any]:
+        if context.payload.get("scope") == "account":
+            return self._run_account(context)
+
         context.report_progress(step=STEP_RESOLVING)
         strategy_id = context.payload["strategy_id"]
         as_of_session = date.fromisoformat(context.payload["as_of_session"])
@@ -90,5 +103,47 @@ class BrokerOrderSyncJobHandler:
             "positions_closed": report.positions_closed,
             "open_positions": report.open_positions,
             "account_snapshot_id": report.account_snapshot_id,
+            "snapshot_id": report.account_snapshot_id,
+            "applied_orders": [dict(record) for record in report.applied_orders],
+            "produced_run_ids": [],
+        }
+
+    def _run_account(self, context: JobContext) -> dict[str, Any]:
+        raw_session = context.payload.get("as_of_session")
+        as_of_session = date.fromisoformat(raw_session) if raw_session is not None else None
+
+        context.report_progress(step=STEP_SYNCING)
+        context.log(
+            level="info",
+            event_code="external_broker_sync_started",
+            message="Broker order sync started; broker-derived state may be written.",
+            context={"scope": "account", "as_of_session": raw_session},
+        )
+
+        report = sync_account_state(as_of_session=as_of_session, settings=self._settings)
+
+        context.report_progress(step=STEP_RECORDING)
+        context.log(
+            level="info",
+            event_code="broker_order_sync_completed",
+            message="Broker order sync finished.",
+            context={
+                "orders_synced": report.orders_synced,
+                "fills_ingested": report.fills_ingested,
+            },
+        )
+
+        return {
+            "scope": "account",
+            "strategy_id": None,
+            "as_of_session": raw_session,
+            "orders_synced": report.orders_synced,
+            "fills_ingested": report.fills_ingested,
+            "positions_opened": 0,
+            "positions_closed": 0,
+            "open_positions": report.open_positions,
+            "account_snapshot_id": report.account_snapshot_id,
+            "snapshot_id": report.account_snapshot_id,
+            "applied_orders": [dict(record) for record in report.applied_orders],
             "produced_run_ids": [],
         }

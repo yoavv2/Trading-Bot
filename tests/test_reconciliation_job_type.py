@@ -73,6 +73,8 @@ def test_rejection_enum_is_closed() -> None:
         "as_of_session_in_future",
         "as_of_session_not_trading_session",
         "as_of_session_out_of_calendar_range",
+        "invalid_scope",
+        "account_scope_forbids_strategy_id",
     }
 
 
@@ -124,6 +126,41 @@ def test_rejection_enum_is_closed() -> None:
             ReconciliationPayloadRejection.AS_OF_SESSION_OUT_OF_CALENDAR_RANGE,
             id="as_of_session_out_of_calendar_range_0001-01-01",
         ),
+        pytest.param(
+            {**_VALID_PAYLOAD, "scope": "everything"},
+            ReconciliationPayloadRejection.INVALID_SCOPE,
+            id="invalid_scope",
+        ),
+        pytest.param(
+            {**_VALID_PAYLOAD, "scope": 7},
+            ReconciliationPayloadRejection.INVALID_SCOPE,
+            id="invalid_scope_non_string",
+        ),
+        pytest.param(
+            {"scope": "account", "strategy_id": "trend_following_daily"},
+            ReconciliationPayloadRejection.ACCOUNT_SCOPE_FORBIDS_STRATEGY_ID,
+            id="account_scope_forbids_strategy_id",
+        ),
+        pytest.param(
+            {"scope": "account", "extra": 1},
+            ReconciliationPayloadRejection.UNKNOWN_PAYLOAD_KEYS,
+            id="account_scope_unknown_payload_keys",
+        ),
+        pytest.param(
+            {"scope": "account", "as_of_session": "2024-13-01"},
+            ReconciliationPayloadRejection.INVALID_DATE,
+            id="account_scope_invalid_date",
+        ),
+        pytest.param(
+            {"scope": "account", "as_of_session": "2026-01-06"},
+            ReconciliationPayloadRejection.AS_OF_SESSION_IN_FUTURE,
+            id="account_scope_as_of_session_in_future",
+        ),
+        pytest.param(
+            {"scope": "account", "as_of_session": "2024-01-06"},
+            ReconciliationPayloadRejection.AS_OF_SESSION_NOT_TRADING_SESSION,
+            id="account_scope_as_of_session_not_trading_session",
+        ),
     ],
 )
 def test_validate_payload_rejects(
@@ -152,6 +189,57 @@ def test_validate_payload_normalizes(migrated_backtest_db: str) -> None:
         "strategy_id": "trend_following_daily",
         "as_of_session": "2024-01-10",
     }
+
+
+def test_omitted_and_explicit_strategy_scope_normalize_identically(
+    migrated_backtest_db: str,
+) -> None:
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)
+    spec = ReconciliationSubmissionSpec(load_settings())
+
+    omitted = spec.validate_payload(dict(_VALID_PAYLOAD))
+    explicit = spec.validate_payload({**_VALID_PAYLOAD, "scope": "strategy"})
+
+    assert omitted == explicit == _VALID_PAYLOAD
+
+
+def test_account_scope_needs_no_owner_and_normalizes(migrated_backtest_db: str) -> None:
+    # No strategy row, no owner: account scope is never gated by ownership (D-09).
+    spec = ReconciliationSubmissionSpec(
+        load_settings(), clock=lambda: datetime(2026, 1, 6, 3, 0, tzinfo=UTC)
+    )
+
+    assert spec.validate_payload({"scope": "account"}) == {"scope": "account"}
+    assert spec.validate_payload({"scope": "account", "as_of_session": "2024-01-10"}) == {
+        "scope": "account",
+        "as_of_session": "2024-01-10",
+    }
+
+
+def test_account_scope_admission_takes_the_lock_but_checks_no_owner(
+    migrated_backtest_db: str,
+) -> None:
+    from trading_platform.db.session import session_scope
+
+    settings = load_settings()
+    spec = ReconciliationSubmissionSpec(settings)
+
+    with session_scope(settings) as session:
+        # no owner and no strategy: must not raise
+        spec.check_admission({"scope": "account"}, session=session)
+
+    # strategy scope still refuses under the same admission
+    seed_registered_strategy(settings, "trend_following_daily")
+    set_active_paper_strategy(settings, None)
+    with session_scope(settings) as session:
+        with pytest.raises(JobSubmissionConflictError):
+            spec.check_admission(dict(_VALID_PAYLOAD), session=session)
+
+
+def test_spec_declares_reads_broker_effect() -> None:
+    from trading_platform.services.broker_jobs import BrokerEffect
+
+    assert ReconciliationSubmissionSpec(load_settings()).broker_effect is BrokerEffect.READS_BROKER
 
 
 def test_reconciliation_submit_conflict_is_a_closed_set() -> None:
@@ -452,3 +540,85 @@ def test_handler_never_writes_run_status_or_calls_corrections() -> None:
     assert "_update_reconciliation_run" not in source
     assert "apply_reconciliation_corrections" not in source
     assert "percent=" not in source
+
+
+# ---------------------------------------------------------------------------
+# Account scope handler (ACCT-01, D-09)
+# ---------------------------------------------------------------------------
+
+
+def _fake_account_report(**overrides: Any):
+    from trading_platform.services.reconciliation.account import AccountReconciliationReport
+
+    defaults: dict[str, Any] = {
+        "run_id": str(uuid.uuid4()),
+        "as_of_session": "2024-01-10",
+        "checked_at": "2024-01-10T00:05:00+00:00",
+        "finding_count": 0,
+        "blocking_count": 0,
+        "blocks_execution": False,
+    }
+    defaults.update(overrides)
+    return AccountReconciliationReport(**defaults)
+
+
+def test_account_scope_handler_calls_reconcile_account_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading_platform.jobs.handlers.reconciliation as reconciliation_module
+
+    report = _fake_account_report(
+        finding_count=2,
+        blocking_count=1,
+        blocks_execution=True,
+        unresolved_reasons=("broker_history_exceeds_cap",),
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_reconcile_account(**kwargs: Any):
+        captured.update(kwargs)
+        return report
+
+    def _fail(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("strategy-scope reconciliation must not run at account scope")
+
+    monkeypatch.setattr(reconciliation_module, "reconcile_account", _fake_reconcile_account)
+    monkeypatch.setattr(reconciliation_module, "reconcile_paper_execution", _fail)
+
+    context = _FakeContext(payload={"scope": "account", "as_of_session": "2024-01-10"})
+    result = ReconciliationJobHandler().run(context)
+
+    assert captured["job_id"] == context.job_id
+    assert captured["trigger_source"] == "job"
+    assert captured["as_of_session"] == date(2024, 1, 10)
+    assert result == {
+        "scope": "account",
+        "run_id": report.run_id,
+        "produced_run_ids": [report.run_id],
+        "strategy_id": None,
+        "as_of_session": "2024-01-10",
+        "finding_count": 2,
+        "blocking_count": 1,
+        "blocks_execution": True,
+        "unresolved_reasons": ["broker_history_exceeds_cap"],
+    }
+    json.dumps(result)
+
+
+def test_account_scope_handler_records_null_session_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading_platform.jobs.handlers.reconciliation as reconciliation_module
+
+    captured: dict[str, Any] = {}
+
+    def _fake_reconcile_account(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_account_report(as_of_session=None)
+
+    monkeypatch.setattr(reconciliation_module, "reconcile_account", _fake_reconcile_account)
+
+    result = ReconciliationJobHandler().run(_FakeContext(payload={"scope": "account"}))
+
+    assert captured["as_of_session"] is None
+    assert result["as_of_session"] is None
