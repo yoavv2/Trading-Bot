@@ -277,6 +277,19 @@ def job_detail(
     return detail
 
 
+@router.get("/{job_id}/recovery")
+def job_recovery(
+    job_id: UUID,
+    job_reads: Annotated[JobReadService, Depends(get_job_read_service)],
+) -> dict[str, object]:
+    """R3: per-intent classification, absence evidence, evidence package; read-only."""
+
+    try:
+        return job_reads.get_job_recovery(str(job_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/{job_id}/progress")
 def job_progress(
     job_id: UUID,

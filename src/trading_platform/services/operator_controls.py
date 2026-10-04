@@ -42,7 +42,20 @@ from trading_platform.services.active_paper_strategy import (
     ownership_block_from_state,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
-from trading_platform.services.recovery import IntentNotFoundError
+
+# Re-exported for the recovery route adapter, which may import only this services module.
+from trading_platform.services.recovery import (
+    IntentNotFoundError,
+)
+from trading_platform.services.recovery import (
+    IntentNotOnMissingOrderPathError as IntentNotOnMissingOrderPathError,
+)
+from trading_platform.services.recovery import (
+    InvalidBrokerStatementError as InvalidBrokerStatementError,
+)
+from trading_platform.services.recovery import (
+    StatementConflictError as StatementConflictError,
+)
 from trading_platform.services.recovery import record_broker_statement as _record_broker_statement
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 

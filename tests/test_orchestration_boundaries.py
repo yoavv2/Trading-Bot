@@ -184,8 +184,8 @@ def _effective_routes() -> dict[str, set[str]]:
 
 
 def test_api_route_modules_declare_only_allowlisted_mutation_decorators() -> None:
-    """D-12: the exact five-route mutating-surface allowlist, replacing the
-    P18/P19 "exactly two" pin now that CTRL-01/02 and OPS-07 add three more."""
+    """D-12: the exact six-route mutating-surface allowlist (P18/P19 "exactly two" pin
+    + CTRL-01/02 and OPS-07 + the REC-01 broker statement of 20.1-10)."""
 
     routes_dir = _ROOT / "src/trading_platform/api/routes"
     mutation_decorators: set[tuple[str, str, str]] = set()
@@ -211,11 +211,12 @@ def test_api_route_modules_declare_only_allowlisted_mutation_decorators() -> Non
         ("jobs.py", "POST", "/{job_id}/retry"),
         ("controls.py", "PUT", "/kill-switch"),
         ("controls.py", "PUT", "/strategies/{strategy_id}"),
+        ("recovery.py", "POST", "/intents/{intent_id}/broker-statement"),
     }
 
 
 def test_runtime_application_mutating_routes_are_exactly_the_allowlist() -> None:
-    """D-12: the exact five (method, path) pairs the runtime application serves."""
+    """D-12: the exact six (method, path) pairs the runtime application serves."""
 
     routes = _effective_routes()
     mutations = {
@@ -230,11 +231,12 @@ def test_runtime_application_mutating_routes_are_exactly_the_allowlist() -> None
         ("POST", "/api/v1/jobs/{job_id}/retry"),
         ("PUT", "/api/v1/controls/kill-switch"),
         ("PUT", "/api/v1/controls/strategies/{strategy_id}"),
+        ("POST", "/api/v1/recovery/intents/{intent_id}/broker-statement"),
     }
 
 
 def test_every_allowlisted_route_declares_the_mutation_guard() -> None:
-    """D-12: every route in the five-route allowlist carries
+    """D-12: every route in the six-route allowlist carries
     require_mutations_enabled -- not just "every mutating route" generically
     (that's test_mutation_guard.py::test_every_mutating_route_requires_mutation_guard),
     but a route-by-route proof scoped to this exact set."""
@@ -248,6 +250,7 @@ def test_every_allowlisted_route_declares_the_mutation_guard() -> None:
         ("POST", "/api/v1/jobs/{job_id}/retry"),
         ("PUT", "/api/v1/controls/kill-switch"),
         ("PUT", "/api/v1/controls/strategies/{strategy_id}"),
+        ("POST", "/api/v1/recovery/intents/{intent_id}/broker-statement"),
     }
 
     app = create_app()
@@ -901,3 +904,23 @@ def test_boundary_scans_exclude_claude_worktrees() -> None:
     for path in scanned:
         assert ".claude" not in path.parts, path
         assert path.is_relative_to(_SCRIPTS_ROOT) or path.is_relative_to(_WORKER_ROOT) or path == _MAKEFILE
+
+
+def test_recovery_route_adapter_imports_only_allowed_layers() -> None:
+    """REC-01: the recovery router reaches the domain only through OperatorControlService."""
+
+    imports = _module_imports(_ROOT / "src/trading_platform/api/routes/recovery.py")
+
+    assert not any(
+        module == forbidden or module.startswith(f"{forbidden}.")
+        for module in imports
+        for forbidden in (
+            "sqlalchemy",
+            "trading_platform.db",
+            "trading_platform.worker",
+            "trading_platform.jobs",
+            "trading_platform.orchestration",
+        )
+    )
+    service_imports = {m for m in imports if m.startswith("trading_platform.services.")}
+    assert service_imports == {"trading_platform.services.operator_controls"}

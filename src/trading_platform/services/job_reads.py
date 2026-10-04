@@ -38,6 +38,7 @@ from trading_platform.db.models import (
     StrategyRun,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services import recovery as recovery_service
 from trading_platform.services.batch_outcomes import derive_job_outcome
 
 DEFAULT_LIMIT = 20
@@ -92,6 +93,18 @@ class JobReadService:
             items = [_serialize_job_summary(job) for job in rows]
 
         return items
+
+    def get_job_recovery(self, job_id: str) -> dict[str, Any]:
+        """R3 (REC-01): the uncertain-outcome recovery view of one Job.
+
+        Delegates to ``services.recovery.get_job_recovery`` (plain dicts, read-only,
+        bounded statements independent of history size). ``LookupError`` for an unknown
+        Job. Identical before and after any execution operation ends.
+        """
+
+        job_uuid = uuid.UUID(job_id)
+        with session_scope(self.settings) as session:
+            return recovery_service.get_job_recovery(session, job_uuid)
 
     def get_job_detail(self, job_id: str) -> dict[str, Any]:
         job_uuid = uuid.UUID(job_id)
