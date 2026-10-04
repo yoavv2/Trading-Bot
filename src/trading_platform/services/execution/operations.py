@@ -9,9 +9,9 @@ pinned risk run) that may span several Jobs. This module owns:
 * ``effective_state`` (pure, read-only: reports ``will_end`` and ``takeover_pending``) and
   ``touch_operation`` (the ONLY place expiry is persisted, D-21: lazy, never by a read);
 * ``end_operation`` (D-20): terminates the operation and its UNSENT intents only. It never
-  cancels a broker order, never resolves an uncertain outcome, never erases a recovery
+  touches a broker order, never resolves an uncertain outcome, never erases a recovery
   record or an attempt log and never changes trading permission. This module imports no
-  broker client and has no cancel path (a source test pins it);
+  broker client and has no path that ends a broker order (a source test pins it);
 * the S1-R3 submission authority and fencing primitives: ``acquire_execution`` (takeover),
   ``authorize_send`` (transaction T1: the durable attempt row BEFORE any POST),
   ``complete_attempt_late`` and the epoch-fenced compare-and-set helpers.
@@ -20,7 +20,7 @@ S1-R3 guarantee, restated (see 20.1-11-PLAN S1-R3): (G1) every attempt is durabl
 before its request can leave the process; (G2) while any submission of the strategy may
 still produce an execution no other request is authorized; (G3) every POST is preceded by a
 durable attempt row. Limitations: the platform cannot stop one already-recorded request
-from reaching the broker late (L1, L5) and has no cancel path.
+from reaching the broker late (L1, L5) and has no way to end a broker order.
 
 Reads (``effective_state`` with a loaded window, the fact loaders) perform no writes.
 Run-time functions take an optional ``now`` that defaults to ``core.clock.now_utc()``.
@@ -890,6 +890,7 @@ def transition(
     *,
     reason_detail: str | None = None,
     fence: Fence | None = None,
+    ended_by: str = "executor",
     now: datetime | None = None,
 ) -> ExecutionOperation:
     """Compare-and-set move to ``to_state`` (legal moves only; final states are final).
@@ -897,14 +898,31 @@ def transition(
     ``paused -> running`` exists only through ``begin_continuation``. With ``fence`` the move
     applies only while the executor's epoch and Job still hold authority. Moving to a final
     state also increments the epoch and clears the executor, so no stale fenced write can
-    touch a final operation. Terminating with intent dispositions goes through
-    ``terminate_operation``; this function never edits intents. Raises
+    touch a final operation. A move to ``terminated`` is delegated to ``terminate_operation``
+    (row lock, fence check and the unsent-intent dispositions in ONE step: unsent intents
+    become ``cancelled_unsent`` for ``cancelled_by_operator``, else ``expired_unsent``), so a
+    terminated operation never keeps ``planned`` intents open. Raises
     ``IllegalOperationTransition`` / ``OperationConflictError`` (the CAS loser).
     """
 
     validate_state_reason(to_state, reason)
     at = now or clock.now_utc()
     to_state = OperationState(to_state)
+    if to_state is OperationState.TERMINATED:
+        assert reason is not None
+        locked = _load_locked(session, operation_id)
+        current_state = OperationState(locked.state)
+        if to_state not in _LEGAL_TRANSITIONS[current_state]:
+            raise IllegalOperationTransition(operation_id, current_state, to_state)
+        terminate_operation(
+            session,
+            locked,
+            TerminatedReason(reason),
+            ended_by=ended_by,
+            fence=fence,
+            now=at,
+        )
+        return locked
     legal_from = [s for s, targets in _LEGAL_TRANSITIONS.items() if to_state in targets]
     values: dict[str, Any] = {
         "state": to_state.value,
@@ -1016,14 +1034,22 @@ def terminate_operation(
     operation: ExecutionOperation,
     reason: TerminatedReason,
     *,
-    unsent_disposition: IntentDisposition,
+    unsent_disposition: IntentDisposition | None = None,
     facts: Sequence[IntentFact] | None = None,
     ended_by: str,
     end_reason: str | None = None,
+    fence: Fence | None = None,
     now: datetime | None = None,
 ) -> list[uuid.UUID]:
     """Terminate an OPEN operation (row lock held by the caller) and return the intent ids
-    moved to ``unsent_disposition``.
+    moved to ``unsent_disposition`` (default: ``cancelled_unsent`` for ``cancelled_by_operator``,
+    ``expired_unsent`` for window expiry and supersession).
+
+    With ``fence`` (an executor terminating itself, e.g. the per-intent window check of the
+    send loop) the whole step applies only while the executor's epoch and Job still hold
+    authority and the operation is ``running``; a stale executor raises
+    ``OperationConflictError`` and NOTHING changes (state, epoch and intent dispositions are
+    written in the same locked step).
 
     Only intents proven not sent change (planned, registered_unsent, not_sent; frozen intents
     of a ``requires_reevaluation`` operation included); submitted and ambiguous intents,
@@ -1036,6 +1062,19 @@ def terminate_operation(
     if OperationState(operation.state) in _FINAL_STATES:
         raise IllegalOperationTransition(
             operation.id, OperationState(operation.state), OperationState.TERMINATED
+        )
+    if fence is not None and (
+        operation.id != fence.operation_id
+        or operation.execution_epoch != fence.epoch
+        or operation.executor_job_id != fence.job_id
+        or OperationState(operation.state) is not OperationState.RUNNING
+    ):
+        raise OperationConflictError(operation.id, "stale executor fence")
+    if unsent_disposition is None:
+        unsent_disposition = (
+            IntentDisposition.CANCELLED_UNSENT
+            if reason is TerminatedReason.CANCELLED_BY_OPERATOR
+            else IntentDisposition.EXPIRED_UNSENT
         )
     if facts is None:
         facts = load_intent_facts(session, [operation.id])[operation.id]
@@ -1127,7 +1166,7 @@ def end_operation(
     now: datetime | None = None,
     settings: Settings | None = None,
 ) -> EndResult:
-    """End an operation (D-20, J-2): terminate it and cancel its UNSENT intents only.
+    """End an operation (D-20, J-2): terminate it and its UNSENT intents only.
 
     Holds the operation row lock. Refused with ``OperationRunningError`` while a queued or
     running Job of the operation exists (linked Jobs plus paper-session Jobs whose payload
@@ -1135,8 +1174,8 @@ def end_operation(
     second End of a terminated operation returns ``changed=False``. Lazy expiry runs first: a
     window that already elapsed terminates the operation with ``execution_window_elapsed`` /
     ``evaluation_superseded`` (reported with ``ended_by_expiry=True``; its unsent intents are
-    ``expired_unsent``) instead of ``cancelled_by_operator``. Submitted orders are NOT
-    cancelled at the broker, ambiguous intents stay ambiguous and blocking, recovery
+    ``expired_unsent``) instead of ``cancelled_by_operator``. Submitted orders are never
+    touched at the broker, ambiguous intents stay ambiguous and blocking, recovery
     records and attempt logs are untouched, trading permission is unchanged. The result lists
     the remaining working orders and unresolved intents with their blocking effect (J-2).
     """
