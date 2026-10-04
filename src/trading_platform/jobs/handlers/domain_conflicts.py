@@ -17,6 +17,7 @@ from contextlib import contextmanager
 
 from trading_platform.jobs.contracts import JobDomainConflictError
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
+from trading_platform.services.external_activity import ExternalActivityRejectedError
 
 # Each translated exception carries an explicit ``outcome_uncertain`` claim
 # (OPS-08/D-19). ``ConcurrentRunLockedError`` is raised when
@@ -25,8 +26,13 @@ from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
 # (reconciliation run, local sync-failure corrections, broker reads) may have
 # run, but none submits to the broker, so the outcome is certain. Adding a
 # member here forces that decision to be made consciously.
+#
+# ``ExternalActivityRejectedError`` (EXT-01) is raised by ``record_external_orders``
+# BEFORE any write: its closed refusal reasons are checked against broker READS only, so
+# nothing was stored and nothing was sent; the outcome is certain.
 DOMAIN_CONFLICT_OUTCOME_UNCERTAIN: dict[type[Exception], bool] = {
     ConcurrentRunLockedError: False,
+    ExternalActivityRejectedError: False,
 }
 
 DOMAIN_CONFLICT_EXCEPTIONS: tuple[type[Exception], ...] = tuple(DOMAIN_CONFLICT_OUTCOME_UNCERTAIN)
@@ -48,6 +54,10 @@ def translate_domain_conflicts() -> Iterator[None]:
             for exception_type, uncertain in DOMAIN_CONFLICT_OUTCOME_UNCERTAIN.items()
             if isinstance(exc, exception_type)
         )
-        raise JobDomainConflictError(
-            f"Domain conflict: {exc}", outcome_uncertain=outcome_uncertain
-        ) from exc
+        # EXT-01: the closed refusal reason is the FIRST token of the failure message.
+        message = (
+            exc.failure_message()
+            if isinstance(exc, ExternalActivityRejectedError)
+            else f"Domain conflict: {exc}"
+        )
+        raise JobDomainConflictError(message, outcome_uncertain=outcome_uncertain) from exc

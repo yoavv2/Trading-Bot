@@ -224,7 +224,8 @@ def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     (``backtest``). Phase 20 (Plan 16) appends the remaining seven
     registrations -- broker-order-sync, ingest-bars, paper-session,
     reconciliation, risk-evaluation, sync-market-sessions, and
-    sync-symbol-metadata -- for eight total registered Job types.
+    sync-symbol-metadata -- for eight total registered Job types. Phase 20.1
+    (Plan 09) adds ``record-external-activity`` (nine).
 
     JOB-03's extensibility contract: adding a new Job type means (1)
     writing a handler module implementing ``JobHandler`` and (2) appending
@@ -256,6 +257,12 @@ def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     from trading_platform.jobs.handlers.reconciliation import ReconciliationJobHandler
     from trading_platform.jobs.handlers.reconciliation_submission import (
         ReconciliationSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.record_external_activity import (
+        RecordExternalActivityJobHandler,
+    )
+    from trading_platform.jobs.handlers.record_external_activity_submission import (
+        RecordExternalActivitySubmissionSpec,
     )
     from trading_platform.jobs.handlers.risk_evaluation import RiskEvaluationJobHandler
     from trading_platform.jobs.handlers.risk_evaluation_submission import (
@@ -290,6 +297,10 @@ def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     registry.register(
         ReconciliationJobHandler(settings=resolved),
         submission_spec=ReconciliationSubmissionSpec(resolved),
+    )
+    registry.register(
+        RecordExternalActivityJobHandler(settings=resolved),
+        submission_spec=RecordExternalActivitySubmissionSpec(resolved),
     )
     registry.register(
         RiskEvaluationJobHandler(settings=resolved),

@@ -375,7 +375,8 @@ def test_existing_service_boundary_stays_auto_scoped_and_strict() -> None:
 
 def test_default_registry_registers_exactly_the_phase20_job_types() -> None:
     """SC1: the single pin replacing all five Phase 17/18 emptiness tripwires,
-    extended in Phase 20 (Plan 16) to the full eight-type registry."""
+    extended in Phase 20 (Plan 16) to the full eight-type registry and in Phase 20.1
+    (Plan 09) to nine (``record-external-activity``, EXT-01)."""
     from trading_platform.core.settings import load_settings
     from trading_platform.jobs.registry import build_default_registry
 
@@ -387,6 +388,7 @@ def test_default_registry_registers_exactly_the_phase20_job_types() -> None:
         "ingest-bars",
         "paper-session",
         "reconciliation",
+        "record-external-activity",
         "risk-evaluation",
         "sync-market-sessions",
         "sync-symbol-metadata",
@@ -405,6 +407,7 @@ def test_default_registry_cancellation_modes_are_pinned() -> None:
     expected = {
         "paper-session": "queued_only",
         "reconciliation": "queued_only",
+        "record-external-activity": "queued_only",
         "broker-order-sync": "queued_only",
         "backtest": "step_boundary",
         "risk-evaluation": "step_boundary",
@@ -430,6 +433,7 @@ def test_default_registry_execution_modes_are_pinned() -> None:
     expected = {
         "paper-session": ExecutionMode.PAPER,
         "reconciliation": ExecutionMode.PAPER,
+        "record-external-activity": ExecutionMode.PAPER,
         "broker-order-sync": ExecutionMode.PAPER,
         "backtest": ExecutionMode.BACKTEST,
         "risk-evaluation": ExecutionMode.BACKTEST,
@@ -458,6 +462,7 @@ def test_default_registry_retry_prerequisites_are_pinned() -> None:
         "ingest-bars": None,
         "paper-session": "reconciliation",
         "reconciliation": None,
+        "record-external-activity": None,
         "risk-evaluation": None,
         "sync-market-sessions": None,
         "sync-symbol-metadata": None,

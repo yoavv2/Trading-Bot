@@ -154,6 +154,7 @@ def test_catalog_exposes_broker_effect_for_the_broker_reading_job_types() -> Non
     effects = {item["job_type"]: item.get("broker_effect") for item in response.json()["items"]}
     assert effects["reconciliation"] == "reads_broker"
     assert effects["broker-order-sync"] == "reads_broker"
+    assert effects["record-external-activity"] == "reads_broker"
     assert all(
         value in {None, "none", "reads_broker", "submits_orders"} for value in effects.values()
     )
@@ -213,8 +214,8 @@ def test_default_registry_types_all_appear_in_catalog() -> None:
     assert catalog_types == set(registry.list_job_types())
 
 
-def test_production_registry_catalog_lists_all_eight_types() -> None:
-    """D-03/OPS-03: GET /api/v1/job-types returns 8 items over the production
+def test_production_registry_catalog_lists_all_nine_types() -> None:
+    """D-03/OPS-03 (+ 20.1-09 record-external-activity): GET /api/v1/job-types returns 9 items over the production
     default registry; every description is nonblank; cancellation_mode
     values match the D-01 map; the paper-session item's description
     documents its queued_only cancellation behavior."""
@@ -227,11 +228,12 @@ def test_production_registry_catalog_lists_all_eight_types() -> None:
 
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 8
+    assert len(items) == 9
 
     expected_cancellation_modes = {
         "paper-session": "queued_only",
         "reconciliation": "queued_only",
+        "record-external-activity": "queued_only",
         "broker-order-sync": "queued_only",
         "backtest": "step_boundary",
         "risk-evaluation": "step_boundary",

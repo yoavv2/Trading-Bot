@@ -32,6 +32,7 @@ from trading_platform.jobs.registry import (
     retry_prerequisite_for,
 )
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
+from trading_platform.services.external_activity import ExternalActivityRejectedError
 
 _ROOT = Path(__file__).resolve().parents[1]
 _JOBS_PKG = _ROOT / "src" / "trading_platform" / "jobs"
@@ -230,7 +231,9 @@ def test_job_domain_conflict_error_message_and_str() -> None:
 
 
 def test_domain_conflict_exceptions_is_the_closed_tuple() -> None:
-    assert DOMAIN_CONFLICT_EXCEPTIONS == (ConcurrentRunLockedError,)
+    # 20.1-09: ExternalActivityRejectedError joins (refusal precedes any write: certain).
+    assert DOMAIN_CONFLICT_EXCEPTIONS == (ConcurrentRunLockedError, ExternalActivityRejectedError)
+    assert DOMAIN_CONFLICT_OUTCOME_UNCERTAIN[ExternalActivityRejectedError] is False
     # Every translated exception carries an explicit certainty decision.
     assert set(DOMAIN_CONFLICT_OUTCOME_UNCERTAIN) == set(DOMAIN_CONFLICT_EXCEPTIONS)
 
