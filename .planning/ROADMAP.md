@@ -5,8 +5,9 @@
 - ✅ **v1.0 MVP Backtest & Paper Trading** - Phases 1-6 (shipped 2026-03-15)
 - ✅ **v1.1 Execution Correctness & Hardening** - Phases 7-12 (shipped 2026-07-15; full detail archived in `.planning/milestones/v1.1-paused/`)
 - ✅ **v1.2 Operator Console v0** - Phases 13-16 (shipped 2026-07-09; full detail archived in `.planning/milestones/v1.2-operator-console/`)
-- 🚧 **v1.3 Operator Platform** - Phases 17-21 (in progress — 17, 18 complete)
-- 🔭 **Next (not yet defined): Strategy Research / Strategy Lab** — after v1.3 closes, work moves away from operator infrastructure toward strategy research. Scheduling (SCHED-01..03) belongs to a later Paper Automation milestone.
+- 🚧 **v1.3 Operator Platform** - Phases 17-21, including inserted Phase 20.1 (in progress — 17–20 complete; 20.1 and 21 planned)
+- 📋 **v1.4 Operator Console** - Phases 22-27 (planned; follows v1.3) — the console rebuild on the Phase 21 read models: design first (Phase 22), then the rebuild (23–27). Carries AUD-02 and NOTIF-02.
+- 🔭 **v1.5 (next after v1.4): Strategy Research / Strategy Lab** — work moves toward strategy research after the Operator Console. Scheduling (SCHED-01..03) belongs to a later Paper Automation milestone.
 
 ## Overview
 
@@ -15,12 +16,18 @@ v1.3 (re-scoped 2026-09-23 after a repository audit) finishes the investment in 
 **Architecture invariant (two mutation paths, nothing else):**
 
 - **Long-running operations:** Console → HTTP → `JobOrchestrationService` → Job registry → worker (`run-jobs`) → existing domain service. Jobs orchestrate; domain services keep all domain semantics.
-- **Immediate safety controls** (kill-switch trip/reset, strategy enable/disable): Console → HTTP → `OperatorControlService`, synchronous, idempotent by target state, audited. A kill-switch operation never depends on a healthy worker.
+- **Synchronous operator controls** (kill-switch trip/reset, strategy enable/disable; from Phase 20.1 also active-paper-strategy seeding/handover, End execution operation, Record broker statement): Console or API → HTTP → `OperatorControlService`, synchronous, idempotent by target state, audited, and **never making a broker call**. A kill-switch operation never depends on a healthy worker. _(Amended 2026-09-30: path 2 was "immediate safety controls"; widened to synchronous operator controls with no broker call. Any action that reads or writes the broker is a Job.)_
 - No script, CLI command, or Makefile target invokes a mutating domain service outside a Job handler or the control service, except named deployment tooling (`migrate`, `seed`).
 
 **Cancellation limitation (accepted for v1.3):** cancellation is cooperative at handler/service-call boundaries. Queued Jobs cancel immediately; running Jobs stop at the next handler step boundary, or land `FAILED`/`cancellation_timeout` with `outcome_uncertain` if a single service call outlives the 300s grace period. No cancellation/progress abstraction is introduced into domain services; fine-grained mid-service cancellation can be added later if real workloads require it.
 
-Phase order: Phase 17 built the generic Job framework; Phase 18 built the idempotent HTTP orchestration surface, followed by post-phase race/test hardening of the framework (PR #1). The production registry was intentionally left empty at the end of Phase 18. Phase 19 proves the whole chain end-to-end with one real operation (backtest) and builds the generic Job UI. Phase 20 migrates every remaining operation, restores safety controls, adds operator retry, and retires all bypasses. Phase 21 builds operational history and failure visibility from audit data that already exists, then v1.3 closes.
+**Re-scope 2026-09-30 (Operator Console IA programme; `.planning/research/operator-console-ia/`):**
+- Phase 20.1 is INSERTED to make trading-safety semantics correct before any read model is built.
+- Phase 21 is re-planned as the **Operator Read-Model Foundation** (no UI).
+- AUD-02 and NOTIF-02 move to the new v1.4 Operator Console milestone.
+- Until v1.4, the new paper-trading controls are operated **through the HTTP API only**; the existing console receives only truthfulness adjustments. The runbook is `research/operator-console-ia/05-INTERIM-API-OPERATIONS.md`.
+
+Phase order: Phase 17 built the generic Job framework; Phase 18 built the idempotent HTTP orchestration surface, followed by post-phase race/test hardening of the framework (PR #1). The production registry was intentionally left empty at the end of Phase 18. Phase 19 proves the whole chain end-to-end with one real operation (backtest) and builds the generic Job UI. Phase 20 migrates every remaining operation, restores safety controls, adds operator retry, and retires all bypasses. Phase 20.1 (inserted) fixes the operator-state semantics: paper-account ownership, attribution, submission uncertainty, recovery, execution operations, calendar/evaluation/execution facts, and data provenance. Phase 21 builds the read models (and the worker heartbeat) the new console needs, then v1.3 closes.
 
 ## Phases
 
@@ -78,9 +85,23 @@ Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-
 - [x] **Phase 18: Orchestration Surface** - Idempotent Job submit/cancel HTTP endpoints, transport-agnostic Job observation, worker CLI reduced to thin adapters. (completed 2026-07-21; ORCH-01/02 Partial — `scripts/` bypass not covered, closes in Phase 20; post-phase race/test hardening completed 2026-07-22 in PR #1 / `2b88d49`)
 - [x] **Phase 19: Job Operations Vertical Slice** - Backtest as the first real production Job, production worker wiring, generic Job list/detail/progress/logs/events/cancel UI, minimal submission UI, end-to-end Console → HTTP → Job → Worker → Service proof. (completed 2026-09-26)
 - [x] **Phase 20: Complete Operation Migration & Safety Controls** - Remaining operations as Jobs, synchronous kill-switch/strategy controls, operator retry with lineage, retirement of every mutation bypass with boundary enforcement. (completed 2026-09-29)
-- [ ] **Phase 21: Operations History & Polish** - Unified operational history and global failure visibility built from existing Job/event/control audit data; operational UX cleanup; then v1.3 closes.
+- [ ] **Phase 20.1: Operator-State Correctness & Paper-Account Ownership** (INSERTED) - Single active paper strategy (starting with none), evidence-based attribution with owner-less account checks, audited external-activity recording, unambiguous order submission and uncertain-outcome recovery, a correct account baseline, honest batch/metadata outcomes, calendar/evaluation/execution facts, evaluation data provenance, a pausable execution operation, and truthful legacy-console behavior. New controls are API-only.
+- [ ] **Phase 21: Operator Read-Model Foundation** - Read-only, bounded, closed-enum read models for the new console (overview, issues, sessions/operations, coverage, reconciliation detail, activity, catalog) plus the persisted worker heartbeat; then v1.3 closes.
 
-**Deferred out of v1.3:** SCHED-01..03 (→ future Paper Automation milestone), AUD-03 (multi-user identity groundwork — single operator). NOTIF-01 folded into AUD-02.
+**Deferred out of v1.3:** SCHED-01..03 (→ future Paper Automation milestone), AUD-03 (multi-user identity groundwork — single operator). NOTIF-01 folded into AUD-02. **Moved to v1.4 (2026-09-30):** AUD-02, NOTIF-02.
+
+### 📋 v1.4 Operator Console (Planned)
+
+**Milestone Goal:** An operator understands at a glance whether trading is safe and working, what needs attention, and what to do next. The console is rebuilt on the Phase 21 read models using the hybrid information architecture (posture + session pipeline + attention; `research/operator-console-ia/02-HYBRID-IA-PROPOSAL.md`). Desktop and mobile; mobile limited to monitoring and emergency controls until an auth/network model exists.
+
+- [ ] **Phase 22: UX & Design Language** - Inspiration → design-system exploration → representative screens → iteration → finalized design language → remaining screens (Paper; no code).
+- [ ] **Phase 23: Shell & Overview** - Header (environment, posture, attention badge = NOTIF-02, operations tray, Stop), navigation, Overview.
+- [ ] **Phase 24: Trading** - Session pipeline, execution operation (Continue/End), permission & controls incl. seeding/handover, recovery screens.
+- [ ] **Phase 25: Portfolio · Market data · Research**
+- [ ] **Phase 26: Activity & System** - Activity (AUD-02), System › Technical; retire legacy routes against the "nothing lost" table.
+- [ ] **Phase 27: Mobile** - Monitoring + emergency controls (network/auth decision required first).
+
+Detailed requirements and plans for v1.4 are defined after Phase 21.
 
 ## Phase Details
 
@@ -291,27 +312,126 @@ Plans:
 - [x] 20-24-PLAN.md — Delete bypass scripts/Makefile targets; closed-world boundary test
 **UI hint**: yes
 
-### Phase 21: Operations History & Polish
+### Phase 20.1: Operator-State Correctness & Paper-Account Ownership (INSERTED)
 
-**Goal**: The operator inspects one filterable operational history of Jobs and safety-control changes and sees failures from any console screen — built entirely from audit data that already exists — and the operational UX is consistent. v1.3 closes after this phase.
-**Depends on**: Phase 20 (every operation and control this phase surfaces already exists)
-**Requirements**: AUD-01, AUD-02, NOTIF-02
+**Goal**: Trading-safety semantics are correct and explicit before any read model or console is built. At most one active paper strategy owns the Alpaca account, starting with none; attribution is evidence-based with an owner-less account-level check; external activity is recorded through an audited path; order submissions are never re-sent ambiguously and uncertain outcomes are recovered by verified broker state; evaluation never corrupts account truth; batch and symbol-metadata outcomes are honest; trading day, evaluation session and execution window are separate facts; evaluations carry data provenance; and a multi-order session is an explicit, pausable execution operation. New controls are API-only until v1.4, and the existing console stays truthful.
+**Depends on**: Phase 20
+**Requirements**: PAPER-01, PAPER-02, ACCT-01, EXT-01, COR-01, COR-03, COR-04, COR-05, COR-06, PROV-01, REC-01, REC-02, COMPAT-01
 **Success Criteria** (what must be TRUE):
 
-  1. Every Job and every safety-control change is inspectable with timestamp, operation type, parameters, resulting Job or control record, and outcome, sourced from existing `Job`/`JobEvent`/`JobMutation` rows and `OPERATOR_CONTROL` runs + `ExecutionEvent` rows (AUD-01).
-  2. A read-only history endpoint and console `/history` page filter by kind (Job/control), type, outcome, and date range, including failures and kill-switch trips (AUD-02, absorbs NOTIF-01).
-  3. A test asserts this phase adds no new tables or columns; a test walking the mutating-route allowlist asserts every mutating route produces a history entry (AUD-01).
-  4. A global failure indicator renders on every console route and links to the filtered history (NOTIF-02).
-  5. Shared status badge replaces duplicated `statusColor` helpers; Jobs, History, and Controls are reachable from the nav.
+  1. Two active paper strategies are unrepresentable; the initial state is no owner; `paper-session` and strategy-scoped reconciliation for a non-owner are rejected at submit and re-checked before every broker action; seeding and handover pass checks A1–A7 from persisted evidence and the new owner starts disabled (PAPER-01, PAPER-02).
+  2. Broker orders and fills are classified `owned` / `recorded_external` / `unrecognized` from local registration evidence (never an ID format alone); unexplained exposure blocks; broker sync never creates positions; owner-less account-level sync and reconciliation run with no strategy and store results in dedicated storage (COR-05, ACCT-01).
+  3. Recording external activity requires terminal orders and zero net external exposure, preserves external origin, and runs a fresh account-level reconciliation in the same Job; recording alone never lifts a block (EXT-01).
+  4. An order POST is never re-sent while the original may still produce an execution; every attempt is logged before it can leave the process; a found order resolves uncertainty by its verified state; an intent is "proven not sent" only by positive evidence over its whole attempt history (a missing outcome is uncertainty); a never-found order stays unresolved until the broker shows it or its attempt history proves it not sent — a broker statement of non-receipt is audited evidence only (amended 2026-10-04; supersedes the earlier non-receipt release rule); every paper-session submission (fresh, retry or Continue) and every ownership change is gated while uncertainty is unresolved, and End, expiry, re-evaluation or a new order version never bypass it (COR-06, REC-01; supersedes Phase 20 D-19).
+  5. A multi-order session pauses at the first order whose effects are not accounted; Continue re-checks sync, reconciliation, provenance, the fresh price and fresh risk and never resubmits or re-versions an order (a price deviation beyond tolerance pauses and sends nothing; an explicit Continue sends the same pinned intent once the price is back within tolerance and every freshness, permission, provenance, recovery, reconciliation, risk and TL-10 check passes again — changed inputs or settings still require re-evaluation, window expiry still terminates, and an unresolved earlier submission still blocks; PD-1 approved 2026-10-04); a new evaluation creates an order only when the action is justified by verified state and strategy rules — a changed fingerprint alone never does — and at most one broker-reaching action per strategy, evaluation session, symbol and side (TL-10); End or expiry terminates unsent intents only and never cancels broker orders, resolves uncertainty or changes trading permission (REC-02).
+  6. Risk evaluation writes no account snapshot and sizes on broker-observed cash; batch and symbol-metadata operations report complete / partial / failed; symbols missing required metadata are never ready for trading (COR-01, COR-03).
+  7. Trading day, evaluation session and execution window are separate calendar facts with explicit unknowns; historical execution is rejected; the calendar can sync ahead to a horizon; evaluations carry an input manifest that detects corrected data but not expected portfolio changes (COR-04, PROV-01).
+  8. The existing console no longer starts paper sessions, shows Outcome next to Job status, defaults reconciliation and sync to account scope, and never states "does not block execution" while trading is blocked; API changes are additive and console contract tests stay green (COMPAT-01).
+  9. The API end-to-end scenarios E1–E15 pass over HTTP against a scripted fake broker.
 
-**Out of scope**: identity/actor schema (AUD-03), external notifications, retention/pruning, new audit tables, scheduling.
-**Plans**: TBD
-**UI hint**: yes
+**Temporary limitations (accepted)**: TL-1 repeated Continue within a session; TL-2 a working order blocks further orders; TL-3 single regular-hours execution policy; TL-4 a never-found ambiguous order blocks the strategy and ownership changes until the broker shows it or it is proven not sent (no product-level release; a broker statement is evidence only; amended 2026-10-04); TL-5 external activity only when terminal and net-zero; TL-6 handover only when flat; TL-7 full broker-history re-read; TL-8 lazy window expiry; TL-9 API-only operation until v1.4; TL-10 one broker-reaching action per strategy, evaluation session, symbol and side (initial product limitation; a partially filled exit leaves no second sell that session); TL-11 partial-fill remainders are not pursued automatically (remaining position preserved, exposed and risk-checked; per-strategy follow-up behaviour in 20.1-15 S3-R4).
+**Schema changes**: migrations 0022–0027 — active-paper-strategy singleton, order-submission attempt log, dedicated `account_reconciliation_runs` (architectural recommendation R-31), `external_broker_activity`, recovery records, execution-operation state + one-open-operation partial unique index. `RiskDecisionCode.symbol_not_ready` is code-only. Inventory: `research/operator-console-ia/03-PLANNING-CHANGES.md` §3.11.
+**Out of scope**: new console screens or controls (v1.4); open-order-aware risk accounting; flatten / exits-only; adopting external positions; concurrent multi-strategy paper trading; scheduling; auth.
+**Plans**: 16 plans
+
+Plans (execution waves follow true dependency depth: the Alembic chain 0021→0027 is serialized, and plans that edit the same files never share a wave):
+
+**Wave 1**
+
+- [ ] 20.1-01-PLAN.md — Single active paper strategy: singleton + migration 0022, submit/run-time gates, no-owner seed, new strategies disabled (PAPER-01)
+- [ ] 20.1-03-PLAN.md — Evaluation writes no account snapshot; broker-observed baseline; cash sizing (COR-01)
+
+**Wave 2**
+
+- [ ] 20.1-02-PLAN.md — Order-submission attempt log (migration 0023), failure taxonomy, no ambiguous re-send, status mapping, client-order-id lookup (COR-06)
+- [ ] 20.1-04-PLAN.md — Batch outcomes complete/partial/failed incl. symbol metadata; symbol readiness + `symbol_not_ready` (COR-03)
+
+**Wave 3**
+
+- [ ] 20.1-05-PLAN.md — Trading day / evaluation session / execution window; execution policy; calendar sync horizon; session defaults (COR-04)
+- [ ] 20.1-07-PLAN.md — Evidence-based attribution, unexplained exposure, no position adoption (COR-05)
+
+**Wave 4**
+
+- [ ] 20.1-06-PLAN.md — Evaluation input manifest (data provenance) + accessor boundary test (PROV-01)
+- [ ] 20.1-08-PLAN.md — Owner-less account-level sync and reconciliation; dedicated `account_reconciliation_runs` (migration 0024) (ACCT-01)
+
+**Wave 5**
+
+- [ ] 20.1-09-PLAN.md — Record external activity Job + `external_broker_activity` (migration 0025) (EXT-01)
+
+**Wave 6**
+
+- [ ] 20.1-10-PLAN.md — Uncertain-outcome recovery, resolution predicate, submission gates, broker statement control, D-19 supersession (migration 0026) (REC-01)
+
+**Wave 7**
+
+- [ ] 20.1-11-PLAN.md — Execution operation storage and state machine: migration 0027, closed states/reasons, one open operation per strategy, S1 fencing and takeover primitives, real OperationView, End operation and R2 reads (REC-02)
+
+**Wave 8**
+
+- [ ] 20.1-12-PLAN.md — Seeding and handover controls with account checks A1–A7 (PAPER-02)
+- [ ] 20.1-15-PLAN.md — Execution operation submission: sequential loop with pause points, per-intent permission, fresh price and risk checks (`revalidate_pinned_intent`), S3 executed-key guard, start-mode submit-time gates (REC-02)
+
+**Wave 9**
+
+- [ ] 20.1-16-PLAN.md — Execution operation Continue: paper-session `continue` mode, S1 takeover and concurrency acceptance, no resend of in-doubt intents, retry resolution (REC-02)
+
+**Wave 10**
+
+- [ ] 20.1-14-PLAN.md — Legacy-console truthfulness adjustments (COMPAT-01)
+
+**Wave 11**
+
+- [ ] 20.1-13-PLAN.md — Phase gate: API end-to-end scenarios E1–E15 (all 20.1 requirements)
+
+**UI hint**: yes (legacy-console compatibility only)
+
+### Phase 21: Operator Read-Model Foundation
+
+**Goal**: The backend exposes every operator-facing fact the v1.4 console needs as read-only, bounded, tested APIs whose meaning is carried in closed enums (trading permission, posture, verdict and next action, issues, session pipeline and execution operations, market-data coverage, reconciliation detail, activity, worker health, catalog), so the console rebuild does no domain interpretation. Worker health is backed by a persisted heartbeat. v1.3 closes after this phase.
+**Depends on**: Phase 20.1
+**Requirements**: AUD-01, OPR-01, OPR-02, OPR-03, OPR-04, OPR-05, OPR-06, OPR-07, OPR-08, WRK-01, WRK-02
+**Success Criteria** (what must be TRUE):
+
+  1. Walking the mutating-route allowlist, every Job and every control change (including seeding/handover, operation End and broker statements) yields exactly one Activity item with timestamp, operation, parameters, resulting record and outcome; control changes are never presented as runs (AUD-01, OPR-06).
+  2. Trading permission uses the same gate functions as the paper session; the books gate is the latest persisted reconciliation of either scope, labelled with its time (OPR-01).
+  3. Issues are a closed rule enum, each mapped to exactly one lane and severity; the 2026-09-29 fixture yields exactly `calendar_out_of_range`, `worker_unknown`, `no_active_paper_strategy` and `outcome_uncertain_unverified` (OPR-02).
+  4. Sessions and operations expose trading day, evaluation session and execution window separately, never mark a historical session executable, and show paused operations with preserved unsent intents (OPR-03).
+  5. Coverage and reconciliation detail cover both owner and account scope with classification, origin tags and unexplained exposure (OPR-04, OPR-05).
+  6. Worker health reports exactly `idle`, `busy`, `unavailable` or `unknown`; no active Job is never evidence of health; worker health is not part of `/ready` (WRK-01, WRK-02).
+  7. Every read returns server `as_of`, writes nothing, and meets the 02 §10 total-request query bound (overview ≤ 15, issues ≤ 12, sessions ≤ 10, coverage ≤ 5, reconciliation list ≤ 1 / detail ≤ 3, activity ≤ 4, reused components included); the overview's verdict and next action come from one decision table and it carries the evaluation-session pipeline and recent activity; the catalog declares each job type's operator mapping (OPR-01, OPR-07, OPR-08).
+  8. A schema-delta test pins exactly one new table (`worker_heartbeats`, migration 0028); no files under `console/` change.
+
+**Out of scope**: any console UI (AUD-02, NOTIF-02 → v1.4); issue persistence; auth; control-change storage separation; scheduling.
+**Plans**: 8 plans
+
+Plans:
+
+**Wave 1**
+
+- [ ] 21-01-PLAN.md — Worker heartbeat table (migration 0028), throttled writer, worker-health read (WRK-01, WRK-02)
+
+**Wave 2** *(after 21-01: the Operations-engine lane reads `services/worker_health.py`)*
+
+- [ ] 21-02-PLAN.md — Overview read + `as_of`/query-count harness (OPR-01, OPR-08)
+
+**Wave 3**
+
+- [ ] 21-03-PLAN.md — Issues read (OPR-02)
+- [ ] 21-04-PLAN.md — Sessions and execution operations read (OPR-03)
+- [ ] 21-05-PLAN.md — Coverage + reconciliation detail reads (OPR-04, OPR-05)
+- [ ] 21-06-PLAN.md — Activity read (OPR-06, AUD-01)
+- [ ] 21-07-PLAN.md — Catalog and job-list extensions (OPR-07)
+
+**Wave 4** *(after 21-03, 21-04 and 21-06: the Overview's recent activity reuses the Activity read)*
+
+- [ ] 21-08-PLAN.md — Overview completion: recent activity, complete contract, cross-read parity, complete request cost (OPR-01, OPR-08)
 
 ## Progress
 
 **Execution Order:**
-v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 starts only after the Phase 19 vertical slice is verified. v1.3 closes after Phase 21.
+v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phase 20 starts only after the Phase 19 vertical slice is verified. v1.3 closes after Phase 21. v1.4 (22 → 23 → 24/25/26 → 27) follows, then v1.5 Strategy Lab.
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -335,7 +455,16 @@ v1.3 executes 17 → 18 → 19 → 20 → 21, strictly sequential. Phase 20 star
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 21. Operations History & Polish | v1.3 | 0/TBD | Not started | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 0/16 | Planned | - |
+| 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
+| 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
+| 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
+| 24. Trading | v1.4 | 0/TBD | Not started | - |
+| 25. Portfolio · Market data · Research | v1.4 | 0/TBD | Not started | - |
+| 26. Activity & System | v1.4 | 0/TBD | Not started | - |
+| 27. Mobile | v1.4 | 0/TBD | Not started | - |
 
 ---
-*Roadmap updated: 2026-09-23 — v1.3 re-scoped after repository audit: post-phase race/test hardening (PR #1) recorded under Phase 18, Phases 19–21 re-cut (vertical slice → migration & safety controls → history & polish), SCHED-01..03 and AUD-03 deferred, ORCH-01/02 marked Partial pending Phase 20. Previous update 2026-07-15.*
+*Roadmap updated: 2026-09-30 — Operator Console IA programme: Phase 20.1 INSERTED (operator-state correctness & paper-account ownership, 14 plans); Phase 21 re-planned as Operator Read-Model Foundation (7 plans, worker heartbeat included); AUD-02/NOTIF-02 moved to the new v1.4 Operator Console milestone (Phases 22–27); Strategy Lab becomes v1.5; mutation path 2 widened to synchronous operator controls with no broker call. Sources: `research/operator-console-ia/03-PLANNING-CHANGES.md` rev. 8, `04-IMPLEMENTATION-PLANS.md`, `05-INTERIM-API-OPERATIONS.md`.*
+*Previous update 2026-09-23 — v1.3 re-scoped after repository audit: post-phase race/test hardening (PR #1) recorded under Phase 18, Phases 19–21 re-cut (vertical slice → migration & safety controls → history & polish), SCHED-01..03 and AUD-03 deferred, ORCH-01/02 marked Partial pending Phase 20. Previous update 2026-07-15.*
+*Roadmap updated: 2026-10-03 — Phase 20.1 plan 20.1-11 split by responsibility into 20.1-11 (storage, state machine, reads, End), 20.1-15 (submission execution) and 20.1-16 (Continue); 16 plans; 14 moved to wave 10 and 13 to wave 11.*

@@ -14,15 +14,27 @@ Build a trustworthy, auditable trading platform that can reproducibly validate a
 
 **Goal (re-scoped 2026-09-23):** Every existing long-running operation executes as a Job that the operator submits, observes, cancels, and retries from generic Job surfaces in the console; immediate safety controls work from the console without depending on the worker; and exactly one mutation path exists per operation class — no `scripts/`, CLI, or Makefile bypasses (sole exception: the trip-only break-glass `kill-switch-trip` worker subcommand, ORCH-01, amended 2026-09-27).
 
-**Current state:** Phases 17, 18, 19 and 20 complete. Phase 20 (Complete Operation Migration & Safety Controls, 2026-09-29) made every remaining manual operation a registered Job (risk evaluation, paper session, reconciliation, `ingest-bars`, `sync-symbol-metadata`, `sync-market-sessions`, broker order-lifecycle sync); added synchronous, worker-independent kill-switch trip/reset and strategy enable/disable HTTP controls with console UI and an audited break-glass CLI trip; added operator Retry with lineage; and retired every mutation bypass behind a pinned five-route allowlist (ORCH-01/02 now complete). UAT diagnosed four gaps (ingest all-fail reported SUCCEEDED, Alpaca page_size 422, stale dialog state on re-open, inverted control timestamps); gap-closure plans 20-25..20-28 fixed them and live re-tests passed. Optional DB CHECK migration 0022 for control timestamps was declined; the 25 pre-fix inverted audit rows stay as historical records. Remaining: Phase 21 (Operations History & Polish), then v1.3 closes.
+**Current state:** Phases 17, 18, 19 and 20 complete. Phase 20 (Complete Operation Migration & Safety Controls, 2026-09-29) made every remaining manual operation a registered Job (risk evaluation, paper session, reconciliation, `ingest-bars`, `sync-symbol-metadata`, `sync-market-sessions`, broker order-lifecycle sync); added synchronous, worker-independent kill-switch trip/reset and strategy enable/disable HTTP controls with console UI and an audited break-glass CLI trip; added operator Retry with lineage; and retired every mutation bypass behind a pinned five-route allowlist (ORCH-01/02 now complete). UAT diagnosed four gaps (ingest all-fail reported SUCCEEDED, Alpaca page_size 422, stale dialog state on re-open, inverted control timestamps); gap-closure plans 20-25..20-28 fixed them and live re-tests passed. Optional DB CHECK migration 0022 for control timestamps was declined; the 25 pre-fix inverted audit rows stay as historical records. **Re-scope 2026-09-30 (Operator Console IA programme, `.planning/research/operator-console-ia/`):**
+- An operator-perspective audit found the console reported records without conclusions. For example, on 29 Sep "everything green" while nothing could trade: the calendar ended 13 Mar, bars were missing, and three uncertain outcomes were hidden.
+- Correctness defects were confirmed: an evaluation snapshot blocked reconciliation, retry was unlocked by a blocking reconciliation, partial ingestion was reported SUCCEEDED, order POSTs could be re-sent automatically, and broker sync adopted positions.
+- Remaining work:
+  - **Phase 20.1 (INSERTED):** operator-state correctness & paper-account ownership;
+  - **Phase 21:** re-planned as the Operator Read-Model Foundation, including the worker heartbeat;
+  - then v1.3 closes;
+  - **v1.4 Operator Console** (the hybrid IA rebuild, which carries AUD-02/NOTIF-02) follows before Strategy Lab.
+- Until v1.4, new paper-trading controls are HTTP-API-only.
 
 _Previous state (2026-09-26):_ Phases 17, 18 and 19 complete. Phase 19 (Job Operations Vertical Slice, 2026-09-26) proved the first production path end to end: `backtest` is the first registered production Job type; the compose worker runs `run-jobs` with config preflight; a read-only job-type catalog (`GET /api/v1/job-types`); an ORCH-07 mutation flag (typed 403, zero writes, disabled on the public `render.yaml` deploy); and generic, job-type-agnostic console Job list/detail/progress/logs/events/cancel UI plus a minimal backtest submission form. Human UAT passed 4/4, and the compose image config-path crash was fixed along the way. Remaining gaps from the 2026-09-23 audit: the kill switch has no supported trip/reset path, and mutating `scripts/*.py` still call domain services directly (ORCH-01/02 Partial). Remaining: Phase 20 (Complete Operation Migration & Safety Controls), Phase 21 (Operations History & Polish), then v1.3 closes.
 
 **Architecture invariants:**
 
-1. **Two mutation paths, nothing else** — long-running operations: Console → HTTP → Job orchestration → worker → existing domain service. Immediate safety controls (kill-switch trip/reset, strategy enable/disable): Console → HTTP → `OperatorControlService`, synchronous, idempotent by target state, audited; a kill-switch operation never depends on a healthy worker. The UI never invokes business logic directly; no script, CLI command, or Makefile target invokes a mutating domain service outside a Job handler or the control service (deployment tooling such as `migrate`/`seed` is explicitly exempted, as is the single trip-only break-glass `kill-switch-trip` worker subcommand so the kill switch can be tripped when the API is down — ORCH-01, amended 2026-09-27).
+1. **Two mutation paths, nothing else** — long-running operations: Console → HTTP → Job orchestration → worker → existing domain service. Synchronous operator controls: Console/API → HTTP → `OperatorControlService`, synchronous, idempotent by target state, audited, and **never making a broker call**; a kill-switch operation never depends on a healthy worker.
+   - Covers kill-switch trip/reset and strategy enable/disable.
+   - From Phase 20.1 it also covers active-paper-strategy seeding/handover, End execution operation, and Record broker statement.
+   - Any action that reads or writes the broker is a Job.
+   - _Amended 2026-09-30: previously "immediate safety controls". The worker's own heartbeat (Phase 21) is worker infrastructure self-state, like per-Job `heartbeat_at`, not an operator mutation path._ The UI never invokes business logic directly; no script, CLI command, or Makefile target invokes a mutating domain service outside a Job handler or the control service (deployment tooling such as `migrate`/`seed` is explicitly exempted, as is the single trip-only break-glass `kill-switch-trip` worker subcommand so the kill switch can be tripped when the API is down — ORCH-01, amended 2026-09-27).
 2. **Jobs are orchestration-only** — Jobs orchestrate work rather than implement business logic. All domain behavior remains inside the existing service layer. A Job carries lifecycle, progress, logs, and audit linkage — never domain semantics.
-3. **Generic, extensible Job abstraction** — one operation-agnostic Job model with closed lifecycle enum `QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED`, progress reporting, structured logs, and audit history. New Job types are registerable without modifying queue infrastructure, and the console's Job list/detail/progress/log/event/cancel surfaces are job-type-agnostic so future types (parameter sweeps, walk-forward tests, strategy comparisons) reuse them unchanged. Submission forms are explicit per operation; no JSON-Schema form framework.
+3. **Generic, extensible Job abstraction** — one operation-agnostic Job model with closed lifecycle enum `QUEUED → RUNNING → SUCCEEDED / FAILED / CANCELLED`, progress reporting, structured logs, and audit history. New Job types are registerable without modifying queue infrastructure, and the console's Job list/detail/progress/log/event/cancel surfaces are job-type-agnostic so future types (parameter sweeps, walk-forward tests, strategy comparisons) reuse them unchanged. Submission forms are explicit per operation; no JSON-Schema form framework. _Amended 2026-09-30: the generic Job surfaces remain (moving to System › Technical in v1.4), and every Job type must **also** declare its operator mapping (operation label, pipeline stage/area, broker effect, session scope, console submission mode), enforced by test (OPR-07). Operation outcomes (e.g. `partial`, `paused`) are derived in the read layer, never stored on the Job (invariant 2)._
 4. **Transport-agnostic observation** — the console submits jobs and observes job state. v1.3 uses polling; no SSE/WebSocket commitment.
 5. **Idempotent operations** — every operator action is safely retryable. Duplicate submissions from browser refreshes, retries, network failures, or repeated requests never execute the same operation twice. Operator retry of a FAILED/CANCELLED Job is an explicit new Job linked via `retry_of_job_id` — no automatic retries.
 6. **Cooperative cancellation (accepted limitation)** — cancellation is checked at handler/service-call boundaries; running Jobs stop at the next step boundary or land `FAILED`/`cancellation_timeout`. No cancellation/progress abstraction enters the domain services in v1.3.
@@ -31,8 +43,21 @@ _Previous state (2026-09-26):_ Phases 17, 18 and 19 complete. Phase 19 (Job Oper
 9. **Audit from existing records** — every Job and safety-control change is inspectable (timestamp, operation type, parameters, resulting Job or control record, outcome) from the existing Job/JobEvent/JobMutation and control audit records. Single operator: no identity/actor schema is added until a concrete requirement needs it.
 
 **Target features (remaining):**
-- Phase 20: risk evaluation, paper session, reconciliation, `ingest-bars`, `sync-symbol-metadata`, `sync-market-sessions`, broker order-lifecycle sync as Jobs; synchronous kill-switch and strategy controls; operator retry with lineage; typed domain-conflict failures; retirement of every mutation bypass with boundary enforcement
-- Phase 21: unified operational history and global failure indicator from existing audit data; operational UX cleanup
+- ~~Phase 20~~ (complete 2026-09-29)
+- Phase 20.1 (INSERTED 2026-09-30):
+  - single active paper strategy (starting with none) with seeding/handover;
+  - evidence-based attribution + owner-less account checks;
+  - audited external-activity recording;
+  - no ambiguous order re-send + uncertain-outcome recovery (supersedes Phase 20 D-19);
+  - evaluation writes no account snapshot;
+  - honest batch/metadata outcomes;
+  - trading day / evaluation session / execution window;
+  - evaluation provenance manifest;
+  - pausable execution operation;
+  - legacy-console truthfulness.
+
+  Temporary limitations TL-1..TL-11 are accepted (TL-4 amended and TL-10/TL-11 added 2026-10-04). Decision PD-1 (a price deviation beyond tolerance pauses the operation; Continue sends the same pinned intent only after every check passes again) was approved 2026-10-04.
+- Phase 21 (re-planned 2026-09-30): closed-enum read models for the new console (overview, issues, sessions/operations, coverage, reconciliation, activity incl. AUD-01, catalog) + persisted worker heartbeat
 
 **Explicit non-goals for v1.3:**
 - Scheduling of any kind — deferred to a future Paper Automation milestone (SCHED-01..03)
@@ -42,7 +67,7 @@ _Previous state (2026-09-26):_ Phases 17, 18 and 19 complete. Phase 19 (Job Oper
 - Redis/Celery/Kafka, distributed workers, SSE/WebSockets, external observability — DB-backed and polling only
 - New Job types beyond existing operations, and the Experiment domain (Stage 2) — the generic Job UI must carry them later, but they do not ship now
 
-**Next milestone direction:** Strategy Research / Strategy Lab (ATOS Stage 2). After v1.3 closes, work moves away from operator infrastructure.
+**Next milestone direction (amended 2026-09-30):** **v1.4 Operator Console** follows v1.3, rebuilding the console on the Phase 21 read models: design first, then the rebuild; mobile limited to monitoring and emergency controls. **v1.5 Strategy Research / Strategy Lab** (ATOS Stage 2) follows v1.4.
 
 ## Shipped Milestone: v1.2 Operator Console v0 (Completed 2026-07-09)
 
@@ -88,7 +113,7 @@ Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and compl
 - Subscription or billing systems — there is no commercial SaaS surface in v1.
 - Team workflows — one operator means no shared workflows or permissions model is needed yet.
 - User management — no additional users or tenant boundaries exist in the first version.
-- Mobile app support — the initial goal is engine correctness and inspectability, not mobile access.
+- Mobile app support — the initial goal is engine correctness and inspectability, not mobile access. _(2026-09-30: v1.4 plans a responsive mobile web layout for monitoring and emergency controls only; native apps remain out of scope.)_
 - Options trading — the initial market is U.S. equities only.
 - Short selling — long-only daily trend following is the first validated workflow.
 - Leverage or margin logic — unnecessary complexity for the initial paper-trading system.

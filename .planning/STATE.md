@@ -2,36 +2,36 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
-status: ready_to_plan
-stopped_at: Phase 20 complete (28/28) — ready to discuss Phase 21
-last_updated: 2026-09-29T13:10:09.654Z
-last_activity: 2026-09-29
+status: planning
+stopped_at: Phase 20.1 (inserted) and re-planned Phase 21 planned (16 + 8 plans); round-6 planning corrections applied and PD-1 approved 2026-10-04; planning complete, implementation awaits separate authorization
+last_updated: 2026-10-04T00:00:00.000Z
+last_activity: 2026-10-04
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 4
-  total_plans: 55
+  total_plans: 79
   completed_plans: 55
-  percent: 80
+  percent: 67
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-23)
+See: .planning/PROJECT.md (updated 2026-09-30)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 21 — operations history & polish
+**Current focus:** Phase 20.1 — operator-state correctness & paper-account ownership (INSERTED); then Phase 21 — operator read-model foundation
 
 ## Current Position
 
-Phase: 21
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-29
-**Progress (v1.3):** [████████░░] 80% — 4 of 5 phases complete (17, 18, 19, 20); 21 not started
+Phase: 20.1
+Plan: Planned (16 plans; 20.1-01 first) — not started; implementation requires separate authorization
+Status: Planning complete for 20.1 and 21 (round-6 corrections applied; PD-1 price pause approved 2026-10-04); no open product decision; implementation not started and requires separate authorization
+Last activity: 2026-10-04
+**Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
 
-v1.3 phase list: 17 ✓ → 18 ✓ (ORCH-01/02 Partial → Phase 20; post-phase race/test hardening done) → 19 ✓ → 20 ✓ (2026-09-29; gap closure 20-25..20-28, live UAT re-tests 6-9 passed; optional migration 0022 declined) → 21 → close v1.3. Scheduling deferred. Next milestone direction: Strategy Research / Strategy Lab.
+v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
 
 ## Performance Metrics
 
@@ -260,6 +260,7 @@ Recent decisions affecting current work:
 
 **Active v1.3 concerns:**
 
+- RESOLVED 2026-10-04: decision PD-1 (`price_moved_beyond_tolerance` pauses; Continue sends the same pinned intent only after every check passes again) approved by the user; recorded in `.planning/research/operator-console-ia/04-IMPLEMENTATION-PLANS.md` "Planning correction, round 6". Implementation still awaits separate authorization.
 - ENVIRONMENT (found 2026-09-23, not a product/code gap): the local `.venv` is broken — `.venv/bin` contains no `python` interpreter and `pyvenv.cfg` records creation at a different path (`.../Trading Bot Project/.venv`, Python 3.13.1). Makefile `PYTHON ?= .venv/bin/python` therefore fails. Recreate the venv before Phase 19 verification; the 2026-09-23 audit could not execute tests or scripts and relied on static evidence.
 - RESOLVED 2026-09-23: the 17-01 … 17-08 "tracking-only" requirement-marking notes below are superseded — JOB-01..07 are all Complete (JOB-06 operator surface delivered by Phase 18 `POST /api/v1/jobs/{job_id}/cancel`).
 - (found 2026-09-23, tracked as Phase 20 scope) Makefile targets `dry-run` and `sync-sessions` call worker subcommands removed in Phase 18 (dead); mutating `scripts/*.py` bypass the orchestration surface (ORCH-01/02 Partial → ORCH-08).

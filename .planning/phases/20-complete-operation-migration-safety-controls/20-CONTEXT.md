@@ -142,13 +142,20 @@ Out of scope (roadmap-fixed):
   - Retrying a non-terminal or `SUCCEEDED` Job also returns a typed `409`.
   - No automatic retry path exists anywhere.
 - **D-18:** Retry **re-runs `validate_payload`** on the copied payload. If it is no longer valid (e.g. the strategy is unregistered) the result is a typed `422` with zero rows. The payload is never modified.
-- **D-19:** A **reconcile-first block** applies to `paper-session` and `broker-order-sync` only.
+- **D-19 — SUPERSEDED 2026-09-30 by Phase 20.1 D-15 / REQUIREMENTS REC-01** (see `.planning/phases/20.1-operator-state-correctness/20.1-CONTEXT.md` and `research/operator-console-ia/03-PLANNING-CHANGES.md` §3.7 D). The replacement rule:
+  - every `paper-session` submission, fresh or retry, is gated while an uncertain outcome for the strategy is unresolved;
+  - resolution requires per-intent broker-state classification plus a fresh clean standalone reconciliation; a `SUCCEEDED` reconciliation whose result blocks no longer lifts the block;
+  - `broker-order-sync` is never gated;
+  - the orchestration layer calls a domain read predicate, reversing the "jobs table only" clause.
+
+  Original text kept for history:
+- **D-19 (original):** A **reconcile-first block** applies to `paper-session` and `broker-order-sync` only.
   - When the original Job is `FAILED` with `outcome_uncertain=true`, retry is rejected with a typed `409` `reconciliation_required`.
   - The block lifts once a `reconciliation` Job exists that meets all of: status `SUCCEEDED`, same `strategy_id`, `finished_at` later than the original's `finished_at`.
   - The check reads only the jobs table in the orchestration layer, with no domain-report coupling. A reconciliation that found blocking findings still counts, because the paper session itself blocks on those findings.
   - All other types retry normally regardless of `outcome_uncertain`.
   - Which types need the block is declared per type (e.g. a submission-spec attribute; mechanism is Claude's).
-- **D-20:** Retry UI:
+- **D-20** _(amended 2026-09-30: during the API-only interim, paper-session Retry is hidden in the legacy console (Phase 20.1 COMPAT-01); retry-block reasons gain `outcome_unresolved` and `reconciliation_not_clean`)_: Retry UI:
   - a "Retry" button on `FAILED`/`CANCELLED` Job detail;
   - the button is disabled with a reason when a retry already exists (links to it), when mutations are off, or when D-19 blocks. The blocked message links to `/jobs/new?type=reconciliation&strategy_id=…` pre-filled;
   - the confirm dialog shows type and payload;
@@ -161,7 +168,7 @@ Out of scope (roadmap-fixed):
   - It is pre-filled with the latest completed session.
   - It is validated as an exchange trading session and not in the future, using the injectable exchange clock.
 - **D-22:** `strategy_id` is **required** for every strategy-scoped type and checked against the strategy registry. The console pre-fills it.
-- **D-23:** Paper session payload is `{strategy_id, as_of_session, risk_run_id | null}`.
+- **D-23** _(amended 2026-09-30 by Phase 20.1 D-16/D-19/D-23: `as_of_session` is the **evaluation (data) session**, and execution must fall inside its execution window; a `null` `risk_run_id` is resolved to a concrete id at the first submission, so retries and continuations replay the same intents; a new `mode: continue` with `operation_id` resumes a paused execution operation)_: Paper session payload is `{strategy_id, as_of_session, risk_run_id | null}`.
   - `null` means the service picks the latest succeeded risk run at run time, as today.
   - The consumed risk run stays recorded in the domain (`source_risk_run_id`).
   - A retry of a `null` payload may consume a newer risk run, which is intended.
