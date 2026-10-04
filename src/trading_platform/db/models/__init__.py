@@ -37,6 +37,16 @@ from trading_platform.db.models.order_submission_attempt import (
 from trading_platform.db.models.paper_fill import PaperFill
 from trading_platform.db.models.paper_order import PaperOrder
 from trading_platform.db.models.position import Position
+from trading_platform.db.models.recovery_record import (
+    AbsenceEvidenceItem,
+    BrokerState,
+    BrokerStatementKind,
+    EvidenceResult,
+    RecoveryClassification,
+    RecoveryRecord,
+    RecoveryRecordKind,
+    UnresolvedReason,
+)
 from trading_platform.db.models.risk_event import RiskEvent
 from trading_platform.db.models.strategy import Strategy, StrategyStatus
 from trading_platform.db.models.strategy_run import StrategyRun, StrategyRunStatus, StrategyRunType
@@ -48,6 +58,7 @@ from trading_platform.db.models.system_control import (
 )
 
 __all__ = [
+    "AbsenceEvidenceItem",
     "AccountReconciliationRun",
     "AccountReconciliationScope",
     "AccountReconciliationStatus",
@@ -58,7 +69,10 @@ __all__ = [
     "BacktestMetric",
     "BacktestSignal",
     "BacktestTrade",
+    "BrokerState",
+    "BrokerStatementKind",
     "DailyBar",
+    "EvidenceResult",
     "ExecutionEvent",
     "ExternalActivityOriginTag",
     "ExternalBrokerActivity",
@@ -84,6 +98,9 @@ __all__ = [
     "PaperFill",
     "PaperOrder",
     "Position",
+    "RecoveryClassification",
+    "RecoveryRecord",
+    "RecoveryRecordKind",
     "RiskEvent",
     "Strategy",
     "StrategyRun",
@@ -92,4 +109,5 @@ __all__ = [
     "StrategyStatus",
     "Symbol",
     "SystemControl",
+    "UnresolvedReason",
 ]
