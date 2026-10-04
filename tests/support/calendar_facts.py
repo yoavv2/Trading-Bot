@@ -44,6 +44,7 @@ def seed_calendar(start: date, end: date, *, settings: Settings | None = None) -
 
 @dataclass(frozen=True)
 class _Meta:
+    strategy_id: str
     universe: tuple[str, ...]
 
 
@@ -51,8 +52,14 @@ class FakeStrategy:
     """Stand-in for ``BaseStrategy``: the facts read only ``metadata.universe`` and
     ``warmup_periods``."""
 
-    def __init__(self, universe: Iterable[str], warmup_periods: int = 0) -> None:
-        self.metadata = _Meta(universe=tuple(universe))
+    def __init__(
+        self,
+        universe: Iterable[str],
+        warmup_periods: int = 0,
+        strategy_id: str = "fake_strategy",
+    ) -> None:
+        self.strategy_id = strategy_id
+        self.metadata = _Meta(strategy_id=strategy_id, universe=tuple(universe))
         self.warmup_periods = warmup_periods
 
 
