@@ -1,6 +1,7 @@
 """ORM model exports for the trading platform."""
 
 from trading_platform.db.models.account_snapshot import AccountSnapshot
+from trading_platform.db.models.active_paper_strategy import ActivePaperStrategy
 from trading_platform.db.models.backtest_equity_snapshot import BacktestEquitySnapshot
 from trading_platform.db.models.backtest_metric import BacktestMetric
 from trading_platform.db.models.backtest_signal import BacktestSignal
@@ -35,6 +36,7 @@ from trading_platform.db.models.system_control import (
 
 __all__ = [
     "AccountSnapshot",
+    "ActivePaperStrategy",
     "BacktestEquitySnapshot",
     "BacktestMetric",
     "BacktestSignal",

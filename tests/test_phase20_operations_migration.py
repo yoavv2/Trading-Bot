@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alembic import command
+from alembic.script import ScriptDirectory
 from scripts.migrate import build_alembic_config
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
@@ -345,8 +346,11 @@ def test_phase20_downgrade_refuses_when_a_job_links_multiple_strategy_runs(
     }
     assert "retry_of_job_id" in {column["name"] for column in inspector.get_columns("jobs")}
     with session_scope(settings) as session:
+        # Head-agnostic (20.1-01): the whole downgrade runs in one transaction
+        # (no transaction_per_migration), so the refusal by 0021 rolls back any
+        # later migration's downgrade too and the version stays at the head.
         assert session.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0021_phase20_operations_safety"
+            ScriptDirectory.from_config(build_alembic_config()).get_current_head()
         )
         assert (
             session.execute(
