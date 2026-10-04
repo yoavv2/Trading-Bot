@@ -21,6 +21,10 @@ from trading_platform.db.models.order_event import (
     OrderTransitionEventType,
     OrderTransitionOutcome,
 )
+from trading_platform.db.models.order_submission_attempt import (
+    AttemptOutcomeClass,
+    OrderSubmissionAttempt,
+)
 from trading_platform.db.models.paper_fill import PaperFill
 from trading_platform.db.models.paper_order import PaperOrder
 from trading_platform.db.models.position import Position
@@ -37,6 +41,7 @@ from trading_platform.db.models.system_control import (
 __all__ = [
     "AccountSnapshot",
     "ActivePaperStrategy",
+    "AttemptOutcomeClass",
     "BacktestEquitySnapshot",
     "BacktestMetric",
     "BacktestSignal",
@@ -59,6 +64,7 @@ __all__ = [
     "MarketSession",
     "OrderEvent",
     "OrderLifecycleState",
+    "OrderSubmissionAttempt",
     "OrderTransitionEventType",
     "OrderTransitionOutcome",
     "PaperFill",

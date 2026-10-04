@@ -1,0 +1,423 @@
+"""Order-submission attempt log: taxonomy, classification, persistence (COR-06, D-12).
+
+Every HTTP attempt of an order POST is logged durably BEFORE and AFTER the
+attempt, in its own committed transaction (``DbSubmissionAttemptLog``). A crash
+between the two leaves a row with a NULL outcome, which reads back as
+``ambiguous`` and is never re-sent.
+
+Taxonomy (closed):
+
+* ``AttemptOutcomeClass`` (per attempt, stored; see ``db.models``):
+  pre_connection, deadline_expired, ambiguous, duplicate_reported, rejected,
+  accepted. NULL only while the attempt is incomplete.
+* ``SubmissionClass`` (derived over ALL attempts of an intent): not_sent,
+  ambiguous, exists_reported, rejected, accepted. Precedence:
+  ambiguous (incl. any NULL-outcome row) > exists_reported > accepted >
+  rejected > not_sent. ``not_sent`` only if EVERY attempt of the intent's whole
+  history has a complete outcome of pre_connection or deadline_expired (positive
+  evidence, recorded by the sending executor, that the request never left the
+  process). A later pre_connection or deadline_expired attempt never downgrades
+  an earlier or later ambiguous or incomplete attempt.
+* ``SubmissionIntentState`` (derived from the local order + attempt log):
+  planned, registered_unsent, not_sent, submitted, ambiguous, rejected. Later
+  plans extend it with expired_unsent / cancelled_unsent.
+
+This module deliberately does not import the Alpaca client module (the client
+imports this one) and nothing under ``jobs/``. The attempt table is append-only here: there is
+no delete path and no update of ``started_at``; an outcome is written once.
+Only broker response text and exception CLASS NAMES are stored, never headers or
+credentials.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Protocol
+
+import httpx
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from trading_platform.core.settings import Settings
+from trading_platform.db.models import (
+    AttemptOutcomeClass,
+    OrderLifecycleState,
+    OrderSubmissionAttempt,
+    PaperOrder,
+)
+from trading_platform.db.session import session_scope
+
+BROKER_MESSAGE_MAX_CHARS = 500
+ERROR_TYPE_MAX_CHARS = 64
+DUPLICATE_CLIENT_ORDER_ID_MESSAGE = "client_order_id must be unique"
+
+NOT_SENT_OUTCOMES: frozenset[AttemptOutcomeClass] = frozenset(
+    {AttemptOutcomeClass.PRE_CONNECTION, AttemptOutcomeClass.DEADLINE_EXPIRED}
+)
+"""Outcomes that are positive evidence the request never left the process."""
+
+
+class SubmissionClass(StrEnum):
+    """Submission class computed over all attempts of one intent (D-12)."""
+
+    NOT_SENT = "not_sent"
+    AMBIGUOUS = "ambiguous"
+    EXISTS_REPORTED = "exists_reported"
+    REJECTED = "rejected"
+    ACCEPTED = "accepted"
+
+
+class SubmissionIntentState(StrEnum):
+    """Closed intent state derived from the local order and its attempt log.
+
+    Later plans extend this set with ``expired_unsent`` and ``cancelled_unsent``.
+    """
+
+    PLANNED = "planned"
+    REGISTERED_UNSENT = "registered_unsent"
+    NOT_SENT = "not_sent"
+    SUBMITTED = "submitted"
+    AMBIGUOUS = "ambiguous"
+    REJECTED = "rejected"
+
+
+class AttemptAlreadyCompletedError(RuntimeError):
+    """Raised when an attempt outcome would be written a second time."""
+
+
+@dataclass(frozen=True)
+class AttemptRecord:
+    """Immutable projection of one ``order_submission_attempts`` row."""
+
+    attempt_number: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    outcome_class: AttemptOutcomeClass | None = None
+    http_status: int | None = None
+    error_type: str | None = None
+    broker_message: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Classification (pure)
+# ---------------------------------------------------------------------------
+
+
+def classify_attempt_exception(exc: BaseException) -> AttemptOutcomeClass:
+    """Class of an attempt that ended in an exception instead of a response.
+
+    ConnectError / ConnectTimeout / PoolTimeout mean the request never left the
+    process (pre_connection). Every other exception is ambiguous: httpx gives no
+    byte-level guarantee that the request was not sent.
+    """
+
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+        return AttemptOutcomeClass.PRE_CONNECTION
+    return AttemptOutcomeClass.AMBIGUOUS
+
+
+def classify_http_response(status_code: int, message: str | None) -> AttemptOutcomeClass:
+    """Class of an attempt that received an HTTP response."""
+
+    if 200 <= status_code < 300:
+        return AttemptOutcomeClass.ACCEPTED
+    if status_code == 422 and DUPLICATE_CLIENT_ORDER_ID_MESSAGE in (message or ""):
+        return AttemptOutcomeClass.DUPLICATE_REPORTED
+    if status_code == 429 or status_code >= 500:
+        return AttemptOutcomeClass.AMBIGUOUS
+    if 400 <= status_code < 500:
+        return AttemptOutcomeClass.REJECTED
+    # 1xx/3xx on an order POST is not a decision we can interpret.
+    return AttemptOutcomeClass.AMBIGUOUS
+
+
+def classify_submission(attempts: Sequence[AttemptRecord]) -> SubmissionClass | None:
+    """Submission class over ALL attempts; ``None`` when no attempt was logged."""
+
+    if not attempts:
+        return None
+    outcomes = [attempt.outcome_class for attempt in attempts]
+    if any(o is None or o == AttemptOutcomeClass.AMBIGUOUS for o in outcomes):
+        return SubmissionClass.AMBIGUOUS
+    if any(o == AttemptOutcomeClass.DUPLICATE_REPORTED for o in outcomes):
+        return SubmissionClass.EXISTS_REPORTED
+    if any(o == AttemptOutcomeClass.ACCEPTED for o in outcomes):
+        return SubmissionClass.ACCEPTED
+    if any(o == AttemptOutcomeClass.REJECTED for o in outcomes):
+        return SubmissionClass.REJECTED
+    # Every attempt is complete and pre_connection or deadline_expired.
+    return SubmissionClass.NOT_SENT
+
+
+_SUBMITTED_STATUSES = frozenset(
+    {
+        OrderLifecycleState.SUBMITTED,
+        OrderLifecycleState.PARTIALLY_FILLED,
+        OrderLifecycleState.FILLED,
+        OrderLifecycleState.CANCELED,
+        OrderLifecycleState.EXPIRED,
+    }
+)
+
+
+def derive_intent_state(
+    order: PaperOrder | None, attempts: Sequence[AttemptRecord]
+) -> SubmissionIntentState:
+    """Closed intent state from the local order status and the attempt log.
+
+    Broker evidence on the order (REJECTED, a broker id, a broker-driven status)
+    resolves the state first. Without it the ambiguous rule is evaluated before
+    the not_sent rule, so an intent whose history holds any NULL or ambiguous
+    attempt is ``ambiguous`` whatever later pre_connection or deadline_expired
+    attempts follow.
+    """
+
+    if order is None:
+        return SubmissionIntentState.PLANNED
+    if order.status == OrderLifecycleState.REJECTED:
+        return SubmissionIntentState.REJECTED
+    if order.broker_order_id or order.status in _SUBMITTED_STATUSES:
+        return SubmissionIntentState.SUBMITTED
+    submission_class = classify_submission(attempts)
+    if order.status == OrderLifecycleState.UNKNOWN or submission_class in (
+        SubmissionClass.AMBIGUOUS,
+        SubmissionClass.EXISTS_REPORTED,
+    ):
+        return SubmissionIntentState.AMBIGUOUS
+    if submission_class == SubmissionClass.REJECTED:
+        return SubmissionIntentState.REJECTED
+    if submission_class == SubmissionClass.ACCEPTED:
+        return SubmissionIntentState.SUBMITTED
+    if submission_class == SubmissionClass.NOT_SENT:
+        return SubmissionIntentState.NOT_SENT
+    return SubmissionIntentState.REGISTERED_UNSENT
+
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+
+
+def _record_from_row(row: OrderSubmissionAttempt) -> AttemptRecord:
+    return AttemptRecord(
+        attempt_number=row.attempt_number,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        outcome_class=(
+            AttemptOutcomeClass(row.outcome_class) if row.outcome_class is not None else None
+        ),
+        http_status=row.http_status,
+        error_type=row.error_type,
+        broker_message=row.broker_message,
+    )
+
+
+def load_submission_attempts(session: Session, paper_order_id: uuid.UUID) -> list[AttemptRecord]:
+    """All attempts of one order in attempt order (one SELECT)."""
+
+    rows = session.execute(
+        select(OrderSubmissionAttempt)
+        .where(OrderSubmissionAttempt.paper_order_id == paper_order_id)
+        .order_by(OrderSubmissionAttempt.attempt_number)
+    ).scalars()
+    return [_record_from_row(row) for row in rows]
+
+
+class SubmissionAttemptLog(Protocol):
+    """Durable attempt log consumed by the Alpaca order submit path."""
+
+    def existing_attempts(self) -> Sequence[AttemptRecord]:
+        """All earlier attempts of the order, across sessions (one SELECT)."""
+
+    def intent_registered_at(self) -> datetime | None:
+        """When the local intent was registered (lower bound for D-07), if known."""
+
+    def begin_attempt(self) -> int:
+        """Commit a new attempt row (outcome NULL) and return its number."""
+
+    def complete_attempt(
+        self,
+        number: int,
+        *,
+        outcome_class: AttemptOutcomeClass,
+        http_status: int | None = None,
+        error_type: str | None = None,
+        broker_message: str | None = None,
+    ) -> None:
+        """Write the outcome of attempt ``number`` exactly once."""
+
+
+class DbSubmissionAttemptLog:
+    """Attempt log backed by ``order_submission_attempts``.
+
+    Each method opens its OWN ``session_scope`` and so commits independently of
+    the caller, unless an outer ``session`` is passed (20.1-11/15 write the row
+    inside their authorization transaction; the row is still committed before
+    the POST because that transaction commits first).
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        paper_order_id: uuid.UUID,
+        strategy_run_id: uuid.UUID | None,
+    ) -> None:
+        self._settings = settings
+        self._paper_order_id = paper_order_id
+        self._strategy_run_id = strategy_run_id
+
+    @property
+    def paper_order_id(self) -> uuid.UUID:
+        return self._paper_order_id
+
+    def existing_attempts(self) -> list[AttemptRecord]:
+        with session_scope(self._settings) as session:
+            return load_submission_attempts(session, self._paper_order_id)
+
+    def intent_registered_at(self) -> datetime | None:
+        with session_scope(self._settings) as session:
+            return session.execute(
+                select(PaperOrder.created_at).where(PaperOrder.id == self._paper_order_id)
+            ).scalar_one_or_none()
+
+    def begin_attempt(self, session: Session | None = None) -> int:
+        if session is not None:
+            return self._begin(session)
+        with session_scope(self._settings) as own_session:
+            return self._begin(own_session)
+
+    def _begin(self, session: Session) -> int:
+        # attempt_number spans ALL earlier attempts of the order (across sessions).
+        highest = session.execute(
+            select(func.max(OrderSubmissionAttempt.attempt_number)).where(
+                OrderSubmissionAttempt.paper_order_id == self._paper_order_id
+            )
+        ).scalar_one()
+        number = int(highest or 0) + 1
+        session.add(
+            OrderSubmissionAttempt(
+                paper_order_id=self._paper_order_id,
+                strategy_run_id=self._strategy_run_id,
+                attempt_number=number,
+                started_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+        return number
+
+    def complete_attempt(
+        self,
+        number: int,
+        *,
+        outcome_class: AttemptOutcomeClass,
+        http_status: int | None = None,
+        error_type: str | None = None,
+        broker_message: str | None = None,
+        session: Session | None = None,
+    ) -> None:
+        if session is not None:
+            self._complete(
+                session,
+                number,
+                outcome_class=outcome_class,
+                http_status=http_status,
+                error_type=error_type,
+                broker_message=broker_message,
+            )
+            return
+        with session_scope(self._settings) as own_session:
+            self._complete(
+                own_session,
+                number,
+                outcome_class=outcome_class,
+                http_status=http_status,
+                error_type=error_type,
+                broker_message=broker_message,
+            )
+
+    def _complete(
+        self,
+        session: Session,
+        number: int,
+        *,
+        outcome_class: AttemptOutcomeClass,
+        http_status: int | None,
+        error_type: str | None,
+        broker_message: str | None,
+    ) -> None:
+        row = session.execute(
+            select(OrderSubmissionAttempt)
+            .where(
+                OrderSubmissionAttempt.paper_order_id == self._paper_order_id,
+                OrderSubmissionAttempt.attempt_number == number,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            raise LookupError(
+                f"No submission attempt {number} for paper_order '{self._paper_order_id}'."
+            )
+        if row.completed_at is not None:
+            raise AttemptAlreadyCompletedError(
+                f"Submission attempt {number} of paper_order '{self._paper_order_id}' "
+                "already has an outcome."
+            )
+        row.outcome_class = AttemptOutcomeClass(outcome_class).value
+        row.http_status = http_status
+        row.error_type = error_type[:ERROR_TYPE_MAX_CHARS] if error_type else None
+        row.broker_message = broker_message[:BROKER_MESSAGE_MAX_CHARS] if broker_message else None
+        row.completed_at = datetime.now(UTC)
+        session.flush()
+
+
+class NullSubmissionAttemptLog:
+    """No-op log for unit tests ONLY; production fails closed when no log is bound."""
+
+    def existing_attempts(self) -> Sequence[AttemptRecord]:
+        return ()
+
+    def intent_registered_at(self) -> datetime | None:
+        return None
+
+    def begin_attempt(self) -> int:
+        return 0
+
+    def complete_attempt(
+        self,
+        number: int,
+        *,
+        outcome_class: AttemptOutcomeClass,
+        http_status: int | None = None,
+        error_type: str | None = None,
+        broker_message: str | None = None,
+    ) -> None:
+        return None
+
+
+_ATTEMPT_LOG: ContextVar[SubmissionAttemptLog | None] = ContextVar(
+    "submission_attempt_log", default=None
+)
+
+
+@contextmanager
+def bind_attempt_log(log: SubmissionAttemptLog) -> Iterator[SubmissionAttemptLog]:
+    """Bind ``log`` as the current attempt log for the enclosed broker call."""
+
+    token = _ATTEMPT_LOG.set(log)
+    try:
+        yield log
+    finally:
+        _ATTEMPT_LOG.reset(token)
+
+
+def current_attempt_log() -> SubmissionAttemptLog | None:
+    """The bound attempt log, or ``None`` when none is bound."""
+
+    return _ATTEMPT_LOG.get()
