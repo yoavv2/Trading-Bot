@@ -652,9 +652,17 @@ def load_intent_facts(
             attempts_by_order.setdefault(attempt.paper_order_id, []).append(
                 _attempt_record(attempt)
             )
+    earliest_by_order = _earliest_intent_created_at(session, order_ids)
     for row, order, ticker in rows:
         attempts = tuple(attempts_by_order.get(order.id, ())) if order is not None else ()
-        registered = _attempt_log_registered(row, order, attempts)
+        registered = _attempt_log_registered(
+            row,
+            order,
+            attempts,
+            earliest_intent_created_at=earliest_by_order.get(order.id)
+            if order is not None
+            else None,
+        )
         facts[row.operation_id].append(
             IntentFact(
                 row=row,
@@ -669,21 +677,48 @@ def load_intent_facts(
     return facts
 
 
+def _earliest_intent_created_at(
+    session: Session, order_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, datetime]:
+    """When each order was FIRST referenced by a pinned intent (any operation): one statement."""
+
+    if not order_ids:
+        return {}
+    found = session.execute(
+        select(
+            ExecutionOperationIntent.paper_order_id,
+            func.min(ExecutionOperationIntent.created_at),
+        )
+        .where(ExecutionOperationIntent.paper_order_id.in_(order_ids))
+        .group_by(ExecutionOperationIntent.paper_order_id)
+    ).all()
+    return {order_id: created for order_id, created in found if order_id is not None}
+
+
 def _attempt_log_registered(
-    row: ExecutionOperationIntent, order: PaperOrder | None, attempts: Sequence[AttemptRecord]
+    row: ExecutionOperationIntent,
+    order: PaperOrder | None,
+    attempts: Sequence[AttemptRecord],
+    *,
+    earliest_intent_created_at: datetime | None = None,
 ) -> bool:
     """Registered under the attempt-log invariant (S1-R3).
 
     True when the order has at least one attempt row, or when it was registered as the
-    realisation of this pinned intent (created at or after the intent row). A legacy order
-    reused later (created BEFORE the intent row, no attempts) is never proven not sent.
+    realisation of a pinned intent: created at or after the EARLIEST intent row that ever
+    referenced it (an order retried by a later operation's intent is still operation-bound; the
+    row that first referenced it pre-dates its registration). A legacy order reused later
+    (created BEFORE every intent row that references it, no attempts) is never proven not sent.
     """
 
     if attempts:
         return True
     if order is None:
         return True
-    return order.created_at >= row.created_at
+    reference = (
+        earliest_intent_created_at if earliest_intent_created_at is not None else row.created_at
+    )
+    return order.created_at >= min(reference, row.created_at)
 
 
 _LOCALLY_TERMINAL_STATUSES = frozenset(
@@ -1575,7 +1610,14 @@ def authorize_send(
             .all()
         )
         attempts = [_attempt_record(row) for row in attempt_rows]
-        registered = _attempt_log_registered(intent, order, attempts)
+        registered = _attempt_log_registered(
+            intent,
+            order,
+            attempts,
+            earliest_intent_created_at=_earliest_intent_created_at(session, [order.id]).get(
+                order.id
+            ),
+        )
         retryable = order.status in (
             OrderLifecycleState.PENDING_SUBMISSION,
             OrderLifecycleState.SUBMISSION_FAILED,

@@ -2251,3 +2251,46 @@ def test_submit_gate_counts_an_operation_past_its_window_as_ended(migrated_paper
     assert normalized["strategy_id"] == STRATEGY
     with session_scope(load_settings()) as session:  # the read persisted nothing
         assert session.execute(select(ExecutionOperation.state)).scalar_one() == "paused"
+
+
+def test_a_registered_never_sent_order_is_retried_by_a_later_operations_intent(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered order that was never sent (T1 refused, zero attempt rows) stays operation-bound
+    when a LATER operation's intent re-uses it, so it is still proven not sent: after End and a new
+    verified evaluation of the same identity it is sent once with its ORIGINAL client_order_id
+    (a legacy order referenced only by the later row would NOT be)."""
+    first = evaluation(DEFAULT_BATCH[:1], verified=False)
+    settings = load_settings()
+    real_send = submit_orders_module._send_authorized
+    armed = {"lose_lease": True}
+
+    def maybe_lose_lease(ctx: Any, **kwargs: Any) -> Any:
+        if armed["lose_lease"]:
+            with session_scope(settings) as session:
+                session.execute(update(Job).values(lease_expires_at=datetime(2020, 1, 1, tzinfo=UTC)))
+        return real_send(ctx, **kwargs)
+
+    monkeypatch.setattr(submit_orders_module, "_send_authorized", maybe_lose_lease)
+    refused = ScriptedExecutionService(["accept"])
+    with pytest.raises(OperationConflictError):
+        _start(refused, risk_run_id=first)
+    assert refused.post_attempts == 0
+    with session_scope(settings) as session:
+        order = session.execute(select(PaperOrder)).scalar_one()
+        original_client_order_id = order.client_order_id
+        assert order.status == OrderLifecycleState.PENDING_SUBMISSION
+    armed["lose_lease"] = False
+    end_all_open_operations()
+    with session_scope(settings) as session:
+        assert [d for d in session.execute(select(ExecutionOperationIntent.disposition)).scalars()] == [
+            "cancelled_unsent"
+        ]
+
+    again = evaluation(DEFAULT_BATCH[:1], as_of="2024-01-08")
+    service = ScriptedExecutionService(["accept"])
+    report = _start(service, risk_run_id=again)
+
+    assert [i.client_order_id for i in service.submitted_intents] == [original_client_order_id]
+    assert report.result_summary["operation"]["reason"] == "working_order_commitments_unaccounted"
+    assert count(PaperOrder) == 1

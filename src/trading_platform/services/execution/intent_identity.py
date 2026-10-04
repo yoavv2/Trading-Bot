@@ -412,19 +412,25 @@ def load_strategy_order_facts(session: Session, strategy_public_id: str) -> tupl
             .group_by(OrderEvent.paper_order_id)
         ).all()
     )
-    operation_bound = set(
+    # Registered under the attempt-log invariant (S1-R3): an attempt row exists, or the order was
+    # created at or after the EARLIEST pinned intent that references it (the same rule as
+    # ``operations._attempt_log_registered``); a legacy order that only a LATER reuse row
+    # references is never proven not sent.
+    first_intent_at = dict(
         session.execute(
-            select(ExecutionOperationIntent.paper_order_id).where(
-                ExecutionOperationIntent.paper_order_id.in_(order_ids)
+            select(
+                ExecutionOperationIntent.paper_order_id,
+                func.min(ExecutionOperationIntent.created_at),
             )
-        )
-        .scalars()
-        .all()
+            .where(ExecutionOperationIntent.paper_order_id.in_(order_ids))
+            .group_by(ExecutionOperationIntent.paper_order_id)
+        ).all()
     )
     facts: list[OrderFact] = []
     for order, ticker, source_run_id in rows:
         attempts = tuple(attempts_by_order.get(order.id, ()))
-        registered = bool(attempts) or order.id in operation_bound
+        first_at = first_intent_at.get(order.id)
+        registered = bool(attempts) or (first_at is not None and order.created_at >= first_at)
         facts.append(
             OrderFact(
                 paper_order_id=order.id,
