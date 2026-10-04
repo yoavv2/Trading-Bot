@@ -1,9 +1,15 @@
-"""Broker-state sync logic: orders, fills, positions, and account snapshots.
+"""Broker-state sync logic: orders, fills, derived positions, and account snapshots.
 
 STRUCT-04 part 2 (12-04): sync-side split of the former monolithic
 `services/paper_execution.py`. Submission + session orchestration lives in
 the sibling `submit_orders.py`; shared dataclasses and cross-cutting helpers
 live in `_paper_common.py`.
+
+D-08 (20.1-07): sync NEVER adopts broker positions. Local ``Position`` rows are
+DERIVED from this strategy's own recorded ``PaperFill`` rows (weighted-average cost,
+signed quantity); broker positions are only compared against them by reconciliation
+(an untracked broker position surfaces as a finding and as unexplained exposure, never
+as a local row).
 """
 
 from __future__ import annotations
@@ -36,8 +42,8 @@ from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution._paper_common import (
     PaperStateSyncReport,
     _broker_transition_event,
-    _ensure_symbol,
 )
+from trading_platform.services.execution.positions import DerivationFill, derive_net_position
 from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
     apply_order_transition,
@@ -104,10 +110,11 @@ def sync_paper_state(
                 broker_fills,
                 local_orders_by_broker_id=local_orders_by_broker_id,
             )
-            positions_opened, positions_closed = _sync_positions_from_broker(
+            # The derivation reads PaperFill rows, including those just ingested.
+            session.flush()
+            positions_opened, positions_closed = _derive_positions_from_owned_fills(
                 session,
                 strategy_record.id,
-                broker_positions,
                 as_of_session=as_of_session,
                 synced_at=synced_at,
             )
@@ -249,16 +256,49 @@ def _load_existing_paper_fill_ids(
     return existing_fill_ids
 
 
-def _sync_positions_from_broker(
+def _derive_positions_from_owned_fills(
     session,
     strategy_row_id: uuid.UUID,
-    broker_positions: list[BrokerPositionSnapshot],
     *,
     as_of_session: date,
     synced_at: datetime,
 ) -> tuple[int, int]:
-    existing_open_positions = (
-        session.execute(
+    """Derive this strategy's Position rows from the PaperFills of its own PaperOrders.
+
+    One select loads the fills and one the open positions. A non-zero derived quantity
+    opens or updates an open Position; a zero quantity (or an open Position without any
+    supporting fill) closes it. Returns ``(opened, closed)``.
+    """
+
+    fill_rows = session.execute(
+        select(
+            PaperFill.symbol_id,
+            PaperFill.broker_fill_id,
+            PaperFill.side,
+            PaperFill.quantity,
+            PaperFill.price,
+            PaperFill.filled_at,
+        )
+        .join(PaperOrder, PaperOrder.id == PaperFill.paper_order_id)
+        .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+        .where(StrategyRun.strategy_id == strategy_row_id)
+        .order_by(PaperFill.symbol_id, PaperFill.filled_at, PaperFill.broker_fill_id)
+    ).all()
+    fills_by_symbol: dict[uuid.UUID, list[DerivationFill]] = {}
+    for symbol_id, broker_fill_id, side, quantity, price, filled_at in fill_rows:
+        fills_by_symbol.setdefault(symbol_id, []).append(
+            DerivationFill(
+                fill_id=broker_fill_id,
+                side=side,
+                quantity=quantity,
+                price=price,
+                filled_at=filled_at,
+            )
+        )
+
+    existing_by_symbol: dict[uuid.UUID, Position] = {
+        position.symbol_id: position
+        for position in session.execute(
             select(Position).where(
                 Position.strategy_id == strategy_row_id,
                 Position.status == "open",
@@ -266,25 +306,31 @@ def _sync_positions_from_broker(
         )
         .scalars()
         .all()
-    )
-    existing_by_symbol = {
-        position.symbol_ref.ticker: position for position in existing_open_positions
     }
     opened = 0
     closed = 0
 
-    for broker_position in broker_positions:
-        symbol_row = _ensure_symbol(session, broker_position.symbol)
-        existing_position = existing_by_symbol.pop(broker_position.symbol, None)
+    for symbol_id in fills_by_symbol.keys() | existing_by_symbol.keys():
+        derived = derive_net_position(fills_by_symbol.get(symbol_id, ()))
+        existing_position = existing_by_symbol.get(symbol_id)
+
+        if derived.is_flat:
+            if existing_position is not None:
+                existing_position.status = "closed"
+                existing_position.closed_session_date = as_of_session
+                existing_position.closed_at = synced_at
+                closed += 1
+            continue
+
         if existing_position is None:
             session.add(
                 Position(
                     strategy_id=strategy_row_id,
-                    symbol_id=symbol_row.id,
+                    symbol_id=symbol_id,
                     status="open",
-                    quantity=broker_position.quantity,
-                    average_entry_price=broker_position.average_entry_price,
-                    cost_basis=broker_position.cost_basis,
+                    quantity=derived.quantity,
+                    average_entry_price=derived.average_entry_price,
+                    cost_basis=derived.cost_basis,
                     opened_session_date=as_of_session,
                     opened_at=synced_at,
                 )
@@ -292,22 +338,13 @@ def _sync_positions_from_broker(
             opened += 1
             continue
 
-        existing_position.quantity = broker_position.quantity
-        existing_position.average_entry_price = broker_position.average_entry_price
-        existing_position.cost_basis = broker_position.cost_basis
-        existing_position.status = "open"
+        existing_position.quantity = derived.quantity
+        existing_position.average_entry_price = derived.average_entry_price
+        existing_position.cost_basis = derived.cost_basis
         existing_position.opened_session_date = (
             existing_position.opened_session_date or as_of_session
         )
         existing_position.opened_at = existing_position.opened_at or synced_at
-        existing_position.closed_session_date = None
-        existing_position.closed_at = None
-
-    for stale_position in existing_by_symbol.values():
-        stale_position.status = "closed"
-        stale_position.closed_session_date = as_of_session
-        stale_position.closed_at = synced_at
-        closed += 1
 
     return opened, closed
 

@@ -423,8 +423,8 @@ def test_local_orders_by_strategy_query_uses_index(seeded_index_db: str) -> None
 def test_open_positions_by_strategy_query_uses_index(seeded_index_db: str) -> None:
     """Identical statement shape used by both:
     - reconciliation.py reconcile_paper_execution's local_positions load (line ~309)
-    - paper_execution.py _sync_positions_from_broker's existing_open_positions load
-      (line ~1787)
+    - sync_orders.py _derive_positions_from_owned_fills' open-positions load
+      (D-08: positions derive from owned fills, never from broker positions)
 
     Both filter select(Position) by strategy_id == <resolved id> and status ==
     'open'; one covers both call sites for the same reason as the test above.
@@ -462,3 +462,30 @@ def test_broker_fill_dedup_selective_query_uses_named_unique_index(
             "Expected the selective broker-fill lookup to use the existing named unique "
             f"index; got:\n{plan}"
         )
+
+
+def test_owned_fills_derivation_query_uses_index(seeded_index_db: str) -> None:
+    """D-08: sync derives positions from this strategy's PaperFills (20.1-07).
+
+    The statement joins PaperFill -> PaperOrder -> StrategyRun filtered by strategy,
+    the same shape as reconciliation's local-fills load; it must reach ``paper_fills``
+    through an index, never a Seq Scan.
+    """
+    settings = load_settings()
+    with session_scope(settings) as session:
+        strategy_row_id = _resolve_target_strategy_id(session)
+        stmt = (
+            select(
+                PaperFill.symbol_id,
+                PaperFill.broker_fill_id,
+                PaperFill.side,
+                PaperFill.quantity,
+                PaperFill.price,
+                PaperFill.filled_at,
+            )
+            .join(PaperOrder, PaperOrder.id == PaperFill.paper_order_id)
+            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+            .where(StrategyRun.strategy_id == strategy_row_id)
+            .order_by(PaperFill.symbol_id, PaperFill.filled_at, PaperFill.broker_fill_id)
+        )
+        assert_uses_index(session, stmt, large_tables=("paper_fills",))
