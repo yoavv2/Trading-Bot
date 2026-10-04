@@ -20,12 +20,14 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from tests.support.paper_ownership import seed_registered_strategy
+from tests.support.symbol_metadata import ready_symbol_fields
 from tests.test_analytics_service import _seed_paper_operational_state
 from tests.test_job_operations_e2e import (
     _counts,
@@ -38,7 +40,8 @@ from tests.test_paper_execution import FakeBrokerClient
 
 from trading_platform.api.app import create_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.models import PaperOrder
+from trading_platform.db.models import PaperOrder, RiskEvent
+from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.handlers import reconciliation as reconciliation_handler_module
 from trading_platform.jobs.handlers import risk_evaluation as risk_handler_module
@@ -119,6 +122,9 @@ def strategy_jobs_env(
     # Explicit arrangement (20.1-01): the strategy under test is enabled AND the
     # active paper strategy, so strategy-scoped reconciliation is admitted (D-03).
     seed_registered_strategy(load_settings(), STRATEGY_ID, enabled=True, owner=True)
+    # D-29 (20.1-04): the seeded universe models READY symbols; tests that need a
+    # metadata-less symbol clear it explicitly through _set_symbol_metadata.
+    _set_symbol_metadata(ready=True)
 
     script = BrokerScript()
     monkeypatch.setattr(reconciliation_report_module, "AlpacaClient", script.build)
@@ -127,6 +133,18 @@ def strategy_jobs_env(
         yield script
     finally:
         clear_settings_cache()
+
+
+def _set_symbol_metadata(*, ready: bool, tickers: tuple[str, ...] = ("AAPL", "MSFT")) -> None:
+    fields = (
+        ready_symbol_fields()
+        if ready
+        else {"market": None, "symbol_type": None, "primary_exchange": None, "metadata_provider": None}
+    )
+    with session_scope(load_settings()) as session:
+        for symbol in session.execute(select(Symbol).where(Symbol.ticker.in_(tickers))).scalars():
+            for name, value in fields.items():
+                setattr(symbol, name, value)
 
 
 def _submit(client: TestClient, job_type: str, key: str, payload: dict[str, str] | None = None):
@@ -171,6 +189,52 @@ def _paper_order_sync_fields() -> list[tuple[uuid.UUID, int, str | None, Any]]:
 
 
 # --- Task 1: the three Job types end-to-end ---------------------------------
+
+
+def _risk_event_codes(as_of_session: str) -> dict[str, str]:
+    with session_scope(load_settings()) as session:
+        rows = session.execute(
+            select(Symbol.ticker, RiskEvent.decision_code)
+            .join(Symbol, Symbol.id == RiskEvent.symbol_id)
+            .where(RiskEvent.session_date == date.fromisoformat(as_of_session))
+        ).all()
+    return {ticker: code for ticker, code in rows}
+
+
+def test_risk_evaluation_job_rejects_metadata_less_symbol_as_symbol_not_ready(
+    strategy_jobs_env: BrokerScript,
+) -> None:
+    """D-29: a symbol without required metadata is rejected by the Job-run risk
+    evaluation with `symbol_not_ready`; the rest of the evaluation is unaffected."""
+
+    _set_symbol_metadata(ready=False, tickers=("AAPL",))
+    payload = {"strategy_id": STRATEGY_ID, "as_of_session": "2024-01-05"}
+
+    with TestClient(create_app()) as client:
+        submitted = _submit(client, "risk-evaluation", "e2e-risk-not-ready", payload)
+        assert submitted.status_code == 202, submitted.text
+        _run_worker_once()
+        detail = client.get(f"/api/v1/jobs/{submitted.json()['job_id']}").json()
+
+    assert detail["status"] == "succeeded", detail["failure_message"]
+    codes = _risk_event_codes("2024-01-05")
+    assert codes["AAPL"] == "symbol_not_ready"
+    assert codes["MSFT"] == "non_actionable_signal"
+
+
+def test_risk_evaluation_job_with_ready_metadata_does_not_reject_as_not_ready(
+    strategy_jobs_env: BrokerScript,
+) -> None:
+    payload = {"strategy_id": STRATEGY_ID, "as_of_session": "2024-01-05"}
+
+    with TestClient(create_app()) as client:
+        submitted = _submit(client, "risk-evaluation", "e2e-risk-ready", payload)
+        assert submitted.status_code == 202, submitted.text
+        _run_worker_once()
+
+    codes = _risk_event_codes("2024-01-05")
+    assert codes["AAPL"] != "symbol_not_ready"
+    assert "symbol_not_ready" not in codes.values()
 
 
 def test_risk_evaluation_job_runs_through_production_path(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -34,6 +35,7 @@ from trading_platform.services.portfolio import (
     PortfolioState,
     PositionSnapshot,
 )
+from trading_platform.services.symbol_readiness import SymbolReadiness, symbols_readiness
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 from trading_platform.strategies.signals import Signal, SignalBatch, SignalDirection
 
@@ -54,6 +56,9 @@ class RiskDecisionCode(StrEnum):
     TOTAL_ALLOCATION_CAP = "total_allocation_cap"
     INSUFFICIENT_CASH = "insufficient_cash"
     ORDER_ROUNDS_TO_ZERO = "order_rounds_to_zero"
+    # D-29/COR-03: required symbol metadata is missing (no migration:
+    # risk_events.decision_code is String(64)).
+    SYMBOL_NOT_READY = "symbol_not_ready"
 
 
 @dataclass(frozen=True)
@@ -175,6 +180,15 @@ class PortfolioRiskService(RiskService):
             as_of_session=batch.as_of_session,
         )
 
+        # D-29: metadata readiness is read once (one statement) for every
+        # non-flat signal symbol; a not-ready symbol is rejected per candidate
+        # while the other signals of this evaluation are decided as before.
+        candidate_symbols = [
+            signal.symbol for signal in batch.signals if signal.direction != SignalDirection.FLAT
+        ]
+        readiness = symbols_readiness(payload.db_session, candidate_symbols)
+        not_ready = {symbol: item for symbol, item in readiness.items() if not item.ready}
+
         working_state = payload.portfolio_state
         decisions_by_symbol: dict[str, RiskDecision] = {}
 
@@ -185,6 +199,7 @@ class PortfolioRiskService(RiskService):
                 max_positions=config.risk.max_positions,
                 risk_per_trade=config.risk.risk_per_trade,
                 stale_reason=stale_reason,
+                not_ready=not_ready,
             )
             decisions_by_symbol[signal.symbol] = decision
             if decision.outcome == RiskDecisionOutcome.APPROVED:
@@ -197,6 +212,7 @@ class PortfolioRiskService(RiskService):
                 max_positions=config.risk.max_positions,
                 risk_per_trade=config.risk.risk_per_trade,
                 stale_reason=stale_reason,
+                not_ready=not_ready,
             )
             decisions_by_symbol[signal.symbol] = decision
             if decision.outcome == RiskDecisionOutcome.APPROVED and signal.direction == SignalDirection.LONG:
@@ -216,6 +232,7 @@ class PortfolioRiskService(RiskService):
         max_positions: int,
         risk_per_trade: float,
         stale_reason: str | None,
+        not_ready: Mapping[str, SymbolReadiness] | None = None,
     ) -> RiskDecision:
         reference_price = signal.indicators.close
 
@@ -224,6 +241,19 @@ class PortfolioRiskService(RiskService):
                 signal,
                 code=RiskDecisionCode.NON_ACTIONABLE_SIGNAL,
                 reason=f"Signal is flat ({signal.reason.value}); there is no execution candidate to approve.",
+            )
+
+        readiness = (not_ready or {}).get(signal.symbol)
+        if readiness is not None:
+            # Exit signals included: a symbol without verified metadata is
+            # never presented as tradeable.
+            return self._reject(
+                signal,
+                code=RiskDecisionCode.SYMBOL_NOT_READY,
+                reason=(
+                    "Symbol is not ready for trading: required metadata is missing "
+                    f"({', '.join(readiness.missing_requirements)})."
+                ),
             )
 
         if stale_reason is not None:

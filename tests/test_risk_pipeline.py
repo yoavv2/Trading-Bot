@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+from tests.support.query_counter import count_queries
+from tests.support.symbol_metadata import ready_symbol_fields
 
 from trading_platform.core.settings import Settings, clear_settings_cache, load_settings
 from trading_platform.db.models import (
@@ -31,6 +33,7 @@ from trading_platform.db.models import (
 from trading_platform.db.models.daily_bar import DailyBar
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
+from trading_platform.services import risk as risk_module
 from trading_platform.services.calendar import upsert_market_sessions
 from trading_platform.services.portfolio import PortfolioState, PositionSnapshot
 from trading_platform.services.risk import (
@@ -162,10 +165,15 @@ def strategy_config_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         clear_settings_cache()
 
 
-def _seed_symbol_and_bar(session, *, ticker: str, session_date: date, close: str) -> Symbol:
+def _seed_symbol_and_bar(
+    session, *, ticker: str, session_date: date, close: str, ready: bool = True
+) -> Symbol:
     symbol = session.execute(select(Symbol).where(Symbol.ticker == ticker)).scalar_one_or_none()
     if symbol is None:
-        symbol = Symbol(ticker=ticker, active=True)
+        # D-29: fixtures must model ready symbols (required metadata present);
+        # ready=False seeds the legacy metadata-less row on purpose.
+        fields = ready_symbol_fields() if ready else {"active": True}
+        symbol = Symbol(ticker=ticker, **fields)
         session.add(symbol)
         session.flush()
     session.add(
@@ -210,6 +218,10 @@ def test_risk_service_rejects_stale_market_data(migrated_risk_db: str) -> None:
     with session_scope(settings) as session:
         upsert_market_sessions(session, date(2024, 1, 5), date(2024, 1, 5))
         _seed_symbol_and_bar(session, ticker="AAPL", session_date=date(2024, 1, 5), close="100")
+        # MSFT: ready symbol WITHOUT a bar for the session (stale-data path);
+        # D-29 makes a metadata-less symbol symbol_not_ready instead.
+        session.add(Symbol(ticker="MSFT", **ready_symbol_fields()))
+        session.flush()
 
         result = service.validate(
             RiskEvaluationRequest(
@@ -359,6 +371,170 @@ def test_risk_service_approves_entry_with_deterministic_whole_share_size(migrate
     assert decision.code == RiskDecisionCode.APPROVED
     assert decision.proposed_quantity == Decimal("10")
     assert decision.proposed_notional == Decimal("1000.000000")
+
+
+def _flat_state() -> PortfolioState:
+    return PortfolioState(
+        cash=Decimal("100000.000000"),
+        gross_exposure=Decimal("0.000000"),
+        total_equity=Decimal("100000.000000"),
+        strategy_exposure=Decimal("0.000000"),
+        as_of_session=date(2024, 1, 5),
+    )
+
+
+def test_risk_decision_code_set_is_closed_with_symbol_not_ready() -> None:
+    # D-29: the previous ten values plus exactly one new member. decision_code
+    # is String(64), so adding the member needs no migration.
+    previous_ten = {
+        "approved",
+        "non_actionable_signal",
+        "stale_market_data",
+        "duplicate_open_position",
+        "no_open_position",
+        "max_positions",
+        "strategy_allocation_cap",
+        "total_allocation_cap",
+        "insufficient_cash",
+        "order_rounds_to_zero",
+    }
+    assert len(previous_ten) == 10
+    assert {code.value for code in RiskDecisionCode} == previous_ten | {"symbol_not_ready"}
+    assert RiskDecisionCode.SYMBOL_NOT_READY.value == "symbol_not_ready"
+
+
+def test_not_ready_symbol_candidate_is_rejected_symbol_not_ready_and_others_unaffected(
+    migrated_risk_db: str,
+) -> None:
+    settings = _test_settings(max_positions=10)
+    service = PortfolioRiskService(settings)
+
+    with session_scope(settings) as session:
+        upsert_market_sessions(session, date(2024, 1, 5), date(2024, 1, 5))
+        _seed_symbol_and_bar(session, ticker="AAPL", session_date=date(2024, 1, 5), close="100")
+        _seed_symbol_and_bar(
+            session, ticker="MSFT", session_date=date(2024, 1, 5), close="100", ready=False
+        )
+
+        result = service.validate(
+            RiskEvaluationRequest(
+                db_session=session,
+                signal_batch=SignalBatch(
+                    strategy_id="trend_following_daily",
+                    as_of_session=date(2024, 1, 5),
+                    signals=(
+                        _signal("MSFT", direction=SignalDirection.LONG),
+                        _signal("AAPL", direction=SignalDirection.LONG),
+                    ),
+                ),
+                portfolio_state=_flat_state(),
+            )
+        )
+
+    by_symbol = {decision.symbol: decision for decision in result.decisions}
+    not_ready = by_symbol["MSFT"]
+    assert not_ready.code == RiskDecisionCode.SYMBOL_NOT_READY
+    assert not_ready.outcome.value == "rejected"
+    assert not_ready.proposed_quantity is None
+    assert "metadata_provider" in not_ready.reason
+    # same evaluation, unaffected: sized exactly as the single-symbol case
+    approved = by_symbol["AAPL"]
+    assert approved.code == RiskDecisionCode.APPROVED
+    assert approved.proposed_quantity == Decimal("10")
+    assert approved.proposed_notional == Decimal("1000.000000")
+
+
+def test_not_ready_symbol_exit_signal_is_rejected_symbol_not_ready(migrated_risk_db: str) -> None:
+    settings = _test_settings(max_positions=10)
+    service = PortfolioRiskService(settings)
+    state = PortfolioState(
+        cash=Decimal("80000.000000"),
+        gross_exposure=Decimal("20000.000000"),
+        total_equity=Decimal("100000.000000"),
+        strategy_exposure=Decimal("20000.000000"),
+        as_of_session=date(2024, 1, 5),
+        open_positions=tuple(
+            PositionSnapshot(
+                position_id=str(uuid.uuid4()),
+                strategy_id="trend_following_daily",
+                symbol=ticker,
+                quantity=Decimal("100"),
+                average_entry_price=Decimal("100"),
+                market_price=Decimal("100"),
+                market_value=Decimal("10000.000000"),
+            )
+            for ticker in ("AAPL", "MSFT")
+        ),
+        open_symbols=frozenset({"AAPL", "MSFT"}),
+        total_open_positions=2,
+    )
+
+    with session_scope(settings) as session:
+        upsert_market_sessions(session, date(2024, 1, 5), date(2024, 1, 5))
+        _seed_symbol_and_bar(session, ticker="AAPL", session_date=date(2024, 1, 5), close="100")
+        _seed_symbol_and_bar(
+            session, ticker="MSFT", session_date=date(2024, 1, 5), close="100", ready=False
+        )
+
+        result = service.validate(
+            RiskEvaluationRequest(
+                db_session=session,
+                signal_batch=SignalBatch(
+                    strategy_id="trend_following_daily",
+                    as_of_session=date(2024, 1, 5),
+                    signals=(
+                        _signal("AAPL", direction=SignalDirection.EXIT),
+                        _signal("MSFT", direction=SignalDirection.EXIT),
+                    ),
+                ),
+                portfolio_state=state,
+            )
+        )
+
+    by_symbol = {decision.symbol: decision for decision in result.decisions}
+    assert by_symbol["MSFT"].code == RiskDecisionCode.SYMBOL_NOT_READY
+    assert by_symbol["AAPL"].code == RiskDecisionCode.APPROVED
+    assert by_symbol["AAPL"].proposed_quantity == Decimal("100")
+
+
+def test_validate_reads_symbol_readiness_in_one_statement(
+    migrated_risk_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _test_settings(max_positions=10)
+    service = PortfolioRiskService(settings)
+    observed: list[int] = []
+    real = risk_module.symbols_readiness
+
+    def counting(session, tickers):
+        with count_queries(session) as counter:
+            value = real(session, tickers)
+        observed.append(counter.count)
+        return value
+
+    monkeypatch.setattr(risk_module, "symbols_readiness", counting)
+
+    with session_scope(settings) as session:
+        upsert_market_sessions(session, date(2024, 1, 5), date(2024, 1, 5))
+        for ticker in ("AAPL", "MSFT", "NVDA"):
+            _seed_symbol_and_bar(session, ticker=ticker, session_date=date(2024, 1, 5), close="100")
+        session.flush()
+
+        service.validate(
+            RiskEvaluationRequest(
+                db_session=session,
+                signal_batch=SignalBatch(
+                    strategy_id="trend_following_daily",
+                    as_of_session=date(2024, 1, 5),
+                    signals=tuple(
+                        _signal(ticker, direction=SignalDirection.LONG)
+                        for ticker in ("AAPL", "MSFT", "NVDA")
+                    ),
+                ),
+                portfolio_state=_flat_state(),
+            )
+        )
+
+    assert observed == [1]
 
 
 def test_run_risk_evaluation_persists_strategy_run_and_risk_events(
