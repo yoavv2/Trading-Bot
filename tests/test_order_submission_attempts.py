@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import uuid
@@ -337,3 +338,128 @@ def test_seed_attempt_row_helper_round_trips(db: Settings) -> None:
     with session_scope(db) as session:
         records = load_submission_attempts(session, order_id)
     assert [r.outcome_class for r in records] == [None, PRE]
+
+
+# --- DB-backed client loop: numbering across sessions and derived intent states --------
+
+
+def _real_client(handler):
+    from trading_platform.core.settings import AlpacaBrokerSettings
+    from trading_platform.services.alpaca import AlpacaClient
+
+    http_client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://paper-api.alpaca.markets"
+    )
+    return AlpacaClient(
+        AlpacaBrokerSettings(
+            api_key="test-key",
+            api_secret="test-secret",
+            max_retries=2,
+            retry_backoff_factor=0.0,
+        ),
+        http_client=http_client,
+    )
+
+
+def _send(settings: Settings, order_id: uuid.UUID, run_id: uuid.UUID, handler):
+    from datetime import date
+    from decimal import Decimal
+
+    from trading_platform.services.execution import OrderIntent, OrderSide
+
+    with session_scope(settings) as session:
+        client_order_id = session.get(PaperOrder, order_id).client_order_id
+    intent = OrderIntent(
+        strategy_id="s",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        intended_session=date(2024, 1, 5),
+        client_order_id=client_order_id,
+    )
+    log = _log(settings, order_id, run_id)
+    with bind_attempt_log(log):
+        return _real_client(handler).submit_order(intent)
+
+
+def _state(settings: Settings, order_id: uuid.UUID) -> SubmissionIntentState:
+    with session_scope(settings) as session:
+        order = session.get(PaperOrder, order_id)
+        return derive_intent_state(order, load_submission_attempts(session, order_id))
+
+
+def test_client_loop_persists_attempts_and_derives_intent_states(
+    db: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trading_platform.services.alpaca import (
+        AmbiguousOrderSubmissionError,
+        OrderNotSentError,
+        OrderRejectedError,
+    )
+
+    monkeypatch.setattr("trading_platform.services.alpaca.time.sleep", lambda *_: None)
+
+    def connect_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    def read_timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    def bad_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"message": "bad"})
+
+    def created(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return httpx.Response(
+            201,
+            json={
+                "id": "b-1",
+                "client_order_id": body["client_order_id"],
+                "symbol": "AAPL",
+                "side": "buy",
+                "qty": "1",
+                "type": "market",
+                "status": "new",
+            },
+        )
+
+    # fresh intent: no attempts yet
+    fresh, fresh_run = _seed(db)
+    assert _state(db, fresh) == SubmissionIntentState.REGISTERED_UNSENT
+
+    # exhausted connect errors -> not_sent; a later session continues the numbering
+    order_id, run_id = _seed(db)
+    with pytest.raises(OrderNotSentError):
+        _send(db, order_id, run_id, connect_error)
+    assert _state(db, order_id) == SubmissionIntentState.NOT_SENT
+    with session_scope(db) as session:
+        assert [a.attempt_number for a in load_submission_attempts(session, order_id)] == [1, 2, 3]
+    _send(db, order_id, run_id, created)  # a later session retries: history is proven not sent
+    with session_scope(db) as session:
+        attempts = load_submission_attempts(session, order_id)
+    assert [(a.attempt_number, a.outcome_class) for a in attempts] == [
+        (1, PRE),
+        (2, PRE),
+        (3, PRE),
+        (4, ACC),
+    ]
+    assert _state(db, order_id) == SubmissionIntentState.SUBMITTED
+
+    ambiguous_id, ambiguous_run = _seed(db)
+    with pytest.raises(AmbiguousOrderSubmissionError):
+        _send(db, ambiguous_id, ambiguous_run, read_timeout)
+    assert _state(db, ambiguous_id) == SubmissionIntentState.AMBIGUOUS
+    # a later session over the same ambiguous history sends nothing
+    with pytest.raises(AmbiguousOrderSubmissionError):
+        _send(db, ambiguous_id, ambiguous_run, created)
+    with session_scope(db) as session:
+        assert len(load_submission_attempts(session, ambiguous_id)) == 1
+
+    rejected_id, rejected_run = _seed(db)
+    with pytest.raises(OrderRejectedError):
+        _send(db, rejected_id, rejected_run, bad_request)
+    assert _state(db, rejected_id) == SubmissionIntentState.REJECTED
+
+    accepted_id, accepted_run = _seed(db)
+    _send(db, accepted_id, accepted_run, created)
+    assert _state(db, accepted_id) == SubmissionIntentState.SUBMITTED

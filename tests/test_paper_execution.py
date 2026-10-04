@@ -19,12 +19,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
 from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
+from tests.support.submission_attempts import seed_attempt_row
 
 import trading_platform.services.execution.submit_orders as paper_submit_orders_module
 import trading_platform.services.execution.sync_orders as paper_sync_orders_module
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
+    AttemptOutcomeClass,
     DailyBar,
     ExecutionEvent,
     KillSwitchState,
@@ -45,10 +47,14 @@ from trading_platform.db.models import (
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services.alpaca import (
+    AmbiguousOrderSubmissionError,
     BrokerAccountSnapshot,
     BrokerFillSnapshot,
     BrokerOrderSnapshot,
     BrokerPositionSnapshot,
+    OrderNotSentError,
+    OrderRejectedError,
+    _normalized_order_snapshot,
 )
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError, session_run_lock
 from trading_platform.services.execution import (
@@ -63,6 +69,7 @@ from trading_platform.services.execution import (
     run_paper_session,
     sync_paper_state,
 )
+from trading_platform.services.execution.attempts import SubmissionClass, current_attempt_log
 from trading_platform.services.execution.idempotency import build_intent_hash
 from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
@@ -2176,3 +2183,333 @@ def test_broker_call_failure_has_no_rollback_divergence_and_skips_reconciliation
         )
 
     assert scheduled_calls == []
+
+
+# --- 20.1-02 (COR-06, D-12/D-13): ambiguous / rejected / not-sent submissions -------------
+
+
+class _RaisingExecutionService(ExecutionService):
+    """Raises a scripted exception from the FIRST submit; later submits succeed.
+
+    ``write_attempt`` makes the double behave like the real client: it commits an
+    attempt row through the bound log before raising.
+    """
+
+    def __init__(self, error: Exception, *, write_attempt: AttemptOutcomeClass | None = None) -> None:
+        self._error = error
+        self._write_attempt = write_attempt
+        self.submitted_intents: list[OrderIntent] = []
+        self._ok = FakeExecutionService()
+
+    def describe(self) -> dict[str, object]:
+        return {"service": "execution", "status": "available", "provider": "raising"}
+
+    def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        self.submitted_intents.append(intent)
+        if len(self.submitted_intents) == 1:
+            if self._write_attempt is not None:
+                log = current_attempt_log()
+                assert log is not None, "submit_orders must bind the durable attempt log"
+                number = log.begin_attempt()
+                log.complete_attempt(number, outcome_class=self._write_attempt)
+            raise self._error
+        return self._ok.submit_order(intent)
+
+
+def _ambiguous_error() -> AmbiguousOrderSubmissionError:
+    return AmbiguousOrderSubmissionError(
+        "ambiguous", submission_class=SubmissionClass.AMBIGUOUS, attempts=[(1, "ambiguous")]
+    )
+
+
+def _orders_with_events() -> list[tuple[PaperOrder, list[OrderEvent]]]:
+    with session_scope(load_settings()) as session:
+        orders = session.execute(select(PaperOrder).order_by(PaperOrder.created_at)).scalars().all()
+        result = []
+        for order in orders:
+            events = (
+                session.execute(
+                    select(OrderEvent)
+                    .where(OrderEvent.paper_order_id == order.id)
+                    .order_by(OrderEvent.event_at.asc())
+                )
+                .scalars()
+                .all()
+            )
+            session.expunge_all()
+            result.append((order, list(events)))
+        return result
+
+
+def test_ambiguous_submission_parks_intent_unknown_and_stops_the_run(
+    migrated_paper_db: str,
+) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    service = _RaisingExecutionService(_ambiguous_error())
+
+    with pytest.raises(AmbiguousOrderSubmissionError):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            settings=settings,
+            execution_service=service,
+            trigger_source="ambiguous_test",
+        )
+
+    # Exactly one submit call; the second candidate was never attempted.
+    assert len(service.submitted_intents) == 1
+    ((order, events),) = _orders_with_events()
+    assert order.status == OrderLifecycleState.UNKNOWN
+    assert order.broker_order_id is None
+    assert [e.event_type for e in events] == [
+        OrderTransitionEventType.INTENT_REGISTERED,
+        OrderTransitionEventType.BROKER_STATUS_UNKNOWN,
+    ]
+    assert events[-1].details["submission_class"] == "ambiguous"
+    assert events[-1].details["attempt_numbers"] == [1]
+    with session_scope(settings) as session:
+        uncertain = (
+            session.execute(
+                select(ExecutionEvent).where(
+                    ExecutionEvent.event_type == "submission_outcome_uncertain"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        run = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.PAPER_EXECUTION)
+        ).scalar_one()
+    assert len(uncertain) == 1
+    assert uncertain[0].severity == "error" and uncertain[0].blocks_execution is True
+    assert uncertain[0].paper_order_id == order.id
+    assert run.status == StrategyRunStatus.FAILED
+
+
+def test_rejected_submission_is_terminal_and_never_retried(migrated_paper_db: str) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    rejecting = _RaisingExecutionService(
+        OrderRejectedError(
+            "rejected",
+            submission_class=SubmissionClass.REJECTED,
+            attempts=[(1, "rejected")],
+            http_status=403,
+        )
+    )
+    with pytest.raises(OrderRejectedError):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            settings=settings,
+            execution_service=rejecting,
+            trigger_source="rejected_test",
+        )
+    ((rejected_order, events),) = _orders_with_events()
+    assert rejected_order.status == OrderLifecycleState.REJECTED
+    assert events[-1].event_type == OrderTransitionEventType.BROKER_REJECTED
+    assert events[-1].details["http_status"] == 403
+    assert events[-1].details["submission_class"] == "rejected"
+
+    follow_up = FakeExecutionService()
+    run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=follow_up,
+        trigger_source="rejected_followup",
+    )
+    assert rejected_order.client_order_id not in [
+        intent.client_order_id for intent in follow_up.submitted_intents
+    ]
+    with session_scope(settings) as session:
+        assert session.get(PaperOrder, rejected_order.id).status == OrderLifecycleState.REJECTED
+
+
+def test_not_sent_submission_still_retries(migrated_paper_db: str) -> None:
+    _seed_approved_risk_batch()
+    settings = load_settings()
+    not_sent = _RaisingExecutionService(
+        OrderNotSentError(
+            "not sent",
+            submission_class=SubmissionClass.NOT_SENT,
+            attempts=[(1, "pre_connection")],
+        ),
+        write_attempt=AttemptOutcomeClass.PRE_CONNECTION,
+    )
+    with pytest.raises(OrderNotSentError):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            settings=settings,
+            execution_service=not_sent,
+            trigger_source="not_sent_test",
+        )
+    ((failed_order, _),) = _orders_with_events()
+    assert failed_order.status == OrderLifecycleState.SUBMISSION_FAILED
+
+    follow_up = FakeExecutionService()
+    run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=follow_up,
+        trigger_source="not_sent_followup",
+    )
+    assert failed_order.client_order_id in [i.client_order_id for i in follow_up.submitted_intents]
+    with session_scope(settings) as session:
+        assert session.get(PaperOrder, failed_order.id).broker_order_id is not None
+
+
+def _seed_retryable_order_with_attempts(
+    outcomes: list[AttemptOutcomeClass | None],
+) -> uuid.UUID:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+        status="pending_submission",
+        broker_order_id=None,
+        broker_status=None,
+        submission_attempt_count=1,
+    )
+    settings = load_settings()
+    with session_scope(settings) as session:
+        order_id = session.execute(select(PaperOrder.id)).scalar_one()
+    for number, outcome in enumerate(outcomes, start=1):
+        seed_attempt_row(settings, order_id, number=number, outcome=outcome)
+    return order_id
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        [None],
+        [AttemptOutcomeClass.AMBIGUOUS, AttemptOutcomeClass.PRE_CONNECTION],
+        [AttemptOutcomeClass.PRE_CONNECTION, None],
+        [AttemptOutcomeClass.DUPLICATE_REPORTED],
+    ],
+    ids=["crash-null-outcome", "ambiguous-then-pre-connection", "pre-connection-then-null", "duplicate"],
+)
+def test_crash_between_attempt_start_and_outcome_is_ambiguous_and_never_resent(
+    migrated_paper_db: str, history: list[AttemptOutcomeClass | None]
+) -> None:
+    order_id = _seed_retryable_order_with_attempts(history)
+    settings = load_settings()
+    service = FakeExecutionService()
+
+    with pytest.raises(AmbiguousOrderSubmissionError):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            settings=settings,
+            execution_service=service,
+            trigger_source="crash_guard_test",
+        )
+
+    # Zero POSTs/submit calls: neither the guarded intent nor the second candidate.
+    assert service.submitted_intents == []
+    with session_scope(settings) as session:
+        order = session.get(PaperOrder, order_id)
+        assert order.status == OrderLifecycleState.UNKNOWN
+        uncertain = session.execute(
+            select(ExecutionEvent).where(ExecutionEvent.event_type == "submission_outcome_uncertain")
+        ).scalars().all()
+    assert len(uncertain) == 1 and uncertain[0].blocks_execution is True
+
+    # A further session does not re-send either: UNKNOWN without a broker id is not resubmittable.
+    run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=service,
+        trigger_source="crash_guard_followup",
+    )
+    assert order.client_order_id not in [i.client_order_id for i in service.submitted_intents]
+
+
+def test_proven_not_sent_history_is_retried_by_the_guard(migrated_paper_db: str) -> None:
+    order_id = _seed_retryable_order_with_attempts(
+        [AttemptOutcomeClass.PRE_CONNECTION, AttemptOutcomeClass.DEADLINE_EXPIRED]
+    )
+    service = FakeExecutionService()
+    run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=load_settings(),
+        execution_service=service,
+        trigger_source="not_sent_history_test",
+    )
+    with session_scope(load_settings()) as session:
+        assert session.get(PaperOrder, order_id).broker_order_id is not None
+
+
+@pytest.mark.parametrize(
+    ("raw_status", "expected_class", "expect_reason"),
+    [
+        ("replaced", "terminal_with_successor", False),
+        ("holding", "unknown", True),
+    ],
+)
+def test_unmapped_broker_status_records_reason_on_order_event(
+    migrated_paper_db: str, raw_status: str, expected_class: str, expect_reason: bool
+) -> None:
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+    )
+    settings = load_settings()
+    client_order_id = build_client_order_id(
+        prefix=settings.execution.client_order_id_prefix,
+        strategy_id="trend_following_daily",
+        session_date=date(2024, 1, 5),
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        quantity=Decimal("10.000000"),
+    )
+    broker_order = _normalized_order_snapshot(
+        {
+            "id": "existing-aapl-001",
+            "client_order_id": client_order_id,
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": "10",
+            "status": raw_status,
+            "updated_at": "2024-01-05T14:40:00Z",
+        }
+    )
+    sync_paper_state(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=FakeBrokerClient(
+            orders=[broker_order],
+            fills=[],
+            positions=[],
+            account=BrokerAccountSnapshot(
+                cash=Decimal("100000"),
+                buying_power=Decimal("100000"),
+                equity=Decimal("100000"),
+                long_market_value=Decimal("0"),
+                short_market_value=Decimal("0"),
+                raw_payload={},
+            ),
+        ),
+    )
+
+    ((order, events),) = _orders_with_events()
+    assert order.status == OrderLifecycleState.UNKNOWN
+    last = events[-1]
+    assert last.event_type == OrderTransitionEventType.BROKER_STATUS_UNKNOWN
+    assert last.details["status_class"] == expected_class
+    assert last.details["broker_status"] == raw_status
+    if expect_reason:
+        assert last.details["status_reason"] == "unmapped_broker_status"
+    else:
+        assert "status_reason" not in last.details

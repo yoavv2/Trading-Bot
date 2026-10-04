@@ -25,6 +25,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -540,3 +541,69 @@ def test_uncertain_failure_requires_later_reconciliation_before_retry(
     assert retry_detail["job_type"] == "paper-session"
     assert retry_detail["payload"] == failed["payload"]
     assert retry_detail["status"] == "queued"
+
+
+def test_ambiguous_submission_lands_job_failed_outcome_uncertain_and_never_resends(
+    paper_jobs_env: BrokerFakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """COR-06/D-12 end to end: a read timeout after the POST was sent goes
+    through the REAL AlpacaExecutionService (httpx.MockTransport). Exactly one
+    POST, the intent is parked UNKNOWN, one attempt row is `ambiguous`, the Job
+    lands failed with outcome_uncertain=true, and a second paper-session run for
+    the same session sends zero further POSTs."""
+
+    from trading_platform.db.models import OrderLifecycleState, OrderSubmissionAttempt, PaperOrder
+    from trading_platform.services.alpaca import AlpacaClient, AlpacaExecutionService
+
+    posts: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            raise httpx.ReadTimeout("timed out after send", request=request)
+        return httpx.Response(404, json={"message": "not found"})
+
+    def _build_real_service(alpaca_settings: Any = None) -> AlpacaExecutionService:
+        settings = load_settings().broker.alpaca
+        http_client = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="https://paper-api.alpaca.markets"
+        )
+        return AlpacaExecutionService(settings, client=AlpacaClient(settings, http_client=http_client))
+
+    monkeypatch.setattr(submit_orders_module, "AlpacaExecutionService", _build_real_service)
+
+    # One approved candidate only. A SECOND approved candidate is a different, new
+    # intent: refusing it while this strategy has an unresolved uncertain outcome is
+    # the D-15 submission gate owned by 20.1-10, not by this plan. This test pins the
+    # COR-06 guarantee: the ambiguous intent itself is never re-sent.
+    with session_scope(load_settings()) as session:
+        msft_event = session.execute(
+            select(RiskEvent).join(Symbol, RiskEvent.symbol_id == Symbol.id).where(
+                Symbol.ticker == "MSFT"
+            )
+        ).scalar_one()
+        session.delete(msft_event)
+
+    with TestClient(create_app()) as client:
+        failed = _submit_and_run(client, "e2e-paper-ambiguous")
+        assert failed["status"] == "failed"
+        assert failed["failure_reason"] == "handler_error"
+        assert failed["outcome_uncertain"] is True
+        assert "external_broker_session_started" in _log_codes(client, failed["id"])
+        assert len(posts) == 1
+
+        with session_scope(load_settings()) as session:
+            orders = session.execute(select(PaperOrder)).scalars().all()
+            attempts = session.execute(select(OrderSubmissionAttempt)).scalars().all()
+        assert len(orders) == 1
+        assert orders[0].status == OrderLifecycleState.UNKNOWN
+        assert orders[0].broker_order_id is None
+        assert [(a.attempt_number, a.outcome_class) for a in attempts] == [(1, "ambiguous")]
+
+        # A second run for the same session never re-sends the ambiguous intent.
+        _submit_and_run(client, "e2e-paper-ambiguous-second")
+        assert len(posts) == 1
+        with session_scope(load_settings()) as session:
+            assert len(session.execute(select(OrderSubmissionAttempt)).scalars().all()) == 1
+            ambiguous_order = session.get(PaperOrder, orders[0].id)
+            assert ambiguous_order.status == OrderLifecycleState.UNKNOWN

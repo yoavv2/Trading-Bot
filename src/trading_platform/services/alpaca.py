@@ -33,6 +33,7 @@ from trading_platform.services.execution.attempts import (
     classify_http_response,
     classify_submission,
     current_attempt_log,
+    summarize_attempts,
 )
 
 logger = get_logger(__name__)
@@ -377,16 +378,6 @@ _NOT_FOUND: Final = object()
 """Sentinel returned by ``_request_with_retry(..., allow_not_found=True)`` on HTTP 404 only."""
 
 
-def _attempt_summary(history: Sequence[AttemptRecord]) -> list[tuple[int, str]]:
-    return [
-        (
-            attempt.attempt_number,
-            attempt.outcome_class.value if attempt.outcome_class is not None else "incomplete",
-        )
-        for attempt in history
-    ]
-
-
 def _all_established_not_sent(history: Sequence[AttemptRecord]) -> bool:
     """True iff every attempt so far is complete and pre_connection or deadline_expired."""
 
@@ -523,7 +514,7 @@ class AlpacaClient:
                 "Order submission history is not clean "
                 f"(submission_class={existing_class.value}); nothing was sent.",
                 submission_class=existing_class,
-                attempts=_attempt_summary(history),
+                attempts=summarize_attempts(history),
                 reason="history_not_clean",
             )
 
@@ -569,14 +560,14 @@ class AlpacaClient:
                     raise OrderNotSentError(
                         "Order was not sent: every attempt failed before a connection was made.",
                         submission_class=SubmissionClass.NOT_SENT,
-                        attempts=_attempt_summary(history),
+                        attempts=summarize_attempts(history),
                         reason=type(failure).__name__,
                     ) from failure
                 raise AmbiguousOrderSubmissionError(
                     "Order submission outcome is ambiguous: the request may have reached "
                     f"the broker ({type(failure).__name__}); it will not be re-sent.",
                     submission_class=SubmissionClass.AMBIGUOUS,
-                    attempts=_attempt_summary(history),
+                    attempts=summarize_attempts(history),
                     reason=type(failure).__name__,
                 ) from failure
 
@@ -609,7 +600,7 @@ class AlpacaClient:
                 raise OrderRejectedError(
                     f"Order rejected by the broker (HTTP {response.status_code}).",
                     submission_class=SubmissionClass.REJECTED,
-                    attempts=_attempt_summary(history),
+                    attempts=summarize_attempts(history),
                     http_status=response.status_code,
                     reason="http_4xx",
                 )
@@ -618,7 +609,7 @@ class AlpacaClient:
                 f"(HTTP {response.status_code} / {error_type or 'transient_status'}); "
                 "it will not be re-sent.",
                 submission_class=SubmissionClass.AMBIGUOUS,
-                attempts=_attempt_summary(history),
+                attempts=summarize_attempts(history),
                 http_status=response.status_code,
                 reason=error_type or "transient_status",
             )
@@ -651,7 +642,7 @@ class AlpacaClient:
                 "Order submission outcome could not be recorded; treated as ambiguous "
                 "and it will not be re-sent.",
                 submission_class=SubmissionClass.AMBIGUOUS,
-                attempts=_attempt_summary(history),
+                attempts=summarize_attempts(history),
                 http_status=http_status,
                 reason="attempt_outcome_not_recorded",
             ) from exc
@@ -672,7 +663,7 @@ class AlpacaClient:
     ) -> OrderSubmissionResult:
         """A duplicate-id reply triggers exactly one lookup, never an inference (V-1)."""
 
-        summary = _attempt_summary(history)
+        summary = summarize_attempts(history)
         try:
             snapshot = self.get_order_by_client_order_id(intent.client_order_id)
         except Exception as exc:

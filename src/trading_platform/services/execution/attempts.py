@@ -155,6 +155,18 @@ def classify_submission(attempts: Sequence[AttemptRecord]) -> SubmissionClass | 
     return SubmissionClass.NOT_SENT
 
 
+def summarize_attempts(attempts: Sequence[AttemptRecord]) -> list[tuple[int, str]]:
+    """Attempt numbers with closed outcome-class names ("incomplete" for NULL) only."""
+
+    return [
+        (
+            attempt.attempt_number,
+            attempt.outcome_class.value if attempt.outcome_class is not None else "incomplete",
+        )
+        for attempt in attempts
+    ]
+
+
 _SUBMITTED_STATUSES = frozenset(
     {
         OrderLifecycleState.SUBMITTED,

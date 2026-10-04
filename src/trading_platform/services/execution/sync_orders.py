@@ -29,6 +29,8 @@ from trading_platform.services.alpaca import (
     BrokerFillSnapshot,
     BrokerOrderSnapshot,
     BrokerPositionSnapshot,
+    broker_status_reason,
+    classify_broker_status,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution._paper_common import (
@@ -157,15 +159,22 @@ def _sync_paper_orders(
             event_type=transition_event,
         )
         if transition_target is not None and transition_target != local_order.status:
+            # D-13: the closed status class (and, for an unmapped status, its
+            # reason) is durable on the order event.
+            transition_details: dict[str, str] = {
+                "broker_order_id": broker_order.broker_order_id,
+                "broker_status": broker_order.broker_status,
+                "status_class": classify_broker_status(broker_order.broker_status).value,
+            }
+            status_reason = broker_status_reason(broker_order.broker_status)
+            if status_reason is not None:
+                transition_details["status_reason"] = status_reason
             apply_order_transition(
                 local_order.id,
                 OrderTransitionRequest(
                     strategy_run_id=local_order.strategy_run_id,
                     event_type=transition_event,
-                    details={
-                        "broker_order_id": broker_order.broker_order_id,
-                        "broker_status": broker_order.broker_status,
-                    },
+                    details=transition_details,
                     event_at=broker_order.updated_at,
                 ),
                 session=session,

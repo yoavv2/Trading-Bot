@@ -36,7 +36,12 @@ from trading_platform.services.active_paper_strategy import (
     BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
     OwnershipBlock,
 )
-from trading_platform.services.alpaca import AlpacaClient, AlpacaExecutionService
+from trading_platform.services.alpaca import (
+    AlpacaClient,
+    AlpacaExecutionService,
+    AmbiguousOrderSubmissionError,
+    OrderRejectedError,
+)
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError, session_run_lock
 from trading_platform.services.execution._paper_common import (
@@ -50,7 +55,11 @@ from trading_platform.services.execution._paper_common import (
 )
 from trading_platform.services.execution.attempts import (
     DbSubmissionAttemptLog,
+    SubmissionClass,
     bind_attempt_log,
+    classify_submission,
+    load_submission_attempts,
+    summarize_attempts,
 )
 from trading_platform.services.execution.contracts import ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.execution.idempotency import (
@@ -457,6 +466,43 @@ def _run_paper_order_submission_guarded(
                     reused_orders.append(payload)
                     continue
 
+                if intent_decision.action == "retry_existing" and (
+                    intent_decision.existing_order_id is not None
+                ):
+                    # D-12 pre-send guard: an intent is re-sent only while its WHOLE
+                    # attempt history is proven not sent (every attempt pre_connection
+                    # or deadline_expired with a complete outcome, or no attempt at all).
+                    # Anything else (an incomplete row left by a crash, an ambiguous
+                    # attempt, a duplicate-id reply, an accepted/rejected record) sends
+                    # NOTHING: the intent is parked in UNKNOWN and the run stops. The
+                    # UNKNOWN transition and the event are committed explicitly BEFORE
+                    # raising so the scope's rollback cannot erase them.
+                    guarded_order = session.get(PaperOrder, intent_decision.existing_order_id)
+                    if guarded_order is None:
+                        raise LookupError(
+                            f"Missing retryable paper_order '{intent_decision.existing_order_id}'."
+                        )
+                    prior_attempts = load_submission_attempts(session, guarded_order.id)
+                    prior_class = classify_submission(prior_attempts)
+                    if prior_class is not None and prior_class != SubmissionClass.NOT_SENT:
+                        guard_error = AmbiguousOrderSubmissionError(
+                            "Order submission history is not clean "
+                            f"(submission_class={prior_class.value}); the intent was not re-sent.",
+                            submission_class=prior_class,
+                            attempts=summarize_attempts(prior_attempts),
+                            reason="history_not_clean",
+                        )
+                        _park_intent_unknown(
+                            session,
+                            resolved_settings,
+                            order=guarded_order,
+                            run_id=run_id,
+                            error=guard_error,
+                            trigger_source=trigger_source,
+                        )
+                        session.commit()
+                        raise guard_error
+
                 if intent_decision.existing_order_id is None:
                     paper_order = PaperOrder(
                         strategy_run_id=run_id,
@@ -563,6 +609,53 @@ def _run_paper_order_submission_guarded(
                     )
                 ):
                     result = broker_execution.submit_order(intent)
+            except AmbiguousOrderSubmissionError as exc:
+                # D-12: the request may have reached the broker. The intent is parked
+                # in UNKNOWN (never retryable, never re-sent) and the run stops; the
+                # Job lands failed with outcome_uncertain through the handler's
+                # external_ marker. Recovery (20.1-10) resolves it from the log.
+                with session_scope(resolved_settings) as session:
+                    ambiguous_order = session.get(PaperOrder, pending_order_id)
+                    if ambiguous_order is not None:
+                        _park_intent_unknown(
+                            session,
+                            resolved_settings,
+                            order=ambiguous_order,
+                            run_id=run_id,
+                            error=exc,
+                            trigger_source=trigger_source,
+                        )
+                raise
+            except OrderRejectedError as exc:
+                # D-12: a 4xx refusal is final. SUBMISSION_FAILED is retryable by
+                # design, so the intent ends REJECTED (already-legal BROKER_REJECTED
+                # transition) with the closed class and HTTP evidence; a new order is
+                # a new decision.
+                with session_scope(resolved_settings) as session:
+                    rejected_order = session.get(PaperOrder, pending_order_id)
+                    if rejected_order is not None:
+                        rejected_order.last_submission_error = str(exc)
+                        rejected_order.broker_payload = {
+                            "error": str(exc),
+                            "submission_class": exc.submission_class.value,
+                            "http_status": exc.http_status,
+                        }
+                        apply_order_transition(
+                            rejected_order.id,
+                            OrderTransitionRequest(
+                                strategy_run_id=run_id,
+                                event_type=OrderTransitionEventType.BROKER_REJECTED,
+                                details={
+                                    "submission_class": exc.submission_class.value,
+                                    "http_status": exc.http_status,
+                                    "attempt_numbers": list(exc.attempt_numbers),
+                                    "trigger_source": trigger_source,
+                                },
+                            ),
+                            session=session,
+                            settings=resolved_settings,
+                        )
+                raise
             except Exception as exc:
                 with session_scope(resolved_settings) as session:
                     failed_order = session.get(PaperOrder, pending_order_id)
@@ -1838,6 +1931,64 @@ def _finalize_mid_run_halt(
             else None,
             result_summary=strategy_run.result_summary,
         )
+
+
+def _park_intent_unknown(
+    session,
+    resolved_settings: Settings,
+    *,
+    order: PaperOrder,
+    run_id: uuid.UUID,
+    error: AmbiguousOrderSubmissionError,
+    trigger_source: str,
+) -> None:
+    """Move an intent with an unclean attempt history to UNKNOWN and record the event.
+
+    Details carry closed class names, HTTP status and attempt numbers only. UNKNOWN
+    without a broker_order_id is not resubmittable and counts as broker-touched.
+    """
+
+    order.last_submission_error = str(error)
+    order.broker_payload = {
+        "error": str(error),
+        "submission_class": error.submission_class.value,
+        "reason": error.reason,
+    }
+    details: dict[str, Any] = {
+        "submission_class": error.submission_class.value,
+        "reason": error.reason,
+        "http_status": error.http_status,
+        "attempt_numbers": list(error.attempt_numbers),
+        "attempt_outcomes": [outcome for _, outcome in error.attempts],
+        "trigger_source": trigger_source,
+    }
+    apply_order_transition(
+        order.id,
+        OrderTransitionRequest(
+            strategy_run_id=run_id,
+            event_type=OrderTransitionEventType.BROKER_STATUS_UNKNOWN,
+            details=details,
+        ),
+        session=session,
+        settings=resolved_settings,
+    )
+    session.add(
+        ExecutionEvent(
+            strategy_run_id=run_id,
+            paper_order_id=order.id,
+            event_type="submission_outcome_uncertain",
+            severity="error",
+            blocks_execution=True,
+            event_at=datetime.now(UTC),
+            message=(
+                f"Order submission outcome is uncertain "
+                f"(submission_class={error.submission_class.value}); the intent was parked "
+                "in UNKNOWN and will not be re-sent automatically."
+            ),
+            details=details,
+        )
+    )
+    session.flush()
 
 
 def _is_resubmittable_order(paper_order: PaperOrder, *, failure_threshold: int) -> bool:
