@@ -9,11 +9,14 @@ Real DB + injected clock + real XNYS sessions. Service-level precedence uses a s
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from tests.support.calendar_facts import (
     FakeStrategy,
     clock_at,
@@ -27,6 +30,7 @@ from tests.support.paper_ownership import seed_registered_strategy, set_active_p
 
 from trading_platform.api.app import create_app
 from trading_platform.core.settings import Settings, clear_settings_cache, load_settings
+from trading_platform.db.models import Position, Strategy, StrategyRun, Symbol
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.handlers.backtest_submission import BacktestSubmissionSpec
 from trading_platform.jobs.handlers.paper_session import PaperSessionJobHandler
@@ -37,6 +41,9 @@ from trading_platform.jobs.handlers.paper_session_submission import (
 from trading_platform.jobs.handlers.risk_evaluation_submission import RiskEvaluationSubmissionSpec
 from trading_platform.jobs.registry import JobRegistry, JobSubmissionConflictError
 from trading_platform.services import calendar_facts as facts
+from trading_platform.services.data import DailyBar as IngestedBar
+from trading_platform.services.ingestion import upsert_daily_bars
+from trading_platform.services.risk import run_risk_evaluation
 from trading_platform.strategies.registry import build_default_registry
 
 STRATEGY_ID = "trend_following_daily"
@@ -74,9 +81,45 @@ def _payload(as_of: date) -> dict[str, object]:
     return {"strategy_id": STRATEGY_ID, "as_of_session": as_of.isoformat(), "risk_run_id": None}
 
 
-def _conflict(spec: PaperSessionSubmissionSpec, as_of: date) -> JobSubmissionConflictError:
+def _evaluate(as_of: date) -> uuid.UUID:
+    """A REAL risk evaluation: it persists the input manifest the submit-time
+    provenance check (PROV-01, D-25) verifies."""
+
+    report = run_risk_evaluation(
+        STRATEGY_ID, as_of_session=as_of, trigger_source="test_suite", settings=load_settings()
+    )
+    assert report.status == "succeeded"
+    return uuid.UUID(report.run_id)
+
+
+def _reingest(ticker: str, session_date: date, *, close: str) -> None:
+    with session_scope(load_settings()) as session:
+        symbol_id = session.execute(select(Symbol.id).where(Symbol.ticker == ticker)).scalar_one()
+        upsert_daily_bars(
+            session,
+            [
+                IngestedBar(
+                    symbol=ticker,
+                    session_date=session_date,
+                    open=Decimal("100"),
+                    high=Decimal("101"),
+                    low=Decimal("99"),
+                    close=Decimal(close),
+                    volume=1000,
+                    adjusted=True,
+                    provider="polygon",
+                )
+            ],
+            symbol_id,
+        )
+
+
+def _conflict(spec: PaperSessionSubmissionSpec, as_of: date, risk_run_id: uuid.UUID | None = None) -> JobSubmissionConflictError:
+    payload = _payload(as_of)
+    if risk_run_id is not None:
+        payload["risk_run_id"] = str(risk_run_id)
     with pytest.raises(JobSubmissionConflictError) as exc_info:
-        spec.validate_payload(_payload(as_of))
+        spec.validate_payload(payload)
     return exc_info.value
 
 
@@ -92,7 +135,7 @@ def _eligibility(settings: Settings, now: datetime, as_of: date, strategy: FakeS
 # ---------------------------------------------------------------------------
 
 
-def test_conflict_set_is_exactly_the_six_values() -> None:
+def test_conflict_set_is_exactly_the_eight_values() -> None:
     assert {member.value for member in PaperSessionSubmitConflict} == {
         "no_active_paper_strategy",
         "strategy_not_active_paper_strategy",
@@ -100,6 +143,8 @@ def test_conflict_set_is_exactly_the_six_values() -> None:
         "outside_execution_window",
         "evaluation_data_not_ready",
         "calendar_data_unavailable",
+        "evaluation_data_changed",
+        "strategy_settings_changed",
     }
 
 
@@ -125,6 +170,7 @@ def test_every_eligibility_rejection_is_a_member_of_the_spec_conflict_enum() -> 
 def test_ten_am_on_session_d_with_ready_previous_session_is_eligible(eligibility_db: Settings) -> None:
     _seed_ready_calendar()
     _own(eligibility_db)
+    _evaluate(date(2025, 12, 1))
     spec = _spec(et(2025, 12, 2, 10, 0))
 
     normalized = spec.validate_payload(_payload(date(2025, 12, 1)))
@@ -190,6 +236,7 @@ def test_early_close_day_cutoff_is_respected(eligibility_db: Settings) -> None:
     _seed_ready_calendar()
     _own(eligibility_db)
     as_of = date(2025, 11, 26)  # previous session of the 2025-11-28 early-close day
+    _evaluate(as_of)
 
     _spec(et(2025, 11, 28, 12, 44, 59)).validate_payload(_payload(as_of))
     assert _conflict(_spec(et(2025, 11, 28, 12, 45, 0)), as_of).code == "outside_execution_window"
@@ -364,3 +411,145 @@ def test_http_409_body_for_historical_execution_rejected(eligibility_db: Setting
         "strategy_id": STRATEGY_ID,
         "as_of_session": "2026-03-13",
     }
+
+
+# ---------------------------------------------------------------------------
+# Provenance: the evaluation input manifest is verified last (PROV-01, D-25)
+# ---------------------------------------------------------------------------
+
+TEN_AM = et(2025, 12, 2, 10, 0)
+AS_OF = date(2025, 12, 1)
+
+
+def _provenance_ready(settings: Settings) -> uuid.UUID:
+    _seed_ready_calendar()
+    _own(settings)
+    return _evaluate(AS_OF)
+
+
+def _post_paper_session(settings: Settings, payload: dict[str, object], key: str):
+    registry = JobRegistry()
+    registry.register(PaperSessionJobHandler(settings=settings), submission_spec=_spec(TEN_AM))
+    with TestClient(create_app(job_registry=registry)) as client:
+        return client.post(
+            "/api/v1/jobs",
+            headers={"Idempotency-Key": key},
+            json={"job_type": "paper-session", "payload": payload},
+        )
+
+
+def test_corrected_bar_after_evaluation_rejects_with_evaluation_data_changed(
+    eligibility_db: Settings,
+) -> None:
+    _provenance_ready(eligibility_db)
+    ticker = _universe()[0]
+
+    _reingest(ticker, date(2025, 11, 20), close="123.45")
+
+    response = _post_paper_session(eligibility_db, _payload(AS_OF), "provenance-http-data")
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "evaluation_data_changed"
+    assert detail["job_type"] == "paper-session"
+    assert detail["strategy_id"] == STRATEGY_ID
+    assert detail["as_of_session"] == "2025-12-01"
+    assert detail["request_kind"] == "bars_for_sessions"  # closed ManifestRequestKind value only
+
+
+def test_changed_strategy_setting_rejects_with_strategy_settings_changed(
+    eligibility_db: Settings,
+) -> None:
+    _provenance_ready(eligibility_db)
+    changed = Settings.model_validate(load_settings().model_dump(mode="python"))
+    # a signal-parameter change that leaves universe and warm-up (readiness) untouched
+    changed.strategies.trend_following_daily.indicators.short_window -= 1
+
+    registry = JobRegistry()
+    registry.register(
+        PaperSessionJobHandler(settings=changed),
+        submission_spec=PaperSessionSubmissionSpec(changed, clock=clock_at(TEN_AM)),
+    )
+    with TestClient(create_app(job_registry=registry)) as client:
+        response = client.post(
+            "/api/v1/jobs",
+            headers={"Idempotency-Key": "provenance-http-settings"},
+            json={"job_type": "paper-session", "payload": _payload(AS_OF)},
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "strategy_settings_changed"
+
+
+def test_identical_reingest_does_not_reject(eligibility_db: Settings) -> None:
+    _provenance_ready(eligibility_db)
+    ticker = _universe()[0]
+
+    _reingest(ticker, date(2025, 11, 20), close="100.5")  # same values, refreshed updated_at
+
+    normalized = _spec(TEN_AM).validate_payload(_payload(AS_OF))
+    assert normalized["risk_run_id"] is None
+
+
+def test_risk_run_without_manifest_rejects_evaluation_data_not_ready(
+    eligibility_db: Settings,
+) -> None:
+    run_id = _provenance_ready(eligibility_db)
+    with session_scope(eligibility_db) as session:
+        run = session.get(StrategyRun, run_id)
+        summary = dict(run.result_summary)
+        summary.pop("evaluation_manifest")
+        run.result_summary = summary
+
+    error = _conflict(_spec(TEN_AM), AS_OF)
+
+    assert error.code == "evaluation_data_not_ready"
+    assert error.detail["reason"] == "manifest_missing"
+    assert error.detail["risk_run_id"] == str(run_id)
+
+
+def test_no_eligible_risk_run_rejects_evaluation_data_not_ready(eligibility_db: Settings) -> None:
+    _seed_ready_calendar()
+    _own(eligibility_db)
+
+    error = _conflict(_spec(TEN_AM), AS_OF)
+
+    assert error.code == "evaluation_data_not_ready"
+    assert error.detail["reason"] == "no_eligible_risk_run"
+    assert "risk_run_id" not in error.detail
+
+
+def test_pinned_and_unpinned_risk_run_use_the_same_verification(eligibility_db: Settings) -> None:
+    run_id = _provenance_ready(eligibility_db)
+    spec = _spec(TEN_AM)
+
+    unpinned = spec.validate_payload(_payload(AS_OF))
+    pinned = spec.validate_payload({**_payload(AS_OF), "risk_run_id": str(run_id)})
+    # the resolved id is never written into the payload; the pinned id stays as given
+    assert unpinned["risk_run_id"] is None
+    assert pinned["risk_run_id"] == str(run_id)
+
+    _reingest(_universe()[0], date(2025, 11, 20), close="123.45")
+
+    assert _conflict(spec, AS_OF).code == "evaluation_data_changed"
+    assert _conflict(spec, AS_OF, risk_run_id=run_id).code == "evaluation_data_changed"
+
+
+def test_a_new_position_after_evaluation_does_not_reject(eligibility_db: Settings) -> None:
+    _provenance_ready(eligibility_db)
+    ticker = _universe()[0]
+    with session_scope(eligibility_db) as session:
+        strategy_pk = session.execute(select(Strategy.id).where(Strategy.strategy_id == STRATEGY_ID)).scalar_one()
+        symbol_pk = session.execute(select(Symbol.id).where(Symbol.ticker == ticker)).scalar_one()
+        session.add(
+            Position(
+                strategy_id=strategy_pk,
+                symbol_id=symbol_pk,
+                status="open",
+                quantity=Decimal("10"),
+                average_entry_price=Decimal("100"),
+                cost_basis=Decimal("1000"),
+                opened_session_date=AS_OF,
+            )
+        )
+
+    assert _spec(TEN_AM).validate_payload(_payload(AS_OF))["as_of_session"] == "2025-12-01"

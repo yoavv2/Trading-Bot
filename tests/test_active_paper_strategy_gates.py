@@ -866,10 +866,13 @@ def test_no_other_module_calls_ownership_decision_inline() -> None:
 def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
     expected = {member.value for member in OwnershipBlock}
     # paper-session adds the four execution-eligibility refusals (COR-04, D-23)
+    # and the two evaluation-provenance refusals (PROV-01, D-25)
     assert {m.value for m in PaperSessionSubmitConflict} == expected | {
         "historical_execution_rejected",
         "outside_execution_window",
         "evaluation_data_not_ready",
         "calendar_data_unavailable",
+        "evaluation_data_changed",
+        "strategy_settings_changed",
     }
     assert {m.value for m in ReconciliationSubmitConflict} == expected

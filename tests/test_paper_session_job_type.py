@@ -59,6 +59,10 @@ from trading_platform.jobs.registry import (
 from trading_platform.services.alpaca import BrokerAccountSnapshot, BrokerOrderSnapshot
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
 from trading_platform.services.config.validation import ExecutionMode
+from trading_platform.services.evaluation_manifest import (
+    ManifestVerification,
+    ManifestVerificationStatus,
+)
 from trading_platform.services.execution import (
     ExecutionOrderStatus,
     OrderSide,
@@ -351,7 +355,72 @@ def test_paper_session_submit_conflict_is_a_closed_set() -> None:
         "outside_execution_window",
         "evaluation_data_not_ready",
         "calendar_data_unavailable",
+        "evaluation_data_changed",
+        "strategy_settings_changed",
     }
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        pytest.param(
+            ManifestVerificationStatus.EVALUATION_DATA_CHANGED,
+            PaperSessionSubmitConflict.EVALUATION_DATA_CHANGED,
+            id="evaluation_data_changed",
+        ),
+        pytest.param(
+            ManifestVerificationStatus.STRATEGY_SETTINGS_CHANGED,
+            PaperSessionSubmitConflict.STRATEGY_SETTINGS_CHANGED,
+            id="strategy_settings_changed",
+        ),
+        pytest.param(
+            ManifestVerificationStatus.MANIFEST_MISSING,
+            PaperSessionSubmitConflict.EVALUATION_DATA_NOT_READY,
+            id="manifest_missing",
+        ),
+    ],
+)
+def test_paper_session_maps_each_manifest_verification_status_to_its_typed_conflict(
+    migrated_paper_db: str,
+    monkeypatch: pytest.MonkeyPatch,
+    status: ManifestVerificationStatus,
+    expected_code: PaperSessionSubmitConflict,
+) -> None:
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)
+    monkeypatch.setattr(
+        "trading_platform.jobs.handlers.paper_session_submission.verify_risk_run_manifest",
+        lambda **kwargs: ManifestVerification(status),
+    )
+    spec = PaperSessionSubmissionSpec(load_settings())
+
+    with pytest.raises(JobSubmissionConflictError) as exc_info:
+        spec.validate_payload(
+            {"strategy_id": "trend_following_daily", "as_of_session": "2024-01-10", "risk_run_id": None}
+        )
+
+    assert exc_info.value.code == expected_code.value
+    assert exc_info.value.detail["strategy_id"] == "trend_following_daily"
+    assert exc_info.value.detail["as_of_session"] == "2024-01-10"
+    assert all(isinstance(value, str) for value in exc_info.value.detail.values())
+
+
+def test_paper_session_without_an_eligible_risk_run_is_evaluation_data_not_ready(
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)
+    monkeypatch.setattr(
+        "trading_platform.jobs.handlers.paper_session_submission.latest_eligible_risk_run_id",
+        lambda **kwargs: None,
+    )
+    spec = PaperSessionSubmissionSpec(load_settings())
+
+    with pytest.raises(JobSubmissionConflictError) as exc_info:
+        spec.validate_payload(
+            {"strategy_id": "trend_following_daily", "as_of_session": "2024-01-10", "risk_run_id": None}
+        )
+
+    assert exc_info.value.code == "evaluation_data_not_ready"
+    assert exc_info.value.detail["reason"] == "no_eligible_risk_run"
 
 
 @pytest.mark.parametrize(
