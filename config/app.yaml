@@ -96,6 +96,8 @@ broker:
     max_retries: 3
     retry_backoff_factor: 0.5
     timeout_seconds: 30
+    alpaca_data_base_url: https://data.alpaca.markets
+    price_feed: iex
 
 execution:
   default_order_type: market
@@ -103,6 +105,9 @@ execution:
   client_order_id_prefix: tp
   execution_policy: regular_hours_prev_session_v1
   execution_window_cutoff_minutes: 15
+  pre_send_price_max_age_seconds: 120
+  pre_send_max_price_deviation: 0.05
+  send_authorization_ttl_seconds: 5
   safety:
     repeated_failure_threshold: 3
     block_on_unresolved_reconciliation: true

@@ -308,6 +308,9 @@ class AlpacaBrokerSettings(BaseModel):
     max_retries: int = 3
     retry_backoff_factor: float = 0.5
     timeout_seconds: float = 30.0
+    # S2-R3: the read-only market-data endpoint behind the pre-send latest-trade price.
+    alpaca_data_base_url: str = "https://data.alpaca.markets"
+    price_feed: Literal["iex", "sip"] = "iex"
 
 
 class BrokerSettings(BaseModel):
@@ -363,6 +366,14 @@ class ExecutionSettings(BaseModel):
     # seconds apart for the evidence set to read as complete. Evidence only: it never
     # resolves an uncertain order and never permits a resend (round 5, 2026-10-04).
     recovery_absence_grace_seconds: int = Field(default=300, ge=0)
+    # S2-R3 (round 3): every pre-send risk check uses a fresh broker price. The observation
+    # must be at most this old, and may deviate from the evaluation price (the sizing basis)
+    # by at most ``pre_send_max_price_deviation`` (a fraction) before the operation pauses.
+    pre_send_price_max_age_seconds: int = Field(default=120, ge=1)
+    pre_send_max_price_deviation: float = Field(default=0.05, gt=0, le=1)
+    # S1-R3: how long a committed T1 authorization stays valid for handing the request to the
+    # HTTP client (a wall-clock deadline; it narrows the late-POST window, it bounds nothing).
+    send_authorization_ttl_seconds: int = Field(default=5, ge=1)
     paper_session_runner: PaperSessionRunnerSettings = PaperSessionRunnerSettings()
     safety: ExecutionSafetySettings = ExecutionSafetySettings()
 

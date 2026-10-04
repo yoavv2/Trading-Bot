@@ -107,6 +107,20 @@ class EntrySizingResult:
     remaining_total_capacity: Decimal
 
 
+@dataclass(frozen=True)
+class EntryCapacity:
+    """Remaining room for a new entry under the allocation caps and cash (shared limit arithmetic).
+
+    Both ``compute_entry_size`` (evaluation sizing) and the pre-send revalidation of a pinned
+    intent read this one computation, so the numbers cannot drift apart.
+    """
+
+    equity: Decimal
+    remaining_strategy_capacity: Decimal
+    remaining_total_capacity: Decimal
+    remaining_cash: Decimal
+
+
 class PortfolioService:
     """Compute deterministic position sizing from typed portfolio settings."""
 
@@ -293,6 +307,25 @@ class PortfolioService:
         session.flush()
         return snapshot
 
+    def entry_capacity(self, state: PortfolioState) -> EntryCapacity:
+        """Remaining strategy / total allocation capacity and cash of ``state``."""
+
+        equity = (
+            state.total_equity
+            if state.total_equity > 0
+            else _money(state.cash + state.gross_exposure)
+        )
+        strategy_cap = _money(equity * Decimal(str(self.settings.max_strategy_allocation_pct)))
+        total_cap = _money(equity * Decimal(str(self.settings.max_total_portfolio_allocation_pct)))
+        return EntryCapacity(
+            equity=equity,
+            remaining_strategy_capacity=_money(
+                max(strategy_cap - state.strategy_exposure, Decimal("0"))
+            ),
+            remaining_total_capacity=_money(max(total_cap - state.gross_exposure, Decimal("0"))),
+            remaining_cash=_money(max(state.cash, Decimal("0"))),
+        )
+
     def compute_entry_size(
         self,
         state: PortfolioState,
@@ -312,14 +345,12 @@ class PortfolioService:
                 remaining_total_capacity=_money(0),
             )
 
-        equity = state.total_equity if state.total_equity > 0 else _money(state.cash + state.gross_exposure)
+        capacity = self.entry_capacity(state)
         risk_budget = Decimal(str(risk_per_trade))
-        target_notional = _money(equity * risk_budget)
-        strategy_cap = _money(equity * Decimal(str(self.settings.max_strategy_allocation_pct)))
-        total_cap = _money(equity * Decimal(str(self.settings.max_total_portfolio_allocation_pct)))
-        remaining_strategy_capacity = _money(max(strategy_cap - state.strategy_exposure, Decimal("0")))
-        remaining_total_capacity = _money(max(total_cap - state.gross_exposure, Decimal("0")))
-        remaining_cash = _money(max(state.cash, Decimal("0")))
+        target_notional = _money(capacity.equity * risk_budget)
+        remaining_strategy_capacity = capacity.remaining_strategy_capacity
+        remaining_total_capacity = capacity.remaining_total_capacity
+        remaining_cash = capacity.remaining_cash
 
         approved_notional = min(
             target_notional,

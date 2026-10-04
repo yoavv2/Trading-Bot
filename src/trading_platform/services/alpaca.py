@@ -6,7 +6,8 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from typing import Any, Final, Literal, TypeVar
 from urllib.parse import quote
 
@@ -80,6 +81,60 @@ class AlpacaClientError(Exception):
 
 class AlpacaAuthError(AlpacaClientError):
     """Raised when Alpaca credentials are missing or rejected."""
+
+
+class PriceFailure(StrEnum):
+    """Closed reasons a pre-send price observation is unavailable (S2-R3).
+
+    They surface as the ``detail`` of an operation paused with ``price_unavailable``.
+    ``no_trade_today`` and ``price_stale`` are decided by the permission check from the
+    observation's timestamp; the other three come from the lookup itself.
+    """
+
+    PRICE_LOOKUP_FAILED = "price_lookup_failed"
+    FEED_NOT_AUTHORIZED = "feed_not_authorized"
+    NO_TRADE_TODAY = "no_trade_today"
+    PRICE_INVALID = "price_invalid"
+    PRICE_STALE = "price_stale"
+
+
+class PriceLookupError(AlpacaClientError):
+    """The latest-trade read produced no usable observation (read-only; nothing was sent)."""
+
+    def __init__(self, failure: PriceFailure, message: str | None = None) -> None:
+        super().__init__(message or f"Latest trade unavailable ({failure.value}).")
+        self.failure = failure
+
+
+PRICE_SOURCE_ALPACA_LATEST_TRADE: Final = "alpaca_latest_trade"
+
+
+@dataclass(frozen=True)
+class PriceObservation:
+    """One fresh broker price observation (S2-R3): the latest trade of a symbol.
+
+    ``observed_at`` is the trade timestamp (``trade.t``, UTC); ``fetched_at`` is when this
+    process read it. It is the pre-send valuation price and is stored in the attempt's
+    permission-check details; the evaluation price (``reference_price``) stays the sizing
+    basis and the deviation baseline.
+    """
+
+    symbol: str
+    price: Decimal
+    observed_at: datetime
+    fetched_at: datetime
+    source: str = PRICE_SOURCE_ALPACA_LATEST_TRADE
+    feed: str = "iex"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "price": str(self.price),
+            "observed_at": self.observed_at.isoformat(),
+            "fetched_at": self.fetched_at.isoformat(),
+            "source": self.source,
+            "feed": self.feed,
+        }
 
 
 class AttemptLogNotBoundError(AlpacaClientError):
@@ -700,6 +755,58 @@ class AlpacaClient:
             )
         return _normalized_result(snapshot.raw_payload)
 
+    def get_latest_trade(self, symbol: str) -> PriceObservation:
+        """Read-only ``GET {alpaca_data_base_url}/v2/stocks/{symbol}/trades/latest?feed=...`` (S2-R3).
+
+        Retries like every other GET; it never POSTs and places nothing. Uses ``trade.p``
+        (must parse to a Decimal > 0) and ``trade.t`` (RFC 3339, converted to UTC).
+        Failures raise ``PriceLookupError`` with a closed ``PriceFailure``: 401/403 ->
+        feed_not_authorized; 404 -> no_trade_today; any other lookup error after the GET
+        retries -> price_lookup_failed; an unparseable or non-positive price or an
+        unparseable timestamp -> price_invalid. Freshness is judged by the caller.
+        """
+
+        ticker = symbol.strip().upper()
+        if not ticker:
+            raise ValueError("symbol must be non-blank.")
+        url = (
+            f"{self._settings.alpaca_data_base_url.rstrip('/')}"
+            f"/v2/stocks/{quote(ticker, safe='')}/trades/latest"
+        )
+        try:
+            payload = self._request_with_retry(
+                "GET",
+                url,
+                params={"feed": self._settings.price_feed},
+                allow_not_found=True,
+            )
+        except AlpacaAuthError as exc:
+            raise PriceLookupError(PriceFailure.FEED_NOT_AUTHORIZED) from exc
+        except (AlpacaClientError, ValueError) as exc:
+            raise PriceLookupError(PriceFailure.PRICE_LOOKUP_FAILED) from exc
+        if payload is _NOT_FOUND:
+            raise PriceLookupError(PriceFailure.NO_TRADE_TODAY)
+        trade = payload.get("trade") if isinstance(payload, dict) else None
+        if not isinstance(trade, dict):
+            raise PriceLookupError(PriceFailure.PRICE_INVALID, "Latest trade payload has no trade.")
+        try:
+            price = Decimal(str(trade["p"]))
+            observed_at = _parse_datetime(str(trade["t"]))
+        except (KeyError, InvalidOperation, ValueError) as exc:
+            raise PriceLookupError(PriceFailure.PRICE_INVALID) from exc
+        if observed_at is None or not price.is_finite() or price <= 0:
+            raise PriceLookupError(PriceFailure.PRICE_INVALID)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=UTC)
+        return PriceObservation(
+            symbol=ticker,
+            price=price,
+            observed_at=observed_at.astimezone(UTC),
+            fetched_at=datetime.now(UTC),
+            source=PRICE_SOURCE_ALPACA_LATEST_TRADE,
+            feed=self._settings.price_feed,
+        )
+
     def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrderSnapshot | None:
         """GET one order by client order id; ``None`` ONLY for HTTP 404.
 
@@ -940,3 +1047,36 @@ class AlpacaExecutionService(ExecutionService):
 
     def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
         return self._client.submit_order(intent)
+
+
+class AlpacaPriceSource:
+    """Production ``PriceSource`` (S2-R3): the read-only latest-trade GET of ``AlpacaClient``.
+
+    The client is built lazily on the first lookup (a session that never reaches a
+    pre-send check never needs market-data credentials) and closed with the source.
+    ``reference_price`` is accepted for protocol parity with scripted test doubles and
+    ignored.
+    """
+
+    def __init__(
+        self, settings: AlpacaBrokerSettings, *, client: AlpacaClient | None = None
+    ) -> None:
+        self._settings = settings
+        self._client = client
+        self._owns_client = client is None
+
+    def latest_trade(
+        self, symbol: str, *, reference_price: Decimal | None = None
+    ) -> PriceObservation:
+        del reference_price
+        if self._client is None:
+            try:
+                self._client = AlpacaClient(self._settings)
+            except AlpacaAuthError as exc:
+                raise PriceLookupError(PriceFailure.FEED_NOT_AUTHORIZED) from exc
+        return self._client.get_latest_trade(symbol)
+
+    def close(self) -> None:
+        if self._owns_client and self._client is not None:
+            self._client.close()
+            self._client = None

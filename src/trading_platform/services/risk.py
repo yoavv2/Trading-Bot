@@ -25,7 +25,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from trading_platform.core.settings import Settings, get_strategy_config, load_settings
+from trading_platform.core.settings import (
+    PortfolioSettings,
+    Settings,
+    get_strategy_config,
+    load_settings,
+)
 from trading_platform.db.models import (
     RiskEvent,
     Strategy,
@@ -35,6 +40,7 @@ from trading_platform.db.models import (
     Symbol,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services.alpaca import PriceObservation
 from trading_platform.services.evaluation_manifest import (
     EvaluationManifest,
     ManifestFormatError,
@@ -485,6 +491,135 @@ class PortfolioRiskService(RiskService):
             open_symbols=frozenset([*state.open_symbols, signal.symbol]),
             total_open_positions=state.total_open_positions + 1,
         )
+
+
+@dataclass(frozen=True)
+class PinnedIntentSpec:
+    """The identity of one pinned intent as risk sees it: symbol, side, quantity, sizing price.
+
+    The quantity is part of the intent's identity; revalidation judges it and never changes it.
+    """
+
+    symbol: str
+    side: str
+    quantity: Decimal
+    reference_price: Decimal
+
+
+@dataclass(frozen=True)
+class RiskLimits:
+    """The CURRENT risk configuration a pinned intent is revalidated against."""
+
+    max_positions: int
+    portfolio: PortfolioSettings
+
+
+def current_risk_limits(settings: Settings, strategy_id: str) -> RiskLimits:
+    """Read the risk limits from the live settings on every call (a change takes effect at once)."""
+
+    config = get_strategy_config(settings, strategy_id)
+    return RiskLimits(max_positions=config.risk.max_positions, portfolio=settings.portfolio)
+
+
+@dataclass(frozen=True)
+class RiskRevalidation:
+    """Outcome of ``revalidate_pinned_intent``: ``ok`` or ``failed`` with one portfolio-dependent code."""
+
+    code: RiskDecisionCode
+    reason: str
+    valuation_price: Decimal
+    notional: Decimal
+
+    @property
+    def ok(self) -> bool:
+        return self.code is RiskDecisionCode.APPROVED
+
+    @property
+    def failed(self) -> bool:
+        return not self.ok
+
+
+def revalidate_pinned_intent(
+    pinned_intent: PinnedIntentSpec,
+    portfolio_state: PortfolioState,
+    risk_config: RiskLimits,
+    price: PriceObservation,
+) -> RiskRevalidation:
+    """Re-apply only the portfolio-dependent limits to a pinned intent at the FRESH price (S2-R3).
+
+    Codes it can return: approved, duplicate_open_position, no_open_position, max_positions,
+    strategy_allocation_cap, total_allocation_cap, insufficient_cash. The pinned (symbol,
+    side, quantity) is valued at the fresh observation (a buy at max(price, reference_price)
+    x quantity, a sell at price x quantity), never at the evaluation price alone, against the
+    CURRENT ``portfolio_state`` (refreshed after the required sync, earlier fills included)
+    and the CURRENT ``risk_config``. It produces no signal, touches no market data and keeps
+    the quantity exactly as pinned.
+    """
+
+    quantity = pinned_intent.quantity
+    if pinned_intent.side == "sell":
+        notional = (price.price * quantity).quantize(Decimal("0.000001"))
+        held = next(
+            (item for item in portfolio_state.open_positions if item.symbol == pinned_intent.symbol),
+            None,
+        )
+        if held is None or held.quantity < quantity:
+            return RiskRevalidation(
+                RiskDecisionCode.NO_OPEN_POSITION,
+                "The open position no longer covers the pinned exit quantity.",
+                price.price,
+                notional,
+            )
+        return RiskRevalidation(
+            RiskDecisionCode.APPROVED, "Pinned exit is covered by the open position.", price.price, notional
+        )
+
+    valuation_price = max(price.price, pinned_intent.reference_price)
+    notional = (valuation_price * quantity).quantize(Decimal("0.000001"))
+    if pinned_intent.symbol in portfolio_state.open_symbols:
+        return RiskRevalidation(
+            RiskDecisionCode.DUPLICATE_OPEN_POSITION,
+            "A live open position already exists for this symbol.",
+            valuation_price,
+            notional,
+        )
+    if portfolio_state.position_count >= risk_config.max_positions:
+        return RiskRevalidation(
+            RiskDecisionCode.MAX_POSITIONS,
+            f"Open positions already meet the strategy max position limit ({risk_config.max_positions}).",
+            valuation_price,
+            notional,
+        )
+    capacity = PortfolioService(risk_config.portfolio).entry_capacity(portfolio_state)
+    # The tightest violated limit decides; a tie reads as cash (default 100% allocation caps
+    # equal the cash, so a plain shortfall must say insufficient_cash, not a cap).
+    limits = (
+        (
+            capacity.remaining_cash,
+            RiskDecisionCode.INSUFFICIENT_CASH,
+            "Available cash does not cover the pinned entry at the fresh price.",
+        ),
+        (
+            capacity.remaining_strategy_capacity,
+            RiskDecisionCode.STRATEGY_ALLOCATION_CAP,
+            "Strategy allocation capacity does not cover the pinned entry at the fresh price.",
+        ),
+        (
+            capacity.remaining_total_capacity,
+            RiskDecisionCode.TOTAL_ALLOCATION_CAP,
+            "Total portfolio allocation capacity does not cover the pinned entry at the fresh price.",
+        ),
+    )
+    violated = [item for item in limits if notional > item[0]]
+    if violated:
+        _remaining, code, reason = min(violated, key=lambda item: item[0])
+        return RiskRevalidation(code, reason, valuation_price, notional)
+    return RiskRevalidation(
+        RiskDecisionCode.APPROVED,
+        "Pinned entry is within position, allocation and cash limits at the fresh price.",
+        valuation_price,
+        notional,
+    )
 
 
 class PlaceholderRiskService(RiskService):
