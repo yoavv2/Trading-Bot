@@ -364,6 +364,14 @@ def test_paper_session_submit_conflict_is_a_closed_set() -> None:
         "outcome_unresolved",
         "reconciliation_required",
         "reconciliation_not_clean",
+        # REC-02 / 20.1-15: the start-mode operation gates (precedence: operation_open ->
+        # working_order_commitments_unaccounted -> risk_run_already_operated) and the S3-R4
+        # evaluation_basis_unverified refusal (a fourth member beyond the plan's three,
+        # because the S4 catalog lists it as a typed 409 at Job submit).
+        "operation_open",
+        "working_order_commitments_unaccounted",
+        "risk_run_already_operated",
+        "evaluation_basis_unverified",
     }
 
 

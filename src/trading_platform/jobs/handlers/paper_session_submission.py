@@ -41,6 +41,17 @@ closed 409 codes ``calendar_data_unavailable`` > ``historical_execution_rejected
 services-layer ``paper_execution_eligibility`` read, judged at the injected clock.
 Research, backtests and evaluation of past sessions are never gated by it.
 
+Start-mode operation gates (20.1-15, REC-02/D-16/D-17): after the recovery gate and before the
+provenance check, a new or retried request is refused, in this fixed order and from the EFFECTIVE
+state (an operation past its window counts as ended; the gate is read-only and writes nothing):
+``operation_open`` (the strategy has an open operation; details: operation_id, next_action
+'continue'), ``working_order_commitments_unaccounted`` (a working or unsynced order of the
+strategy), ``risk_run_already_operated`` (the pinned risk run's operation is terminated; a
+COMPLETED one is accepted and becomes the ``noop_existing_orders`` run) and
+``evaluation_basis_unverified`` (S3-R4: the pinned risk run's portfolio basis is not verified
+against the strategy's executions). ``risk_run_id: null`` is resolved read-only through
+``latest_eligible_risk_run_id``, the same function the manifest check and the run-time pin use.
+
 Provenance (D-25, PROV-01): as the LAST validation step the risk run that will be
 used (the pinned ``risk_run_id``, else the latest eligible one) has its stored
 evaluation input manifest verified against the current source data and signal
@@ -72,8 +83,16 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
+from sqlalchemy import select
 
 from trading_platform.core.settings import Settings
+from trading_platform.db.models import (
+    OPEN_OPERATION_STATES,
+    ExecutionOperation,
+    OperationState,
+    Strategy,
+    StrategyRun,
+)
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.handlers.payload_fields import (
     evaluation_session_default,
@@ -94,6 +113,12 @@ from trading_platform.services.calendar_facts import (
     paper_execution_eligibility,
 )
 from trading_platform.services.evaluation_manifest import ManifestVerificationStatus
+from trading_platform.services.execution.intent_identity import (
+    load_basis_verification_rows,
+    verify_evaluation_basis,
+)
+from trading_platform.services.execution.operations import effective_state
+from trading_platform.services.execution.permission import strategy_working_orders
 from trading_platform.services.recovery import REQUIRED_JOB_TYPE, strategy_recovery_status
 from trading_platform.services.risk import (
     is_eligible_risk_run,
@@ -127,8 +152,8 @@ class PaperSessionSubmitConflict(StrEnum):
     """Closed set of state-conflict codes (HTTP 409) ``paper-session`` submission
     can raise via ``JobSubmissionConflictError`` (D-03, D-15, D-23, D-25): the two
     ownership refusals, the four execution-eligibility refusals, the two evaluation
-    provenance refusals and the three recovery gate codes; later plans extend it. One
-    parametrized test case exists per value."""
+    provenance refusals, the three recovery gate codes and the four start-mode operation gates
+    (20.1-15); later plans extend it. One parametrized test case exists per value."""
 
     NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
     STRATEGY_NOT_ACTIVE_PAPER_STRATEGY = "strategy_not_active_paper_strategy"
@@ -142,6 +167,11 @@ class PaperSessionSubmitConflict(StrEnum):
     OUTCOME_UNRESOLVED = "outcome_unresolved"
     RECONCILIATION_REQUIRED = "reconciliation_required"
     RECONCILIATION_NOT_CLEAN = "reconciliation_not_clean"
+    # REC-02 (20.1-15): the start-mode operation gates, in this precedence order, then S3-R4.
+    OPERATION_OPEN = "operation_open"
+    WORKING_ORDER_COMMITMENTS_UNACCOUNTED = "working_order_commitments_unaccounted"
+    RISK_RUN_ALREADY_OPERATED = "risk_run_already_operated"
+    EVALUATION_BASIS_UNVERIFIED = "evaluation_basis_unverified"
 
 
 def _default_clock() -> datetime:
@@ -281,6 +311,16 @@ class PaperSessionSubmissionSpec:
         # safety refusal wins over provenance.
         self._require_recovery_resolved(strategy_id=strategy_id, as_of_session=as_of_session)
 
+        # REC-02 (20.1-15): the start-mode operation gates (read-only, effective state).
+        resolved_risk_run_id = pinned_risk_run_id or latest_eligible_risk_run_id(
+            strategy_id=strategy_id, as_of_session=as_of_session, settings=self._settings
+        )
+        self._require_start_gates(
+            strategy_id=strategy_id,
+            as_of_session=as_of_session,
+            risk_run_id=resolved_risk_run_id,
+        )
+
         self._require_matching_manifest(
             strategy_id=strategy_id,
             as_of_session=as_of_session,
@@ -308,6 +348,100 @@ class PaperSessionSubmissionSpec:
                     "required_job_type": REQUIRED_JOB_TYPE,
                 },
             )
+
+    def _require_start_gates(
+        self, *, strategy_id: str, as_of_session: date, risk_run_id: uuid.UUID | None
+    ) -> None:
+        """operation_open -> working_order_commitments_unaccounted -> risk_run_already_operated
+        -> evaluation_basis_unverified (fixed precedence; read-only; EFFECTIVE state)."""
+
+        now = self._clock()
+        base: dict[str, str] = {
+            "strategy_id": strategy_id,
+            "as_of_session": as_of_session.isoformat(),
+        }
+        with session_scope(self._settings) as session:
+            strategy_pk = session.execute(
+                select(Strategy.id).where(Strategy.strategy_id == strategy_id)
+            ).scalar_one_or_none()
+            if strategy_pk is None:
+                return  # no execution history of this strategy exists yet
+            open_operation = (
+                session.execute(
+                    select(ExecutionOperation).where(
+                        ExecutionOperation.strategy_id == strategy_pk,
+                        ExecutionOperation.state.in_([s.value for s in OPEN_OPERATION_STATES]),
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if open_operation is not None:
+                effective = effective_state(
+                    session, open_operation, now=now, settings=self._settings
+                )
+                if effective.state in OPEN_OPERATION_STATES:
+                    raise JobSubmissionConflictError(
+                        job_type=PAPER_SESSION_JOB_TYPE,
+                        code=PaperSessionSubmitConflict.OPERATION_OPEN.value,
+                        detail={
+                            **base,
+                            "operation_id": str(open_operation.id),
+                            "operation_state": effective.state.value,
+                            "operation_reason": effective.reason or "",
+                            "next_action": "continue",
+                        },
+                    )
+            working = strategy_working_orders(session, strategy_id)
+            if working:
+                raise JobSubmissionConflictError(
+                    job_type=PAPER_SESSION_JOB_TYPE,
+                    code=PaperSessionSubmitConflict.WORKING_ORDER_COMMITMENTS_UNACCOUNTED.value,
+                    detail={
+                        **base,
+                        "working_orders": ",".join(order.client_order_id for order in working[:20]),
+                    },
+                )
+            if risk_run_id is None:
+                return
+            pinned = session.execute(
+                select(ExecutionOperation).where(
+                    ExecutionOperation.strategy_id == strategy_pk,
+                    ExecutionOperation.risk_run_id == risk_run_id,
+                )
+            ).scalar_one_or_none()
+            if pinned is not None:
+                effective = effective_state(session, pinned, now=now, settings=self._settings)
+                if effective.state is OperationState.TERMINATED:
+                    raise JobSubmissionConflictError(
+                        job_type=PAPER_SESSION_JOB_TYPE,
+                        code=PaperSessionSubmitConflict.RISK_RUN_ALREADY_OPERATED.value,
+                        detail={
+                            **base,
+                            "risk_run_id": str(risk_run_id),
+                            "operation_id": str(pinned.id),
+                            "operation_reason": effective.reason or "",
+                            "next_action": "new_evaluation_required",
+                        },
+                    )
+            risk_run = session.get(StrategyRun, risk_run_id)
+            if risk_run is None:
+                return  # provenance reports a missing run
+            verification = verify_evaluation_basis(
+                load_basis_verification_rows(
+                    session, strategy_public_id=strategy_id, risk_run=risk_run
+                )
+            )
+            if verification.failure is not None:
+                raise JobSubmissionConflictError(
+                    job_type=PAPER_SESSION_JOB_TYPE,
+                    code=PaperSessionSubmitConflict.EVALUATION_BASIS_UNVERIFIED.value,
+                    detail={
+                        **base,
+                        "risk_run_id": str(risk_run_id),
+                        "reason": verification.failure.value,
+                    },
+                )
 
     def _require_matching_manifest(
         self,

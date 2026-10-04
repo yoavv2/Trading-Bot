@@ -17,6 +17,11 @@ from contextlib import contextmanager
 
 from trading_platform.jobs.contracts import JobDomainConflictError
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
+from trading_platform.services.execution.operations import (
+    OperationConflictError,
+    OperationOpenError,
+    RiskRunAlreadyOperatedError,
+)
 from trading_platform.services.external_activity import ExternalActivityRejectedError
 
 # Each translated exception carries an explicit ``outcome_uncertain`` claim
@@ -30,9 +35,20 @@ from trading_platform.services.external_activity import ExternalActivityRejected
 # ``ExternalActivityRejectedError`` (EXT-01) is raised by ``record_external_orders``
 # BEFORE any write: its closed refusal reasons are checked against broker READS only, so
 # nothing was stored and nothing was sent; the outcome is certain.
+#
+# 20.1-15 (REC-02): ``OperationConflictError`` (a lost compare-and-set, a refused send
+# authorization), ``OperationOpenError`` (the open-operation race lost at the database
+# constraint) and ``RiskRunAlreadyOperatedError`` (the pinned risk run already has an
+# operation) are raised BEFORE the request they refuse (the refused send authorization sends
+# nothing; the other two are raised at operation creation, before any intent is registered),
+# so the outcome is certain. An executor that loses authority AFTER a POST raises a different
+# error (``ExecutionAuthorityLostAfterSendError``) that is deliberately NOT translated.
 DOMAIN_CONFLICT_OUTCOME_UNCERTAIN: dict[type[Exception], bool] = {
     ConcurrentRunLockedError: False,
     ExternalActivityRejectedError: False,
+    OperationConflictError: False,
+    OperationOpenError: False,
+    RiskRunAlreadyOperatedError: False,
 }
 
 DOMAIN_CONFLICT_EXCEPTIONS: tuple[type[Exception], ...] = tuple(DOMAIN_CONFLICT_OUTCOME_UNCERTAIN)

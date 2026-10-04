@@ -99,7 +99,7 @@ class PaperSessionJobHandler:
             if run_id is not None
         ]
 
-        return {
+        result: dict[str, Any] = {
             "action": report.action,
             "strategy_id": report.strategy_id,
             "as_of_session": context.payload["as_of_session"],
@@ -109,3 +109,11 @@ class PaperSessionJobHandler:
             "reconciliation_run_id": report.reconciliation_run_id,
             "produced_run_ids": produced_run_ids,
         }
+        # REC-02 (20.1-15, additive): the execution operation this session created or ended in.
+        operation = report.result_summary.get("operation")
+        if isinstance(operation, dict):
+            result["operation"] = dict(operation)
+        dispositions = report.result_summary.get("candidate_dispositions")
+        if isinstance(dispositions, list):
+            result["candidate_dispositions"] = list(dispositions)
+        return result

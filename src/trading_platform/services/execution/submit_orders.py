@@ -16,7 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy import and_, case, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from trading_platform.core import clock
@@ -2474,9 +2474,7 @@ def _resolve_source_risk_run(
     for run in session.execute(query).scalars():
         if run.status != StrategyRunStatus.SUCCEEDED:
             continue
-        parameters_session = run.parameters_snapshot.get("as_of_session")
-        summary_session = run.result_summary.get("as_of_session")
-        if parameters_session == target_session or summary_session == target_session:
+        if run.parameters_snapshot.get("as_of_session") == target_session:
             return run
 
     raise LookupError(
@@ -2559,10 +2557,10 @@ def _load_auto_resolve_candidates(
             Strategy.strategy_id == strategy_id,
             StrategyRun.run_type == StrategyRunType.RISK_EVALUATION,
             StrategyRun.status == StrategyRunStatus.SUCCEEDED,
-            or_(
-                StrategyRun.parameters_snapshot["as_of_session"].as_string() == target_session,
-                StrategyRun.result_summary["as_of_session"].as_string() == target_session,
-            ),
+            # 20.1-15 (20.1-06 handoff): the SAME predicate as the submit-time gate's
+            # ``latest_eligible_risk_run_id`` / ``is_eligible_risk_run`` (parameters_snapshot
+            # only), so the gate, the manifest check and the run-time pin name one run.
+            StrategyRun.parameters_snapshot["as_of_session"].as_string() == target_session,
         )
         .order_by(StrategyRun.started_at.desc())
         .limit(1)
