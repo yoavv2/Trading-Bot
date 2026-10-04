@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
-status: planning
-stopped_at: Phase 20.1 (inserted) and re-planned Phase 21 planned (16 + 8 plans); round-6 planning corrections applied and PD-1 approved 2026-10-04; planning complete, implementation awaits separate authorization
-last_updated: 2026-10-04T00:00:00.000Z
-last_activity: 2026-10-04
+status: executing
+stopped_at: Completed 20-28-PLAN.md
+last_updated: "2026-10-04T06:28:53.267Z"
+last_activity: 2026-10-04 -- Phase 20.1 execution started
 progress:
   total_phases: 6
   completed_phases: 4
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-30)
 
 **Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 20.1 — operator-state correctness & paper-account ownership (INSERTED); then Phase 21 — operator read-model foundation
+**Current focus:** Phase 20.1 — operator-state-correctness
 
 ## Current Position
 
-Phase: 20.1
-Plan: Planned (16 plans; 20.1-01 first) — not started; implementation requires separate authorization
-Status: Planning complete for 20.1 and 21 (round-6 corrections applied; PD-1 price pause approved 2026-10-04); no open product decision; implementation not started and requires separate authorization
-Last activity: 2026-10-04
+Phase: 20.1 (operator-state-correctness) — EXECUTING
+Plan: 1 of 16
+Status: Executing Phase 20.1
+Last activity: 2026-10-04 -- Phase 20.1 execution started
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
 
 v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
