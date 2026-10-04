@@ -291,6 +291,8 @@ def verify_evaluation_basis(rows: BasisRows) -> BasisVerification:
         if not needs_apply:
             if order.status is OrderLifecycleState.REJECTED:
                 continue  # rejected at submission: the broker never created an order
+            if order.status is OrderLifecycleState.SUBMISSION_FAILED and not order.attempts:
+                continue  # a legacy failed submission: gate-neutral (Phase 20 classification)
             if order.reached_broker:
                 return BasisVerification(BasisFailure.EXECUTIONS_NOT_SYNCED)
             continue  # never sent (proven not sent): nothing to sync
@@ -765,8 +767,13 @@ def classify_candidate(
     ]
     if any(order.reached_broker for order in same_key):
         return CandidateVerdict(CandidateDisposition.ACTION_ALREADY_SUBMITTED)
+    # ``prior_execution_refs``: the strategy's earlier orders on this symbol (any session or
+    # side), so a later-session exit names the buy it closes.
     return CandidateVerdict(
-        None, prior_execution_refs=tuple(str(order.paper_order_id) for order in same_key)
+        None,
+        prior_execution_refs=tuple(
+            str(order.paper_order_id) for order in orders if order.symbol == key.symbol
+        ),
     )
 
 

@@ -251,6 +251,13 @@ def test_paper_session_job_links_both_runs(paper_jobs_env: BrokerFakes) -> None:
         assert detail["failure_reason"] is None
         assert detail["outcome_uncertain"] is False
         assert detail["result_summary"]["action"] == "submitted_missing_orders"
+        # REC-02 (20.1-15, additive): the Job result carries the operation the session ended in.
+        operation = detail["result_summary"]["operation"]
+        assert (operation["state"], operation["reason"]) == (
+            "paused",
+            "working_order_commitments_unaccounted",
+        )
+        assert operation["next_action"] == "wait_for_order_then_sync_and_continue"
 
         resources = detail["resources"]
         assert len(resources) == 2

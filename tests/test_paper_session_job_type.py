@@ -413,6 +413,62 @@ def test_paper_session_raises_each_recovery_gate_code_as_a_typed_conflict(
 
 
 @pytest.mark.parametrize(
+    "gate_code",
+    ["operation_open", "working_order_commitments_unaccounted", "risk_run_already_operated"],
+)
+def test_paper_session_raises_each_start_mode_operation_gate_as_a_typed_conflict(
+    migrated_paper_db: str, gate_code: str
+) -> None:
+    """REC-02 / 20.1-15: one case per start-mode operation gate code (the precedence table and the
+    S3-R4 evaluation_basis_unverified refusal are tested in tests/test_paper_session_operations.py)."""
+    from tests.support.operation_fixtures import seed_operation, seed_risk_run
+    from tests.support.recovery_fixtures import seed_intent, seed_paper_run
+
+    from trading_platform.db.models import AttemptOutcomeClass, OrderLifecycleState
+
+    settings = load_settings()
+    seed_registered_strategy(settings, "trend_following_daily", owner=True)
+    pinned: str | None = None
+    with session_scope(settings) as session:
+        if gate_code == "operation_open":
+            seed_operation(session, state="paused", reason="awaiting_reconciliation")
+        elif gate_code == "working_order_commitments_unaccounted":
+            run = seed_paper_run(session, None)
+            seed_intent(
+                session,
+                run,
+                status=OrderLifecycleState.SUBMITTED,
+                attempts=(AttemptOutcomeClass.ACCEPTED,),
+                broker_order_id="working-1",
+                broker_status="new",
+            )
+        else:
+            risk_run = seed_risk_run(session, session_date=date(2024, 1, 10))
+            seed_operation(
+                session,
+                state="terminated",
+                reason="cancelled_by_operator",
+                session_date=date(2024, 1, 10),
+                risk_run=risk_run,
+            )
+            pinned = str(risk_run.id)
+    spec = PaperSessionSubmissionSpec(settings)
+
+    with pytest.raises(JobSubmissionConflictError) as exc_info:
+        spec.validate_payload(
+            {"strategy_id": "trend_following_daily", "as_of_session": "2024-01-10", "risk_run_id": pinned}
+        )
+
+    assert exc_info.value.code == gate_code
+    assert exc_info.value.job_type == "paper-session"
+    assert exc_info.value.detail["strategy_id"] == "trend_following_daily"
+    assert all(isinstance(value, str) for value in exc_info.value.detail.values())
+    if gate_code == "operation_open":
+        assert exc_info.value.detail["next_action"] == "continue"
+        assert "operation_id" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
     ("status", "expected_code"),
     [
         pytest.param(

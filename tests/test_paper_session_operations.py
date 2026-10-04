@@ -33,6 +33,7 @@ from trading_platform.core import clock
 from trading_platform.core.settings import AlpacaBrokerSettings, load_settings
 from trading_platform.db.models import (
     AttemptOutcomeClass,
+    ExecutionEvent,
     ExecutionOperation,
     ExecutionOperationIntent,
     Job,
@@ -332,6 +333,15 @@ def test_first_order_working_pauses_and_preserves_unsent_intents(migrated_paper_
     ]
     with session_scope(load_settings()) as session:
         assert session.execute(select(func.count()).select_from(PaperOrder)).scalar_one() == 1
+        # S2-R3 audit: the permission check that allowed the send, with the fresh price
+        # observation, is stored with the order it allowed.
+        checked = session.execute(
+            select(ExecutionEvent).where(ExecutionEvent.event_type == "intent_permission_checked")
+        ).scalars().all()
+        assert len(checked) == 1
+        assert checked[0].details["verdict"] == "ok"
+        assert checked[0].details["price_observation"]["symbol"] == "AAPL"
+        assert checked[0].details["price_observation"]["source"] == "test_fresh"
         unsent = session.execute(
             select(ExecutionOperationIntent).where(ExecutionOperationIntent.paper_order_id.is_(None))
         ).scalars().all()
@@ -2049,3 +2059,195 @@ def test_fresh_price_cash_failure_then_end_and_unchanged_reevaluation_sends_once
     assert service.post_attempts == 1
     assert report.result_summary["operation"]["state"] == "paused"
     assert count(ExecutionOperation) == 2
+
+
+# ---------------------------------------------------------------------------
+# TL-11: partial-exit remainder per strategy (the real signal rules drive the sessions)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Bar:
+    close: Decimal
+    high: Decimal
+    low: Decimal
+
+
+def _bars(*closes: int) -> list[_Bar]:
+    return [_Bar(Decimal(c), Decimal(c), Decimal(c)) for c in closes]
+
+
+def _strategy_signal(strategy: str, session_index: int) -> str:
+    """The REAL ``_evaluate_symbol`` of the strategy over scripted bars of one evaluation session
+    (``session_index`` 0 = the next session after the partial exit, 1 = a later one)."""
+
+    from trading_platform.strategies.donchian_breakout_daily import DonchianBreakoutDailyStrategy
+    from trading_platform.strategies.rsi_mean_reversion_daily import RsiMeanReversionDailyStrategy
+    from trading_platform.strategies.time_series_momentum_daily import (
+        TimeSeriesMomentumDailyStrategy,
+    )
+    from trading_platform.strategies.trend_following_daily import TrendFollowingDailyStrategy
+
+    settings = load_settings()
+    as_of = date(2024, 1, 8 + session_index)
+    if strategy == "trend_following_daily":
+        closes = [(10, 10, 10, 10, 10, 9), (10, 10, 10, 10, 10, 8)][session_index]
+        _snap, (direction, _reason) = TrendFollowingDailyStrategy(settings)._evaluate_symbol(
+            ticker="AAPL",
+            bars=_bars(*closes),
+            as_of=as_of,
+            short_window=3,
+            long_window=5,
+            warmup=5,
+            exit_window=3,
+        )
+    elif strategy == "time_series_momentum_daily":
+        closes = [(10, 11, 12, 13, 9), (10, 11, 12, 13, 8)][session_index]
+        _snap, (direction, _reason) = TimeSeriesMomentumDailyStrategy(settings)._evaluate_symbol(
+            ticker="AAPL", bars=_bars(*closes), as_of=as_of, lookback_periods=3, warmup=4
+        )
+    elif strategy == "donchian_breakout_daily":
+        closes = [(10, 11, 12, 11), (10, 11, 12, 10)][session_index]
+        _snap, (direction, _reason) = DonchianBreakoutDailyStrategy(settings)._evaluate_symbol(
+            ticker="AAPL", bars=_bars(*closes), as_of=as_of, entry_window=3, exit_window=2, warmup=4
+        )
+    else:
+        closes = [tuple([10] * 15), tuple(range(1, 16))][session_index]
+        _snap, (direction, _reason) = RsiMeanReversionDailyStrategy(settings)._evaluate_symbol(
+            ticker="AAPL",
+            bars=_bars(*closes),
+            as_of=as_of,
+            rsi_window=14,
+            oversold=Decimal(30),
+            overbought=Decimal(70),
+            warmup=15,
+        )
+    return direction.value
+
+
+@pytest.mark.parametrize(
+    ("strategy", "signals", "sells_in_session"),
+    [
+        # exits whenever close < SMA_exit: the remainder is sold in the next session
+        ("trend_following_daily", ["exit", "exit"], 0),
+        # exits in every session that is not momentum-positive: sold in the next such session
+        ("time_series_momentum_daily", ["exit", "exit"], 0),
+        # exits only below the exit-channel low: held while the signal is FLAT, sold at the breakdown
+        ("donchian_breakout_daily", ["flat", "exit"], 1),
+        # exits only while RSI > overbought: held while neutral, sold when overbought
+        ("rsi_mean_reversion_daily", ["flat", "exit"], 1),
+    ],
+)
+def test_partial_exit_remainder_per_strategy(  # noqa: F811
+    migrated_paper_db: str, strategy: str, signals: list[str], sells_in_session: int
+) -> None:
+    """TL-11 (verified per strategy from the code): after a partial exit (sell 10 fills 6, position 4)
+    trend_following and time_series_momentum sell the remaining 4 in the next session whose exit
+    condition holds; donchian and rsi hold the 4 while their signal is FLAT and sell when their exit
+    condition fires. The signals come from each strategy's REAL ``_evaluate_symbol`` over scripted
+    bars; the sessions are then driven through the platform (S3-R4 is strategy-agnostic, so the
+    execution side uses the one fixture strategy). The held remainder never produces a second sell
+    in the SAME evaluation session (TL-10), only in a later one."""
+    assert [_strategy_signal(strategy, i) for i in range(2)] == signals
+
+    earlier_session, exit_session = date(2024, 1, 3), date(2024, 1, 4)
+    seed_buy = evaluation(DEFAULT_BATCH[:1], session_date=earlier_session, verified=False)
+    _start(ScriptedExecutionService(["accept"]), risk_run_id=seed_buy, session_date=earlier_session)
+    settle("AAPL", OrderLifecycleState.FILLED, fills="10")
+    put_position("AAPL", "10")
+    end_all_open_operations()
+    exit_run = evaluation(DEFAULT_BATCH[:1], session_date=exit_session, side="exit", positions=[("AAPL", "10")])
+    _start(ScriptedExecutionService(["accept"]), risk_run_id=exit_run, session_date=exit_session)
+    settle("AAPL", OrderLifecycleState.EXPIRED, side="sell", fills="6")
+    put_position("AAPL", "4")
+    end_all_open_operations()
+
+    sells: list[int] = []
+    for index, signal in enumerate(signals):
+        session_date = date(2024, 1, 8 + index)
+        service = ScriptedExecutionService(["accept"])
+        if signal == "flat":
+            seed_batch([], session_date=session_date, manifest=manifest(f"flat-{index}", as_of=session_date.isoformat()))
+            report = run_paper_session(
+                STRATEGY, as_of_session=session_date, settings=load_settings(), execution_service=service
+            )
+            assert report.action == "noop_no_candidates"
+            assert service.post_attempts == 0
+            continue
+        run = evaluation(
+            [("AAPL", "4", "120")],
+            session_date=session_date,
+            side="exit",
+            digest=f"exit-{index}",
+            positions=[("AAPL", "4")],
+        )
+        _start(service, risk_run_id=run, session_date=session_date)
+        assert [(i.side.value, i.quantity) for i in service.submitted_intents] == [
+            ("sell", Decimal("4.000000"))
+        ]
+        sells.append(index)
+        break
+    assert sells == [sells_in_session]
+
+
+def test_after_kill_switch_reset_and_the_continuation_checks_the_session_continues(migrated_paper_db: str) -> None:  # noqa: F811
+    """D-18: a tripped kill switch between steps pauses the operation with the unsent intents
+    preserved; after the reset (and sync + clean reconciliation) the loop continues with the SAME
+    pinned intents."""
+    run, _ = seed_batch(DEFAULT_BATCH[:2], manifest=manifest())
+    settings = load_settings()
+    control = OperatorControlService(settings=settings)
+
+    def trip() -> None:
+        control.trip_kill_switch(reason="between steps", actor="pytest", trigger_source="pytest")
+
+    first = ScriptedExecutionService([(trip, "reject"), "accept"])
+    paused = _start(first, risk_run_id=run)
+    assert paused.result_summary["operation"]["reason"] == "kill_switch_tripped"
+    with session_scope(settings) as session:
+        planned = session.execute(
+            select(ExecutionOperationIntent).where(ExecutionOperationIntent.paper_order_id.is_(None))
+        ).scalar_one()
+        planned_id = planned.client_order_id
+
+    # still tripped: the continuation pauses again, nothing is sent
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    blocked = ScriptedExecutionService(["accept"])
+    state = continue_operation(blocked)
+    assert state.final_reason == "kill_switch_tripped" and blocked.post_attempts == 0
+
+    control.reset_kill_switch(reason="resolved", actor="pytest", trigger_source="pytest")
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    resumed = ScriptedExecutionService(["accept"])
+    state = continue_operation(resumed)
+
+    assert [i.client_order_id for i in resumed.submitted_intents] == [planned_id]
+    assert state.final_reason == "working_order_commitments_unaccounted"
+
+
+def test_submit_gate_counts_an_operation_past_its_window_as_ended(migrated_paper_db: str) -> None:  # noqa: F811
+    """The submit-time gate is read-only and evaluates the EFFECTIVE state: a paused operation whose
+    window already elapsed is not `operation_open` (nothing is persisted by the read)."""
+    seed_calendar(date(2025, 11, 24), date(2026, 1, 9))
+    seed_batch(DEFAULT_BATCH[:1])
+    with session_scope(load_settings()) as session:
+        run_id = seed_run_row(session, date(2025, 12, 2))
+        session.add(
+            ExecutionOperation(
+                strategy_id=session.get(StrategyRun, run_id).strategy_id,
+                as_of_session=date(2025, 12, 2),
+                risk_run_id=run_id,
+                state="paused",
+                reason="price_unavailable",
+            )
+        )
+
+    inside = _conflict(now=et(2025, 12, 3, 10, 0))
+    assert inside.code == "operation_open"
+    normalized = _validate(now=et(2025, 12, 4, 10, 0))  # the trading day moved on: ended
+
+    assert normalized["strategy_id"] == STRATEGY
+    with session_scope(load_settings()) as session:  # the read persisted nothing
+        assert session.execute(select(ExecutionOperation.state)).scalar_one() == "paused"
