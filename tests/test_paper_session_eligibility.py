@@ -135,9 +135,10 @@ def _eligibility(settings: Settings, now: datetime, as_of: date, strategy: FakeS
 # ---------------------------------------------------------------------------
 
 
-def test_conflict_set_is_exactly_the_eleven_values() -> None:
-    """Renamed from ``..._eight_values`` (D-15 / 20.1-10): the three uncertain-outcome recovery
-    gate codes extend the set; the eight earlier values are unchanged."""
+def test_conflict_set_is_exactly_the_fifteen_values() -> None:
+    """Renamed from ``..._eleven_values`` (REC-02 / 20.1-15: the four start-mode operation gates
+    extend the set; the eleven earlier values are unchanged; before that ``..._eight_values``,
+    D-15 / 20.1-10)."""
 
     assert {member.value for member in PaperSessionSubmitConflict} == {
         "no_active_paper_strategy",
@@ -151,6 +152,10 @@ def test_conflict_set_is_exactly_the_eleven_values() -> None:
         "outcome_unresolved",
         "reconciliation_required",
         "reconciliation_not_clean",
+        "operation_open",
+        "working_order_commitments_unaccounted",
+        "risk_run_already_operated",
+        "evaluation_basis_unverified",
     }
 
 

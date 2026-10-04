@@ -903,7 +903,7 @@ def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
     expected = {member.value for member in OwnershipBlock}
     # paper-session adds the four execution-eligibility refusals (COR-04, D-23), the two
     # evaluation-provenance refusals (PROV-01, D-25) and the three uncertain-outcome recovery
-    # gate codes (REC-01, D-15 / 20.1-10)
+    # gate codes (REC-01, D-15 / 20.1-10) and the four start-mode operation gates (20.1-15)
     assert {m.value for m in PaperSessionSubmitConflict} == expected | {
         "historical_execution_rejected",
         "outside_execution_window",
@@ -914,6 +914,11 @@ def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
         "outcome_unresolved",
         "reconciliation_required",
         "reconciliation_not_clean",
+        # REC-02 / 20.1-15: the start-mode operation gates and the S3-R4 basis refusal
+        "operation_open",
+        "working_order_commitments_unaccounted",
+        "risk_run_already_operated",
+        "evaluation_basis_unverified",
     }
     assert {m.value for m in ReconciliationSubmitConflict} == expected
 
