@@ -548,6 +548,8 @@ def test_jobs_router_exposes_exact_allowed_methods() -> None:
         "/api/v1/jobs/{job_id}/progress": {"GET"},
         "/api/v1/jobs/{job_id}/logs": {"GET"},
         "/api/v1/jobs/{job_id}/events": {"GET"},
+        # 20.1-10 (REC-01 R3): the additive read-only recovery view of one Job.
+        "/api/v1/jobs/{job_id}/recovery": {"GET"},
         "/api/v1/jobs/{job_id}/cancel": {"POST"},
         "/api/v1/jobs/{job_id}/retry": {"POST"},
     }
