@@ -586,3 +586,56 @@ class TestPhase2Plan02MigrationSchema:
             "share_class_figi",
             "metadata_provider",
         }
+
+
+# ---------------------------------------------------------------------------
+# Evaluation-input recording hooks (PROV-01, 20.1-06)
+# ---------------------------------------------------------------------------
+
+
+class TestRecordingHooks:
+    """The hooks add no statement and change no result; without a recorder the
+    five accessors behave exactly as before."""
+
+    def _run_five(self, session) -> list[object]:
+        from trading_platform.services.market_data_access import (
+            bars_for_session_date,
+            missing_bars_for_session,
+            persisted_session_dates,
+        )
+
+        as_of = date(2024, 1, 5)
+        return [
+            bars_for_sessions(session, "AAPL", 3, as_of=as_of),
+            latest_completed_session(session, as_of=as_of),
+            persisted_session_dates(session, date(2024, 1, 3), as_of),
+            bars_for_session_date(session, as_of, symbols=["AAPL", "MSFT"]),
+            missing_bars_for_session(session, as_of, symbols=["AAPL", "MSFT"]),
+        ]
+
+    def test_recording_adds_no_statement_and_changes_no_result(
+        self, migrated_access_db: str
+    ) -> None:
+        from tests.support.query_counter import count_queries
+
+        from trading_platform.services.evaluation_manifest import ManifestRecorder
+        from trading_platform.services.read_recording import recording
+
+        settings = load_settings()
+        with session_scope(settings) as session:
+            upsert_market_sessions(session, date(2024, 1, 3), date(2024, 1, 5))
+            _seed_symbol_and_bars(
+                session, "AAPL", [date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)]
+            )
+        with session_scope(settings) as session:
+            with count_queries(session) as plain:
+                plain_results = self._run_five(session)
+            recorder = ManifestRecorder()
+            with count_queries(session) as recorded, recording(recorder):
+                recorded_results = self._run_five(session)
+
+        # bars_for_sessions 2 + latest 1 + dates 1 + by-date 1 + missing 1
+        assert plain.count == 6
+        assert recorded.count == plain.count
+        assert recorded_results == plain_results
+        assert len(recorder.build("d").requests) == 5

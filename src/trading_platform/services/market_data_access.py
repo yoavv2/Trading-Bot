@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -26,6 +27,17 @@ from trading_platform.db.models.symbol import Symbol
 from trading_platform.services.calendar import (
     _DEFAULT_EXCHANGE,
     get_persisted_sessions,
+)
+from trading_platform.services.read_recording import (
+    KIND_BARS_FOR_SESSION_DATE,
+    KIND_BARS_FOR_SESSIONS,
+    KIND_LATEST_COMPLETED_SESSION,
+    KIND_MISSING_BARS_FOR_SESSION,
+    KIND_PERSISTED_SESSION_DATES,
+    active_recorder,
+    result_count,
+    result_digest,
+    suspended,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +93,41 @@ class MissingSessionInfo:
     symbol: str | None = None  # None means the session itself is not persisted
 
 
+def _session_bar(symbol: str, bar: DailyBarModel) -> SessionBar:
+    return SessionBar(
+        symbol=symbol,
+        session_date=bar.session_date,
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
+        adjusted=bar.adjusted,
+        provider=bar.provider,
+        vwap=bar.vwap,
+        trade_count=bar.trade_count,
+        provider_timestamp=bar.provider_timestamp,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Evaluation-input recording hook (PROV-01, D-25)
+# ---------------------------------------------------------------------------
+
+
+def _record(kind: str, params: dict[str, Any], result: Any) -> None:
+    """Report one accessor read to the active recorder (a no-op without one).
+
+    Callers guard with ``active_recorder() is not None`` before building
+    *params*, so the unrecorded path stays byte-identical and allocation-free.
+    """
+
+    recorder = active_recorder()
+    if recorder is None:
+        return
+    recorder.record(kind, params, result_digest(kind, result), result_count(kind, result))
+
+
 # ---------------------------------------------------------------------------
 # Access helpers
 # ---------------------------------------------------------------------------
@@ -108,6 +155,16 @@ def latest_completed_session(
         query = query.where(MarketSession.session_date <= as_of)
 
     result = session.execute(query).scalar_one_or_none()
+    if active_recorder() is not None:
+        # Time-relative lookup: record the RESOLVED bound (the input bound, or
+        # for an unbounded call its own result) so verification re-runs it
+        # against that bound (calendar sync ahead / passage of a day is not stale).
+        bound = as_of if as_of is not None else result
+        _record(
+            KIND_LATEST_COMPLETED_SESSION,
+            {"exchange": exchange, "as_of_bound": bound.isoformat() if bound is not None else None},
+            result,
+        )
     return result
 
 
@@ -135,13 +192,22 @@ def persisted_session_dates(
     exchange: str = _DEFAULT_EXCHANGE,
 ) -> list[date]:
     """Return persisted session dates in ascending order for the requested range."""
-    return session.execute(
-        select(MarketSession.session_date)
-        .where(MarketSession.exchange == exchange)
-        .where(MarketSession.session_date >= start)
-        .where(MarketSession.session_date <= end)
-        .order_by(MarketSession.session_date.asc())
-    ).scalars().all()
+    dates = list(
+        session.execute(
+            select(MarketSession.session_date)
+            .where(MarketSession.exchange == exchange)
+            .where(MarketSession.session_date >= start)
+            .where(MarketSession.session_date <= end)
+            .order_by(MarketSession.session_date.asc())
+        ).scalars().all()
+    )
+    if active_recorder() is not None:
+        _record(
+            KIND_PERSISTED_SESSION_DATES,
+            {"start": start.isoformat(), "end": end.isoformat(), "exchange": exchange},
+            dates,
+        )
+    return dates
 
 
 def next_persisted_session(
@@ -187,10 +253,63 @@ def bars_for_sessions(
     sym = session.execute(
         select(Symbol).where(Symbol.ticker == symbol)
     ).scalar_one_or_none()
-    if sym is None:
-        return []
+    result: list[SessionBar] = []
+    if sym is not None:
+        # Get n_sessions most recent session dates from persisted sessions
+        session_subq = (
+            select(MarketSession.session_date)
+            .where(MarketSession.exchange == exchange)
+            .where(MarketSession.session_date <= as_of)
+            .order_by(MarketSession.session_date.desc())
+            .limit(n_sessions)
+            .subquery()
+        )
 
-    # Get n_sessions most recent session dates from persisted sessions
+        bars = session.execute(
+            select(DailyBarModel)
+            .where(DailyBarModel.symbol_id == sym.id)
+            .where(DailyBarModel.adjusted == adjusted)
+            .where(DailyBarModel.provider == provider)
+            .where(DailyBarModel.session_date.in_(select(session_subq)))
+            .order_by(DailyBarModel.session_date.asc())
+        ).scalars().all()
+        result = [_session_bar(symbol, bar) for bar in bars]
+
+    if active_recorder() is not None:
+        _record(
+            KIND_BARS_FOR_SESSIONS,
+            {
+                "symbol": symbol,
+                "n_sessions": n_sessions,
+                "as_of": as_of.isoformat(),
+                "exchange": exchange,
+                "adjusted": adjusted,
+                "provider": provider,
+            },
+            result,
+        )
+    return result
+
+
+def bars_for_sessions_many(
+    session: Session,
+    symbols: list[str] | tuple[str, ...],
+    n_sessions: int,
+    as_of: date,
+    exchange: str = _DEFAULT_EXCHANGE,
+    adjusted: bool = True,
+    provider: str = "polygon",
+) -> dict[str, list[SessionBar]]:
+    """Batched ``bars_for_sessions``: ONE statement for any number of symbols.
+
+    Returns ``{symbol: bars}`` keyed off the REQUESTED symbols, so a symbol with
+    no row at all and a symbol with a row but no bars both map to ``[]``. Used
+    by evaluation-manifest verification; never recorded itself.
+    """
+
+    result: dict[str, list[SessionBar]] = {symbol: [] for symbol in symbols}
+    if not result:
+        return result
     session_subq = (
         select(MarketSession.session_date)
         .where(MarketSession.exchange == exchange)
@@ -199,33 +318,18 @@ def bars_for_sessions(
         .limit(n_sessions)
         .subquery()
     )
-
-    bars = session.execute(
-        select(DailyBarModel)
-        .where(DailyBarModel.symbol_id == sym.id)
+    rows = session.execute(
+        select(Symbol.ticker, DailyBarModel)
+        .join(Symbol, Symbol.id == DailyBarModel.symbol_id)
+        .where(Symbol.ticker.in_(list(result)))
         .where(DailyBarModel.adjusted == adjusted)
         .where(DailyBarModel.provider == provider)
         .where(DailyBarModel.session_date.in_(select(session_subq)))
-        .order_by(DailyBarModel.session_date.asc())
-    ).scalars().all()
-
-    return [
-        SessionBar(
-            symbol=symbol,
-            session_date=bar.session_date,
-            open=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-            volume=bar.volume,
-            adjusted=bar.adjusted,
-            provider=bar.provider,
-            vwap=bar.vwap,
-            trade_count=bar.trade_count,
-            provider_timestamp=bar.provider_timestamp,
-        )
-        for bar in bars
-    ]
+        .order_by(Symbol.ticker.asc(), DailyBarModel.session_date.asc())
+    ).all()
+    for ticker, bar in rows:
+        result[ticker].append(_session_bar(ticker, bar))
+    return result
 
 
 def bars_for_session_date(
@@ -250,23 +354,20 @@ def bars_for_session_date(
         query = query.where(Symbol.ticker.in_(symbols))
 
     rows = session.execute(query).all()
-    return {
-        ticker: SessionBar(
-            symbol=ticker,
-            session_date=bar.session_date,
-            open=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-            volume=bar.volume,
-            adjusted=bar.adjusted,
-            provider=bar.provider,
-            vwap=bar.vwap,
-            trade_count=bar.trade_count,
-            provider_timestamp=bar.provider_timestamp,
+    result = {ticker: _session_bar(ticker, bar) for ticker, bar in rows}
+    if active_recorder() is not None:
+        _record(
+            KIND_BARS_FOR_SESSION_DATE,
+            {
+                "session_date": session_date.isoformat(),
+                # an empty list filters nothing (same as None): record it as None
+                "symbols": sorted(set(symbols)) if symbols else None,
+                "adjusted": adjusted,
+                "provider": provider,
+            },
+            result,
         )
-        for ticker, bar in rows
-    }
+    return result
 
 
 def missing_bars_for_session(
@@ -281,14 +382,29 @@ def missing_bars_for_session(
 
     if not symbols:
         return []
-    available = bars_for_session_date(
-        session,
-        session_date,
-        symbols=list(symbols),
-        adjusted=adjusted,
-        provider=provider,
-    )
-    return sorted(set(symbols) - set(available))
+    # The nested bars_for_session_date read is part of THIS request: it is
+    # recorded once, as the outer request, via the suspension context.
+    with suspended():
+        available = bars_for_session_date(
+            session,
+            session_date,
+            symbols=list(symbols),
+            adjusted=adjusted,
+            provider=provider,
+        )
+    missing = sorted(set(symbols) - set(available))
+    if active_recorder() is not None:
+        _record(
+            KIND_MISSING_BARS_FOR_SESSION,
+            {
+                "session_date": session_date.isoformat(),
+                "symbols": sorted(set(symbols)),
+                "adjusted": adjusted,
+                "provider": provider,
+            },
+            missing,
+        )
+    return missing
 
 
 def missing_sessions_for_symbol(
