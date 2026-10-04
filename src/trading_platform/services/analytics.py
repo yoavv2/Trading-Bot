@@ -26,6 +26,7 @@ from trading_platform.db.models import (
     StrategyStatus,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services.account_baseline import latest_broker_observed_account_snapshot
 from trading_platform.services.backtest_reporting import build_backtest_report
 from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.registry import UnknownStrategyError, build_default_registry
@@ -100,10 +101,11 @@ class StrategyAnalyticsService(AnalyticsService):
                     # (OperatorControlService.get_strategy_state) and the
                     # mutating get-or-create (ensure_strategy_record) use, so
                     # every surface agrees on the execution-gating flag.
+                    # R-8: new / unregistered strategies are `disabled`.
                     "status": (
                         strategy_record.status.value
                         if strategy_record is not None
-                        else StrategyStatus.ACTIVE.value
+                        else StrategyStatus.DISABLED.value
                     ),
                     "version": strategy_record.version if strategy_record is not None else metadata.version,
                 },
@@ -167,11 +169,9 @@ class StrategyAnalyticsService(AnalyticsService):
             }
 
         with session_scope(self.settings) as session:
-            latest_snapshot = session.execute(
-                select(AccountSnapshot)
-                .where(AccountSnapshot.strategy_id == strategy.id)
-                .order_by(AccountSnapshot.snapshot_at.desc())
-            ).scalars().first()
+            # D-27: the latest account read is the broker-observed snapshot
+            # (any strategy_id or NULL), never a risk_evaluation row.
+            latest_snapshot = latest_broker_observed_account_snapshot(session)
 
             latest_paper_run = self._resolve_paper_run(
                 session,

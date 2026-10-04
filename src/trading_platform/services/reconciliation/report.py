@@ -27,6 +27,7 @@ from trading_platform.db.models import (
     StrategyRunType,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services.account_baseline import latest_broker_observed_account_snapshot
 from trading_platform.services.alpaca import (
     AlpacaClient,
     BrokerAccountSnapshot,
@@ -350,15 +351,9 @@ def reconcile_paper_execution(
                 .scalars()
                 .all()
             )
-            latest_snapshot = (
-                session.execute(
-                    select(AccountSnapshot)
-                    .where(AccountSnapshot.strategy_id == strategy_record.id)
-                    .order_by(AccountSnapshot.snapshot_at.desc())
-                )
-                .scalars()
-                .first()
-            )
+            # D-27: the baseline is the latest BROKER-OBSERVED account snapshot
+            # (account-wide; risk_evaluation/seed/derived rows are excluded).
+            latest_snapshot = latest_broker_observed_account_snapshot(session)
 
             # READ-ONLY projection boundary (RECON-03/05): ORM rows are projected into
             # the typed 09-01 snapshots here; no ORM instance crosses this boundary into
@@ -538,7 +533,7 @@ def _project_local_position(position: Position) -> LocalPositionSnapshot:
 
 
 def _project_local_account(snapshot: AccountSnapshot) -> LocalAccountSnapshot:
-    """Project the latest ``AccountSnapshot`` ORM row into the typed 09-01 snapshot."""
+    """Project the latest broker-observed ``AccountSnapshot`` ORM row into the typed 09-01 snapshot."""
     return LocalAccountSnapshot(
         cash=snapshot.cash,
         gross_exposure=snapshot.gross_exposure,
@@ -558,11 +553,11 @@ def _evaluate_account_divergence(
     """Read-only account-divergence evaluation (decision D1). Preserves all three
     pre-rewrite account branches exactly, with NO row writes:
 
-    - (B1) no AccountSnapshot has ever been persisted AND positions exist (broker or
+    - (B1) no broker-observed AccountSnapshot has ever been persisted AND positions exist (broker or
       local) -> truthy ``account_snapshot_missing_locally`` sub-flag (BLOCKS).
-    - (B2) no AccountSnapshot has ever been persisted AND the book is flat -> empty
+    - (B2) no broker-observed AccountSnapshot has ever been persisted AND the book is flat -> empty
       dict (NON-blocking).
-    - (B3) an AccountSnapshot exists AND cash/buying_power/equity/gross_exposure/
+    - (B3) a broker-observed AccountSnapshot exists AND cash/buying_power/equity/gross_exposure/
       open_positions deltas exceed tolerance -> populated deltas (BLOCKS).
     """
     if latest_snapshot is None:

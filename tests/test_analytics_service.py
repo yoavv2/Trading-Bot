@@ -30,6 +30,7 @@ from trading_platform.db.models import (
     PaperOrder,
     Position,
     RiskEvent,
+    Strategy,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
@@ -650,3 +651,101 @@ def test_strategy_analytics_report_renders_markdown_and_json(
     assert "MSFT" in markdown
     assert parsed["strategy"]["strategy_id"] == "trend_following_daily"
     assert parsed["inspection"]["paper_orders"]["count"] == 2
+
+
+def test_latest_account_snapshot_is_broker_observed_even_when_a_newer_risk_evaluation_exists(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    """D-27: the latest-account read never shows a risk_evaluation snapshot."""
+    _seed_strategy_record()
+    settings = load_settings()
+    with session_scope(settings) as session:
+        strategy_record = session.execute(
+            select(Strategy).where(Strategy.strategy_id == "trend_following_daily")
+        ).scalar_one()
+        for source, at, cash in (
+            ("broker_sync", datetime(2024, 1, 5, 14, 45, tzinfo=UTC), "98797.5"),
+            ("risk_evaluation", datetime(2024, 1, 5, 15, 30, tzinfo=UTC), "1"),
+        ):
+            session.add(
+                AccountSnapshot(
+                    strategy_id=strategy_record.id,
+                    snapshot_source=source,
+                    snapshot_at=at,
+                    cash=Decimal(cash),
+                    gross_exposure=Decimal("0"),
+                    total_equity=Decimal(cash),
+                    buying_power=Decimal(cash),
+                    open_positions=0,
+                )
+            )
+
+    summary = StrategyAnalyticsService(settings).summarize({"strategy_id": "trend_following_daily"})
+
+    snapshot = summary["paper"]["latest_account_snapshot"]
+    assert snapshot["snapshot_source"] == "broker_sync"
+    assert snapshot["cash"] == pytest.approx(98797.5)
+
+
+def test_latest_account_snapshot_accepts_a_null_strategy_broker_snapshot(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    _seed_strategy_record()
+    settings = load_settings()
+    with session_scope(settings) as session:
+        session.add(
+            AccountSnapshot(
+                strategy_id=None,
+                snapshot_source="broker_sync",
+                snapshot_at=datetime(2024, 1, 5, 14, 45, tzinfo=UTC),
+                cash=Decimal("5000"),
+                gross_exposure=Decimal("0"),
+                total_equity=Decimal("5000"),
+                buying_power=Decimal("20000"),
+                open_positions=0,
+            )
+        )
+
+    summary = StrategyAnalyticsService(settings).summarize({"strategy_id": "trend_following_daily"})
+
+    assert summary["paper"]["latest_account_snapshot"]["snapshot_source"] == "broker_sync"
+
+
+def test_latest_account_snapshot_is_none_without_a_broker_observed_snapshot(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    _seed_strategy_record()
+    settings = load_settings()
+    with session_scope(settings) as session:
+        session.add(
+            AccountSnapshot(
+                strategy_id=None,
+                snapshot_source="risk_evaluation",
+                snapshot_at=datetime(2024, 1, 5, 14, 45, tzinfo=UTC),
+                cash=Decimal("5000"),
+                gross_exposure=Decimal("0"),
+                total_equity=Decimal("5000"),
+                buying_power=Decimal("5000"),
+                open_positions=0,
+            )
+        )
+
+    summary = StrategyAnalyticsService(settings).summarize({"strategy_id": "trend_following_daily"})
+
+    assert summary["paper"]["latest_account_snapshot"] is None
+
+
+def test_unregistered_strategy_status_is_disabled(
+    migrated_analytics_db: str,
+    strategy_config_override: None,
+) -> None:
+    """R-8: a strategy with no DB row reports `disabled` (agrees with the pure
+    control read and ensure_strategy_record, 20.1-01); analytics owns this surface."""
+    settings = load_settings()
+
+    summary = StrategyAnalyticsService(settings).summarize({"strategy_id": "trend_following_daily"})
+
+    assert summary["strategy"]["status"] == "disabled"

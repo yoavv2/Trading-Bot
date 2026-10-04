@@ -1070,3 +1070,179 @@ def test_reconcile_paper_execution_never_calls_apply_reconciliation_corrections(
 
     assert "def apply_reconciliation_corrections" in source
     assert "apply_reconciliation_corrections" not in reconcile_body
+
+
+# ---------------------------------------------------------------------------
+# 20.1-03 (D-27 / COR-01): the reconciliation baseline is the latest
+# BROKER-OBSERVED account snapshot, account-wide.
+# ---------------------------------------------------------------------------
+
+
+def _add_account_snapshot(
+    *,
+    source: str,
+    snapshot_at: datetime,
+    cash: str,
+    buying_power: str,
+    for_strategy: bool = True,
+    open_positions: int = 0,
+) -> None:
+    settings = load_settings()
+    strategy = build_default_registry(settings).resolve("trend_following_daily")
+    with session_scope(settings) as session:
+        strategy_record = ensure_strategy_record(session, strategy.metadata)
+        session.add(
+            AccountSnapshot(
+                strategy_id=strategy_record.id if for_strategy else None,
+                snapshot_source=source,
+                snapshot_at=snapshot_at,
+                cash=Decimal(cash),
+                gross_exposure=Decimal("0"),
+                total_equity=Decimal(cash),
+                buying_power=Decimal(buying_power),
+                open_positions=open_positions,
+            )
+        )
+
+
+def _flat_broker(*, cash: str, buying_power: str) -> FakeBrokerClient:
+    return FakeBrokerClient(
+        orders=[],
+        fills=[],
+        positions=[],
+        account=BrokerAccountSnapshot(
+            cash=Decimal(cash),
+            buying_power=Decimal(buying_power),
+            equity=Decimal(cash),
+            long_market_value=Decimal("0"),
+            short_market_value=Decimal("0"),
+            raw_payload={"equity": cash},
+        ),
+    )
+
+
+def _reconcile_divergence(broker: FakeBrokerClient):
+    settings = load_settings()
+    report = reconcile_paper_execution(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        broker_client=broker,
+    )
+    with session_scope(settings) as session:
+        run = session.execute(
+            select(StrategyRun).where(StrategyRun.run_type == StrategyRunType.RECONCILIATION)
+        ).scalars().one()
+        divergence = run.result_summary["account_divergence"]
+    return report, divergence
+
+
+def test_newer_risk_evaluation_snapshot_is_ignored_as_reconciliation_baseline(
+    migrated_reconciliation_db: str,
+) -> None:
+    """D-27: a risk_evaluation snapshot (buying_power == cash) is never the baseline."""
+    _add_account_snapshot(
+        source="broker_sync",
+        snapshot_at=datetime(2024, 1, 5, 14, 0, tzinfo=UTC),
+        cash="100000",
+        buying_power="400000",
+    )
+    _add_account_snapshot(
+        source="risk_evaluation",
+        snapshot_at=datetime(2024, 1, 5, 15, 0, tzinfo=UTC),
+        cash="100000",
+        buying_power="100000",
+    )
+
+    report, divergence = _reconcile_divergence(_flat_broker(cash="100000", buying_power="400000"))
+
+    assert divergence == {}
+    assert report.blocks_execution is False
+
+
+def test_only_non_broker_snapshots_behave_as_no_baseline_flat_book(
+    migrated_reconciliation_db: str,
+) -> None:
+    """D-27 + B2: with no broker-observed snapshot a flat book is clean (no divergence)."""
+    for source in ("risk_evaluation", "seed", "derived"):
+        _add_account_snapshot(
+            source=source,
+            snapshot_at=datetime(2024, 1, 5, 15, 0, tzinfo=UTC),
+            cash="1",
+            buying_power="1",
+        )
+
+    report, divergence = _reconcile_divergence(_flat_broker(cash="100000", buying_power="400000"))
+
+    assert divergence == {}
+    assert report.blocks_execution is False
+
+
+def test_only_non_broker_snapshots_with_positions_flag_missing_locally(
+    migrated_reconciliation_db: str,
+) -> None:
+    """D-27 + B1: positions at the broker and only a risk_evaluation snapshot locally."""
+    _add_account_snapshot(
+        source="risk_evaluation",
+        snapshot_at=datetime(2024, 1, 5, 15, 0, tzinfo=UTC),
+        cash="100000",
+        buying_power="100000",
+    )
+    broker = FakeBrokerClient(
+        orders=[],
+        fills=[],
+        positions=[
+            BrokerPositionSnapshot(
+                symbol="AAPL",
+                quantity=Decimal("10"),
+                average_entry_price=Decimal("120"),
+                cost_basis=Decimal("1200"),
+                market_value=Decimal("1215"),
+                current_price=Decimal("121.5"),
+                raw_payload={"symbol": "AAPL"},
+            )
+        ],
+        account=BrokerAccountSnapshot(
+            cash=Decimal("98800"),
+            buying_power=Decimal("98800"),
+            equity=Decimal("100015"),
+            long_market_value=Decimal("1215"),
+            short_market_value=Decimal("0"),
+            raw_payload={},
+        ),
+    )
+
+    report, divergence = _reconcile_divergence(broker)
+
+    assert divergence["account_snapshot_missing_locally"] is True
+    assert report.blocks_execution is True
+
+
+@pytest.mark.parametrize("for_strategy", [False, True])
+def test_broker_snapshot_of_another_strategy_or_null_is_a_valid_baseline(
+    migrated_reconciliation_db: str, for_strategy: bool
+) -> None:
+    """D-27: the baseline is account-wide; strategy_id is NULL or any strategy."""
+    settings = load_settings()
+    registry = build_default_registry(settings)
+    other = registry.resolve("donchian_breakout_daily")
+    with session_scope(settings) as session:
+        other_record = ensure_strategy_record(session, other.metadata)
+        session.add(
+            AccountSnapshot(
+                strategy_id=other_record.id if for_strategy else None,
+                snapshot_source="broker_sync",
+                snapshot_at=datetime(2024, 1, 5, 14, 0, tzinfo=UTC),
+                cash=Decimal("100000"),
+                gross_exposure=Decimal("0"),
+                total_equity=Decimal("100000"),
+                buying_power=Decimal("400000"),
+                open_positions=0,
+            )
+        )
+
+    _report, divergence = _reconcile_divergence(_flat_broker(cash="90000", buying_power="400000"))
+
+    # The baseline is used (cash 100000 vs broker 90000), not ignored.
+    assert "cash" in divergence
+    assert divergence["cash"]["local"] == "100000.000000"
