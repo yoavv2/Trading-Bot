@@ -39,6 +39,10 @@ from trading_platform.services.execution import (
     OrderSubmissionResult,
     run_paper_order_submission,
 )
+from trading_platform.services.execution.attempts import (
+    NullSubmissionAttemptLog,
+    bind_attempt_log,
+)
 from trading_platform.strategies.registry import build_default_registry
 
 
@@ -103,7 +107,9 @@ def test_alpaca_execution_maps_payload_and_normalizes_response() -> None:
     client = AlpacaClient(_alpaca_settings(), http_client=http_client)
     service = AlpacaExecutionService(_alpaca_settings(), client=client)
 
-    result = service.submit_order(_order_intent())
+    # D-12: the submit path fails closed without a bound attempt log.
+    with bind_attempt_log(NullSubmissionAttemptLog()):
+        result = service.submit_order(_order_intent())
 
     assert captured["path"] == "/v2/orders"
     assert captured["headers"] == {
@@ -131,12 +137,16 @@ def test_alpaca_execution_maps_payload_and_normalizes_response() -> None:
 
 
 def test_alpaca_client_retries_transient_transport_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    # D-12: only a failure that provably never connected (ConnectError) is retried
+    # for an order POST. A transient failure that may have reached the broker
+    # (ReadTimeout, 5xx, 429...) is intentionally NOT retried any more; see
+    # tests/test_alpaca_submission_taxonomy.py.
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         attempts["count"] += 1
         if attempts["count"] == 1:
-            raise httpx.ReadTimeout("timed out", request=request)
+            raise httpx.ConnectError("connection refused", request=request)
         return httpx.Response(200, json=_success_payload())
 
     monkeypatch.setattr("trading_platform.services.alpaca.time.sleep", lambda *_: None)
@@ -145,7 +155,8 @@ def test_alpaca_client_retries_transient_transport_failures(monkeypatch: pytest.
     http_client = httpx.Client(transport=transport, base_url="https://paper-api.alpaca.markets")
     client = AlpacaClient(_alpaca_settings(), http_client=http_client)
 
-    result = client.submit_order(_order_intent())
+    with bind_attempt_log(NullSubmissionAttemptLog()):
+        result = client.submit_order(_order_intent())
 
     assert attempts["count"] == 2
     assert result.broker_order_id == "broker-order-123"

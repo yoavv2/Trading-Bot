@@ -48,6 +48,10 @@ from trading_platform.services.execution._paper_common import (
     _broker_transition_event,
     _record_intent_decision_event,
 )
+from trading_platform.services.execution.attempts import (
+    DbSubmissionAttemptLog,
+    bind_attempt_log,
+)
 from trading_platform.services.execution.contracts import ExecutionService, OrderIntent, OrderSide
 from trading_platform.services.execution.idempotency import (
     DerivedOrderIdentity,
@@ -549,7 +553,16 @@ def _run_paper_order_submission_guarded(
             # committed as success. A broker exception never enters the
             # success-persist session at all (see the `except` branch).
             try:
-                result = broker_execution.submit_order(intent)
+                # D-12: every HTTP attempt is logged durably (own committed
+                # transactions) before and after it through the bound log.
+                with bind_attempt_log(
+                    DbSubmissionAttemptLog(
+                        resolved_settings,
+                        paper_order_id=pending_order_id,
+                        strategy_run_id=run_id,
+                    )
+                ):
+                    result = broker_execution.submit_order(intent)
             except Exception as exc:
                 with session_scope(resolved_settings) as session:
                     failed_order = session.get(PaperOrder, pending_order_id)

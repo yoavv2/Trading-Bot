@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Final, Literal, TypeVar
 
 import httpx
 
 from trading_platform.core.logging import get_logger
 from trading_platform.core.settings import AlpacaBrokerSettings
+from trading_platform.db.models import AttemptOutcomeClass
 from trading_platform.services.execution import (
     ExecutionOrderStatus,
     ExecutionService,
@@ -21,23 +24,81 @@ from trading_platform.services.execution import (
     OrderTimeInForce,
     OrderType,
 )
+from trading_platform.services.execution.attempts import (
+    BROKER_MESSAGE_MAX_CHARS,
+    NOT_SENT_OUTCOMES,
+    AttemptRecord,
+    SubmissionClass,
+    classify_attempt_exception,
+    classify_http_response,
+    classify_submission,
+    current_attempt_log,
+)
 
 logger = get_logger(__name__)
 
 _TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
-_PENDING_BROKER_STATUSES = {
-    "accepted",
-    "accepted_for_bidding",
-    "calculated",
-    "held",
-    "new",
-    "pending_cancel",
-    "pending_new",
-    "pending_replace",
-    "replaced",
-    "stopped",
-    "suspended",
+
+
+class BrokerStatusClass(StrEnum):
+    """Closed classification of a raw Alpaca order status (D-13)."""
+
+    WORKING = "working"
+    TERMINAL = "terminal"
+    TERMINAL_WITH_SUCCESSOR = "terminal_with_successor"
+    UNKNOWN = "unknown"
+
+
+UNMAPPED_BROKER_STATUS: Final = "unmapped_broker_status"
+
+# Single source of truth for the status mapping: the 16 documented Alpaca order
+# statuses (Placing Orders, accessed 2026-09-30) plus the legacy ``held``.
+# ``done_for_day`` is working (it can resume); ``replaced`` is terminal with a
+# successor order (the successor is unrecognized until verified); anything not
+# listed here is ``unknown`` with reason ``unmapped_broker_status``.
+_BROKER_STATUS_CLASSES: Final[dict[str, BrokerStatusClass]] = {
+    "new": BrokerStatusClass.WORKING,
+    "partially_filled": BrokerStatusClass.WORKING,
+    "filled": BrokerStatusClass.TERMINAL,
+    "done_for_day": BrokerStatusClass.WORKING,
+    "canceled": BrokerStatusClass.TERMINAL,
+    "expired": BrokerStatusClass.TERMINAL,
+    "replaced": BrokerStatusClass.TERMINAL_WITH_SUCCESSOR,
+    "pending_cancel": BrokerStatusClass.WORKING,
+    "pending_replace": BrokerStatusClass.WORKING,
+    "accepted": BrokerStatusClass.WORKING,
+    "pending_new": BrokerStatusClass.WORKING,
+    "accepted_for_bidding": BrokerStatusClass.WORKING,
+    "stopped": BrokerStatusClass.WORKING,
+    "rejected": BrokerStatusClass.TERMINAL,
+    "suspended": BrokerStatusClass.WORKING,
+    "calculated": BrokerStatusClass.WORKING,
+    "held": BrokerStatusClass.WORKING,
 }
+
+# Working statuses that normalize to PENDING (partially_filled has its own status).
+_PENDING_BROKER_STATUSES = {
+    status
+    for status, status_class in _BROKER_STATUS_CLASSES.items()
+    if status_class == BrokerStatusClass.WORKING and status != "partially_filled"
+}
+
+
+def classify_broker_status(raw: str | None) -> BrokerStatusClass:
+    """Closed class of a raw broker status; any other or missing value is unknown."""
+
+    if not raw:
+        return BrokerStatusClass.UNKNOWN
+    return _BROKER_STATUS_CLASSES.get(raw, BrokerStatusClass.UNKNOWN)
+
+
+def broker_status_reason(raw: str | None) -> str | None:
+    """``unmapped_broker_status`` exactly when the status class is unknown."""
+
+    if classify_broker_status(raw) == BrokerStatusClass.UNKNOWN:
+        return UNMAPPED_BROKER_STATUS
+    return None
+
 
 EnumT = TypeVar("EnumT")
 
@@ -57,6 +118,53 @@ class AlpacaClientError(Exception):
 
 class AlpacaAuthError(AlpacaClientError):
     """Raised when Alpaca credentials are missing or rejected."""
+
+
+class AttemptLogNotBoundError(AlpacaClientError):
+    """Raised when an order POST is requested without a bound durable attempt log.
+
+    D-12 requires every HTTP attempt to be logged durably before and after it, so
+    the submit path fails closed (zero POSTs) when no log is bound.
+    """
+
+
+class AlpacaOrderSubmissionError(AlpacaClientError):
+    """Base for the closed outcomes of an order POST that did not produce an order.
+
+    Carries the submission class and an attempt summary (attempt numbers and
+    closed outcome-class names only; no headers, credentials or free text).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        submission_class: SubmissionClass,
+        attempts: Sequence[tuple[int, str]] = (),
+        http_status: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.submission_class = submission_class
+        self.attempts: tuple[tuple[int, str], ...] = tuple(attempts)
+        self.http_status = http_status
+        self.reason = reason
+
+    @property
+    def attempt_numbers(self) -> tuple[int, ...]:
+        return tuple(number for number, _ in self.attempts)
+
+
+class AmbiguousOrderSubmissionError(AlpacaOrderSubmissionError):
+    """The order may or may not exist at the broker; it must never be re-sent."""
+
+
+class OrderNotSentError(AlpacaOrderSubmissionError):
+    """Every attempt provably never left the process (safe to retry in a later session)."""
+
+
+class OrderRejectedError(AlpacaOrderSubmissionError):
+    """The broker refused the order (4xx other than the duplicate-id reply)."""
 
 
 class AlpacaPaginationError(AlpacaClientError):
@@ -125,6 +233,8 @@ def _normalize_status(broker_status: str | None) -> ExecutionOrderStatus:
         return ExecutionOrderStatus.REJECTED
     if broker_status == "expired":
         return ExecutionOrderStatus.EXPIRED
+    if broker_status == "replaced":
+        return ExecutionOrderStatus.REPLACED
     return ExecutionOrderStatus.UNKNOWN
 
 
@@ -154,6 +264,7 @@ def _normalized_result(payload: dict[str, Any]) -> OrderSubmissionResult:
         broker_status=broker_status,
         submitted_at=_parse_datetime(payload.get("submitted_at")),
         raw_payload=payload,
+        status_reason=broker_status_reason(broker_status),
     )
 
 
@@ -171,6 +282,7 @@ class BrokerOrderSnapshot:
     canceled_at: datetime | None
     updated_at: datetime | None
     raw_payload: dict[str, Any]
+    status_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +333,7 @@ def _normalized_order_snapshot(payload: dict[str, Any]) -> BrokerOrderSnapshot:
         canceled_at=_parse_datetime(payload.get("canceled_at")),
         updated_at=_parse_datetime(payload.get("updated_at")),
         raw_payload=payload,
+        status_reason=broker_status_reason(broker_status),
     )
 
 
@@ -258,6 +371,89 @@ def _normalized_account_snapshot(payload: dict[str, Any]) -> BrokerAccountSnapsh
         short_market_value=_normalize_money(payload.get("short_market_value") or "0"),
         raw_payload=payload,
     )
+
+
+_NOT_FOUND: Final = object()
+"""Sentinel returned by ``_request_with_retry(..., allow_not_found=True)`` on HTTP 404 only."""
+
+
+def _attempt_summary(history: Sequence[AttemptRecord]) -> list[tuple[int, str]]:
+    return [
+        (
+            attempt.attempt_number,
+            attempt.outcome_class.value if attempt.outcome_class is not None else "incomplete",
+        )
+        for attempt in history
+    ]
+
+
+def _all_established_not_sent(history: Sequence[AttemptRecord]) -> bool:
+    """True iff every attempt so far is complete and pre_connection or deadline_expired."""
+
+    return all(
+        attempt.outcome_class is not None and attempt.outcome_class in NOT_SENT_OUTCOMES
+        for attempt in history
+    )
+
+
+def _response_message(response: httpx.Response) -> str:
+    """Broker message for classification/storage, truncated; never headers."""
+
+    message: str | None = None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and body.get("message") is not None:
+        message = str(body["message"])
+    if message is None:
+        message = response.text
+    return message[:BROKER_MESSAGE_MAX_CHARS]
+
+
+def _parse_json_object(response: httpx.Response) -> dict[str, Any] | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _intent_mismatch(
+    intent: OrderIntent,
+    snapshot: BrokerOrderSnapshot,
+    *,
+    registered_at: datetime | None,
+) -> str | None:
+    """Why a looked-up broker record is NOT evidence for ``intent`` (D-07), or ``None``.
+
+    An id alone is never ownership evidence: symbol, side, quantity and type must
+    match and the broker ``created_at`` must not precede the local registration.
+    """
+
+    raw = snapshot.raw_payload
+    if snapshot.client_order_id != intent.client_order_id:
+        return "client_order_id"
+    if snapshot.symbol != intent.symbol:
+        return "symbol"
+    if snapshot.side != intent.side:
+        return "side"
+    if raw.get("qty") is None or snapshot.quantity != _normalize_quantity(intent.quantity):
+        return "quantity"
+    if str(raw.get("type") or "") != intent.order_type.value:
+        return "type"
+    if registered_at is not None:
+        try:
+            created_at = _parse_datetime(raw.get("created_at"))
+        except ValueError:
+            created_at = None
+        if created_at is None:
+            return "created_at"
+        if registered_at.tzinfo is None:
+            registered_at = registered_at.replace(tzinfo=UTC)
+        if created_at < registered_at:
+            return "created_at"
+    return None
 
 
 class AlpacaClient:
@@ -299,6 +495,19 @@ class AlpacaClient:
         self.close()
 
     def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        """POST one order through the single-attempt, durably logged path (D-12).
+
+        Never goes through ``_request_with_retry``: an order POST is re-sent only
+        while EVERY attempt so far (including attempts from earlier sessions) is
+        established not sent (pre_connection or deadline_expired, complete). Any
+        ambiguous outcome stops at once with ``AmbiguousOrderSubmissionError``.
+        """
+
+        log = current_attempt_log()
+        if log is None:
+            raise AttemptLogNotBoundError(
+                "Refusing to POST an order without a bound durable attempt log (D-12)."
+            )
         payload = {
             "symbol": intent.symbol,
             "qty": str(intent.quantity),
@@ -307,8 +516,212 @@ class AlpacaClient:
             "time_in_force": intent.time_in_force.value,
             "client_order_id": intent.client_order_id,
         }
-        response_payload = self._request_with_retry("POST", "/v2/orders", payload=payload)
-        return _normalized_result(response_payload)
+        history: list[AttemptRecord] = list(log.existing_attempts())
+        existing_class = classify_submission(history)
+        if existing_class is not None and existing_class != SubmissionClass.NOT_SENT:
+            raise AmbiguousOrderSubmissionError(
+                "Order submission history is not clean "
+                f"(submission_class={existing_class.value}); nothing was sent.",
+                submission_class=existing_class,
+                attempts=_attempt_summary(history),
+                reason="history_not_clean",
+            )
+
+        retries = 0
+        while True:
+            number = log.begin_attempt()
+            started_at = datetime.now(UTC)
+            response: httpx.Response | None = None
+            failure: Exception | None = None
+            try:
+                response = self._client.post("/v2/orders", json=payload)
+            # BaseException (KeyboardInterrupt/SystemExit) is NOT caught: the attempt row
+            # stays incomplete, which reads back as ambiguous.
+            except Exception as exc:
+                failure = exc
+
+            if failure is not None:
+                outcome = classify_attempt_exception(failure)
+                self._complete_attempt(
+                    log,
+                    number,
+                    history,
+                    started_at,
+                    outcome_class=outcome,
+                    error_type=type(failure).__name__,
+                )
+                if outcome == AttemptOutcomeClass.PRE_CONNECTION:
+                    if retries < self._settings.max_retries and _all_established_not_sent(history):
+                        retries += 1
+                        sleep_seconds = self._settings.retry_backoff_factor * (2 ** (retries - 1))
+                        logger.warning(
+                            "alpaca_order_post_retry_not_sent",
+                            extra={
+                                "context": {
+                                    "attempt": number,
+                                    "sleep_seconds": sleep_seconds,
+                                    "error_type": type(failure).__name__,
+                                }
+                            },
+                        )
+                        time.sleep(sleep_seconds)
+                        continue
+                    raise OrderNotSentError(
+                        "Order was not sent: every attempt failed before a connection was made.",
+                        submission_class=SubmissionClass.NOT_SENT,
+                        attempts=_attempt_summary(history),
+                        reason=type(failure).__name__,
+                    ) from failure
+                raise AmbiguousOrderSubmissionError(
+                    "Order submission outcome is ambiguous: the request may have reached "
+                    f"the broker ({type(failure).__name__}); it will not be re-sent.",
+                    submission_class=SubmissionClass.AMBIGUOUS,
+                    attempts=_attempt_summary(history),
+                    reason=type(failure).__name__,
+                ) from failure
+
+            assert response is not None
+            message = _response_message(response)
+            outcome = classify_http_response(response.status_code, message)
+            body: dict[str, Any] | None = None
+            error_type: str | None = None
+            if outcome == AttemptOutcomeClass.ACCEPTED:
+                body = _parse_json_object(response)
+                if body is None:
+                    outcome = AttemptOutcomeClass.AMBIGUOUS
+                    error_type = "InvalidResponseBody"
+            self._complete_attempt(
+                log,
+                number,
+                history,
+                started_at,
+                outcome_class=outcome,
+                http_status=response.status_code,
+                error_type=error_type,
+                broker_message=None if outcome == AttemptOutcomeClass.ACCEPTED else message,
+            )
+            if outcome == AttemptOutcomeClass.ACCEPTED:
+                assert body is not None
+                return _normalized_result(body)
+            if outcome == AttemptOutcomeClass.DUPLICATE_REPORTED:
+                return self._resolve_duplicate_reply(intent, log, history)
+            if outcome == AttemptOutcomeClass.REJECTED:
+                raise OrderRejectedError(
+                    f"Order rejected by the broker (HTTP {response.status_code}).",
+                    submission_class=SubmissionClass.REJECTED,
+                    attempts=_attempt_summary(history),
+                    http_status=response.status_code,
+                    reason="http_4xx",
+                )
+            raise AmbiguousOrderSubmissionError(
+                "Order submission outcome is ambiguous "
+                f"(HTTP {response.status_code} / {error_type or 'transient_status'}); "
+                "it will not be re-sent.",
+                submission_class=SubmissionClass.AMBIGUOUS,
+                attempts=_attempt_summary(history),
+                http_status=response.status_code,
+                reason=error_type or "transient_status",
+            )
+
+    def _complete_attempt(
+        self,
+        log: Any,
+        number: int,
+        history: list[AttemptRecord],
+        started_at: datetime,
+        *,
+        outcome_class: AttemptOutcomeClass,
+        http_status: int | None = None,
+        error_type: str | None = None,
+        broker_message: str | None = None,
+    ) -> None:
+        """Write the outcome; a failed write leaves the row incomplete (= ambiguous)."""
+
+        try:
+            log.complete_attempt(
+                number,
+                outcome_class=outcome_class,
+                http_status=http_status,
+                error_type=error_type,
+                broker_message=broker_message,
+            )
+        except Exception as exc:
+            history.append(AttemptRecord(attempt_number=number, started_at=started_at))
+            raise AmbiguousOrderSubmissionError(
+                "Order submission outcome could not be recorded; treated as ambiguous "
+                "and it will not be re-sent.",
+                submission_class=SubmissionClass.AMBIGUOUS,
+                attempts=_attempt_summary(history),
+                http_status=http_status,
+                reason="attempt_outcome_not_recorded",
+            ) from exc
+        history.append(
+            AttemptRecord(
+                attempt_number=number,
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                outcome_class=outcome_class,
+                http_status=http_status,
+                error_type=error_type,
+                broker_message=broker_message,
+            )
+        )
+
+    def _resolve_duplicate_reply(
+        self, intent: OrderIntent, log: Any, history: list[AttemptRecord]
+    ) -> OrderSubmissionResult:
+        """A duplicate-id reply triggers exactly one lookup, never an inference (V-1)."""
+
+        summary = _attempt_summary(history)
+        try:
+            snapshot = self.get_order_by_client_order_id(intent.client_order_id)
+        except Exception as exc:
+            raise AmbiguousOrderSubmissionError(
+                "Duplicate client_order_id reported and the lookup failed; "
+                "the order state is unknown.",
+                submission_class=SubmissionClass.EXISTS_REPORTED,
+                attempts=summary,
+                http_status=422,
+                reason="lookup_failed",
+            ) from exc
+        if snapshot is None:
+            raise AmbiguousOrderSubmissionError(
+                "Duplicate client_order_id reported but the broker has no such order.",
+                submission_class=SubmissionClass.EXISTS_REPORTED,
+                attempts=summary,
+                http_status=422,
+                reason="lookup_not_found",
+            )
+        mismatch = _intent_mismatch(intent, snapshot, registered_at=log.intent_registered_at())
+        if mismatch is not None:
+            raise AmbiguousOrderSubmissionError(
+                f"Duplicate client_order_id reported but the broker record does not match "
+                f"the local intent ({mismatch}); ownership is not proven.",
+                submission_class=SubmissionClass.EXISTS_REPORTED,
+                attempts=summary,
+                http_status=422,
+                reason="id_mismatch",
+            )
+        return _normalized_result(snapshot.raw_payload)
+
+    def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrderSnapshot | None:
+        """GET one order by client order id; ``None`` ONLY for HTTP 404.
+
+        Retries like every other GET. 5xx, 422, auth and transport errors raise,
+        never ``None`` (D-13): only a 404 is evidence of absence.
+        """
+
+        payload = self._request_with_retry(
+            "GET",
+            "/v2/orders:by_client_order_id",
+            params={"client_order_id": client_order_id},
+            allow_not_found=True,
+        )
+        if payload is _NOT_FOUND:
+            return None
+        if not isinstance(payload, dict):
+            raise AlpacaClientError("Alpaca order lookup returned a non-object payload.")
+        return _normalized_order_snapshot(payload)
 
     def list_orders(
         self,
@@ -419,14 +832,22 @@ class AlpacaClient:
         path: str,
         *,
         params: dict[str, Any] | None = None,
-        payload: dict[str, Any] | None = None,
+        allow_not_found: bool = False,
     ) -> Any:
+        # D-12: an order POST must never go through the generic retry loop.
+        if method.upper() != "GET":
+            raise ValueError(
+                "_request_with_retry only supports GET; order POSTs use the "
+                "single-attempt logged submit path."
+            )
         attempts = 0
         last_error: Exception | None = None
 
         while attempts <= self._settings.max_retries:
             try:
-                response = self._client.request(method, path, params=params, json=payload)
+                response = self._client.request(method, path, params=params)
+                if allow_not_found and response.status_code == 404:
+                    return _NOT_FOUND
                 if response.status_code in (401, 403):
                     raise AlpacaAuthError(
                         f"Alpaca returned {response.status_code}. "

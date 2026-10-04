@@ -31,6 +31,7 @@ class ExecutionOrderStatus(StrEnum):
     CANCELED = "canceled"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    REPLACED = "replaced"
     UNKNOWN = "unknown"
 
 
@@ -63,6 +64,7 @@ class OrderSubmissionResult:
     broker_status: str
     submitted_at: datetime | None
     raw_payload: dict[str, Any] = field(default_factory=dict)
+    status_reason: str | None = None
 
 
 class ExecutionService(ABC):
