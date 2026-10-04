@@ -366,7 +366,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 **Wave 7**
 
-- [ ] 20.1-11-PLAN.md — Execution operation storage and state machine: migration 0027, closed states/reasons, one open operation per strategy, S1 fencing and takeover primitives, real OperationView, End operation and R2 reads (REC-02)
+- [x] 20.1-11-PLAN.md — Execution operation storage and state machine: migration 0027, closed states/reasons, one open operation per strategy, S1 fencing and takeover primitives, real OperationView, End operation and R2 reads (REC-02)
 
 **Wave 8**
 
@@ -455,7 +455,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 10/16 | In Progress | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 11/16 | In Progress | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
