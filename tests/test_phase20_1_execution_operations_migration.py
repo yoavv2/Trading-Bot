@@ -181,18 +181,13 @@ def test_reason_sets_match_the_documented_cardinalities() -> None:
     assert [s.value for s in OPEN_OPERATION_STATES] == list(OPEN_STATES)
 
 
-@pytest.mark.parametrize(("first", "second"), list(itertools.product(OPEN_STATES, OPEN_STATES)))
-def test_second_open_operation_for_strategy_fails_at_db_level(
-    migrated_db: str, first: str, second: str
-) -> None:
-    from datetime import date
+def _open_index_states() -> set[str]:
+    """The state literals of the partial unique index predicate, introspected from pg_indexes.
 
-    _insert_operation(OWNER, first, _reason_for(first))
-    with pytest.raises(IntegrityError):
-        _insert_operation(OWNER, second, _reason_for(second), session_date=date(2024, 1, 8))
+    PostgreSQL rewrites ``IN (...)`` as ``= ANY (ARRAY[...])``, so the literals are parsed out
+    of the stored predicate instead of string-matching it.
+    """
 
-
-def test_open_index_predicate_names_exactly_the_three_open_states(migrated_db: str) -> None:
     with session_scope(load_settings()) as session:
         row = session.execute(
             text(
@@ -201,11 +196,28 @@ def test_open_index_predicate_names_exactly_the_three_open_states(migrated_db: s
             )
         ).one()
     definition: str = row.indexdef
-    assert "UNIQUE" in definition
+    assert "UNIQUE" in definition and "(strategy_id)" in definition
     predicate = definition.split(" WHERE ", 1)[1]
-    # PostgreSQL rewrites IN (...) as = ANY (ARRAY[...]); parse the literals instead.
-    assert set(re.findall(r"'([a-z_]+)'", predicate)) == set(OPEN_STATES)
-    assert "(strategy_id)" in definition
+    return set(re.findall(r"'([a-z_]+)'", predicate))
+
+
+@pytest.mark.parametrize(("first", "second"), list(itertools.product(OPEN_STATES, OPEN_STATES)))
+def test_second_open_operation_for_strategy_fails_at_db_level(
+    migrated_db: str, first: str, second: str
+) -> None:
+    from datetime import date
+
+    # The failing constraint is the partial unique index whose predicate names EXACTLY the
+    # three open states (introspected from pg_indexes).
+    assert _open_index_states() == set(OPEN_STATES)
+    _insert_operation(OWNER, first, _reason_for(first))
+    with pytest.raises(IntegrityError) as excinfo:
+        _insert_operation(OWNER, second, _reason_for(second), session_date=date(2024, 1, 8))
+    assert "uq_execution_operations_one_open_per_strategy" in str(excinfo.value)
+
+
+def test_open_index_predicate_names_exactly_the_three_open_states(migrated_db: str) -> None:
+    assert _open_index_states() == set(OPEN_STATES)
 
 
 def test_terminated_or_completed_never_blocks_a_new_open_operation(migrated_db: str) -> None:

@@ -761,7 +761,7 @@ def test_legacy_order_linked_to_an_intent_is_not_proven_not_sent(ops_db: str) ->
         assert result.unsent_cancelled == ()
 
 
-def test_touch_operation_expiry_terminates_unsent_only(ops_db: str) -> None:
+def test_expiry_terminates_unsent_only(ops_db: str) -> None:
     with session_scope(load_settings()) as session:
         operation, _seeded = _mixed_operation(session)
         operation_id = operation.id
@@ -1553,3 +1553,106 @@ def test_attempts_module_is_unchanged_in_scope_and_has_no_alpaca_import() -> Non
     source = Path(inspect.getfile(attempts_module)).read_text()
     assert "import httpx" in source  # classification only
     assert "services.alpaca" not in source
+
+
+def test_stale_fence_terminate_changes_nothing(ops_db: str) -> None:
+    operation_id, intent_id, job_id = _t1_setup(order_status=OrderLifecycleState.PENDING_SUBMISSION)
+    with session_scope(load_settings()) as session:
+        before = _operation_row(session, operation_id)
+        for fence in (Fence(operation_id, 2, job_id), Fence(operation_id, 3, uuid.uuid4())):
+            with pytest.raises(OperationConflictError):
+                ops.transition(
+                    session,
+                    operation_id,
+                    OperationState.TERMINATED,
+                    "execution_window_elapsed",
+                    fence=fence,
+                )
+        locked = session.execute(
+            select(ExecutionOperation).where(ExecutionOperation.id == operation_id)
+        ).scalar_one()
+        with pytest.raises(OperationConflictError):
+            ops.terminate_operation(
+                session,
+                locked,
+                TerminatedReason.EXECUTION_WINDOW_ELAPSED,
+                ended_by="executor",
+                fence=Fence(operation_id, 1, job_id),
+            )
+        assert _operation_row(session, operation_id) == before
+        intent = session.get(ExecutionOperationIntent, intent_id)
+        assert intent is not None and intent.disposition == "open"
+
+
+def _operation_row(session: Any, operation_id: uuid.UUID) -> tuple[Any, ...]:
+    session.expire_all()
+    row = session.execute(
+        select(
+            ExecutionOperation.state,
+            ExecutionOperation.reason,
+            ExecutionOperation.execution_epoch,
+            ExecutionOperation.executor_job_id,
+        ).where(ExecutionOperation.id == operation_id)
+    ).one()
+    return tuple(row)
+
+
+@pytest.mark.parametrize(
+    ("reason", "disposition"),
+    [
+        ("execution_window_elapsed", "expired_unsent"),
+        ("evaluation_superseded", "expired_unsent"),
+        ("cancelled_by_operator", "cancelled_unsent"),
+    ],
+)
+def test_transition_to_terminated_moves_the_proven_unsent_intents(
+    ops_db: str, reason: str, disposition: str
+) -> None:
+    with session_scope(load_settings()) as session:
+        job = seed_operation_job(session, status=JobStatus.RUNNING)
+        operation = seed_operation(
+            session, state="running", reason=None, session_date=S, epoch=5, executor_job=job
+        )
+        planned = seed_operation_intent(session, operation, sequence=1, ticker="AAA")
+        registered = seed_operation_intent(
+            session,
+            operation,
+            sequence=2,
+            ticker="BBB",
+            order_status=OrderLifecycleState.PENDING_SUBMISSION,
+        )
+        submitted = seed_operation_intent(
+            session,
+            operation,
+            sequence=3,
+            ticker="CCC",
+            attempts=[ACCEPTED],
+            order_status=OrderLifecycleState.SUBMITTED,
+            broker_order_id="b-9",
+        )
+        ambiguous = seed_operation_intent(
+            session,
+            operation,
+            sequence=4,
+            ticker="DDD",
+            attempts=[AMBIGUOUS],
+            order_status=OrderLifecycleState.UNKNOWN,
+        )
+        operation_id, job_id = operation.id, job.id
+        ids = (planned.row.id, registered.row.id, submitted.row.id, ambiguous.row.id)
+    with session_scope(load_settings()) as session:
+        done = ops.transition(
+            session,
+            operation_id,
+            OperationState.TERMINATED,
+            reason,
+            fence=Fence(operation_id, 5, job_id),
+        )
+        assert done.state == "terminated" and done.reason == reason
+        assert done.execution_epoch == 6 and done.executor_job_id is None
+    with session_scope(load_settings()) as session:
+        rows = {
+            i.id: i.disposition for i in session.execute(select(ExecutionOperationIntent)).scalars()
+        }
+        assert rows[ids[0]] == rows[ids[1]] == disposition
+        assert rows[ids[2]] == rows[ids[3]] == "open"
