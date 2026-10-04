@@ -17,6 +17,7 @@ from __future__ import annotations
 # contracts/transition/idempotency surface, while still resolving
 # ``from trading_platform.services.execution import run_paper_order_submission``.
 from trading_platform.services.execution._paper_common import (
+    AccountStateSyncReport,
     PaperExecutionCandidate,
     PaperExecutionRunReport,
     PaperIntentDecision,
@@ -61,6 +62,7 @@ _LAZY_PAPER_EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "build_paper_client_order_id": ("submit_orders", "build_client_order_id"),
     "sync_paper_state": ("sync_orders", "sync_paper_state"),
+    "sync_account_state": ("sync_orders", "sync_account_state"),
 }
 
 
@@ -99,6 +101,8 @@ __all__ = [
     "run_paper_order_submission",
     "run_paper_session",
     "sync_paper_state",
+    "sync_account_state",
+    "AccountStateSyncReport",
     "build_paper_client_order_id",
     "schedule_reconciliation_after_partial_failure",
     "PaperExecutionCandidate",

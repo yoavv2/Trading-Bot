@@ -5,6 +5,8 @@ Reorganizes the reconciliation subsystem into four role-named modules:
 - ``snapshot`` — typed ``Local*Snapshot`` dataclasses + ``ReconciliationIdentity``.
 - ``findings`` — the closed ``ReconciliationFinding`` enum + the ``Finding`` value type.
 - ``matcher`` — the pure, indexed ``match_snapshots`` matcher.
+- ``account`` — the owner-less, report-only ``reconcile_account`` (ACCT-01) and
+  ``latest`` — the one reader of the latest standalone reconciliation (R-5).
 - ``report`` — the read-only ``reconcile_paper_execution`` orchestrator, the
   separately-invoked ``apply_reconciliation_corrections`` corrective entrypoint, and
   the materialized ``ReconciliationReport``.
@@ -18,7 +20,16 @@ directly when needed (the two intentionally share a name across different roles)
 
 from __future__ import annotations
 
+from trading_platform.services.reconciliation.account import (
+    AccountReconciliationReport,
+    reconcile_account,
+)
 from trading_platform.services.reconciliation.findings import Finding, ReconciliationFinding
+from trading_platform.services.reconciliation.latest import (
+    StandaloneReconciliation,
+    latest_account_reconciliation_run,
+    latest_standalone_reconciliation,
+)
 from trading_platform.services.reconciliation.matcher import (
     match_snapshots,
     match_snapshots_with_comparisons,
@@ -46,6 +57,11 @@ from trading_platform.services.reconciliation.snapshot import (
 __all__ = [
     # report / orchestrator surface
     "reconcile_paper_execution",
+    "reconcile_account",
+    "AccountReconciliationReport",
+    "latest_standalone_reconciliation",
+    "latest_account_reconciliation_run",
+    "StandaloneReconciliation",
     "apply_reconciliation_corrections",
     "recover_inflight_paper_orders",
     "load_broker_state",

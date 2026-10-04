@@ -221,6 +221,16 @@ def _normalize_quantity(value: Any) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.000001"))
 
 
+def _optional_quantity(value: Any) -> Decimal | None:
+    """A quantity field that may be absent or malformed -> ``None`` (never raises)."""
+    if value is None or value == "":
+        return None
+    try:
+        return _normalize_quantity(value)
+    except (ArithmeticError, ValueError):
+        return None
+
+
 def _normalize_money(value: Any) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.000001"))
 
@@ -268,6 +278,9 @@ class BrokerOrderSnapshot:
     order_type: str | None = None
     replaces_order_id: str | None = None
     successor_order_id: str | None = None
+    # 20.1-08: the broker's cumulative filled quantity (payload ``filled_qty``). Recorded
+    # per applied order by broker-order-sync as basis evidence; ``None`` when absent.
+    filled_quantity: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -323,6 +336,7 @@ def _normalized_order_snapshot(payload: dict[str, Any]) -> BrokerOrderSnapshot:
         order_type=_optional_text(payload.get("type")),
         replaces_order_id=_optional_text(payload.get("replaces")),
         successor_order_id=_optional_text(payload.get("replaced_by")),
+        filled_quantity=_optional_quantity(payload.get("filled_qty")),
     )
 
 

@@ -40,6 +40,7 @@ from trading_platform.services.alpaca import (
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.execution._paper_common import (
+    AccountStateSyncReport,
     PaperStateSyncReport,
     _broker_transition_event,
 )
@@ -98,12 +99,14 @@ def sync_paper_state(
                 order.client_order_id: order for order in local_orders if order.client_order_id
             }
 
+            applied_orders: list[dict[str, str | None]] = []
             orders_synced = _sync_paper_orders(
                 session,
                 broker_orders,
                 local_orders_by_broker_id=local_orders_by_broker_id,
                 local_orders_by_client_id=local_orders_by_client_id,
                 synced_at=synced_at,
+                applied=applied_orders,
             )
             fills_ingested = _ingest_paper_fills(
                 session,
@@ -136,6 +139,84 @@ def sync_paper_state(
                 positions_closed=positions_closed,
                 open_positions=len(broker_positions),
                 account_snapshot_id=str(snapshot.id),
+                applied_orders=tuple(applied_orders),
+            )
+    finally:
+        if owns_broker_client:
+            client.close()
+
+
+def sync_account_state(
+    *,
+    as_of_session: date | None = None,
+    settings: Settings | None = None,
+    broker_client: AlpacaClient | None = None,
+) -> AccountStateSyncReport:
+    """Owner-less account-level broker sync (ACCT-01, D-08/D-09).
+
+    Updates ONLY known local orders (matched by ``client_order_id`` then
+    ``broker_order_id`` across ALL strategies) and ingests fills ONLY for those known
+    orders. It records one broker-observed account snapshot (``strategy_id`` NULL,
+    ``snapshot_source`` ``broker_sync``). It never creates or closes a ``Position``,
+    never creates a ``PaperOrder`` and never assigns anything to a strategy; unknown
+    broker activity is left for the account-level reconciliation to report.
+    """
+
+    resolved_settings = settings or load_settings()
+    synced_at = datetime.now(UTC)
+
+    owns_broker_client = broker_client is None
+    client = broker_client or AlpacaClient(resolved_settings.broker.alpaca)
+
+    try:
+        broker_orders = client.list_orders()
+        broker_fills = client.list_fills()
+        broker_positions = client.list_positions()
+        broker_account = client.get_account()
+
+        with session_scope(resolved_settings) as session:
+            local_orders = (
+                session.execute(select(PaperOrder).order_by(PaperOrder.created_at.asc()))
+                .scalars()
+                .all()
+            )
+            local_orders_by_broker_id = {
+                order.broker_order_id: order for order in local_orders if order.broker_order_id
+            }
+            local_orders_by_client_id = {
+                order.client_order_id: order for order in local_orders if order.client_order_id
+            }
+
+            applied_orders: list[dict[str, str | None]] = []
+            orders_synced = _sync_paper_orders(
+                session,
+                broker_orders,
+                local_orders_by_broker_id=local_orders_by_broker_id,
+                local_orders_by_client_id=local_orders_by_client_id,
+                synced_at=synced_at,
+                applied=applied_orders,
+            )
+            fills_ingested = _ingest_paper_fills(
+                session,
+                broker_fills,
+                local_orders_by_broker_id=local_orders_by_broker_id,
+            )
+            snapshot = _record_broker_account_snapshot(
+                session,
+                None,
+                broker_account,
+                broker_positions,
+                synced_at=synced_at,
+            )
+
+            return AccountStateSyncReport(
+                session_date=as_of_session.isoformat() if as_of_session is not None else None,
+                synced_at=synced_at.isoformat(),
+                orders_synced=orders_synced,
+                fills_ingested=fills_ingested,
+                open_positions=len(broker_positions),
+                account_snapshot_id=str(snapshot.id),
+                applied_orders=tuple(applied_orders),
             )
     finally:
         if owns_broker_client:
@@ -149,6 +230,7 @@ def _sync_paper_orders(
     local_orders_by_broker_id: dict[str, PaperOrder],
     local_orders_by_client_id: dict[str, PaperOrder],
     synced_at: datetime,
+    applied: list[dict[str, str | None]] | None = None,
 ) -> int:
     synced_count = 0
     for broker_order in broker_orders:
@@ -196,6 +278,20 @@ def _sync_paper_orders(
 
         if local_order.broker_order_id:
             local_orders_by_broker_id[local_order.broker_order_id] = local_order
+        if applied is not None:
+            # 20.1-08 basis traceability: durable evidence of the broker state applied.
+            applied.append(
+                {
+                    "paper_order_id": str(local_order.id),
+                    "broker_status": broker_order.broker_status,
+                    "broker_filled_qty": (
+                        str(broker_order.filled_quantity)
+                        if broker_order.filled_quantity is not None
+                        else None
+                    ),
+                    "applied_at": synced_at.isoformat(),
+                }
+            )
         synced_count += 1
     return synced_count
 
@@ -351,7 +447,7 @@ def _derive_positions_from_owned_fills(
 
 def _record_broker_account_snapshot(
     session,
-    strategy_row_id: uuid.UUID,
+    strategy_row_id: uuid.UUID | None,
     broker_account: BrokerAccountSnapshot,
     broker_positions: list[BrokerPositionSnapshot],
     *,

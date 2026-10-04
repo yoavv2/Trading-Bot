@@ -709,6 +709,9 @@ _MUTATING_ENTRY_POINTS = {
     "apply_reconciliation_corrections",
     "recover_inflight_paper_orders",
     "sync_paper_state",
+    # ACCT-01 (20.1-08): the owner-less account-level entry points.
+    "sync_account_state",
+    "reconcile_account",
     "ingest_daily_bars",
     "sync_symbol_metadata",
     "upsert_symbol_metadata",

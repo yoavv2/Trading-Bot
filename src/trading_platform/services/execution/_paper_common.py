@@ -120,6 +120,9 @@ class PaperStateSyncReport:
     positions_closed: int
     open_positions: int
     account_snapshot_id: str
+    # 20.1-08 basis traceability: one record per local order whose broker state was
+    # applied ({paper_order_id, broker_status, broker_filled_qty, applied_at}).
+    applied_orders: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -132,6 +135,31 @@ class PaperStateSyncReport:
             "positions_closed": self.positions_closed,
             "open_positions": self.open_positions,
             "account_snapshot_id": self.account_snapshot_id,
+            "applied_orders": [dict(record) for record in self.applied_orders],
+        }
+
+
+@dataclass(frozen=True)
+class AccountStateSyncReport:
+    """Result of an owner-less account-level sync (20.1-08, D-09): no owner, no positions."""
+
+    session_date: str | None
+    synced_at: str
+    orders_synced: int
+    fills_ingested: int
+    open_positions: int
+    account_snapshot_id: str
+    applied_orders: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "session_date": self.session_date,
+            "synced_at": self.synced_at,
+            "orders_synced": self.orders_synced,
+            "fills_ingested": self.fills_ingested,
+            "open_positions": self.open_positions,
+            "account_snapshot_id": self.account_snapshot_id,
+            "applied_orders": [dict(record) for record in self.applied_orders],
         }
 
 
