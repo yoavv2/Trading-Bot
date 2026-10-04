@@ -148,6 +148,8 @@ def test_run_paper_session_threads_job_id_to_both_created_runs(
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
                     raw_payload={"id": "recovered-aapl-001", "status": "new"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[],

@@ -468,6 +468,7 @@ def _seed_existing_paper_order(
         session.add(
             PaperOrder(
                 strategy_run_id=execution_run.id,
+                created_at=datetime(2024, 1, 5, 14, 30, tzinfo=UTC),
                 source_risk_event_id=risk_event_id,
                 symbol_id=symbol_row.id,
                 intended_session_date=session_date,
@@ -852,6 +853,8 @@ def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_ca
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
                     raw_payload={"id": "recovered-aapl-001", "status": "new"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[],
@@ -1033,6 +1036,8 @@ def test_sync_paper_state_persists_fills_positions_and_account_snapshot(
                 canceled_at=None,
                 updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
                 raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                order_type="market",
             )
         ],
         fills=[
@@ -1137,6 +1142,8 @@ def test_sync_paper_state_advances_partial_lifecycle_without_duplicate_fills(
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 38, tzinfo=UTC),
                     raw_payload={"id": "existing-aapl-001", "status": "partially_filled"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[
@@ -1194,6 +1201,8 @@ def test_sync_paper_state_advances_partial_lifecycle_without_duplicate_fills(
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 42, tzinfo=UTC),
                     raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[
@@ -1640,6 +1649,8 @@ def test_run_paper_session_runs_reconciliation_before_blocking_on_tripped_kill_s
                 canceled_at=None,
                 updated_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
                 raw_payload={"id": "recovered-aapl-001", "status": "new"},
+                created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                order_type="market",
             )
         ],
         fills=[],
@@ -1721,6 +1732,8 @@ def test_sync_paper_state_continues_reading_broker_state_while_kill_switch_is_tr
                 canceled_at=None,
                 updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
                 raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                order_type="market",
             )
         ],
         fills=[

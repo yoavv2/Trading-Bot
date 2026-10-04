@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -30,13 +30,24 @@ from trading_platform.db.session import session_scope
 from trading_platform.services.account_baseline import latest_broker_observed_account_snapshot
 from trading_platform.services.alpaca import (
     AlpacaClient,
+    AlpacaPaginationCapExceededError,
     BrokerAccountSnapshot,
     BrokerFillSnapshot,
     BrokerOrderSnapshot,
     BrokerPositionSnapshot,
 )
+from trading_platform.services.attribution import (
+    AttributionResult,
+    UnresolvedReason,
+    classify_broker_activity,
+)
+from trading_platform.services.attribution_inputs import (
+    load_local_intent_records,
+    load_ownership_periods,
+    load_recorded_external_order_ids,
+)
 from trading_platform.services.bootstrap import ensure_strategy_record
-from trading_platform.services.config.tolerances import MONEY_TOLERANCE
+from trading_platform.services.config.tolerances import MONEY_TOLERANCE, QUANTITY_TOLERANCE
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
 from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
@@ -99,6 +110,9 @@ class ReconciliationReport:
     recovered_order_count: int
     blocks_execution: bool
     findings: tuple[ReconciliationFinding, ...]
+    # Additive (20.1-07): bounded attribution summary and the closed unresolved reasons.
+    unresolved_reasons: tuple[str, ...] = ()
+    attribution: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +125,8 @@ class ReconciliationReport:
             "recovered_order_count": self.recovered_order_count,
             "blocks_execution": self.blocks_execution,
             "findings": [finding.to_dict() for finding in self.findings],
+            "unresolved_reasons": list(self.unresolved_reasons),
+            "attribution": self.attribution,
         }
 
 
@@ -303,10 +319,18 @@ def reconcile_paper_execution(
     strategy = resolved_registry.resolve(resolved_strategy_id)
     checked_at = datetime.now(UTC)
     safety_settings = resolved_settings.execution.safety
-    effective_broker_state = broker_state or load_broker_state(
-        settings=resolved_settings,
-        broker_client=broker_client,
-    )
+    effective_broker_state: BrokerStateSnapshot | None = broker_state
+    unresolved_reasons: tuple[UnresolvedReason, ...] = ()
+    if effective_broker_state is None:
+        try:
+            effective_broker_state = load_broker_state(
+                settings=resolved_settings,
+                broker_client=broker_client,
+            )
+        except AlpacaPaginationCapExceededError:
+            # D-11: a page-cap overflow is an UNRESOLVED, blocking result -- never a
+            # truncated list and never an unstructured failure.
+            unresolved_reasons = (UnresolvedReason.BROKER_HISTORY_EXCEEDS_CAP,)
     run_id = _create_reconciliation_run(
         resolved_settings,
         strategy.metadata,
@@ -316,102 +340,35 @@ def reconcile_paper_execution(
     )
 
     try:
-        with session_scope(resolved_settings) as session:
-            strategy_record = ensure_strategy_record(session, strategy.metadata)
-            local_orders = (
-                session.execute(
-                    select(PaperOrder)
-                    .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-                    .where(StrategyRun.strategy_id == strategy_record.id)
-                    .order_by(PaperOrder.created_at.asc())
+        if effective_broker_state is None:
+            findings: tuple[Finding, ...] = ()
+            attribution = AttributionResult(unresolved_reasons=unresolved_reasons)
+            account_divergence: dict[str, Any] = {}
+            threshold_breach: list[dict[str, Any]] = []
+        else:
+            with session_scope(resolved_settings) as session:
+                (
+                    findings,
+                    attribution,
+                    account_divergence,
+                    threshold_breach,
+                ) = _reconcile_against_broker_state(
+                    session,
+                    strategy.metadata,
+                    effective_broker_state,
+                    run_id=run_id,
+                    checked_at=checked_at,
+                    platform_prefix=resolved_settings.execution.client_order_id_prefix,
+                    failure_threshold=safety_settings.repeated_failure_threshold,
                 )
-                .scalars()
-                .all()
-            )
-            local_fills = (
-                session.execute(
-                    select(PaperFill)
-                    .join(PaperOrder, PaperOrder.id == PaperFill.paper_order_id)
-                    .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
-                    .where(StrategyRun.strategy_id == strategy_record.id)
-                    .order_by(PaperFill.filled_at.asc())
-                )
-                .scalars()
-                .all()
-            )
-            local_positions = (
-                session.execute(
-                    select(Position)
-                    .where(
-                        Position.strategy_id == strategy_record.id,
-                        Position.status == "open",
-                    )
-                    .order_by(Position.created_at.asc())
-                )
-                .scalars()
-                .all()
-            )
-            # D-27: the baseline is the latest BROKER-OBSERVED account snapshot
-            # (account-wide; risk_evaluation/seed/derived rows are excluded).
-            latest_snapshot = latest_broker_observed_account_snapshot(session)
-
-            # READ-ONLY projection boundary (RECON-03/05): ORM rows are projected into
-            # the typed 09-01 snapshots here; no ORM instance crosses this boundary into
-            # the pure matcher or the account/threshold evaluations below.
-            local_order_snapshots = [_project_local_order(order) for order in local_orders]
-            local_fill_snapshots = [_project_local_fill(fill) for fill in local_fills]
-            local_position_snapshots = [
-                _project_local_position(position) for position in local_positions
-            ]
-            local_account_snapshot = (
-                _project_local_account(latest_snapshot) if latest_snapshot is not None else None
-            )
-
-            findings = match_snapshots(
-                local_orders=local_order_snapshots,
-                local_fills=local_fill_snapshots,
-                local_positions=local_position_snapshots,
-                broker_orders=list(effective_broker_state.orders),
-                broker_fills=list(effective_broker_state.fills),
-                broker_positions=list(effective_broker_state.positions),
-            )
-            # increment moved to corrective path (09-04): reconcile no longer writes
-            # PaperOrder.sync_failure_count / last_sync_error / last_sync_failure_at.
-
-            account_divergence = _evaluate_account_divergence(
-                latest_snapshot=local_account_snapshot,
-                broker_account=effective_broker_state.account,
-                broker_positions=effective_broker_state.positions,
-                local_positions_present=bool(local_positions),
-            )
-            threshold_breach = _evaluate_threshold_breach(
-                local_orders=local_orders,
-                findings=findings,
-                failure_threshold=safety_settings.repeated_failure_threshold,
-            )
-
-            session.add_all(
-                [
-                    ExecutionEvent(
-                        strategy_run_id=run_id,
-                        paper_order_id=(
-                            uuid.UUID(event_dict["paper_order_id"])
-                            if event_dict["paper_order_id"]
-                            else None
-                        ),
-                        event_type=event_dict["event_type"],
-                        severity=event_dict["severity"],
-                        blocks_execution=event_dict["blocks_execution"],
-                        event_at=checked_at,
-                        message=event_dict["message"],
-                        details=event_dict["details"],
-                    )
-                    for event_dict in (_finding_event_dict(finding) for finding in findings)
-                ]
-            )
 
         blocking_count = sum(1 for finding in findings if finding.blocks_execution)
-        blocks_execution = bool(findings) or bool(account_divergence) or bool(threshold_breach)
+        blocks_execution = (
+            bool(findings)
+            or bool(account_divergence)
+            or bool(threshold_breach)
+            or attribution.blocks_execution
+        )
         report = _update_reconciliation_run(
             resolved_settings,
             run_id,
@@ -428,6 +385,8 @@ def reconcile_paper_execution(
                 "account_divergence": account_divergence,
                 "threshold_breach": threshold_breach,
                 "findings": [_finding_event_dict(finding) for finding in findings],
+                "attribution": attribution.to_dict(),
+                "unresolved_reasons": [reason.value for reason in attribution.unresolved_reasons],
             },
         )
     except Exception as exc:
@@ -465,6 +424,8 @@ def reconcile_paper_execution(
         blocking_count=report.result_summary["blocking_count"],
         recovered_order_count=recovered_order_count,
         blocks_execution=report.result_summary["blocks_execution"],
+        unresolved_reasons=tuple(report.result_summary["unresolved_reasons"]),
+        attribution=report.result_summary["attribution"],
         findings=tuple(
             ReconciliationFinding(
                 event_type=finding["event_type"],
@@ -489,6 +450,172 @@ def reconcile_paper_execution(
         recovered_order_count=reconciliation_report.recovered_order_count,
     )
     return reconciliation_report
+
+
+def _reconcile_against_broker_state(
+    session,
+    strategy_metadata,
+    broker_state: BrokerStateSnapshot,
+    *,
+    run_id: uuid.UUID,
+    checked_at: datetime,
+    platform_prefix: str,
+    failure_threshold: int,
+) -> tuple[tuple[Finding, ...], AttributionResult, dict[str, Any], list[dict[str, Any]]]:
+    """Classify broker activity, match the strategy's own scope and persist finding events.
+
+    Attribution sees ALL strategies' intents (D-07). Broker orders and fills cleanly owned
+    by ANOTHER strategy, and recorded-external ones, are explained: they are removed from
+    the matcher input together with their net exposure. Everything else matches exactly
+    as before, and the attribution result is OR-ed into ``blocks_execution`` by the caller.
+    """
+
+    strategy_record = ensure_strategy_record(session, strategy_metadata)
+    local_orders = (
+        session.execute(
+            select(PaperOrder)
+            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+            .where(StrategyRun.strategy_id == strategy_record.id)
+            .order_by(PaperOrder.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
+    local_fills = (
+        session.execute(
+            select(PaperFill)
+            .join(PaperOrder, PaperOrder.id == PaperFill.paper_order_id)
+            .join(StrategyRun, StrategyRun.id == PaperOrder.strategy_run_id)
+            .where(StrategyRun.strategy_id == strategy_record.id)
+            .order_by(PaperFill.filled_at.asc())
+        )
+        .scalars()
+        .all()
+    )
+    local_positions = (
+        session.execute(
+            select(Position)
+            .where(
+                Position.strategy_id == strategy_record.id,
+                Position.status == "open",
+            )
+            .order_by(Position.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
+    # D-27: the baseline is the latest BROKER-OBSERVED account snapshot
+    # (account-wide; risk_evaluation/seed/derived rows are excluded).
+    latest_snapshot = latest_broker_observed_account_snapshot(session)
+
+    # D-07: evidence-based attribution over the whole account's history.
+    attribution = classify_broker_activity(
+        broker_orders=broker_state.orders,
+        broker_fills=broker_state.fills,
+        broker_positions=broker_state.positions,
+        local_intents=load_local_intent_records(session),
+        ownership_periods=load_ownership_periods(session),
+        recorded_external_order_ids=load_recorded_external_order_ids(session),
+        platform_prefix=platform_prefix,
+    )
+    excluded_order_ids = attribution.excluded_order_ids_for(strategy_record.strategy_id)
+    matcher_orders, matcher_fills, matcher_positions = _matcher_scope(
+        broker_state, excluded_order_ids
+    )
+
+    # READ-ONLY projection boundary (RECON-03/05): ORM rows are projected into
+    # the typed 09-01 snapshots here; no ORM instance crosses this boundary into
+    # the pure matcher or the account/threshold evaluations below.
+    local_order_snapshots = [_project_local_order(order) for order in local_orders]
+    local_fill_snapshots = [_project_local_fill(fill) for fill in local_fills]
+    local_position_snapshots = [_project_local_position(position) for position in local_positions]
+    local_account_snapshot = (
+        _project_local_account(latest_snapshot) if latest_snapshot is not None else None
+    )
+
+    findings = match_snapshots(
+        local_orders=local_order_snapshots,
+        local_fills=local_fill_snapshots,
+        local_positions=local_position_snapshots,
+        broker_orders=matcher_orders,
+        broker_fills=matcher_fills,
+        broker_positions=matcher_positions,
+    )
+    # increment moved to corrective path (09-04): reconcile no longer writes
+    # PaperOrder.sync_failure_count / last_sync_error / last_sync_failure_at.
+
+    # The account is a single shared book: divergence stays account-wide.
+    account_divergence = _evaluate_account_divergence(
+        latest_snapshot=local_account_snapshot,
+        broker_account=broker_state.account,
+        broker_positions=broker_state.positions,
+        local_positions_present=bool(local_positions),
+    )
+    threshold_breach = _evaluate_threshold_breach(
+        local_orders=local_orders,
+        findings=findings,
+        failure_threshold=failure_threshold,
+    )
+
+    session.add_all(
+        [
+            ExecutionEvent(
+                strategy_run_id=run_id,
+                paper_order_id=(
+                    uuid.UUID(event_dict["paper_order_id"])
+                    if event_dict["paper_order_id"]
+                    else None
+                ),
+                event_type=event_dict["event_type"],
+                severity=event_dict["severity"],
+                blocks_execution=event_dict["blocks_execution"],
+                event_at=checked_at,
+                message=event_dict["message"],
+                details=event_dict["details"],
+            )
+            for event_dict in (_finding_event_dict(finding) for finding in findings)
+        ]
+    )
+    return findings, attribution, account_divergence, threshold_breach
+
+
+def _matcher_scope(
+    broker_state: BrokerStateSnapshot,
+    excluded_order_ids: frozenset[str],
+) -> tuple[list[BrokerOrderSnapshot], list[BrokerFillSnapshot], list[BrokerPositionSnapshot]]:
+    """Broker orders, fills and positions with explained foreign activity removed.
+
+    With nothing excluded (the single-owner case) the inputs are passed through
+    unchanged. Otherwise the net signed quantity of the excluded fills is subtracted
+    from the matching broker positions (a position that nets to zero is dropped) so a
+    prior owner's exposure is not reported as untracked by the new owner. Exposure the
+    excluded fills do not explain stays visible to the matcher.
+    """
+
+    if not excluded_order_ids:
+        return (
+            list(broker_state.orders),
+            list(broker_state.fills),
+            list(broker_state.positions),
+        )
+
+    orders = [o for o in broker_state.orders if o.broker_order_id not in excluded_order_ids]
+    fills = [f for f in broker_state.fills if f.broker_order_id not in excluded_order_ids]
+    excluded_net: dict[str, Decimal] = {}
+    for fill in broker_state.fills:
+        if fill.broker_order_id in excluded_order_ids:
+            signed = fill.quantity if fill.side == OrderSide.BUY else -fill.quantity
+            excluded_net[fill.symbol] = excluded_net.get(fill.symbol, Decimal("0")) + signed
+
+    positions: list[BrokerPositionSnapshot] = []
+    for position in broker_state.positions:
+        remaining = position.quantity - excluded_net.get(position.symbol, Decimal("0"))
+        if abs(remaining) <= QUANTITY_TOLERANCE:
+            continue
+        positions.append(
+            position if remaining == position.quantity else replace(position, quantity=remaining)
+        )
+    return orders, fills, positions
 
 
 def _project_local_order(order: PaperOrder) -> LocalOrderSnapshot:

@@ -222,6 +222,7 @@ def _seed_existing_execution_state(
         )
         paper_order = PaperOrder(
             strategy_run_id=execution_run.id,
+            created_at=datetime(2024, 1, 5, 14, 30, tzinfo=UTC),
             source_risk_event_id=risk_event.id,
             symbol_id=symbol.id,
             intended_session_date=session_date,
@@ -441,6 +442,8 @@ def test_reconciliation_persists_clean_event_and_resets_sync_failures(
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
                     raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[
@@ -740,6 +743,8 @@ def test_reconciliation_clean_run_emits_empty_report(
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
                     raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[
@@ -832,6 +837,8 @@ def test_reconciliation_blocks_when_account_snapshot_missing_with_positions(
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 40, tzinfo=UTC),
                     raw_payload={"id": "existing-aapl-001", "status": "filled"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[
@@ -988,6 +995,7 @@ def test_reconciliation_prefers_client_order_id_when_version_chain_exists(
         session.add(
             PaperOrder(
                 strategy_run_id=followup_execution_run.id,
+                created_at=datetime(2024, 1, 5, 14, 30, tzinfo=UTC),
                 source_risk_event_id=followup_risk_event.id,
                 symbol_id=predecessor.symbol_id,
                 intended_session_date=date(2024, 1, 5),
@@ -1032,6 +1040,8 @@ def test_reconciliation_prefers_client_order_id_when_version_chain_exists(
                     canceled_at=None,
                     updated_at=datetime(2024, 1, 5, 14, 45, tzinfo=UTC),
                     raw_payload={"id": "shared-broker-id", "status": "new"},
+                    created_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
+                    order_type="market",
                 )
             ],
             fills=[],
