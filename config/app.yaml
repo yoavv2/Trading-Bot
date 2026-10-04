@@ -65,6 +65,8 @@ backtest:
     bps: 5.0
   calendar:
     exchange: XNYS
+    coverage_horizon_sessions: 60
+    runway_low_sessions: 10
   metadata:
     provider: polygon
     universe:
@@ -99,6 +101,8 @@ execution:
   default_order_type: market
   default_time_in_force: day
   client_order_id_prefix: tp
+  execution_policy: regular_hours_prev_session_v1
+  execution_window_cutoff_minutes: 15
   safety:
     repeated_failure_threshold: 3
     block_on_unresolved_reconciliation: true

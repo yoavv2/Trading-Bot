@@ -75,6 +75,79 @@ def is_trading_session(session_date: date, exchange: str = _DEFAULT_EXCHANGE) ->
 
 
 # ---------------------------------------------------------------------------
+# Library-bound navigation (COR-04): read surface for the calendar facts
+# ---------------------------------------------------------------------------
+
+
+class CalendarOutOfBoundsError(Exception):
+    """A calendar lookup fell outside the exchange_calendars library window.
+
+    The library only knows a rolling window of sessions; a date beyond it
+    raises ``DateOutOfBounds`` (a ``ValueError``) or ``OverflowError``. This
+    typed error lets callers map that to an explicit ``unknown`` instead of an
+    untyped crash.
+    """
+
+
+def previous_session_date(as_of: date, exchange: str = _DEFAULT_EXCHANGE) -> date:
+    """Return the latest session strictly before *as_of* (calendar read surface).
+
+    Works for session and non-session dates. Raises ``CalendarOutOfBoundsError``
+    when the library cannot answer.
+    """
+
+    cal = get_calendar(exchange)
+    ts = pd.Timestamp(as_of)
+    try:
+        if cal.is_session(ts):
+            return cal.previous_session(ts).date()
+        return cal.date_to_session(ts, direction="previous").date()
+    except (ValueError, OverflowError) as exc:
+        raise CalendarOutOfBoundsError(str(exc)) from exc
+
+
+def next_session_date(as_of: date, exchange: str = _DEFAULT_EXCHANGE) -> date:
+    """Return the earliest session strictly after *as_of* (calendar read surface)."""
+
+    cal = get_calendar(exchange)
+    ts = pd.Timestamp(as_of)
+    try:
+        if cal.is_session(ts):
+            return cal.next_session(ts).date()
+        return cal.date_to_session(ts, direction="next").date()
+    except (ValueError, OverflowError) as exc:
+        raise CalendarOutOfBoundsError(str(exc)) from exc
+
+
+def calendar_horizon_end(
+    settings: Settings,
+    today: date,
+    *,
+    minimum_sessions: int = 0,
+) -> date:
+    """Date of the N-th session strictly after *today*, N = the configured
+    coverage horizon (``max(N, minimum_sessions)``), clipped to the library's
+    last session. Raises ``CalendarOutOfBoundsError`` when *today* itself is
+    outside the library window (read surface for the calendar facts, D-24)."""
+
+    exchange = settings.market_data.calendar.exchange
+    count = max(settings.market_data.calendar.coverage_horizon_sessions, minimum_sessions)
+    cal = get_calendar(exchange)
+    try:
+        last_session: date = cal.last_session.date()
+        current = next_session_date(today, exchange)
+        if current > last_session:
+            raise CalendarOutOfBoundsError(f"no session after {today.isoformat()} in the library window")
+        ts = pd.Timestamp(current)
+        try:
+            return cal.session_offset(ts, count - 1).date()
+        except (ValueError, OverflowError):
+            return last_session
+    except (ValueError, OverflowError) as exc:
+        raise CalendarOutOfBoundsError(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # Session persistence helpers
 # ---------------------------------------------------------------------------
 

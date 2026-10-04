@@ -185,3 +185,50 @@ def test_fully_valid_paper_payload_returns_settings() -> None:
 
     assert isinstance(settings, Settings)
     assert settings.broker.alpaca.api_key == "key"
+
+
+# --- COR-04: calendar coverage and named execution policy (D-23, D-24) ----------
+
+
+def test_calendar_and_execution_policy_defaults_are_visible_in_yaml() -> None:
+    settings = Settings.model_validate(_raw_payload())
+
+    assert settings.market_data.calendar.coverage_horizon_sessions == 60
+    assert settings.market_data.calendar.runway_low_sessions == 10
+    assert settings.execution.execution_policy == "regular_hours_prev_session_v1"
+    assert settings.execution.execution_window_cutoff_minutes == 15
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        ("calendar", "coverage_horizon_sessions", 0),
+        ("calendar", "runway_low_sessions", 0),
+        ("execution", "execution_window_cutoff_minutes", -1),
+        ("execution", "execution_window_cutoff_minutes", 121),
+        ("execution", "execution_policy", "some_other_policy"),
+    ],
+)
+def test_out_of_range_calendar_and_policy_settings_are_rejected(
+    section: str, key: str, value: Any
+) -> None:
+    payload = _raw_payload()
+    if section == "calendar":
+        payload["market_data"]["calendar"][key] = value
+        expected_field = f"market_data.calendar.{key}"
+    else:
+        payload["execution"][key] = value
+        expected_field = f"execution.{key}"
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        validate_config(payload, mode=ExecutionMode.BACKTEST)
+
+    assert expected_field in [field for field, _ in exc_info.value.failures]
+
+
+def test_cutoff_bounds_are_inclusive() -> None:
+    for minutes in (0, 120):
+        payload = _raw_payload()
+        payload["execution"]["execution_window_cutoff_minutes"] = minutes
+        settings = validate_config(payload, mode=ExecutionMode.BACKTEST)
+        assert settings.execution.execution_window_cutoff_minutes == minutes

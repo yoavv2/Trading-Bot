@@ -55,6 +55,24 @@ class SessionBar:
 
 
 @dataclass(frozen=True)
+class PersistedSessionRow:
+    """Persisted open/close facts of one session (COR-04 calendar-facts read surface)."""
+
+    session_date: date
+    market_open: datetime | None
+    market_close: datetime | None
+    early_close: bool
+
+
+@dataclass(frozen=True)
+class PersistedSessionsAfter:
+    """Count and last date of persisted sessions strictly after a date."""
+
+    count: int
+    last_session: date | None
+
+
+@dataclass(frozen=True)
 class MissingSessionInfo:
     """A session for which expected bar data is absent."""
 
@@ -322,3 +340,90 @@ def missing_sessions_for_symbol(
         for ms in persisted
         if ms.session_date not in covered
     ]
+
+
+# ---------------------------------------------------------------------------
+# Read surface for the calendar facts (COR-04, services/calendar_facts.py).
+# Evaluation-input recording (20.1-06) records reads made through these.
+# ---------------------------------------------------------------------------
+
+
+def persisted_session_row(
+    session: Session,
+    session_date: date,
+    exchange: str = _DEFAULT_EXCHANGE,
+) -> PersistedSessionRow | None:
+    """Return the persisted open/close/early-close of one session, or ``None``.
+
+    Read surface for the calendar facts: one statement.
+    """
+
+    row = session.execute(
+        select(
+            MarketSession.session_date,
+            MarketSession.market_open,
+            MarketSession.market_close,
+            MarketSession.early_close,
+        )
+        .where(MarketSession.exchange == exchange)
+        .where(MarketSession.session_date == session_date)
+    ).one_or_none()
+    if row is None:
+        return None
+    return PersistedSessionRow(
+        session_date=row.session_date,
+        market_open=row.market_open,
+        market_close=row.market_close,
+        early_close=row.early_close,
+    )
+
+
+def persisted_sessions_after(
+    session: Session,
+    session_date: date,
+    exchange: str = _DEFAULT_EXCHANGE,
+    limit: int | None = None,
+) -> PersistedSessionsAfter:
+    """Count (optionally capped at *limit*) and last persisted session strictly
+    after *session_date*. Read surface for the calendar runway: one statement."""
+
+    base = (
+        select(MarketSession.session_date)
+        .where(MarketSession.exchange == exchange)
+        .where(MarketSession.session_date > session_date)
+    )
+    if limit is not None:
+        base = base.order_by(MarketSession.session_date.asc()).limit(limit)
+    sub = base.subquery()
+    row = session.execute(
+        select(func.count(sub.c.session_date), func.max(sub.c.session_date))
+    ).one()
+    return PersistedSessionsAfter(count=int(row[0]), last_session=row[1])
+
+
+def bar_counts_through_session(
+    session: Session,
+    symbols: list[str] | tuple[str, ...],
+    session_date: date,
+    adjusted: bool = True,
+    provider: str = "polygon",
+) -> dict[str, int]:
+    """Bars on or before *session_date* per requested symbol, ONE GROUP BY
+    statement for any number of symbols. Symbols with no bars map to ``0``.
+
+    Read surface for the evaluation-session history rule (warm-up).
+    """
+
+    if not symbols:
+        return {}
+    rows = session.execute(
+        select(Symbol.ticker, func.count(DailyBarModel.id))
+        .join(DailyBarModel, DailyBarModel.symbol_id == Symbol.id)
+        .where(Symbol.ticker.in_(list(symbols)))
+        .where(DailyBarModel.session_date <= session_date)
+        .where(DailyBarModel.adjusted == adjusted)
+        .where(DailyBarModel.provider == provider)
+        .group_by(Symbol.ticker)
+    ).all()
+    counts = {ticker: int(count) for ticker, count in rows}
+    return {symbol: counts.get(symbol, 0) for symbol in symbols}

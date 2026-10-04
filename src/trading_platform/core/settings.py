@@ -222,9 +222,17 @@ class IngestSettings(BaseModel):
 
 
 class CalendarSettings(BaseModel):
-    """Settings for the exchange calendar service."""
+    """Settings for the exchange calendar service.
+
+    ``coverage_horizon_sessions`` bounds how far ahead ``sync-market-sessions``
+    may persist sessions (D-24) and ``runway_low_sessions`` is the threshold
+    below which the calendar runway (persisted sessions after today) is
+    reported low. Both are tested configurable constants (COR-04).
+    """
 
     exchange: str = "XNYS"
+    coverage_horizon_sessions: int = Field(default=60, ge=1)
+    runway_low_sessions: int = Field(default=10, ge=1)
 
 
 class MetadataRefreshSettings(BaseModel):
@@ -345,6 +353,12 @@ class ExecutionSettings(BaseModel):
     default_order_type: Literal["market"] = "market"
     default_time_in_force: Literal["day"] = "day"
     client_order_id_prefix: str = Field(default="tp", min_length=2, max_length=12)
+    # D-23/G-2: the execution policy is a named, versioned SETTING, not a
+    # platform invariant. ``regular_hours_prev_session_v1`` = regular hours of
+    # next_session(S) from the open until ``execution_window_cutoff_minutes``
+    # before the close.
+    execution_policy: Literal["regular_hours_prev_session_v1"] = "regular_hours_prev_session_v1"
+    execution_window_cutoff_minutes: int = Field(default=15, ge=0, le=120)
     paper_session_runner: PaperSessionRunnerSettings = PaperSessionRunnerSettings()
     safety: ExecutionSafetySettings = ExecutionSafetySettings()
 
