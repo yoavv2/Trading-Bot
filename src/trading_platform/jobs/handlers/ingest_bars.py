@@ -19,6 +19,7 @@ from typing import Any
 
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.jobs.contracts import JobContext
+from trading_platform.services.batch_outcomes import outcome_from_ingestion_run_status
 from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.ingestion import ingest_daily_bars
 
@@ -103,4 +104,6 @@ class IngestBarsJobHandler:
             "bars_upserted": result.bars_upserted,
             "symbols_failed": result.symbols_failed,
             "ingestion_succeeded": result.succeeded,
+            # D-28/COR-03: closed outcome derived from the domain run status.
+            "outcome": outcome_from_ingestion_run_status(result.run_status).value,
         }

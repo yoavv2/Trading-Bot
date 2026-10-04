@@ -414,7 +414,18 @@ def test_partial_result_returns_summary_without_raising(
 
     assert summary["ingestion_succeeded"] is False
     assert summary["symbols_failed"] == ["SPY"]
+    assert summary["outcome"] == "partial"
     assert context.log_calls[-1]["context"]["run_status"] == "partial"
+
+
+def test_clean_run_summary_outcome_is_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+    import trading_platform.jobs.handlers.ingest_bars as ingest_bars_module
+
+    monkeypatch.setattr(ingest_bars_module, "ingest_daily_bars", lambda **kwargs: _fake_result())
+
+    summary = IngestBarsJobHandler().run(_FakeContext())
+
+    assert summary["outcome"] == "complete"
 
 
 def test_handler_passes_job_id_trigger_source_db_settings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -460,6 +471,8 @@ def test_result_summary_carries_expected_keys(monkeypatch: pytest.MonkeyPatch) -
         "bars_upserted": result.bars_upserted,
         "symbols_failed": result.symbols_failed,
         "ingestion_succeeded": result.succeeded,
+        # D-28/COR-03: additive closed outcome derived from the run status.
+        "outcome": "complete",
     }
     json.dumps(summary)
 

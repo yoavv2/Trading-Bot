@@ -205,6 +205,7 @@ def test_ingest_bars_job_links_ingestion_run(market_jobs_env: None) -> None:
     assert detail["result_summary"]["ingestion_succeeded"] is True
     assert detail["result_summary"]["bars_upserted"] == 4
     assert detail["result_summary"]["symbols_failed"] == []
+    assert detail["outcome"] == "complete"
 
     with session_scope(load_settings()) as session:
         runs = session.execute(select(MarketDataIngestionRun)).scalars().all()
@@ -239,6 +240,8 @@ def test_ingest_bars_all_symbols_failed_fails_job(
         detail = _submit_and_run(client, "e2e-ingest-allfail", "ingest-bars", INGEST_PAYLOAD)
 
         assert detail["status"] == "failed"
+        # COR-03: an all-symbols-failed Job reads outcome `failed`.
+        assert detail["outcome"] == "failed"
         assert detail["failure_reason"] == "handler_error"
         assert detail["outcome_uncertain"] is False
         assert len(detail["resources"]) == 1
@@ -277,6 +280,9 @@ def test_ingest_bars_one_ok_one_fail_stays_succeeded(
 
     assert detail["status"] == "succeeded", detail["failure_message"]
     assert detail["failure_reason"] is None
+    # COR-03: a partial run is never read as plain success.
+    assert detail["outcome"] == "partial"
+    assert detail["result_summary"]["outcome"] == "partial"
     assert detail["resources"][0]["status"] == "partial"
     assert detail["result_summary"]["symbols_failed"] == ["SPY"]
     assert detail["result_summary"]["ingestion_succeeded"] is False

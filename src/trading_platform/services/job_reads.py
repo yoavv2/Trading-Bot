@@ -37,6 +37,7 @@ from trading_platform.db.models import (
     StrategyRun,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services.batch_outcomes import derive_job_outcome
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -179,6 +180,7 @@ class JobReadService:
                 "id": str(job.id),
                 "job_type": job.job_type,
                 "status": job.status.value,
+                "outcome": _job_outcome(job),
                 "queued_at": _dt(job.queued_at),
                 "started_at": _dt(job.started_at),
                 "completed_at": _dt(job.completed_at),
@@ -335,6 +337,7 @@ def _serialize_job_summary(job: Job) -> dict[str, Any]:
         "id": str(job.id),
         "job_type": job.job_type,
         "status": job.status.value,
+        "outcome": _job_outcome(job),
         "queued_at": _dt(job.queued_at),
         "started_at": _dt(job.started_at),
         "completed_at": _dt(job.completed_at),
@@ -343,6 +346,13 @@ def _serialize_job_summary(job: Job) -> dict[str, Any]:
         "cancellation_requested_at": _dt(job.cancellation_requested_at),
         "progress": _serialize_progress(job),
     }
+
+
+def _job_outcome(job: Job) -> str | None:
+    """Additive COR-03 batch outcome (derived, never a Job column)."""
+
+    outcome = derive_job_outcome(job.job_type, job.status, job.result_summary)
+    return outcome.value if outcome is not None else None
 
 
 def _serialize_progress(job: Job) -> dict[str, Any]:
