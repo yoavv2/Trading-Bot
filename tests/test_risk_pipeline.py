@@ -35,12 +35,19 @@ from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import clear_engine_cache, session_scope
 from trading_platform.services import risk as risk_module
 from trading_platform.services.calendar import upsert_market_sessions
+from trading_platform.services.evaluation_manifest import (
+    EvaluationManifest,
+    ManifestRequestKind,
+    ManifestVerificationStatus,
+)
 from trading_platform.services.portfolio import PortfolioState, PositionSnapshot
 from trading_platform.services.risk import (
     PortfolioRiskService,
     RiskDecisionCode,
     RiskEvaluationRequest,
+    latest_eligible_risk_run_id,
     run_risk_evaluation,
+    verify_risk_run_manifest,
 )
 from trading_platform.strategies.signals import (
     IndicatorSnapshot,
@@ -628,3 +635,155 @@ def test_run_risk_evaluation_source_does_not_write_account_snapshots() -> None:
     source = inspect.getsource(run_risk_evaluation)
     assert "record_snapshot" not in source
     assert "AccountSnapshot" not in source
+
+
+# ---------------------------------------------------------------------------
+# Evaluation input manifest (PROV-01, D-25, 20.1-06)
+# ---------------------------------------------------------------------------
+
+
+def _ten_symbol_settings() -> tuple[Settings, list[str]]:
+    tickers = [f"T{index:02d}" for index in range(10)]
+    settings = _test_settings()
+    settings.strategies.trend_following_daily.universe = tuple(tickers)
+    return settings, tickers
+
+
+def _seed_three_sessions(settings: Settings, tickers: list[str]) -> None:
+    with session_scope(settings) as session:
+        upsert_market_sessions(session, date(2024, 1, 3), date(2024, 1, 5))
+        for ticker in tickers:
+            for day, close in ((3, "100"), (4, "101"), (5, "102")):
+                _seed_symbol_and_bar(session, ticker=ticker, session_date=date(2024, 1, day), close=close)
+
+
+def test_run_risk_evaluation_stores_a_manifest_that_verifies(
+    migrated_risk_db: str,
+    strategy_config_override: None,
+) -> None:
+    settings, tickers = _ten_symbol_settings()
+    _seed_three_sessions(settings, tickers)
+
+    report = run_risk_evaluation(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        trigger_source="test_suite",
+        settings=settings,
+    )
+
+    manifest = EvaluationManifest.from_dict(report.result_summary["evaluation_manifest"])
+    window_requests = [r for r in manifest.requests if r.kind is ManifestRequestKind.BARS_FOR_SESSIONS]
+    assert sorted(r.params["symbol"] for r in window_requests) == tickers  # one per universe symbol
+    assert {r.params["n_sessions"] for r in window_requests} == {3}  # the strategy warm-up
+    assert {r.params["as_of"] for r in window_requests} == {"2024-01-05"}
+    kinds = {r.kind for r in manifest.requests}
+    assert {
+        ManifestRequestKind.LATEST_COMPLETED_SESSION,
+        ManifestRequestKind.PERSISTED_SESSION_DATES,
+        ManifestRequestKind.MISSING_BARS_FOR_SESSION,
+    } <= kinds
+    # existing summary keys are untouched (additive key only)
+    assert report.result_summary["decision_count"] == 10
+    assert "portfolio_basis" in report.result_summary
+
+    verification = verify_risk_run_manifest(
+        risk_run_id=uuid.UUID(report.run_id),
+        strategy_id="trend_following_daily",
+        settings=settings,
+    )
+    assert verification.status is ManifestVerificationStatus.MATCHES
+    assert (
+        latest_eligible_risk_run_id(
+            strategy_id="trend_following_daily", as_of_session=date(2024, 1, 5), settings=settings
+        )
+        == uuid.UUID(report.run_id)
+    )
+
+
+def test_manifest_records_empty_results_for_absent_symbol(
+    migrated_risk_db: str,
+    strategy_config_override: None,
+) -> None:
+    settings, tickers = _ten_symbol_settings()
+    _seed_three_sessions(settings, tickers[:-1])  # the last universe symbol has no bars at all
+    absent = tickers[-1]
+
+    report = run_risk_evaluation(
+        "trend_following_daily", as_of_session=date(2024, 1, 5), trigger_source="test_suite", settings=settings
+    )
+
+    manifest = EvaluationManifest.from_dict(report.result_summary["evaluation_manifest"])
+    empty = [
+        r
+        for r in manifest.requests
+        if r.kind is ManifestRequestKind.BARS_FOR_SESSIONS and r.params["symbol"] == absent
+    ]
+    assert len(empty) == 1 and empty[0].count == 0
+    run_id = uuid.UUID(report.run_id)
+    assert (
+        verify_risk_run_manifest(risk_run_id=run_id, strategy_id="trend_following_daily", settings=settings).status
+        is ManifestVerificationStatus.MATCHES
+    )
+
+    # the 29 Sep shape: the absent symbol is ingested after the evaluation
+    with session_scope(settings) as session:
+        for day, close in ((3, "100"), (4, "101"), (5, "102")):
+            _seed_symbol_and_bar(session, ticker=absent, session_date=date(2024, 1, day), close=close)
+    assert (
+        verify_risk_run_manifest(risk_run_id=run_id, strategy_id="trend_following_daily", settings=settings).status
+        is ManifestVerificationStatus.EVALUATION_DATA_CHANGED
+    )
+
+
+def test_run_without_manifest_verifies_as_manifest_missing(
+    migrated_risk_db: str,
+    strategy_config_override: None,
+) -> None:
+    settings, tickers = _ten_symbol_settings()
+    _seed_three_sessions(settings, tickers)
+    report = run_risk_evaluation(
+        "trend_following_daily", as_of_session=date(2024, 1, 5), trigger_source="test_suite", settings=settings
+    )
+    with session_scope(settings) as session:
+        run = session.get(StrategyRun, uuid.UUID(report.run_id))
+        summary = dict(run.result_summary)
+        summary.pop("evaluation_manifest")
+        run.result_summary = summary
+
+    result = verify_risk_run_manifest(
+        risk_run_id=uuid.UUID(report.run_id), strategy_id="trend_following_daily", settings=settings
+    )
+
+    assert result.status is ManifestVerificationStatus.MANIFEST_MISSING
+
+
+def test_failed_evaluation_summary_has_no_manifest_key_change(
+    migrated_risk_db: str,
+    strategy_config_override: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trading_platform.services import read_recording
+
+    settings, tickers = _ten_symbol_settings()
+    _seed_three_sessions(settings, tickers)
+
+    def _boom(self, payload):  # noqa: ANN001
+        raise RuntimeError("validation exploded")
+
+    monkeypatch.setattr(PortfolioRiskService, "validate", _boom)
+    with pytest.raises(RuntimeError, match="validation exploded"):
+        run_risk_evaluation(
+            "trend_following_daily", as_of_session=date(2024, 1, 5), trigger_source="test_suite", settings=settings
+        )
+
+    with session_scope(settings) as session:
+        run = session.execute(
+            select(StrategyRun).where(StrategyRun.status == StrategyRunStatus.FAILED)
+        ).scalar_one()
+        summary = run.result_summary
+    assert summary == {
+        "stage": "failed",
+        "strategy_id": "trend_following_daily",
+        "as_of_session": "2024-01-05",
+    }
+    assert read_recording.active_recorder() is None  # the recording context was released
