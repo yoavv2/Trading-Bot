@@ -20,6 +20,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from trading_platform.core import clock
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
     AccountSnapshot,
@@ -27,10 +28,12 @@ from trading_platform.db.models import (
     PaperOrder,
     Position,
     StrategyRun,
+    UnresolvedReason,
 )
 from trading_platform.db.session import session_scope
 from trading_platform.services.alpaca import (
     AlpacaClient,
+    AlpacaPaginationCapExceededError,
     BrokerAccountSnapshot,
     BrokerFillSnapshot,
     BrokerOrderSnapshot,
@@ -49,6 +52,10 @@ from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
     apply_order_transition,
     resolve_transition_target,
+)
+from trading_platform.services.recovery import (
+    assess_unestablished_intents,
+    record_scan_failure_for_unestablished,
 )
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
@@ -75,7 +82,7 @@ def sync_paper_state(
     client = broker_client or AlpacaClient(resolved_settings.broker.alpaca)
 
     try:
-        broker_orders = client.list_orders()
+        broker_orders = _list_broker_orders(client, resolved_settings, resolved_strategy_id)
         broker_fills = client.list_fills()
         broker_positions = client.list_positions()
         broker_account = client.get_account()
@@ -112,6 +119,24 @@ def sync_paper_state(
                 session,
                 broker_fills,
                 local_orders_by_broker_id=local_orders_by_broker_id,
+            )
+            # REC-01: evidence for this strategy's unestablished (ambiguous) intents is
+            # collected inside the sync pass, never in a read; it resolves nothing by itself.
+            assess_unestablished_intents(
+                session,
+                broker_client=client,
+                broker_orders=broker_orders,
+                broker_fills=broker_fills,
+                broker_positions=broker_positions,
+                apply_broker_order=_applier(
+                    session,
+                    local_orders_by_broker_id,
+                    local_orders_by_client_id,
+                    synced_at,
+                    applied_orders,
+                ),
+                strategy_public_id=resolved_strategy_id,
+                now=clock.now_utc(),
             )
             # The derivation reads PaperFill rows, including those just ingested.
             session.flush()
@@ -169,7 +194,7 @@ def sync_account_state(
     client = broker_client or AlpacaClient(resolved_settings.broker.alpaca)
 
     try:
-        broker_orders = client.list_orders()
+        broker_orders = _list_broker_orders(client, resolved_settings, None)
         broker_fills = client.list_fills()
         broker_positions = client.list_positions()
         broker_account = client.get_account()
@@ -201,6 +226,23 @@ def sync_account_state(
                 broker_fills,
                 local_orders_by_broker_id=local_orders_by_broker_id,
             )
+            # REC-01: account-level evidence for every strategy's unestablished intents.
+            assess_unestablished_intents(
+                session,
+                broker_client=client,
+                broker_orders=broker_orders,
+                broker_fills=broker_fills,
+                broker_positions=broker_positions,
+                apply_broker_order=_applier(
+                    session,
+                    local_orders_by_broker_id,
+                    local_orders_by_client_id,
+                    synced_at,
+                    applied_orders,
+                ),
+                strategy_public_id=None,
+                now=clock.now_utc(),
+            )
             snapshot = _record_broker_account_snapshot(
                 session,
                 None,
@@ -221,6 +263,49 @@ def sync_account_state(
     finally:
         if owns_broker_client:
             client.close()
+
+
+def _list_broker_orders(
+    client: AlpacaClient, settings: Settings, strategy_public_id: str | None
+) -> list[BrokerOrderSnapshot]:
+    """The complete ``status=all`` listing; a page-cap overflow is recorded as evidence.
+
+    A capped listing cannot show whether an ambiguous order exists at the broker, so every
+    unestablished intent in scope is recorded ``unresolved(page_cap_reached)`` (in its own
+    committed transaction) before the typed error propagates and fails the sync.
+    """
+
+    try:
+        return client.list_orders()
+    except AlpacaPaginationCapExceededError:
+        with session_scope(settings) as session:
+            record_scan_failure_for_unestablished(
+                session, UnresolvedReason.PAGE_CAP_REACHED, strategy_public_id=strategy_public_id
+            )
+        raise
+
+
+def _applier(
+    session,
+    local_orders_by_broker_id: dict[str, PaperOrder],
+    local_orders_by_client_id: dict[str, PaperOrder],
+    synced_at: datetime,
+    applied: list[dict[str, str | None]],
+):
+    """Callback applying ONE looked-up broker order through the normal legal-transition sync."""
+
+    def apply(snapshot: BrokerOrderSnapshot, order: PaperOrder) -> None:
+        local_orders_by_client_id.setdefault(order.client_order_id, order)
+        _sync_paper_orders(
+            session,
+            [snapshot],
+            local_orders_by_broker_id=local_orders_by_broker_id,
+            local_orders_by_client_id=local_orders_by_client_id,
+            synced_at=synced_at,
+            applied=applied,
+        )
+
+    return apply
 
 
 def _sync_paper_orders(

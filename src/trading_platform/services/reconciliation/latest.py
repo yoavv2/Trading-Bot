@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from trading_platform.db.models import (
@@ -80,7 +80,9 @@ def latest_account_reconciliation_run(session: Session) -> AccountReconciliation
     ).scalar_one_or_none()
 
 
-def latest_broker_effect_at(session: Session) -> datetime | None:
+def latest_broker_effect_at(
+    session: Session, strategy_public_id: str | None = None
+) -> datetime | None:
     """Newest moment a broker-touching action last changed local state (A6 boundary).
 
     The newest of: ``completed_at`` of paper-session / broker-order-sync Jobs, and the
@@ -89,14 +91,20 @@ def latest_broker_effect_at(session: Session) -> datetime | None:
     handler runs its own fresh account reconciliation before the Job completes, so the
     Job's ``completed_at`` always postdates that fresh check and would make it
     non-qualifying. ``None`` when neither exists. Two statements, read-only.
+
+    ``strategy_public_id`` (20.1-10) narrows the Job side to that strategy's Jobs PLUS
+    every account-level Job (no ``strategy_id`` in the payload); recordings always count
+    (they are account-wide). ``None`` keeps the all-Jobs behaviour.
     """
 
     job_types = STATE_CHANGING_BROKER_JOB_TYPES - {RECORD_EXTERNAL_ACTIVITY_JOB_TYPE}
-    job_time = session.execute(
-        select(func.max(Job.completed_at)).where(
-            Job.job_type.in_(sorted(job_types)), Job.completed_at.is_not(None)
-        )
-    ).scalar_one_or_none()
+    job_stmt = select(func.max(Job.completed_at)).where(
+        Job.job_type.in_(sorted(job_types)), Job.completed_at.is_not(None)
+    )
+    if strategy_public_id is not None:
+        job_strategy = Job.payload["strategy_id"].as_string()
+        job_stmt = job_stmt.where(or_(job_strategy == strategy_public_id, job_strategy.is_(None)))
+    job_time = session.execute(job_stmt).scalar_one_or_none()
     record_time = session.execute(
         select(func.max(ExternalBrokerActivity.created_at))
     ).scalar_one_or_none()

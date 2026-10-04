@@ -719,6 +719,10 @@ _MUTATING_ENTRY_POINTS = {
     "reconcile_account",
     # EXT-01 (20.1-09): audited recording of external broker activity (Job handler only).
     "record_external_orders",
+    # REC-01 (20.1-10): evidence is appended only by broker-sync passes and the statement control.
+    "record_broker_statement",
+    "assess_unestablished_intents",
+    "record_scan_failure_for_unestablished",
     "ingest_daily_bars",
     "sync_symbol_metadata",
     "upsert_symbol_metadata",

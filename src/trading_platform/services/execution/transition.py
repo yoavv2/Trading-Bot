@@ -79,6 +79,10 @@ _LEGAL_TRANSITIONS: dict[
     },
     OrderLifecycleState.UNKNOWN: {
         OrderTransitionEventType.LEGACY_IMPORTED: OrderLifecycleState.UNKNOWN,
+        # REC-01 liveness (20.1-10): recovery returns an UNKNOWN intent whose OWN attempt
+        # history proves it never left the process (pre_connection / deadline_expired only)
+        # to the retryable state. Applied by services/recovery.py for that class ONLY.
+        OrderTransitionEventType.SUBMISSION_FAILED: OrderLifecycleState.SUBMISSION_FAILED,
         OrderTransitionEventType.BROKER_ACKNOWLEDGED: OrderLifecycleState.SUBMITTED,
         OrderTransitionEventType.BROKER_PARTIALLY_FILLED: OrderLifecycleState.PARTIALLY_FILLED,
         OrderTransitionEventType.BROKER_FILLED: OrderLifecycleState.FILLED,

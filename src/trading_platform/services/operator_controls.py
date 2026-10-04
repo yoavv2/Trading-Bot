@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from trading_platform.db.models import (
     ActivePaperStrategy,
     ExecutionEvent,
     KillSwitchState,
+    PaperOrder,
     Strategy,
     StrategyRun,
     StrategyRunStatus,
@@ -40,6 +42,8 @@ from trading_platform.services.active_paper_strategy import (
     ownership_block_from_state,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
+from trading_platform.services.recovery import IntentNotFoundError
+from trading_platform.services.recovery import record_broker_statement as _record_broker_statement
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
 _BLOCKED_REASON_STRATEGY_DISABLED = "strategy_disabled"
@@ -200,6 +204,30 @@ class KillSwitchControlReport:
             "actor": self.actor,
             "state_snapshot": self.state_snapshot,
             "result_summary": self.result_summary,
+        }
+
+
+@dataclass(frozen=True)
+class BrokerStatementControlReport:
+    """Result of the REC-01 broker-statement control (M14); audited evidence only."""
+
+    run_id: str
+    intent_id: str
+    strategy_id: str
+    statement: str
+    changed: bool
+    classification: str
+    actor: str
+    trigger_source: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "intent_id": self.intent_id,
+            "strategy_id": self.strategy_id,
+            "statement": self.statement,
+            "changed": self.changed,
+            "classification": self.classification,
         }
 
 
@@ -555,6 +583,137 @@ class OperatorControlService:
             trigger_source=trigger_source,
         )
         return report
+
+    @_translate_db_errors(ControlWriteError)
+    def record_broker_statement(
+        self,
+        intent_id: uuid.UUID,
+        *,
+        statement: str,
+        reference: str,
+        reason: str,
+        actor: str = "local_operator",
+        trigger_source: str = "api_control",
+    ) -> BrokerStatementControlReport:
+        """Record the broker statement of an ambiguous intent (REC-01 / 05 M14).
+
+        Synchronous, no broker call, audited as an ``operator_control`` run attached to the
+        INTENT'S OWN strategy (resolved through order -> run -> strategy), with one
+        ``recovery_broker_statement_recorded`` ExecutionEvent, in one transaction. The
+        statement is EVIDENCE ONLY (round 5, 2026-10-04): it never resolves the intent and
+        never authorizes a resend. A refusal (unknown intent, not on the missing-order
+        path, conflicting statement, invalid field) raises before anything is committed, so
+        it performs zero writes; an idempotent repeat (``changed`` False) is audited too.
+        """
+
+        with session_scope(self.settings) as session:
+            changed_at = _db_clock_now(session)
+            intent_strategy = self._intent_strategy_public_id(session, intent_id)
+            strategy_record = session.execute(
+                select(Strategy).where(Strategy.strategy_id == intent_strategy)
+            ).scalar_one_or_none()
+            if strategy_record is None:
+                raise ControlStateUnavailableError(
+                    f"Strategy '{intent_strategy}' of intent '{intent_id}' has no row."
+                )
+            strategy_run = StrategyRun(
+                strategy_id=strategy_record.id,
+                run_type=StrategyRunType.OPERATOR_CONTROL,
+                status=StrategyRunStatus.PENDING,
+                trigger_source=trigger_source,
+                parameters_snapshot={
+                    "action": "record_broker_statement",
+                    "actor": actor,
+                    "intent_id": str(intent_id),
+                    "statement": statement,
+                    "reference": reference,
+                    "reason": reason,
+                },
+                result_summary={
+                    "stage": "pending",
+                    "strategy_id": intent_strategy,
+                    "action": "record_broker_statement",
+                },
+            )
+            session.add(strategy_run)
+            session.flush()
+
+            # Raises (and rolls the whole transaction back) on any refusal.
+            result = _record_broker_statement(
+                session, intent_id, statement, reference, reason, actor
+            )
+
+            result_summary = {
+                "stage": "completed",
+                "strategy_id": intent_strategy,
+                "action": "record_broker_statement",
+                "intent_id": str(intent_id),
+                "statement": result.statement.value,
+                "reference": reference.strip(),
+                "reason": reason.strip(),
+                "changed": result.changed,
+                "classification": result.classification.value,
+                "actor": actor,
+                "changed_at": changed_at.isoformat(),
+            }
+            strategy_run.status = StrategyRunStatus.SUCCEEDED
+            strategy_run.completed_at = changed_at
+            strategy_run.result_summary = result_summary
+            session.add(
+                ExecutionEvent(
+                    strategy_run_id=strategy_run.id,
+                    paper_order_id=intent_id,
+                    event_type="recovery_broker_statement_recorded",
+                    severity="info",
+                    blocks_execution=False,
+                    event_at=changed_at,
+                    message=(
+                        f"Broker statement '{result.statement.value}' "
+                        f"{'recorded' if result.changed else 'reaffirmed'} for intent "
+                        f"'{intent_id}'; it is audited evidence only and resolves nothing."
+                    ),
+                    details=result_summary,
+                )
+            )
+            session.flush()
+            report = BrokerStatementControlReport(
+                run_id=str(strategy_run.id),
+                intent_id=str(intent_id),
+                strategy_id=intent_strategy,
+                statement=result.statement.value,
+                changed=result.changed,
+                classification=result.classification.value,
+                actor=actor,
+                trigger_source=trigger_source,
+            )
+
+        emit_structured_log(
+            self._logger,
+            logging.INFO,
+            "recovery_broker_statement_applied",
+            strategy_id=report.strategy_id,
+            run_id=report.run_id,
+            intent_id=report.intent_id,
+            statement=report.statement,
+            actor=actor,
+            changed=report.changed,
+            trigger_source=trigger_source,
+        )
+        return report
+
+    @staticmethod
+    def _intent_strategy_public_id(session: Session, intent_id: uuid.UUID) -> str:
+        """The public id of the strategy that owns an intent (order -> run -> strategy)."""
+
+        public_id = session.execute(
+            select(Strategy.strategy_id)
+            .join(StrategyRun, StrategyRun.strategy_id == Strategy.id)
+            .join(PaperOrder, PaperOrder.strategy_run_id == StrategyRun.id)
+            .where(PaperOrder.id == intent_id)
+        ).scalar_one_or_none()
+        if public_id is None:
+            raise IntentNotFoundError(intent_id)
+        return public_id
 
     def get_kill_switch_state(self) -> KillSwitchStateSnapshot:
         """Thin wrapper over the shared gate loader (R-Q1)."""

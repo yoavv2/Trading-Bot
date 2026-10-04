@@ -359,6 +359,10 @@ class ExecutionSettings(BaseModel):
     # before the close.
     execution_policy: Literal["regular_hours_prev_session_v1"] = "regular_hours_prev_session_v1"
     execution_window_cutoff_minutes: int = Field(default=15, ge=0, le=120)
+    # REC-01 (D-14): the two absence-evidence (a) checks must be at least this many
+    # seconds apart for the evidence set to read as complete. Evidence only: it never
+    # resolves an uncertain order and never permits a resend (round 5, 2026-10-04).
+    recovery_absence_grace_seconds: int = Field(default=300, ge=0)
     paper_session_runner: PaperSessionRunnerSettings = PaperSessionRunnerSettings()
     safety: ExecutionSafetySettings = ExecutionSafetySettings()
 
