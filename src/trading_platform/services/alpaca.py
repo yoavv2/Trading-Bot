@@ -7,7 +7,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from enum import StrEnum
 from typing import Any, Final, Literal, TypeVar
 
 import httpx
@@ -15,6 +14,17 @@ import httpx
 from trading_platform.core.logging import get_logger
 from trading_platform.core.settings import AlpacaBrokerSettings
 from trading_platform.db.models import AttemptOutcomeClass
+from trading_platform.services.broker_status import (
+    BROKER_STATUS_CLASSES,
+    BrokerStatusClass,
+    broker_status_reason,
+)
+from trading_platform.services.broker_status import (
+    UNMAPPED_BROKER_STATUS as UNMAPPED_BROKER_STATUS,
+)
+from trading_platform.services.broker_status import (
+    classify_broker_status as classify_broker_status,
+)
 from trading_platform.services.execution import (
     ExecutionOrderStatus,
     ExecutionService,
@@ -40,65 +50,15 @@ logger = get_logger(__name__)
 
 _TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 
-
-class BrokerStatusClass(StrEnum):
-    """Closed classification of a raw Alpaca order status (D-13)."""
-
-    WORKING = "working"
-    TERMINAL = "terminal"
-    TERMINAL_WITH_SUCCESSOR = "terminal_with_successor"
-    UNKNOWN = "unknown"
-
-
-UNMAPPED_BROKER_STATUS: Final = "unmapped_broker_status"
-
-# Single source of truth for the status mapping: the 16 documented Alpaca order
-# statuses (Placing Orders, accessed 2026-09-30) plus the legacy ``held``.
-# ``done_for_day`` is working (it can resume); ``replaced`` is terminal with a
-# successor order (the successor is unrecognized until verified); anything not
-# listed here is ``unknown`` with reason ``unmapped_broker_status``.
-_BROKER_STATUS_CLASSES: Final[dict[str, BrokerStatusClass]] = {
-    "new": BrokerStatusClass.WORKING,
-    "partially_filled": BrokerStatusClass.WORKING,
-    "filled": BrokerStatusClass.TERMINAL,
-    "done_for_day": BrokerStatusClass.WORKING,
-    "canceled": BrokerStatusClass.TERMINAL,
-    "expired": BrokerStatusClass.TERMINAL,
-    "replaced": BrokerStatusClass.TERMINAL_WITH_SUCCESSOR,
-    "pending_cancel": BrokerStatusClass.WORKING,
-    "pending_replace": BrokerStatusClass.WORKING,
-    "accepted": BrokerStatusClass.WORKING,
-    "pending_new": BrokerStatusClass.WORKING,
-    "accepted_for_bidding": BrokerStatusClass.WORKING,
-    "stopped": BrokerStatusClass.WORKING,
-    "rejected": BrokerStatusClass.TERMINAL,
-    "suspended": BrokerStatusClass.WORKING,
-    "calculated": BrokerStatusClass.WORKING,
-    "held": BrokerStatusClass.WORKING,
-}
+# Backward-compatible private alias (tests pin the mapping through this name).
+_BROKER_STATUS_CLASSES: Final = BROKER_STATUS_CLASSES
 
 # Working statuses that normalize to PENDING (partially_filled has its own status).
 _PENDING_BROKER_STATUSES = {
     status
-    for status, status_class in _BROKER_STATUS_CLASSES.items()
+    for status, status_class in BROKER_STATUS_CLASSES.items()
     if status_class == BrokerStatusClass.WORKING and status != "partially_filled"
 }
-
-
-def classify_broker_status(raw: str | None) -> BrokerStatusClass:
-    """Closed class of a raw broker status; any other or missing value is unknown."""
-
-    if not raw:
-        return BrokerStatusClass.UNKNOWN
-    return _BROKER_STATUS_CLASSES.get(raw, BrokerStatusClass.UNKNOWN)
-
-
-def broker_status_reason(raw: str | None) -> str | None:
-    """``unmapped_broker_status`` exactly when the status class is unknown."""
-
-    if classify_broker_status(raw) == BrokerStatusClass.UNKNOWN:
-        return UNMAPPED_BROKER_STATUS
-    return None
 
 
 EnumT = TypeVar("EnumT")
@@ -212,6 +172,24 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _parse_datetime_or_none(value: Any) -> datetime | None:
+    """Parse an evidence timestamp; a missing or malformed value is ``None`` (never raises)."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        return _parse_datetime(value)
+    except ValueError:
+        return None
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text or None
+
+
 def _coerce_enum(enum_cls: type[EnumT], value: str, default: EnumT) -> EnumT:
     try:
         return enum_cls(value)  # type: ignore[arg-type]
@@ -284,6 +262,12 @@ class BrokerOrderSnapshot:
     updated_at: datetime | None
     raw_payload: dict[str, Any]
     status_reason: str | None = None
+    # D-07 evidence fields (typed copies of payload ``created_at``/``type``/
+    # ``replaces``/``replaced_by``); attribution reads these, never the raw payload.
+    created_at: datetime | None = None
+    order_type: str | None = None
+    replaces_order_id: str | None = None
+    successor_order_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -335,6 +319,10 @@ def _normalized_order_snapshot(payload: dict[str, Any]) -> BrokerOrderSnapshot:
         updated_at=_parse_datetime(payload.get("updated_at")),
         raw_payload=payload,
         status_reason=broker_status_reason(broker_status),
+        created_at=_parse_datetime_or_none(payload.get("created_at")),
+        order_type=_optional_text(payload.get("type")),
+        replaces_order_id=_optional_text(payload.get("replaces")),
+        successor_order_id=_optional_text(payload.get("replaced_by")),
     )
 
 

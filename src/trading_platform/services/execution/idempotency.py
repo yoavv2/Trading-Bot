@@ -63,6 +63,12 @@ def build_intent_hash(
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def client_order_id_prefix_fragment(prefix: str) -> str:
+    """Normalize a configured client-order-id prefix exactly as ``build_client_order_id`` does."""
+
+    return "".join(char for char in prefix.lower() if char.isalnum())[:12] or "tp"
+
+
 def build_client_order_id(
     *,
     prefix: str,
@@ -89,7 +95,7 @@ def build_client_order_id(
     symbol_fragment = (
         "".join(char for char in material.symbol.lower() if char.isalnum())[:8] or "order"
     )
-    prefix_fragment = "".join(char for char in prefix.lower() if char.isalnum())[:12] or "tp"
+    prefix_fragment = client_order_id_prefix_fragment(prefix)
     return (
         f"{prefix_fragment}-{session_date.strftime('%Y%m%d')}-{symbol_fragment}-{intent_hash[:18]}"
     )
