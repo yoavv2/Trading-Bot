@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -37,7 +38,11 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.session import session_scope
 from trading_platform.services.account_baseline import latest_broker_observed_account_snapshot
-from trading_platform.services.alpaca import AlpacaClient, AlpacaPaginationCapExceededError
+from trading_platform.services.alpaca import (
+    AlpacaClient,
+    AlpacaPaginationCapExceededError,
+    BrokerOrderSnapshot,
+)
 from trading_platform.services.attribution import (
     AttributionAnomaly,
     AttributionResult,
@@ -50,6 +55,7 @@ from trading_platform.services.attribution_inputs import (
     load_ownership_periods,
     load_recorded_external,
 )
+from trading_platform.services.execution.contracts import ExecutionOrderStatus
 from trading_platform.services.reconciliation.findings import Finding
 from trading_platform.services.reconciliation.matcher import match_snapshots
 from trading_platform.services.reconciliation.report import (
@@ -189,6 +195,13 @@ def reconcile_account(
             "threshold_breach": threshold_breach,
             "attribution": attribution.to_dict(),
             "unresolved_reasons": unresolved_values,
+            # 20.1-12 (check A2): the broker's own non-terminal order count, or None when
+            # the broker order list could not be read (never a silent 0).
+            "non_terminal_order_count": (
+                non_terminal_order_count(effective_state.orders)
+                if effective_state is not None
+                else None
+            ),
         }
         _finalize_run(
             resolved_settings,
@@ -254,6 +267,27 @@ def reconcile_account(
         classification_summary=classification,
         findings=tuple(finding_dicts),
     )
+
+
+#: Broker order statuses that are final (nothing further can happen to the order).
+_TERMINAL_BROKER_ORDER_STATUSES = frozenset(
+    {
+        ExecutionOrderStatus.FILLED,
+        ExecutionOrderStatus.CANCELED,
+        ExecutionOrderStatus.REJECTED,
+        ExecutionOrderStatus.EXPIRED,
+        ExecutionOrderStatus.REPLACED,
+    }
+)
+
+
+def non_terminal_order_count(orders: Iterable[BrokerOrderSnapshot]) -> int:
+    """Broker orders that are not final (pending, accepted, partially filled, UNKNOWN).
+
+    An unmapped status counts as non-terminal (fail closed).
+    """
+
+    return sum(1 for order in orders if order.status not in _TERMINAL_BROKER_ORDER_STATUSES)
 
 
 #: ``event_type`` of the stored finding for a recorded external order missing at the broker.

@@ -253,6 +253,64 @@ def test_cap_overflow_is_a_stored_blocking_unresolved_result(
     assert stored.result_summary["unresolved_reasons"] == ["broker_history_exceeds_cap"]
 
 
+def test_result_summary_stores_the_broker_non_terminal_order_count(account_db: str) -> None:
+    """20.1-12 (check A2): additive ``non_terminal_order_count`` from the broker's own list."""
+
+    orders = [
+        _broker_order(broker_order_id="b-open", client_order_id="c-open", broker_status="new"),
+        replace(
+            _broker_order(
+                broker_order_id="b-partial", client_order_id="c-partial", broker_status="new"
+            ),
+            status=ExecutionOrderStatus.PARTIALLY_FILLED,
+        ),
+        _broker_order(
+            broker_order_id="b-filled", client_order_id="c-filled", broker_status="filled"
+        ),
+        replace(
+            _broker_order(
+                broker_order_id="b-cancel", client_order_id="c-cancel", broker_status="canceled"
+            ),
+            status=ExecutionOrderStatus.CANCELED,
+        ),
+    ]
+
+    _reconcile(FakeBroker(orders=orders))
+
+    (stored,) = _stored_runs()
+    assert stored.result_summary["non_terminal_order_count"] == 2
+
+
+def test_non_terminal_order_count_is_none_when_broker_orders_were_unreadable(
+    account_db: str,
+) -> None:
+    _reconcile(FakeBroker(orders_error=_cap_error()))
+
+    (stored,) = _stored_runs()
+    assert "non_terminal_order_count" in stored.result_summary
+    assert stored.result_summary["non_terminal_order_count"] is None
+
+
+@pytest.mark.parametrize(
+    ("status", "terminal"),
+    [(status, status in {
+        ExecutionOrderStatus.FILLED,
+        ExecutionOrderStatus.CANCELED,
+        ExecutionOrderStatus.REJECTED,
+        ExecutionOrderStatus.EXPIRED,
+        ExecutionOrderStatus.REPLACED,
+    }) for status in ExecutionOrderStatus],
+)
+def test_non_terminal_order_count_classifies_every_status(
+    status: ExecutionOrderStatus, terminal: bool
+) -> None:
+    order = replace(
+        _broker_order(broker_order_id="b", client_order_id="c", broker_status="new"), status=status
+    )
+
+    assert account_module.non_terminal_order_count([order]) == (0 if terminal else 1)
+
+
 def test_other_failure_finalizes_failed_blocking_and_reraises(account_db: str) -> None:
     with pytest.raises(RuntimeError, match="broker down"):
         _reconcile(FakeBroker(orders_error=RuntimeError("broker down")))
