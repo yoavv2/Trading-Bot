@@ -28,6 +28,7 @@ from trading_platform.db.session import session_scope
 from trading_platform.services.execution import attempts as attempts_module
 from trading_platform.services.execution.attempts import (
     AttemptAlreadyCompletedError,
+    AttemptNotAuthorizedError,
     AttemptRecord,
     DbSubmissionAttemptLog,
     SubmissionClass,
@@ -39,6 +40,7 @@ from trading_platform.services.execution.attempts import (
     current_attempt_log,
     derive_intent_state,
     load_submission_attempts,
+    send_authorization_scope,
 )
 
 A = AttemptOutcomeClass
@@ -265,8 +267,35 @@ def db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
         yield load_settings()
 
 
+class _InsideT1Log(DbSubmissionAttemptLog):
+    """Persistence-mechanics double: ``begin_attempt`` runs as if inside transaction T1.
+
+    Since 20.1-15 the real ``begin_attempt`` fails closed outside T1 (``authorize_send``); the
+    tests below exercise numbering, visibility and completion, not the authorization, so they
+    open the T1 scope explicitly. ``test_begin_attempt_fails_closed_outside_t1`` pins the guard.
+    """
+
+    def begin_attempt(self, session=None, **columns):  # type: ignore[no-untyped-def]
+        with send_authorization_scope():
+            return super().begin_attempt(session, **columns)
+
+
 def _log(settings: Settings, order_id: uuid.UUID, run_id: uuid.UUID) -> DbSubmissionAttemptLog:
-    return DbSubmissionAttemptLog(settings, paper_order_id=order_id, strategy_run_id=run_id)
+    return _InsideT1Log(settings, paper_order_id=order_id, strategy_run_id=run_id)
+
+
+def test_begin_attempt_fails_closed_outside_t1(db: Settings) -> None:
+    order_id, run_id = _seed(db)
+    real = DbSubmissionAttemptLog(db, paper_order_id=order_id, strategy_run_id=run_id)
+
+    with pytest.raises(AttemptNotAuthorizedError):
+        real.begin_attempt()
+    with session_scope(db) as session:
+        with pytest.raises(AttemptNotAuthorizedError):
+            real.begin_attempt(session)
+        assert load_submission_attempts(session, order_id) == []
+    with send_authorization_scope():
+        assert real.begin_attempt() == 1
 
 
 def _seed(settings: Settings) -> tuple[uuid.UUID, uuid.UUID]:

@@ -30,6 +30,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from tests.support.paper_eligibility import allow_paper_execution
+from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 from tests.test_job_operations_e2e import (
     _run_worker_once,
@@ -272,11 +273,10 @@ def test_paper_session_job_links_both_runs(paper_jobs_env: BrokerFakes) -> None:
     }
     assert all(run["job_id"] == detail["id"] for run in run_details.values())
     assert all(run["trigger_source"] != "operator" for run in run_details.values())
-    # Both approved candidates went to the (fake) broker exactly once.
-    assert sorted(i.symbol for i in paper_jobs_env.execution.submitted_intents) == [
-        "AAPL",
-        "MSFT",
-    ]
+    # 20.1-15 (D-17, changed from both): the first accepted order pauses the operation, so only
+    # the first approved candidate went to the (fake) broker, exactly once; the second stays
+    # planned and unsent (paused/working_order_commitments_unaccounted).
+    assert sorted(i.symbol for i in paper_jobs_env.execution.submitted_intents) == ["AAPL"]
     assert paper_jobs_env.state_clients_built == 1
 
 
@@ -325,7 +325,7 @@ def test_cancel_while_running_is_rejected_and_submission_completes(
     assert detail["cancellation_acknowledged_at"] is None
     assert detail["cancellation_cause"] is None
     assert "cancellation_requested" not in event_types
-    assert len(paper_jobs_env.execution.submitted_intents) == 2
+    assert len(paper_jobs_env.execution.submitted_intents) == 1  # 20.1-15: pause after the first
 
 
 def test_cancel_queued_paper_session_never_executes(
@@ -637,3 +637,12 @@ def test_ambiguous_submission_lands_job_failed_outcome_uncertain_and_never_resen
             assert len(session.execute(select(OrderSubmissionAttempt)).scalars().all()) == 1
             ambiguous_order = session.get(PaperOrder, orders[0].id)
             assert ambiguous_order.status == OrderLifecycleState.UNKNOWN
+
+
+@pytest.fixture(autouse=True)
+def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20.1-15: this module's subject is not the per-intent permission check or the S1 guard
+    (tests/test_operation_permission.py, tests/test_paper_session_operations.py): see
+    tests/support/paper_execution_seams.py."""
+
+    allow_direct_paper_execution(monkeypatch)

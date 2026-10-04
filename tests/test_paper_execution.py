@@ -13,11 +13,13 @@ from pathlib import Path
 import psycopg
 import pytest
 from alembic import command
-from sqlalchemy import event, select
+from sqlalchemy import event, func, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
+from tests.support.basis_fixtures import seed_verified_basis
+from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 from tests.support.submission_attempts import seed_attempt_row
 
@@ -29,10 +31,12 @@ from trading_platform.db.models import (
     AttemptOutcomeClass,
     DailyBar,
     ExecutionEvent,
+    ExecutionOperation,
     KillSwitchState,
     MarketSession,
     OrderEvent,
     OrderLifecycleState,
+    OrderSubmissionAttempt,
     OrderTransitionEventType,
     PaperFill,
     PaperOrder,
@@ -63,16 +67,22 @@ from trading_platform.services.execution import (
     OrderIntent,
     OrderSide,
     OrderSubmissionResult,
+    PaperExecutionCandidate,
     build_client_order_id,
     resolve_submission_session,
     run_paper_order_submission,
     run_paper_session,
     sync_paper_state,
 )
-from trading_platform.services.execution.attempts import SubmissionClass, current_attempt_log
-from trading_platform.services.execution.idempotency import build_intent_hash
+from trading_platform.services.execution.attempts import (
+    SubmissionClass,
+    current_attempt_log,
+    load_submission_attempts,
+)
+from trading_platform.services.execution.idempotency import build_intent_hash, derive_order_identity
+from trading_platform.services.execution.intent_identity import VersionBypassRefusedError
+from trading_platform.services.execution.submit_orders import create_new_version
 from trading_platform.services.operator_controls import OperatorControlService
-from trading_platform.services.operator_reads import OperatorReadFilters, OperatorReadService
 from trading_platform.strategies.registry import build_default_registry
 
 _AUTO_BROKER_ORDER_ID = object()
@@ -190,6 +200,36 @@ def migrated_paper_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
                 cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
 
 
+@pytest.fixture(autouse=True)
+def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20.1-15: this module's subject is not the per-intent permission check or the S1 guard
+    (tests/test_operation_permission.py, tests/test_paper_session_operations.py): see
+    tests/support/paper_execution_seams.py (FreshPriceSource, open window, matching manifest,
+    a leased executor Job)."""
+
+    allow_direct_paper_execution(monkeypatch)
+
+
+def _begin_attempt_through_bound_log() -> tuple[object, int] | None:
+    """Behave like the real client: begin the attempt through the bound durable log BEFORE the
+    POST and assert the committed attempt row exists at that moment (S1-R3 G1/G3)."""
+
+    log = current_attempt_log()
+    if log is None:
+        return None
+    number = log.begin_attempt()
+    with session_scope(load_settings()) as session:
+        row = session.execute(
+            select(OrderSubmissionAttempt).where(
+                OrderSubmissionAttempt.paper_order_id == log.paper_order_id  # type: ignore[attr-defined]
+            )
+        ).scalars().all()
+        assert any(r.attempt_number == number and r.completed_at is None for r in row), (
+            "a POST must never be issued without a committed attempt row"
+        )
+    return log, number
+
+
 class FakeExecutionService(ExecutionService):
     def __init__(self) -> None:
         self.submitted_intents: list[OrderIntent] = []
@@ -198,7 +238,10 @@ class FakeExecutionService(ExecutionService):
         return {"service": "execution", "status": "available", "provider": "fake"}
 
     def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        began = _begin_attempt_through_bound_log()
         self.submitted_intents.append(intent)
+        if began is not None:
+            began[0].complete_attempt(began[1], outcome_class=AttemptOutcomeClass.ACCEPTED)  # type: ignore[attr-defined]
         return OrderSubmissionResult(
             client_order_id=intent.client_order_id,
             broker_order_id=f"fake-{intent.symbol.lower()}-001",
@@ -281,7 +324,12 @@ class ExplodingExecutionService(ExecutionService):
 
 
 class MidRunTrippingExecutionService(ExecutionService):
-    """Submits the first candidate successfully, then trips the kill switch."""
+    """Trips the kill switch while the first candidate is sent, which the broker REJECTS (4xx).
+
+    20.1-15: an ACCEPTED first order pauses the operation (working order) before a second
+    permission check could see the tripped switch, so the 'between steps' halt needs a first
+    result that lets the loop continue: a broker rejection. The accepted-first behaviour is
+    pinned in tests/test_paper_session_operations.py."""
 
     def __init__(self, *, settings) -> None:
         self._settings = settings
@@ -296,6 +344,7 @@ class MidRunTrippingExecutionService(ExecutionService):
             raise AssertionError(
                 "execution service should not submit more orders after mid-run kill switch trip"
             )
+        began = _begin_attempt_through_bound_log()
         self.submitted_intents.append(intent)
         OperatorControlService(settings=self._settings).trip_kill_switch(
             reason="mid-run trip in test",
@@ -303,23 +352,15 @@ class MidRunTrippingExecutionService(ExecutionService):
             trigger_source="pytest",
         )
         self._tripped = True
-        return OrderSubmissionResult(
-            client_order_id=intent.client_order_id,
-            broker_order_id=f"mid-run-{intent.symbol.lower()}-001",
-            symbol=intent.symbol,
-            side=intent.side,
-            quantity=intent.quantity,
-            order_type=intent.order_type,
-            time_in_force=intent.time_in_force,
-            status=ExecutionOrderStatus.PENDING,
-            broker_status="new",
-            submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
-            raw_payload={
-                "id": f"mid-run-{intent.symbol.lower()}-001",
-                "client_order_id": intent.client_order_id,
-                "symbol": intent.symbol,
-                "status": "new",
-            },
+        if began is not None:
+            began[0].complete_attempt(  # type: ignore[attr-defined]
+                began[1], outcome_class=AttemptOutcomeClass.REJECTED, http_status=403
+            )
+        raise OrderRejectedError(
+            "rejected",
+            submission_class=SubmissionClass.REJECTED,
+            attempts=[(1, "rejected")],
+            http_status=403,
         )
 
 
@@ -433,6 +474,7 @@ def _seed_existing_paper_order(
     broker_status: str | None = "new",
     submission_attempt_count: int = 1,
     last_submission_error: str | None = None,
+    last_synced_at: datetime | None = None,
 ) -> uuid.UUID:
     settings = load_settings()
     registry = build_default_registry(settings)
@@ -503,6 +545,7 @@ def _seed_existing_paper_order(
                 if submission_attempt_count
                 else None,
                 last_submission_error=last_submission_error,
+                last_synced_at=last_synced_at,
                 broker_payload={"id": resolved_broker_order_id}
                 if resolved_broker_order_id is not None
                 else {},
@@ -639,11 +682,16 @@ def test_run_paper_session_submits_only_missing_orders(
     migrated_paper_db: str,
 ) -> None:
     risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    # 20.1-15: the existing AAPL order is terminal AND synced (a working or unsynced order of the
+    # strategy now pauses the session, TL-1/TL-2); its subject here is "submit only the missing".
     _seed_existing_paper_order(
         risk_run_id=risk_run_id,
         risk_event_id=approved_event_ids["AAPL"],
         symbol="AAPL",
         session_date=date(2024, 1, 5),
+        status="filled",
+        broker_status="filled",
+        last_synced_at=datetime(2024, 1, 5, 15, 5, tzinfo=UTC),
     )
     settings = load_settings()
     execution_service = FakeExecutionService()
@@ -688,6 +736,12 @@ def test_run_paper_session_submits_only_missing_orders(
 def test_run_paper_order_submission_retries_same_intent_across_followup_risk_runs(
     migrated_paper_db: str,
 ) -> None:
+    """20.1-15 / S3-R4 (changed): an intent of an EARLIER evaluation is retried through a
+    follow-up evaluation only when it is PROVEN not sent (every attempt pre_connection or
+    deadline_expired) and the follow-up's basis is verified. The legacy form of this test seeded
+    a SUBMISSION_FAILED order with no attempt rows; since round 5 such a legacy order is never
+    proven not sent (see test_legacy_submission_failed_order_is_not_retried_by_a_followup in
+    tests/test_paper_session_operations.py)."""
     risk_run_id, approved_event_ids = _seed_approved_risk_batch()
     _seed_existing_paper_order(
         risk_run_id=risk_run_id,
@@ -715,6 +769,9 @@ def test_run_paper_order_submission_retries_same_intent_across_followup_risk_run
         ).scalar_one()
         existing_order_id = existing_order.id
         existing_client_order_id = existing_order.client_order_id
+    seed_attempt_row(settings, existing_order_id, number=1, outcome=AttemptOutcomeClass.PRE_CONNECTION)
+    with session_scope(settings) as session:
+        seed_verified_basis(session, risk_run_id=followup_risk_run_id)
 
     report = run_paper_order_submission(
         "trend_following_daily",
@@ -743,15 +800,22 @@ def test_run_paper_order_submission_retries_same_intent_across_followup_risk_run
     assert paper_orders[0].source_risk_event_id == approved_event_ids["AAPL"]
 
 
-def test_run_paper_order_submission_versions_material_change_after_broker_touch(
+def test_run_paper_order_submission_never_versions_a_broker_touched_identity(
     migrated_paper_db: str,
 ) -> None:
+    """20.1-15 / S3-R4 round 5 (changed from 'versions material change after broker touch'): a
+    candidate whose (session, symbol, side) was already submitted is `action_already_submitted`
+    even with a changed quantity and a verified basis: nothing is registered or sent, no
+    intent_version + 1 exists, and `create_new_version` itself raises `version_bypass_refused`."""
     risk_run_id, approved_event_ids = _seed_approved_risk_batch()
     _seed_existing_paper_order(
         risk_run_id=risk_run_id,
         risk_event_id=approved_event_ids["AAPL"],
         symbol="AAPL",
         session_date=date(2024, 1, 5),
+        status="filled",
+        broker_status="filled",
+        last_synced_at=datetime(2024, 1, 5, 15, 5, tzinfo=UTC),
     )
     followup_risk_run_id, followup_event_id = _seed_followup_risk_event(
         symbol="AAPL",
@@ -760,6 +824,8 @@ def test_run_paper_order_submission_versions_material_change_after_broker_touch(
         signal_reason="scaled_entry",
     )
     settings = load_settings()
+    with session_scope(settings) as session:
+        seed_verified_basis(session, risk_run_id=followup_risk_run_id)
     execution_service = FakeExecutionService()
 
     report = run_paper_order_submission(
@@ -771,43 +837,44 @@ def test_run_paper_order_submission_versions_material_change_after_broker_touch(
         trigger_source="followup_version",
     )
 
-    assert report.result_summary["submitted_count"] == 1
-    assert report.result_summary["reused_count"] == 0
-    assert report.result_summary["versioned_count"] == 1
-    assert len(execution_service.submitted_intents) == 1
-    assert execution_service.submitted_intents[0].intent_version == 2
-
+    assert report.result_summary["action"] == "noop_existing_orders"
+    assert report.result_summary["candidate_dispositions"] == [
+        {"symbol": "AAPL", "side": "buy", "disposition": "action_already_submitted"}
+    ]
+    assert report.result_summary["submitted_count"] == 0
+    assert report.result_summary["versioned_count"] == 0
+    assert execution_service.submitted_intents == []
     with session_scope(settings) as session:
-        paper_orders = session.execute(
-            select(PaperOrder).order_by(PaperOrder.intent_version.asc(), PaperOrder.created_at.asc())
-        ).scalars().all()
-
-    assert len(paper_orders) == 2
-    first_order, second_order = paper_orders
-    assert first_order.intent_version == 1
-    assert second_order.intent_version == 2
-    assert second_order.supersedes_paper_order_id == first_order.id
-    assert second_order.source_risk_event_id == followup_event_id
-    assert second_order.client_order_id != first_order.client_order_id
-    assert report.result_summary["versioned_orders"][0]["intent_decision"]["action"] == "create_new_version"
-
-    service = OperatorReadService(settings)
-    order_reads = service.list_paper_orders(
-        OperatorReadFilters(
-            strategy_id="trend_following_daily",
-            run_type="paper_execution",
-            status="succeeded",
-            session_start=date(2024, 1, 5),
-            session_end=date(2024, 1, 5),
-            limit=10,
-        )
-    )
-    versioned_payload = next(
-        item for item in order_reads if item["intent_context"]["intent_version"] == 2
-    )
-
-    assert versioned_payload["intent_context"]["supersedes_paper_order_id"] == str(first_order.id)
-    assert versioned_payload["intent_context"]["supersedes_client_order_id"] == first_order.client_order_id
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+        assert len(paper_orders) == 1
+        assert paper_orders[0].intent_version == 1
+        symbol_id = paper_orders[0].symbol_id
+        with pytest.raises(VersionBypassRefusedError, match="version_bypass_refused"):
+            create_new_version(
+                session,
+                strategy_id="trend_following_daily",
+                candidate=PaperExecutionCandidate(
+                    risk_event_id=followup_event_id,
+                    source_risk_run_id=followup_risk_run_id,
+                    symbol_id=symbol_id,
+                    symbol="AAPL",
+                    session_date=date(2024, 1, 5),
+                    side=OrderSide.BUY,
+                    quantity=Decimal("12"),
+                    reference_price=Decimal("120"),
+                    signal_reason="scaled_entry",
+                    decision_reason="x",
+                    risk_metadata={},
+                ),
+                identity=derive_order_identity(
+                    prefix="tp",
+                    strategy_id="trend_following_daily",
+                    session_date=date(2024, 1, 5),
+                    symbol="AAPL",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("12"),
+                ),
+            )
 
 
 def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_candidates(
@@ -870,16 +937,20 @@ def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_ca
         ),
     )
 
+    # 20.1-15 (changed): the recovery step still runs, but the recovered AAPL order is now a
+    # WORKING order of the strategy, so the session pauses before MSFT is registered or sent
+    # (the operation is paused/working_order_commitments_unaccounted, MSFT stays planned).
     assert report.action == "submitted_missing_orders"
     assert report.result_summary["session_preflight"]["reconciliation"]["recovered_order_count"] == 1
-    assert len(execution_service.submitted_intents) == 1
-    assert execution_service.submitted_intents[0].symbol == "MSFT"
+    assert report.result_summary["operation"]["state"] == "paused"
+    assert report.result_summary["operation"]["reason"] == "working_order_commitments_unaccounted"
+    assert execution_service.submitted_intents == []
 
     with session_scope(settings) as session:
         paper_orders = session.execute(select(PaperOrder).order_by(PaperOrder.client_order_id.asc())).scalars().all()
         aapl_order = next(order for order in paper_orders if order.symbol_ref.ticker == "AAPL")
 
-    assert len(paper_orders) == 2
+    assert len(paper_orders) == 1
     assert aapl_order.broker_order_id == "recovered-aapl-001"
     assert aapl_order.status == "submitted"
 
@@ -1546,11 +1617,14 @@ def test_run_paper_order_submission_persists_block_until_manual_kill_switch_rese
 
     assert resumed_report.status == StrategyRunStatus.SUCCEEDED.value
     assert resumed_report.result_summary.get("blocked_reason") is None
-    assert resumed_report.result_summary["submitted_count"] == 2
-    assert {intent.symbol for intent in allowed_execution_service.submitted_intents} == {
-        "AAPL",
-        "MSFT",
-    }
+    # 20.1-15 (D-17, changed from 2): the first accepted order pauses the operation
+    # (working_order_commitments_unaccounted); the second intent stays planned and unsent.
+    assert resumed_report.result_summary["submitted_count"] == 1
+    assert [intent.symbol for intent in allowed_execution_service.submitted_intents] == ["AAPL"]
+    assert resumed_report.result_summary["operation"]["state"] == "paused"
+    assert resumed_report.result_summary["operation"]["reason"] == (
+        "working_order_commitments_unaccounted"
+    )
 
 
 def test_run_paper_order_submission_halts_mid_run_when_kill_switch_trips_between_submissions(
@@ -1572,12 +1646,16 @@ def test_run_paper_order_submission_halts_mid_run_when_kill_switch_trips_between
     assert report.result_summary["action"] == "blocked_mid_run_global_kill_switch"
     assert report.result_summary["blocked_reason"] == "global_kill_switch_tripped"
     assert report.result_summary["stage"] == "blocked_mid_run"
-    assert report.result_summary["submitted_count"] == 1
+    assert report.result_summary["submitted_count"] == 0
+    assert len(report.result_summary["rejected_orders"]) == 1
     assert report.result_summary["skipped_by_kill_switch_count"] == 1
     assert len(execution_service.submitted_intents) == 1
+    # 20.1-15: the legacy action is kept additively next to the new operation summary.
+    assert report.result_summary["operation"]["state"] == "paused"
+    assert report.result_summary["operation"]["reason"] == "kill_switch_tripped"
 
     submitted_client_order_ids = {
-        entry["client_order_id"] for entry in report.result_summary["submitted_orders"]
+        entry["client_order_id"] for entry in report.result_summary["rejected_orders"]
     }
     skipped_symbols = {
         entry["symbol"] for entry in report.result_summary["skipped_by_kill_switch"]
@@ -1976,11 +2054,12 @@ def test_run_paper_order_submission_commits_broker_result_only_after_success(
         trigger_source="commit_after_both_test",
     )
 
-    assert report.result_summary["submitted_count"] == 2
+    # 20.1-15 (D-17, changed from 2): one accepted order, then the operation pauses.
+    assert report.result_summary["submitted_count"] == 1
 
     with session_scope(settings) as session:
         paper_orders = session.execute(select(PaperOrder)).scalars().all()
-        assert len(paper_orders) == 2
+        assert len(paper_orders) == 1
         for order in paper_orders:
             assert order.broker_order_id is not None
             assert order.broker_status == "new"
@@ -2083,8 +2162,8 @@ def test_broker_submit_call_runs_outside_open_transaction_boundary(
         trigger_source="broker_outside_transaction_test",
     )
 
-    assert report.result_summary["submitted_count"] == 2
-    assert len(execution_service.observed_statuses) == 2
+    assert report.result_summary["submitted_count"] == 1  # 20.1-15: pause after the first accepted
+    assert len(execution_service.observed_statuses) == 1
     assert all(
         status == OrderLifecycleState.PENDING_SUBMISSION
         for status in execution_service.observed_statuses
@@ -2311,36 +2390,49 @@ def test_rejected_submission_is_terminal_and_never_retried(migrated_paper_db: st
             http_status=403,
         )
     )
-    with pytest.raises(OrderRejectedError):
-        run_paper_order_submission(
-            "trend_following_daily",
-            as_of_session=date(2024, 1, 5),
-            settings=settings,
-            execution_service=rejecting,
-            trigger_source="rejected_test",
-        )
-    ((rejected_order, events),) = _orders_with_events()
-    assert rejected_order.status == OrderLifecycleState.REJECTED
+    # 20.1-15 (D-17, changed): a broker rejection no longer fails the run; the rejected intent
+    # is final and the loop continues to the next intent after its own permission check. The
+    # next intent is accepted and pauses the operation (working order).
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=rejecting,
+        trigger_source="rejected_test",
+    )
+    assert report.result_summary["submitted_count"] == 1
+    assert len(report.result_summary["rejected_orders"]) == 1
+    assert report.result_summary["operation"]["reason"] == "working_order_commitments_unaccounted"
+    rejected_order, events = next(
+        (order, events)
+        for order, events in _orders_with_events()
+        if order.status == OrderLifecycleState.REJECTED
+    )
     assert events[-1].event_type == OrderTransitionEventType.BROKER_REJECTED
     assert events[-1].details["http_status"] == 403
     assert events[-1].details["submission_class"] == "rejected"
 
+    # A follow-up on the same risk run never re-sends the rejected intent: every candidate
+    # already has an order that reached the broker, so the Phase 20 result is kept (existing
+    # orders, zero POST) even though the first run's operation is still open.
     follow_up = FakeExecutionService()
-    run_paper_order_submission(
+    follow_up_report = run_paper_order_submission(
         "trend_following_daily",
         as_of_session=date(2024, 1, 5),
         settings=settings,
         execution_service=follow_up,
         trigger_source="rejected_followup",
     )
-    assert rejected_order.client_order_id not in [
-        intent.client_order_id for intent in follow_up.submitted_intents
-    ]
+    assert follow_up_report.result_summary["action"] == "noop_existing_orders"
+    assert follow_up_report.result_summary["existing_count"] == 2
+    assert follow_up.submitted_intents == []
     with session_scope(settings) as session:
         assert session.get(PaperOrder, rejected_order.id).status == OrderLifecycleState.REJECTED
 
 
-def test_not_sent_submission_still_retries(migrated_paper_db: str) -> None:
+def test_not_sent_submission_pauses_broker_unavailable_and_stays_retryable(
+    migrated_paper_db: str,
+) -> None:
     _seed_approved_risk_batch()
     settings = load_settings()
     not_sent = _RaisingExecutionService(
@@ -2351,28 +2443,25 @@ def test_not_sent_submission_still_retries(migrated_paper_db: str) -> None:
         ),
         write_attempt=AttemptOutcomeClass.PRE_CONNECTION,
     )
-    with pytest.raises(OrderNotSentError):
-        run_paper_order_submission(
-            "trend_following_daily",
-            as_of_session=date(2024, 1, 5),
-            settings=settings,
-            execution_service=not_sent,
-            trigger_source="not_sent_test",
-        )
-    ((failed_order, _),) = _orders_with_events()
-    assert failed_order.status == OrderLifecycleState.SUBMISSION_FAILED
-
-    follow_up = FakeExecutionService()
-    run_paper_order_submission(
+    # 20.1-15 (changed): the outcome is CERTAIN (nothing left the process), so the Job ends
+    # normally: the operation is paused/broker_unavailable and the intent stays SUBMISSION_FAILED
+    # (retryable by Continue, 20.1-16); the remaining intent stays planned.
+    report = run_paper_order_submission(
         "trend_following_daily",
         as_of_session=date(2024, 1, 5),
         settings=settings,
-        execution_service=follow_up,
-        trigger_source="not_sent_followup",
+        execution_service=not_sent,
+        trigger_source="not_sent_test",
     )
-    assert failed_order.client_order_id in [i.client_order_id for i in follow_up.submitted_intents]
+    assert report.status == StrategyRunStatus.SUCCEEDED.value
+    assert report.result_summary["operation"]["state"] == "paused"
+    assert report.result_summary["operation"]["reason"] == "broker_unavailable"
+    assert len(not_sent.submitted_intents) == 1
+    ((failed_order, _),) = _orders_with_events()
+    assert failed_order.status == OrderLifecycleState.SUBMISSION_FAILED
     with session_scope(settings) as session:
-        assert session.get(PaperOrder, failed_order.id).broker_order_id is not None
+        attempts = load_submission_attempts(session, failed_order.id)
+    assert [a.outcome_class for a in attempts] == [AttemptOutcomeClass.PRE_CONNECTION]
 
 
 def _seed_retryable_order_with_attempts(
@@ -2410,30 +2499,32 @@ def _seed_retryable_order_with_attempts(
 def test_crash_between_attempt_start_and_outcome_is_ambiguous_and_never_resent(
     migrated_paper_db: str, history: list[AttemptOutcomeClass | None]
 ) -> None:
+    """20.1-15 (changed, S1-R3 G2): an order whose attempt history is not proven not-sent and that
+    has no broker evidence is UNESTABLISHED: while it exists NO request of the strategy is
+    authorized, so the run-time start is blocked `outcome_unresolved` with zero POST (the legacy
+    form parked this one intent UNKNOWN and raised, but still let the other candidate through)."""
     order_id = _seed_retryable_order_with_attempts(history)
     settings = load_settings()
     service = FakeExecutionService()
 
-    with pytest.raises(AmbiguousOrderSubmissionError):
-        run_paper_order_submission(
-            "trend_following_daily",
-            as_of_session=date(2024, 1, 5),
-            settings=settings,
-            execution_service=service,
-            trigger_source="crash_guard_test",
-        )
+    report = run_paper_order_submission(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=service,
+        trigger_source="crash_guard_test",
+    )
 
-    # Zero POSTs/submit calls: neither the guarded intent nor the second candidate.
+    assert report.result_summary["action"] == "blocked_outcome_unresolved"
+    assert report.result_summary["blocked_reason"] == "outcome_unresolved"
     assert service.submitted_intents == []
     with session_scope(settings) as session:
         order = session.get(PaperOrder, order_id)
-        assert order.status == OrderLifecycleState.UNKNOWN
-        uncertain = session.execute(
-            select(ExecutionEvent).where(ExecutionEvent.event_type == "submission_outcome_uncertain")
-        ).scalars().all()
-    assert len(uncertain) == 1 and uncertain[0].blocks_execution is True
+        assert order.status == OrderLifecycleState.PENDING_SUBMISSION
+        assert order.broker_order_id is None
+        assert session.execute(select(func.count()).select_from(ExecutionOperation)).scalar_one() == 0
 
-    # A further session does not re-send either: UNKNOWN without a broker id is not resubmittable.
+    # A further session does not re-send either.
     run_paper_order_submission(
         "trend_following_daily",
         as_of_session=date(2024, 1, 5),
@@ -2441,7 +2532,7 @@ def test_crash_between_attempt_start_and_outcome_is_ambiguous_and_never_resent(
         execution_service=service,
         trigger_source="crash_guard_followup",
     )
-    assert order.client_order_id not in [i.client_order_id for i in service.submitted_intents]
+    assert service.submitted_intents == []
 
 
 def test_proven_not_sent_history_is_retried_by_the_guard(migrated_paper_db: str) -> None:

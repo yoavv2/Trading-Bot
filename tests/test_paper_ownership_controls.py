@@ -25,6 +25,7 @@ from tests.support.calendar_facts import seed_calendar
 from tests.support.migrated_db import migrated_database
 from tests.support.operation_fixtures import seed_operation, seed_operation_intent
 from tests.support.paper_eligibility import allow_paper_execution
+from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import seed_registered_strategy, set_active_paper_strategy
 from tests.support.recovery_fixtures import OTHER, OWNER, at, seed_job, strategy_row
 from tests.test_active_paper_strategy_gates import RecordingBrokerClient, RecordingExecutionService
@@ -1262,3 +1263,12 @@ def test_put_makes_no_broker_call(http: TestClient, monkeypatch: pytest.MonkeyPa
     _quiet_account()
 
     assert _put(http, OTHER).status_code == 200
+
+
+@pytest.fixture(autouse=True)
+def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20.1-15: this module's subject is not the per-intent permission check or the S1 guard
+    (tests/test_operation_permission.py, tests/test_paper_session_operations.py): see
+    tests/support/paper_execution_seams.py."""
+
+    allow_direct_paper_execution(monkeypatch)

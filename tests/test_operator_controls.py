@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select
+from tests.support.paper_execution_seams import allow_direct_paper_execution
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -388,3 +389,12 @@ def test_config_disabled_strategy_with_no_db_row_has_one_default_status_everywhe
     )
 
     assert control_read.status == ensured.status == StrategyStatus.DISABLED.value  # R-8
+
+
+@pytest.fixture(autouse=True)
+def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20.1-15: this module's subject is not the per-intent permission check or the S1 guard
+    (tests/test_operation_permission.py, tests/test_paper_session_operations.py): see
+    tests/support/paper_execution_seams.py."""
+
+    allow_direct_paper_execution(monkeypatch)

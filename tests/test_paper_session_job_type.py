@@ -24,6 +24,7 @@ import pytest
 from sqlalchemy import select
 from tests.support.calendar_facts import clock_at, et, seed_bars, seed_calendar
 from tests.support.paper_eligibility import allow_paper_execution
+from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import seed_registered_strategy, set_active_paper_strategy
 from tests.test_paper_execution import (
     ExplodingBrokerClient,
@@ -941,3 +942,12 @@ def test_paper_session_handler_never_writes_run_status() -> None:
     source = inspect.getsource(paper_session_module)
     assert "StrategyRunStatus" not in source
     assert "percent=" not in source
+
+
+@pytest.fixture(autouse=True)
+def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20.1-15: this module's subject is not the per-intent permission check or the S1 guard
+    (tests/test_operation_permission.py, tests/test_paper_session_operations.py): see
+    tests/support/paper_execution_seams.py."""
+
+    allow_direct_paper_execution(monkeypatch)

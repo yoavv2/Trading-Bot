@@ -75,6 +75,11 @@ class PaperSessionRunReport:
     # ran (None when reconciliation did not run this call, e.g. the
     # blocked_strategy_disabled path).
     reconciliation_run_id: str | None = None
+    # 20.1-15 (REC-02): the execution operation this session created or ended in (additive;
+    # all None when the session created no operation).
+    operation_id: str | None = None
+    operation_state: str | None = None
+    operation_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +92,9 @@ class PaperSessionRunReport:
             "execution_status": self.execution_status,
             "result_summary": self.result_summary,
             "reconciliation_run_id": self.reconciliation_run_id,
+            "operation_id": self.operation_id,
+            "operation_state": self.operation_state,
+            "operation_reason": self.operation_reason,
         }
 
 

@@ -51,6 +51,7 @@ from trading_platform.db.models import (
     StrategyRun,
     Symbol,
 )
+from trading_platform.services import operator_controls
 from trading_platform.services.alpaca import PriceFailure, PriceLookupError, PriceObservation
 from trading_platform.services.calendar_facts import (
     execution_window_from_window,
@@ -66,7 +67,6 @@ from trading_platform.services.execution.operations import (
     risk_limit_failed,
     window_verdict,
 )
-from trading_platform.services.operator_controls import load_trading_gate_state
 from trading_platform.services.portfolio import PortfolioService
 from trading_platform.services.reconciliation.latest import (
     StandaloneReconciliation,
@@ -198,6 +198,8 @@ class WorkingOrder:
     paper_order_id: uuid.UUID
     client_order_id: str
     symbol: str
+    side: str
+    quantity: Decimal
     status: str
     last_synced_at: datetime | None
 
@@ -237,6 +239,8 @@ def strategy_working_orders(session: Session, strategy_id: str) -> list[WorkingO
             paper_order_id=order.id,
             client_order_id=order.client_order_id,
             symbol=ticker,
+            side=order.side,
+            quantity=order.quantity,
             status=order.status.value,
             last_synced_at=order.last_synced_at,
         )
@@ -396,7 +400,7 @@ def check_intent_permission(
         )
 
     # (3) pauses
-    gate = load_trading_gate_state(session, strategy_id=strategy_id)
+    gate = operator_controls.load_trading_gate_state(session, strategy_id=strategy_id)
     block = gate.ownership_block_for(strategy_id)
     if block is not None:
         return _pause("owner", PausedReason.NOT_ACTIVE_PAPER_STRATEGY, block.value)

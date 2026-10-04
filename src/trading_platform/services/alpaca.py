@@ -582,6 +582,26 @@ class AlpacaClient:
         while True:
             number = log.begin_attempt()
             started_at = datetime.now(UTC)
+            # S1-R3: immediately before handing the request to the HTTP client re-read the WALL
+            # clock; past the authorization deadline NOTHING is sent and the attempt is
+            # recorded as established not-sent (a bound log without a deadline never expires).
+            deadline_passed = getattr(log, "send_deadline_passed", None)
+            if deadline_passed is not None and deadline_passed(number):
+                self._complete_attempt(
+                    log,
+                    number,
+                    history,
+                    started_at,
+                    outcome_class=AttemptOutcomeClass.DEADLINE_EXPIRED,
+                    error_type="AuthorizationDeadlineExpired",
+                )
+                raise OrderNotSentError(
+                    "Order was not sent: the send authorization expired before the request "
+                    "was handed to the HTTP client.",
+                    submission_class=SubmissionClass.NOT_SENT,
+                    attempts=summarize_attempts(history),
+                    reason="deadline_expired",
+                )
             response: httpx.Response | None = None
             failure: Exception | None = None
             try:

@@ -77,11 +77,13 @@ from trading_platform.services.concurrency_guard import RunLock
 from trading_platform.services.execution.attempts import (
     AttemptAlreadyCompletedError,
     AttemptRecord,
+    DbSubmissionAttemptLog,
     SubmissionClass,
     SubmissionIntentState,
     classify_submission,
     derive_intent_state,
     proven_not_sent,
+    send_authorization_scope,
 )
 from trading_platform.services.execution.transition import (
     IllegalOrderTransition,
@@ -1499,7 +1501,7 @@ def authorize_send(
     job_id: uuid.UUID,
     *,
     lease_owner: str,
-    ttl_seconds: int = DEFAULT_SEND_AUTHORIZATION_TTL_SECONDS,
+    ttl_seconds: int | None = None,
     settings: Settings | None = None,
 ) -> SendAuthorization:
     """Transaction T1 (S1-R3): authority and the attempt record, durably, BEFORE the POST.
@@ -1519,6 +1521,8 @@ def authorize_send(
     """
 
     resolved = settings or load_settings()
+    if ttl_seconds is None:
+        ttl_seconds = resolved.execution.send_authorization_ttl_seconds
     with session_scope(resolved) as session:
         operation = session.execute(
             select(ExecutionOperation)
@@ -1588,21 +1592,27 @@ def authorize_send(
         status = strategy_recovery_status(session, public_id, now=clock.now_utc())
         if status.gate_code is GateCode.OUTCOME_UNRESOLVED:
             raise SendRefusedError(SendRefusal.OUTCOME_UNRESOLVED)
-        number = (attempt_rows[-1].attempt_number if attempt_rows else 0) + 1
         deadline = now_db + timedelta(seconds=ttl_seconds)
-        attempt = OrderSubmissionAttempt(
-            paper_order_id=order.id,
-            strategy_run_id=order.strategy_run_id,
-            attempt_number=number,
-            started_at=now_db,
-            execution_epoch=epoch,
-            executor_job_id=job_id,
-            authorization_deadline=deadline,
-        )
-        session.add(attempt)
+        # S1-R3: the begin-attempt row is written through the attempt log INSIDE T1; the log
+        # fails closed everywhere else.
+        with send_authorization_scope():
+            number = DbSubmissionAttemptLog(
+                resolved, paper_order_id=order.id, strategy_run_id=order.strategy_run_id
+            ).begin_attempt(
+                session,
+                started_at=now_db,
+                execution_epoch=epoch,
+                executor_job_id=job_id,
+                authorization_deadline=deadline,
+            )
         operation.last_guarded_at = now_db
         session.flush()
-        attempt_id = attempt.id
+        attempt_id = session.execute(
+            select(OrderSubmissionAttempt.id).where(
+                OrderSubmissionAttempt.paper_order_id == order.id,
+                OrderSubmissionAttempt.attempt_number == number,
+            )
+        ).scalar_one()
         order_id = order.id
     # T1 committed (session_scope exit). The wall-clock deadline starts now.
     return SendAuthorization(

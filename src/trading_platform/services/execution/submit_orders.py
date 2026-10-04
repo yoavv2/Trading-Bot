@@ -10,17 +10,27 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, case, or_, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy.orm import Session, joinedload
 
+from trading_platform.core import clock
 from trading_platform.core.logging import build_log_context, emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
 from trading_platform.db.models import (
+    OPEN_OPERATION_STATES,
+    AttemptOutcomeClass,
     ExecutionEvent,
+    ExecutionOperation,
+    ExecutionOperationIntent,
+    IntentDisposition,
+    Job,
+    OperationState,
     OrderLifecycleState,
     OrderTransitionEventType,
     PaperOrder,
@@ -32,14 +42,17 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.models.symbol import Symbol
 from trading_platform.db.session import session_scope
+from trading_platform.services import operator_controls
 from trading_platform.services.active_paper_strategy import (
     BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
-    OwnershipBlock,
+    lock_active_paper_strategy_shared,
 )
 from trading_platform.services.alpaca import (
     AlpacaClient,
     AlpacaExecutionService,
+    AlpacaPriceSource,
     AmbiguousOrderSubmissionError,
+    OrderNotSentError,
     OrderRejectedError,
 )
 from trading_platform.services.bootstrap import ensure_strategy_record
@@ -54,14 +67,19 @@ from trading_platform.services.execution._paper_common import (
     _record_intent_decision_event,
 )
 from trading_platform.services.execution.attempts import (
-    DbSubmissionAttemptLog,
     SubmissionClass,
+    SubmissionIntentState,
     bind_attempt_log,
     classify_submission,
     load_submission_attempts,
     summarize_attempts,
 )
-from trading_platform.services.execution.contracts import ExecutionService, OrderIntent, OrderSide
+from trading_platform.services.execution.contracts import (
+    ExecutionService,
+    OrderIntent,
+    OrderSide,
+    OrderSubmissionResult,
+)
 from trading_platform.services.execution.idempotency import (
     DerivedOrderIdentity,
     derive_order_identity,
@@ -69,6 +87,47 @@ from trading_platform.services.execution.idempotency import (
 from trading_platform.services.execution.idempotency import (
     build_client_order_id as _build_client_order_id,
 )
+from trading_platform.services.execution.intent_identity import (
+    BasisRows,
+    CandidateKey,
+    VersionBypassRefusedError,
+    classify_candidate,
+    decision_fingerprint,
+    decision_inputs_digest,
+    load_basis_verification_rows,
+    load_earlier_intents,
+    load_strategy_order_facts,
+    portfolio_state_digest,
+    risk_config_digest,
+    verify_evaluation_basis,
+)
+from trading_platform.services.execution.operations import (
+    Fence,
+    OperationConflictError,
+    OperationOpenError,
+    PausedReason,
+    PlannedIntent,
+    RiskRunAlreadyOperatedError,
+    SendRefusal,
+    SendRefusedError,
+    authorize_send,
+    cas_update_operation,
+    create_operation,
+    load_intent_facts,
+    next_action,
+    touch_operation,
+    transition,
+    validate_state_reason,
+)
+from trading_platform.services.execution.permission import (
+    PermissionOutcome,
+    PermissionVerdict,
+    PinnedIntent,
+    PriceSource,
+    check_intent_permission,
+    strategy_working_orders,
+)
+from trading_platform.services.execution.send_guard import GuardedAttemptLog, fence_held
 from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
     apply_order_transition,
@@ -76,7 +135,6 @@ from trading_platform.services.execution.transition import (
 from trading_platform.services.market_data_access import latest_completed_session
 from trading_platform.services.operator_controls import (
     BLOCKED_REASON_GLOBAL_KILL_SWITCH,
-    KillSwitchStateSnapshot,
     ensure_strategy_control_state,
     read_trading_gate_state,
 )
@@ -86,7 +144,7 @@ from trading_platform.services.reconciliation import (
     reconcile_paper_execution,
     recover_inflight_paper_orders,
 )
-from trading_platform.services.recovery import REQUIRED_JOB_TYPE, strategy_recovery_status
+from trading_platform.services.recovery import REQUIRED_JOB_TYPE, GateCode, strategy_recovery_status
 from trading_platform.services.stale_runs import reclaim_stale_runs
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
@@ -134,6 +192,7 @@ def run_paper_order_submission(
     registry: StrategyRegistry | None = None,
     execution_service: ExecutionService | None = None,
     job_id: uuid.UUID | None = None,
+    price_source: PriceSource | None = None,
 ) -> PaperExecutionRunReport:
     """Lock-guarded entrypoint (LOCK-01/02/03/05): resolve pure state, then
     acquire the (strategy_id, session_date) advisory lock BEFORE any write or
@@ -169,6 +228,7 @@ def run_paper_order_submission(
                 resolved_registry=resolved_registry,
                 execution_service=execution_service,
                 job_id=job_id,
+                price_source=price_source,
             )
     except ConcurrentRunLockedError:
         # The context manager raises before its body ever runs -- this
@@ -197,6 +257,7 @@ def _run_paper_order_submission_guarded(
     resolved_registry: StrategyRegistry,
     execution_service: ExecutionService | None,
     job_id: uuid.UUID | None = None,
+    price_source: PriceSource | None = None,
 ) -> PaperExecutionRunReport:
     """Guarded body -- only ever called from inside `session_run_lock`.
 
@@ -344,8 +405,14 @@ def _run_paper_order_submission_guarded(
 
     owns_execution_service = execution_service is None
     broker_execution = execution_service or AlpacaExecutionService(resolved_settings.broker.alpaca)
+    owns_price_source = price_source is None
+    resolved_price_source = price_source or _default_price_source(resolved_settings)
     source_risk_run: StrategyRun | None = None
     strategy_row_id: uuid.UUID | None = None
+    context: _ExecutionContext | None = None
+    start_result: _StartResult | None = None
+    loop: _LoopState | None = None
+    candidates: list[PaperExecutionCandidate] = []
 
     try:
         with session_scope(resolved_settings) as session:
@@ -359,403 +426,121 @@ def _run_paper_order_submission_guarded(
             strategy_row_id = source_risk_run.strategy_id
             candidates = _load_submission_candidates(session, source_risk_run.id)
 
-        submitted_orders: list[dict[str, Any]] = []
-        existing_orders: list[dict[str, Any]] = []
-        reused_orders: list[dict[str, Any]] = []
-        versioned_orders: list[dict[str, Any]] = []
-        skipped_by_kill_switch: list[dict[str, Any]] = []
-        skipped_by_ownership: list[dict[str, Any]] = []
-        safety_threshold = resolved_settings.execution.safety.repeated_failure_threshold
-        mid_run_kill_switch: KillSwitchStateSnapshot | None = None
-        mid_run_ownership_block: OwnershipBlock | None = None
-
-        for candidate in candidates:
-            # R-Q1 + D-03: one fresh gate statement per candidate yields the
-            # kill switch AND the owner, read before registering the intent
-            # and before the broker call.
-            mid_run_gate = read_trading_gate_state(resolved_settings)
-            mid_run_kill_switch = mid_run_gate.kill_switch
-            if mid_run_kill_switch.is_tripped:
-                skipped_by_kill_switch.append(
-                    {
-                        "symbol": candidate.symbol,
-                        "side": candidate.side.value,
-                        "quantity": float(candidate.quantity),
-                        "session_date": candidate.session_date.isoformat(),
-                        "source_risk_event_id": str(candidate.risk_event_id),
-                    }
-                )
-                emit_structured_log(
-                    logger,
-                    logging.WARNING,
-                    "paper_execution_skipped",
-                    strategy_id=strategy_id,
-                    run_id=str(run_id),
-                    session_date=as_of_session.isoformat(),
-                    symbol=candidate.symbol,
-                    kill_switch_state=mid_run_kill_switch.state,
-                    blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
-                    trigger_source=trigger_source,
-                )
-                continue
-
-            mid_run_ownership_block = mid_run_gate.ownership_block_for(strategy_id)
-            if mid_run_ownership_block is not None:
-                skipped_by_ownership.append(
-                    {
-                        "symbol": candidate.symbol,
-                        "side": candidate.side.value,
-                        "quantity": float(candidate.quantity),
-                        "session_date": candidate.session_date.isoformat(),
-                        "source_risk_event_id": str(candidate.risk_event_id),
-                        "ownership_block": mid_run_ownership_block.value,
-                    }
-                )
-                emit_structured_log(
-                    logger,
-                    logging.WARNING,
-                    "paper_execution_skipped",
-                    strategy_id=strategy_id,
-                    run_id=str(run_id),
-                    session_date=as_of_session.isoformat(),
-                    symbol=candidate.symbol,
-                    blocked_reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
-                    ownership_block=mid_run_ownership_block.value,
-                    trigger_source=trigger_source,
-                )
-                continue
-
-            order_type = resolved_settings.execution.default_order_type
-            time_in_force = resolved_settings.execution.default_time_in_force
-
-            with session_scope(resolved_settings) as session:
-                if strategy_row_id is None:
-                    raise LookupError("Missing strategy row for paper execution.")
-
-                intent_decision = _resolve_paper_intent_decision(
-                    session,
-                    strategy_row_id=strategy_row_id,
-                    strategy_id=strategy_id,
-                    prefix=resolved_settings.execution.client_order_id_prefix,
-                    candidate=candidate,
-                    failure_threshold=safety_threshold,
-                )
-
-                if intent_decision.action == "reuse_existing":
-                    existing_order = session.get(PaperOrder, intent_decision.existing_order_id)
-                    if existing_order is None:
-                        raise LookupError(
-                            f"Missing reusable paper_order '{intent_decision.existing_order_id}'."
-                        )
-                    _record_intent_decision_event(
-                        session,
-                        strategy_run_id=run_id,
-                        paper_order_id=existing_order.id,
-                        event_type="paper_order_reused",
-                        message=(
-                            f"Reused existing intent '{existing_order.client_order_id}' for identical "
-                            "material order inputs; no new submission was attempted."
-                        ),
-                        details=intent_decision.summary,
-                    )
-                    payload = _paper_order_payload(
-                        existing_order,
-                        intent_decision=intent_decision.summary,
-                        supersedes_client_order_id=intent_decision.supersedes_client_order_id,
-                    )
-                    existing_orders.append(payload)
-                    reused_orders.append(payload)
-                    continue
-
-                if intent_decision.action == "retry_existing" and (
-                    intent_decision.existing_order_id is not None
-                ):
-                    # D-12 pre-send guard: an intent is re-sent only while its WHOLE
-                    # attempt history is proven not sent (every attempt pre_connection
-                    # or deadline_expired with a complete outcome, or no attempt at all).
-                    # Anything else (an incomplete row left by a crash, an ambiguous
-                    # attempt, a duplicate-id reply, an accepted/rejected record) sends
-                    # NOTHING: the intent is parked in UNKNOWN and the run stops. The
-                    # UNKNOWN transition and the event are committed explicitly BEFORE
-                    # raising so the scope's rollback cannot erase them.
-                    guarded_order = session.get(PaperOrder, intent_decision.existing_order_id)
-                    if guarded_order is None:
-                        raise LookupError(
-                            f"Missing retryable paper_order '{intent_decision.existing_order_id}'."
-                        )
-                    prior_attempts = load_submission_attempts(session, guarded_order.id)
-                    prior_class = classify_submission(prior_attempts)
-                    if prior_class is not None and prior_class != SubmissionClass.NOT_SENT:
-                        guard_error = AmbiguousOrderSubmissionError(
-                            "Order submission history is not clean "
-                            f"(submission_class={prior_class.value}); the intent was not re-sent.",
-                            submission_class=prior_class,
-                            attempts=summarize_attempts(prior_attempts),
-                            reason="history_not_clean",
-                        )
-                        _park_intent_unknown(
-                            session,
-                            resolved_settings,
-                            order=guarded_order,
-                            run_id=run_id,
-                            error=guard_error,
-                            trigger_source=trigger_source,
-                        )
-                        session.commit()
-                        raise guard_error
-
-                if intent_decision.existing_order_id is None:
-                    paper_order = PaperOrder(
-                        strategy_run_id=run_id,
-                        source_risk_event_id=candidate.risk_event_id,
-                        symbol_id=candidate.symbol_id,
-                        intended_session_date=candidate.session_date,
-                        side=candidate.side.value,
-                        quantity=candidate.quantity,
-                        order_type=order_type,
-                        time_in_force=time_in_force,
-                        intent_hash=intent_decision.identity.intent_hash,
-                        intent_version=intent_decision.intent_version,
-                        supersedes_paper_order_id=intent_decision.supersedes_paper_order_id,
-                        client_order_id=intent_decision.identity.client_order_id,
-                        status=OrderLifecycleState.PENDING_SUBMISSION,
-                        broker_payload={},
-                    )
-                    session.add(paper_order)
-                    session.flush()
-                    pending_order = paper_order
-                    transition_event_type = OrderTransitionEventType.INTENT_REGISTERED
-                else:
-                    retrieved_order = session.get(PaperOrder, intent_decision.existing_order_id)
-                    if retrieved_order is None:
-                        raise LookupError(
-                            f"Missing retryable paper_order '{intent_decision.existing_order_id}'."
-                        )
-                    pending_order = retrieved_order
-                    transition_event_type = OrderTransitionEventType.RETRY_REQUESTED
-
-                pending_order.strategy_run_id = run_id
-                apply_order_transition(
-                    pending_order.id,
-                    OrderTransitionRequest(
-                        strategy_run_id=run_id,
-                        event_type=transition_event_type,
-                        details={
-                            "trigger_source": trigger_source,
-                            "source_risk_event_id": str(candidate.risk_event_id),
-                            "intent_decision": intent_decision.summary,
-                        },
-                    ),
-                    session=session,
-                    settings=resolved_settings,
-                )
-                pending_order.submission_attempt_count += 1
-                pending_order.last_submission_attempt_at = datetime.now(UTC)
-                pending_order.last_submission_error = None
-                session.flush()
-                pending_order_id = pending_order.id
-
-                if intent_decision.action == "create_new_version":
-                    _record_intent_decision_event(
-                        session,
-                        strategy_run_id=run_id,
-                        paper_order_id=pending_order.id,
-                        event_type="paper_order_versioned",
-                        message=(
-                            f"Created intent version {pending_order.intent_version} after superseding "
-                            f"broker-touched order '{intent_decision.supersedes_client_order_id}'."
-                        ),
-                        details=intent_decision.summary,
-                    )
-
-            intent = OrderIntent(
+        # S1-R3 / D-16: the operation is created at the FIRST submission, after the run-time gates
+        # passed, in one transaction that holds the ownership singleton FOR SHARE (SER).
+        start_result = _prepare_start(
+            resolved_settings,
+            strategy_id=strategy_id,
+            strategy_row_id=strategy_row_id,
+            source_risk_run_id=source_risk_run.id,
+            as_of_session=as_of_session,
+            candidates=candidates,
+            job_id=job_id,
+        )
+        if isinstance(start_result, _StartBlocked):
+            report = _finalize_blocked_paper_execution_run(
+                resolved_settings,
+                run_id,
                 strategy_id=strategy_id,
-                symbol=candidate.symbol,
-                side=candidate.side,
-                quantity=candidate.quantity,
-                intended_session=candidate.session_date,
-                client_order_id=pending_order.client_order_id,
-                intent_hash=pending_order.intent_hash,
-                intent_version=pending_order.intent_version,
-                reference_price=candidate.reference_price,
-                metadata={
-                    "signal_reason": candidate.signal_reason,
-                    "decision_reason": candidate.decision_reason,
-                    "risk_metadata": candidate.risk_metadata,
-                    "source_risk_run_id": str(candidate.source_risk_run_id),
-                    "source_risk_event_id": str(candidate.risk_event_id),
+                as_of_session=as_of_session,
+                requested_risk_run_id=risk_run_id,
+                trigger_source=trigger_source,
+                strategy_status=control_state.status,
+                blocked_reason=start_result.reason,
+                action=start_result.action,
+                message=start_result.message,
+                extra_details={
+                    "candidate_dispositions": start_result.dispositions,
+                    **start_result.extra,
                 },
             )
+            emit_structured_log(
+                logger,
+                logging.WARNING,
+                "paper_execution_blocked",
+                strategy_id=strategy_id,
+                run_id=report.run_id,
+                session_date=as_of_session.isoformat(),
+                strategy_status=control_state.status,
+                blocked_reason=start_result.reason,
+                trigger_source=trigger_source,
+            )
+            return report
+        if isinstance(start_result, _StartNoop):
+            noop_summary: dict[str, Any] = {
+                "stage": "completed",
+                "action": "noop_existing_orders",
+                "strategy_id": strategy_id,
+                "as_of_session": as_of_session.isoformat(),
+                "requested_risk_run_id": risk_run_id,
+                "source_risk_run_id": str(source_risk_run.id),
+                "approved_candidate_count": len(candidates),
+                "submitted_count": 0,
+                "existing_count": len(start_result.existing_orders),
+                "reused_count": len(start_result.existing_orders),
+                "versioned_count": 0,
+                "skipped_by_kill_switch_count": 0,
+                "skipped_by_ownership_count": 0,
+                "submitted_orders": [],
+                "existing_orders": start_result.existing_orders,
+                "reused_orders": start_result.existing_orders,
+                "versioned_orders": [],
+                "skipped_by_kill_switch": [],
+                "skipped_by_ownership": [],
+                "candidate_dispositions": start_result.dispositions,
+                "broker_provider": resolved_settings.broker.provider,
+                "execution_defaults": resolved_settings.execution.model_dump(mode="json"),
+            }
+            report = _update_paper_execution_run(
+                resolved_settings,
+                run_id,
+                status=StrategyRunStatus.SUCCEEDED,
+                completed_at=datetime.now(UTC),
+                result_summary=noop_summary,
+            )
+            emit_structured_log(
+                logger,
+                logging.INFO,
+                "paper_execution_completed",
+                strategy_id=strategy_id,
+                run_id=report.run_id,
+                session_date=as_of_session.isoformat(),
+                strategy_status=control_state.status,
+                trigger_source=trigger_source,
+                submitted_count=0,
+                existing_count=len(start_result.existing_orders),
+            )
+            return report
 
-            # DB-04/DB-05 invariant (explicit transaction boundary + commit-
-            # after-both): the broker call below sits OUTSIDE any open
-            # session/transaction -- the pre-broker `session_scope` above
-            # already committed the PENDING_SUBMISSION intent (durable
-            # idempotency), and the two branches below each open their OWN
-            # fresh `session_scope`. The success branch's commit is
-            # contingent on BOTH (a) the broker call having already
-            # returned successfully (we are past `submit_order` without an
-            # exception) AND (b) the state-transition write below flushing
-            # cleanly -- if either is false, that success is never
-            # committed as success. A broker exception never enters the
-            # success-persist session at all (see the `except` branch).
-            try:
-                # D-12: every HTTP attempt is logged durably (own committed
-                # transactions) before and after it through the bound log.
-                with bind_attempt_log(
-                    DbSubmissionAttemptLog(
-                        resolved_settings,
-                        paper_order_id=pending_order_id,
-                        strategy_run_id=run_id,
-                    )
-                ):
-                    result = broker_execution.submit_order(intent)
-            except AmbiguousOrderSubmissionError as exc:
-                # D-12: the request may have reached the broker. The intent is parked
-                # in UNKNOWN (never retryable, never re-sent) and the run stops; the
-                # Job lands failed with outcome_uncertain through the handler's
-                # external_ marker. Recovery (20.1-10) resolves it from the log.
-                with session_scope(resolved_settings) as session:
-                    ambiguous_order = session.get(PaperOrder, pending_order_id)
-                    if ambiguous_order is not None:
-                        _park_intent_unknown(
-                            session,
-                            resolved_settings,
-                            order=ambiguous_order,
-                            run_id=run_id,
-                            error=exc,
-                            trigger_source=trigger_source,
-                        )
-                raise
-            except OrderRejectedError as exc:
-                # D-12: a 4xx refusal is final. SUBMISSION_FAILED is retryable by
-                # design, so the intent ends REJECTED (already-legal BROKER_REJECTED
-                # transition) with the closed class and HTTP evidence; a new order is
-                # a new decision.
-                with session_scope(resolved_settings) as session:
-                    rejected_order = session.get(PaperOrder, pending_order_id)
-                    if rejected_order is not None:
-                        rejected_order.last_submission_error = str(exc)
-                        rejected_order.broker_payload = {
-                            "error": str(exc),
-                            "submission_class": exc.submission_class.value,
-                            "http_status": exc.http_status,
-                        }
-                        apply_order_transition(
-                            rejected_order.id,
-                            OrderTransitionRequest(
-                                strategy_run_id=run_id,
-                                event_type=OrderTransitionEventType.BROKER_REJECTED,
-                                details={
-                                    "submission_class": exc.submission_class.value,
-                                    "http_status": exc.http_status,
-                                    "attempt_numbers": list(exc.attempt_numbers),
-                                    "trigger_source": trigger_source,
-                                },
-                            ),
-                            session=session,
-                            settings=resolved_settings,
-                        )
-                raise
-            except Exception as exc:
-                with session_scope(resolved_settings) as session:
-                    failed_order = session.get(PaperOrder, pending_order_id)
-                    if failed_order is not None:
-                        failed_order.last_submission_error = str(exc)
-                        failed_order.broker_payload = {"error": str(exc)}
-                        apply_order_transition(
-                            failed_order.id,
-                            OrderTransitionRequest(
-                                strategy_run_id=run_id,
-                                event_type=OrderTransitionEventType.SUBMISSION_FAILED,
-                                details={
-                                    "error": str(exc),
-                                    "trigger_source": trigger_source,
-                                },
-                            ),
-                            session=session,
-                            settings=resolved_settings,
-                        )
-                # No broker side effect occurred (submit_order raised before
-                # returning) -- this is a clean failure, not a divergence
-                # between broker and local state. Reconciliation is
-                # deliberately NOT scheduled on this path (DB-06 scope).
-                raise
-
-            try:
-                with session_scope(resolved_settings) as session:
-                    persisted_order = session.get(PaperOrder, pending_order_id)
-                    if persisted_order is None:
-                        raise LookupError(f"Missing pending paper_order '{pending_order_id}'.")
-
-                    transition_recorded_at = datetime.now(UTC)
-                    persisted_order.broker_order_id = result.broker_order_id or None
-                    persisted_order.broker_status = result.broker_status
-                    persisted_order.submitted_at = result.submitted_at
-                    persisted_order.last_submission_error = None
-                    persisted_order.broker_payload = result.raw_payload
-                    apply_order_transition(
-                        persisted_order.id,
-                        OrderTransitionRequest(
-                            strategy_run_id=run_id,
-                            event_type=_broker_transition_event(result.status),
-                            details={
-                                "broker_order_id": result.broker_order_id,
-                                "broker_status": result.broker_status,
-                                "trigger_source": trigger_source,
-                            },
-                            event_at=transition_recorded_at,
-                        ),
-                        session=session,
-                        settings=resolved_settings,
-                    )
-                    session.flush()
-                    session.refresh(persisted_order)
-                    payload = _paper_order_payload(
-                        persisted_order,
-                        intent_decision=intent_decision.summary,
-                        supersedes_client_order_id=intent_decision.supersedes_client_order_id,
-                    )
-                    submitted_orders.append(payload)
-                    if intent_decision.action == "retry_existing":
-                        reused_orders.append(payload)
-                    if intent_decision.action == "create_new_version":
-                        versioned_orders.append(payload)
-            except Exception as exc:
-                # DB-06: the broker has ALREADY accepted this order (we are
-                # past `submit_order` without an exception) but the local
-                # write that would record that acceptance just rolled back
-                # (`session_scope` rolls back on any exception). The broker
-                # and the local DB are now divergent for this order --
-                # rolling back the local write is necessary but not
-                # sufficient: a reconciliation pass must be scheduled so the
-                # divergence is discovered and corrected rather than
-                # silently swallowed. The original exception always
-                # propagates after scheduling.
-                schedule_reconciliation_after_partial_failure(
-                    resolved_settings,
-                    logger=logger,
-                    strategy_id=strategy_id,
-                    run_id=run_id,
-                    paper_order_id=pending_order_id,
-                    session_date=candidate.session_date,
-                    client_order_id=pending_order.client_order_id,
-                    broker_order_id=result.broker_order_id,
-                    trigger_source=trigger_source,
-                    error=exc,
-                )
-                raise
-
-        halted_mid_run = bool(skipped_by_kill_switch) and (
-            mid_run_kill_switch is not None and mid_run_kill_switch.is_tripped
+        context = _ExecutionContext(
+            settings=resolved_settings,
+            logger=logger,
+            strategy_id=strategy_id,
+            strategy_row_id=strategy_row_id,
+            as_of_session=as_of_session,
+            risk_run_id=source_risk_run.id,
+            run_id=run_id,
+            trigger_source=trigger_source,
+            fence=Fence(
+                operation_id=start_result.operation_id,
+                epoch=start_result.epoch,
+                job_id=start_result.executor_job_id,
+            ),
+            lease_owner=start_result.lease_owner,
+            broker_execution=broker_execution,
+            price_source=resolved_price_source,
+            failure_threshold=resolved_settings.execution.safety.repeated_failure_threshold,
         )
-        # D-03: ownership lost mid-run halts the remaining candidates. Kill
-        # switch has precedence when both halted (guarded-body order).
-        halted_by_ownership = (
-            not halted_mid_run
-            and bool(skipped_by_ownership)
-            and mid_run_ownership_block is not None
-        )
+        loop = _run_operation_loop(context)
+        # Candidates this risk run had already realised keep reporting as existing orders.
+        loop.existing_orders = [*start_result.existing_orders, *loop.existing_orders]
+        loop.reused_orders = [*start_result.existing_orders, *loop.reused_orders]
+
+        halted_mid_run = loop.halt == "kill_switch"
+        halted_by_ownership = loop.halt == "ownership"
+        mid_run_kill_switch = loop.kill_switch
+        mid_run_ownership_block = loop.ownership_block
+        operation_summary = _operation_summary(resolved_settings, start_result.operation_id)
         summary: dict[str, Any] = {
             "stage": "blocked_mid_run" if (halted_mid_run or halted_by_ownership) else "completed",
             "strategy_id": strategy_id,
@@ -763,18 +548,21 @@ def _run_paper_order_submission_guarded(
             "requested_risk_run_id": risk_run_id,
             "source_risk_run_id": str(source_risk_run.id),
             "approved_candidate_count": len(candidates),
-            "submitted_count": len(submitted_orders),
-            "existing_count": len(existing_orders),
-            "reused_count": len(reused_orders),
-            "versioned_count": len(versioned_orders),
-            "skipped_by_kill_switch_count": len(skipped_by_kill_switch),
-            "skipped_by_ownership_count": len(skipped_by_ownership),
-            "submitted_orders": submitted_orders,
-            "existing_orders": existing_orders,
-            "reused_orders": reused_orders,
-            "versioned_orders": versioned_orders,
-            "skipped_by_kill_switch": skipped_by_kill_switch,
-            "skipped_by_ownership": skipped_by_ownership,
+            "submitted_count": len(loop.submitted_orders),
+            "existing_count": len(loop.existing_orders),
+            "reused_count": len(loop.reused_orders),
+            "versioned_count": len(loop.versioned_orders),
+            "skipped_by_kill_switch_count": len(loop.skipped_by_kill_switch),
+            "skipped_by_ownership_count": len(loop.skipped_by_ownership),
+            "submitted_orders": loop.submitted_orders,
+            "existing_orders": loop.existing_orders,
+            "reused_orders": loop.reused_orders,
+            "versioned_orders": loop.versioned_orders,
+            "skipped_by_kill_switch": loop.skipped_by_kill_switch,
+            "skipped_by_ownership": loop.skipped_by_ownership,
+            "rejected_orders": loop.rejected_orders,
+            "candidate_dispositions": start_result.dispositions,
+            "operation": operation_summary,
             "broker_provider": resolved_settings.broker.provider,
             "execution_defaults": resolved_settings.execution.model_dump(mode="json"),
         }
@@ -782,23 +570,25 @@ def _run_paper_order_submission_guarded(
         if halted_mid_run and mid_run_kill_switch is not None:
             halted_message = (
                 "Global kill switch tripped during session; "
-                f"{len(skipped_by_kill_switch)} pending candidate(s) halted before broker submission."
+                f"{len(loop.skipped_by_kill_switch)} pending candidate(s) halted before broker submission."
             )
             summary["blocked_reason"] = BLOCKED_REASON_GLOBAL_KILL_SWITCH
             summary["action"] = "blocked_mid_run_global_kill_switch"
             summary["message"] = halted_message
-            summary["kill_switch"] = mid_run_kill_switch.to_dict()
+            summary["kill_switch"] = mid_run_kill_switch
         elif halted_by_ownership and mid_run_ownership_block is not None:
             halted_message = (
                 "Strategy is no longer the active paper strategy "
-                f"({mid_run_ownership_block.value}); "
-                f"{len(skipped_by_ownership)} pending candidate(s) halted before broker submission."
+                f"({mid_run_ownership_block}); "
+                f"{len(loop.skipped_by_ownership)} pending candidate(s) halted before broker submission."
             )
             summary["blocked_reason"] = BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY
             summary["action"] = "blocked_mid_run_not_active_paper_strategy"
             summary["message"] = halted_message
-            summary["ownership_block"] = mid_run_ownership_block.value
+            summary["ownership_block"] = mid_run_ownership_block
     except Exception as exc:
+        if context is not None:
+            _best_effort_pause(context)
         _update_paper_execution_run(
             resolved_settings,
             run_id,
@@ -832,6 +622,8 @@ def _run_paper_order_submission_guarded(
     finally:
         if owns_execution_service and hasattr(broker_execution, "close"):
             broker_execution.close()
+        if owns_price_source and hasattr(resolved_price_source, "close"):
+            resolved_price_source.close()
 
     completed_at = datetime.now(UTC)
     if halted_by_ownership and mid_run_ownership_block is not None:
@@ -852,7 +644,7 @@ def _run_paper_order_submission_guarded(
             session_date=as_of_session.isoformat(),
             strategy_status=control_state.status,
             blocked_reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
-            ownership_block=mid_run_ownership_block.value,
+            ownership_block=mid_run_ownership_block,
             trigger_source=trigger_source,
             submitted_count=summary["submitted_count"],
             skipped_by_ownership_count=summary["skipped_by_ownership_count"],
@@ -875,7 +667,7 @@ def _run_paper_order_submission_guarded(
             run_id=report.run_id,
             session_date=as_of_session.isoformat(),
             strategy_status=control_state.status,
-            kill_switch_state=mid_run_kill_switch.state,
+            kill_switch_state=mid_run_kill_switch.get("state"),
             blocked_reason=BLOCKED_REASON_GLOBAL_KILL_SWITCH,
             trigger_source=trigger_source,
             submitted_count=summary["submitted_count"],
@@ -908,6 +700,15 @@ def _run_paper_order_submission_guarded(
 #: Domain action of a paper session refused by the D-15 recovery defence.
 BLOCKED_ACTION_OUTCOME_UNRESOLVED = "blocked_outcome_unresolved"
 
+#: Run-time execution blocks raised while creating the operation (zero POST; Job SUCCEEDED).
+_SUBMISSION_BLOCK_ACTIONS = frozenset(
+    {
+        BLOCKED_ACTION_OUTCOME_UNRESOLVED,
+        "blocked_evaluation_basis_unverified",
+        "blocked_not_active_paper_strategy",
+    }
+)
+
 
 def _recovery_gate_code(settings: Settings, strategy_id: str) -> str | None:
     """The unresolved-outcome gate code of ``strategy_id`` (read-only, 2 statements), or None."""
@@ -928,6 +729,7 @@ def run_paper_session(
     execution_service: ExecutionService | None = None,
     broker_client: AlpacaClient | None = None,
     job_id: uuid.UUID | None = None,
+    price_source: PriceSource | None = None,
 ) -> PaperSessionRunReport:
     """``job_id`` (D-08/D-09) is threaded to BOTH runs this function may
     create: the internal reconciliation ``StrategyRun`` (via
@@ -1202,6 +1004,13 @@ def run_paper_session(
         )
 
     if not session_plan.missing_candidates:
+        # Round 6: the persisted per-candidate dispositions (never recomputed by a read model).
+        base_summary["candidate_dispositions"] = noop_candidate_dispositions(
+            resolved_settings,
+            strategy_id=resolved_strategy_id,
+            source_risk_run_id=session_plan.source_risk_run_id,
+            candidates=session_plan.candidates,
+        )
         emit_structured_log(
             logger,
             logging.INFO,
@@ -1233,11 +1042,40 @@ def run_paper_session(
         registry=registry,
         execution_service=execution_service,
         job_id=job_id,
+        price_source=price_source,
     )
     result_summary = dict(execution_report.result_summary)
     result_summary["session_preflight"] = base_summary
     blocked_reason = result_summary.get("blocked_reason")
-    if blocked_reason == BLOCKED_REASON_GLOBAL_KILL_SWITCH:
+    operation = result_summary.get("operation")
+    operation = operation if isinstance(operation, dict) else {}
+    if result_summary.get("action") == "noop_existing_orders":
+        # Every candidate was a replay / already-submitted action (S3-R4): a no-op, zero POST.
+        action = "noop_existing_orders"
+        emit_structured_log(
+            logger,
+            logging.INFO,
+            "paper_session_noop",
+            strategy_id=resolved_strategy_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            trigger_source=resolved_trigger_source,
+            action=action,
+        )
+    elif result_summary.get("action") in _SUBMISSION_BLOCK_ACTIONS:
+        action = str(result_summary["action"])
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_session_blocked",
+            strategy_id=resolved_strategy_id,
+            run_id=execution_report.run_id,
+            session_date=as_of_session.isoformat(),
+            strategy_status=control_state.status,
+            blocked_reason=blocked_reason,
+            trigger_source=resolved_trigger_source,
+        )
+    elif blocked_reason == BLOCKED_REASON_GLOBAL_KILL_SWITCH:
         action = "blocked_global_kill_switch"
         emit_structured_log(
             logger,
@@ -1275,7 +1113,1322 @@ def run_paper_session(
         execution_status=execution_report.status,
         result_summary=result_summary,
         reconciliation_run_id=reconciliation_run_id,
+        operation_id=operation.get("id"),
+        operation_state=operation.get("state"),
+        operation_reason=operation.get("reason"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Execution operation: start, sequential loop, guarded single send path (REC-02, D-17, S1-R3)
+# ---------------------------------------------------------------------------
+
+
+class ExecutorJobRequiredError(RuntimeError):
+    """An execution operation needs the Job that holds execution authority (S1-R3).
+
+    Nothing was created or sent when this is raised."""
+
+
+class ExecutionAuthorityLostAfterSendError(RuntimeError):
+    """The executor lost its authority after the broker answered; its outcome could not be
+    recorded locally. Never mapped to a domain conflict: the POST WAS sent, so the Job fails
+    with an uncertain outcome and recovery (broker-order-sync) establishes the order."""
+
+
+def _executor_identity(settings: Settings, job_id: uuid.UUID | None) -> tuple[uuid.UUID, str]:
+    """The Job that will hold execution authority and the lease owner it holds NOW.
+
+    ``JobContext`` is frozen and carries no lease owner, so the owner is read once from the
+    Job row when the session starts (this process certainly holds the lease then); every T1
+    re-verifies it, so a lease taken over later refuses the next send. A Job-less call cannot
+    hold authority: tests that call the service directly use ``tests/support``'s seam.
+    """
+
+    if job_id is None:
+        raise ExecutorJobRequiredError(
+            "A paper execution operation needs an executor Job (job_id); none was given."
+        )
+    with session_scope(settings) as session:
+        lease_owner = session.execute(
+            select(Job.lease_owner).where(Job.id == job_id)
+        ).scalar_one_or_none()
+    return job_id, lease_owner or ""
+
+
+def _default_price_source(settings: Settings) -> PriceSource:
+    """The production S2-R3 price source (read-only latest-trade GET); tests patch this."""
+
+    return AlpacaPriceSource(settings.broker.alpaca)
+
+
+@dataclass(frozen=True)
+class _ExecutionContext:
+    """What every step of an operation's loop needs (shared with Continue, 20.1-16)."""
+
+    settings: Settings
+    logger: logging.Logger
+    strategy_id: str
+    strategy_row_id: uuid.UUID
+    as_of_session: date
+    risk_run_id: uuid.UUID
+    run_id: uuid.UUID
+    trigger_source: str
+    fence: Fence
+    lease_owner: str
+    broker_execution: ExecutionService
+    price_source: PriceSource
+    failure_threshold: int
+
+
+@dataclass(frozen=True)
+class _StartBlocked:
+    """A run-time execution block raised while creating the operation (zero POST)."""
+
+    reason: str
+    action: str
+    message: str
+    dispositions: list[dict[str, Any]] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _StartNoop:
+    """No candidate became a new intent: ``noop_existing_orders`` with the dispositions."""
+
+    dispositions: list[dict[str, Any]]
+    existing_orders: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _OperationStart:
+    operation_id: uuid.UUID
+    epoch: int
+    executor_job_id: uuid.UUID
+    lease_owner: str
+    dispositions: list[dict[str, Any]]
+    existing_orders: list[dict[str, Any]] = field(default_factory=list)
+
+
+_StartResult = _StartBlocked | _StartNoop | _OperationStart
+
+
+@dataclass(frozen=True)
+class _EligibleCandidate:
+    candidate: PaperExecutionCandidate
+    fingerprint: str
+    prior_execution_refs: tuple[str, ...]
+
+
+def _candidate_dispositions(
+    session: Session,
+    settings: Settings,
+    *,
+    strategy_id: str,
+    risk_run: StrategyRun,
+    candidates: Sequence[PaperExecutionCandidate],
+    rows: BasisRows,
+) -> tuple[list[dict[str, Any]], list[_EligibleCandidate], list[PaperExecutionCandidate]]:
+    """S3-R4 checks 4-6 for every candidate, in plan order: the closed dispositions of the ones
+    that do NOT become a new intent (``[{symbol, side, disposition}]``, round 6), the eligible
+    ones with their ``decision_fingerprint`` and the candidates this very risk run already
+    realised (reported as existing orders)."""
+
+    manifest = (risk_run.result_summary or {}).get("evaluation_manifest")
+    inputs = decision_inputs_digest(
+        manifest if isinstance(manifest, Mapping) else None,
+        risk_config=risk_config_digest(settings, strategy_id),
+    )
+    working = strategy_working_orders(session, strategy_id)
+    portfolio_digest = portfolio_state_digest(
+        rows.basis_positions, [(order.symbol, order.side, order.quantity) for order in working]
+    )
+    earlier = load_earlier_intents(session, strategy_id, rows.orders)
+    basis_positions = rows.basis_positions if rows.basis_source is not None else None
+    dispositions: list[dict[str, Any]] = []
+    eligible: list[_EligibleCandidate] = []
+    # A candidate this very risk run already realised as an order that reached (or may have
+    # reached) the broker is the SAME intent (case a), reported as an existing order, never as
+    # a disposition; one that never reached the broker stays a candidate (a retry).
+    realised_here = {
+        (order.symbol, order.side, order.session_date, order.quantity)
+        for order in rows.orders
+        if order.source_risk_run_id == risk_run.id and order.reached_broker
+    }
+    already_realised: list[PaperExecutionCandidate] = []
+    for candidate in candidates:
+        if (
+            candidate.symbol,
+            candidate.side.value,
+            candidate.session_date,
+            candidate.quantity,
+        ) in realised_here:
+            already_realised.append(candidate)
+            continue
+        fingerprint = decision_fingerprint(
+            strategy_id=strategy_id,
+            session_date=candidate.session_date,
+            symbol=candidate.symbol,
+            side=candidate.side.value,
+            quantity=candidate.quantity,
+            inputs_digest=inputs,
+            portfolio_digest=portfolio_digest,
+        )
+        verdict = classify_candidate(
+            CandidateKey(
+                symbol=candidate.symbol,
+                side=candidate.side.value,
+                session_date=candidate.session_date,
+                quantity=candidate.quantity,
+            ),
+            fingerprint,
+            orders=rows.orders,
+            earlier_intents=earlier,
+            basis_positions=basis_positions,
+        )
+        if verdict.disposition is None:
+            eligible.append(
+                _EligibleCandidate(candidate, fingerprint, verdict.prior_execution_refs)
+            )
+            continue
+        entry: dict[str, Any] = {
+            "symbol": candidate.symbol,
+            "side": candidate.side.value,
+            "disposition": verdict.disposition.value,
+        }
+        if verdict.earlier_intent_id is not None:
+            entry["earlier_intent_id"] = str(verdict.earlier_intent_id)
+        dispositions.append(entry)
+    return dispositions, eligible, already_realised
+
+
+def _existing_order_payloads(
+    session: Session,
+    settings: Settings,
+    *,
+    strategy_id: str,
+    strategy_row_id: uuid.UUID,
+    candidates: Sequence[PaperExecutionCandidate],
+) -> list[dict[str, Any]]:
+    """Payloads of the orders this risk run already realised (Phase 20 ``existing_orders``)."""
+
+    payloads: list[dict[str, Any]] = []
+    for candidate in candidates:
+        decision = _resolve_paper_intent_decision(
+            session,
+            strategy_row_id=strategy_row_id,
+            strategy_id=strategy_id,
+            prefix=settings.execution.client_order_id_prefix,
+            candidate=candidate,
+            failure_threshold=settings.execution.safety.repeated_failure_threshold,
+        )
+        if decision.existing_order_id is None:
+            continue
+        existing = session.get(PaperOrder, decision.existing_order_id)
+        if existing is not None:
+            payloads.append(
+                _paper_order_payload(
+                    existing,
+                    intent_decision=decision.summary,
+                    supersedes_client_order_id=decision.supersedes_client_order_id,
+                )
+            )
+    return payloads
+
+
+def noop_candidate_dispositions(
+    settings: Settings,
+    *,
+    strategy_id: str,
+    source_risk_run_id: uuid.UUID,
+    candidates: Sequence[PaperExecutionCandidate],
+) -> list[dict[str, Any]]:
+    """The persisted per-candidate dispositions of a start whose every candidate already has an
+    order (the preflight ``noop_existing_orders`` path). Read-only; never raises."""
+
+    try:
+        with session_scope(settings) as session:
+            risk_run = session.get(StrategyRun, source_risk_run_id)
+            if risk_run is None:
+                return []
+            rows = load_basis_verification_rows(
+                session, strategy_public_id=strategy_id, risk_run=risk_run
+            )
+            dispositions, _eligible, _realised = _candidate_dispositions(
+                session,
+                settings,
+                strategy_id=strategy_id,
+                risk_run=risk_run,
+                candidates=candidates,
+                rows=rows,
+            )
+            return dispositions
+    except Exception:  # reporting only: a failure here must never change the run's result
+        return []
+
+
+def _prepare_start(
+    settings: Settings,
+    *,
+    strategy_id: str,
+    strategy_row_id: uuid.UUID,
+    source_risk_run_id: uuid.UUID,
+    as_of_session: date,
+    candidates: Sequence[PaperExecutionCandidate],
+    job_id: uuid.UUID | None,
+) -> _StartResult:
+    """Run-time operation creation (D-16, S3-R4): ONE transaction that holds the ownership
+    singleton FOR SHARE (SER), re-checks the owner, lazily expires a stale open operation
+    (D-21), then decides the start: a completed operation of the pinned risk run is a no-op, a
+    terminated or open one is a typed conflict, an unresolved outcome or an unverified basis
+    blocks with zero POST, candidates failing the replay / justification / allowance checks are
+    listed and not registered, and the remaining candidates are persisted as ``planned``
+    intents in plan order. The database constraints (one open operation per strategy, one
+    operation per pinned risk run) decide races, not a prior read.
+    """
+
+    now = clock.now_utc()
+    with session_scope(settings) as session:
+        lock_active_paper_strategy_shared(session)
+        gate = operator_controls.load_trading_gate_state(session, strategy_id=strategy_id)
+        block = gate.ownership_block_for(strategy_id)
+        if block is not None:
+            return _StartBlocked(
+                reason=BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY,
+                action="blocked_not_active_paper_strategy",
+                message=(
+                    f"Strategy '{strategy_id}' is not the active paper strategy "
+                    f"({block.value}); paper execution halted before broker submission begins."
+                ),
+                extra={
+                    "ownership_block": block.value,
+                    "active_paper_strategy": gate.owner.to_dict(),
+                },
+            )
+
+        open_operation = (
+            session.execute(
+                select(ExecutionOperation).where(
+                    ExecutionOperation.strategy_id == strategy_row_id,
+                    ExecutionOperation.state.in_([s.value for s in OPEN_OPERATION_STATES]),
+                )
+            )
+            .scalars()
+            .first()
+        )
+        still_open = False
+        if open_operation is not None:
+            touched = touch_operation(session, open_operation.id, now=now, settings=settings)
+            still_open = touched.state in OPEN_OPERATION_STATES
+        risk_run = session.get(StrategyRun, source_risk_run_id)
+        if risk_run is None:
+            raise LookupError(f"Missing risk evaluation run '{source_risk_run_id}'.")
+        rows = load_basis_verification_rows(
+            session, strategy_public_id=strategy_id, risk_run=risk_run
+        )
+        dispositions, eligible, realised = _candidate_dispositions(
+            session,
+            settings,
+            strategy_id=strategy_id,
+            risk_run=risk_run,
+            candidates=candidates,
+            rows=rows,
+        )
+        existing_payloads = _existing_order_payloads(
+            session,
+            settings,
+            strategy_id=strategy_id,
+            strategy_row_id=strategy_row_id,
+            candidates=realised,
+        )
+        if candidates and len(realised) == len(candidates):
+            # An idempotent re-run on the SAME risk run: every candidate is already an order
+            # that reached the broker. Phase 20 result (existing orders, no POST), whatever the
+            # state of that run's operation.
+            return _StartNoop([], existing_payloads)
+        if still_open and open_operation is not None:
+            raise OperationOpenError(strategy_row_id, open_operation.id)
+        pinned = session.execute(
+            select(ExecutionOperation).where(
+                ExecutionOperation.strategy_id == strategy_row_id,
+                ExecutionOperation.risk_run_id == source_risk_run_id,
+            )
+        ).scalar_one_or_none()
+        if pinned is not None:
+            if OperationState(pinned.state) is OperationState.COMPLETED:
+                return _StartNoop([])
+            raise RiskRunAlreadyOperatedError(strategy_row_id, source_risk_run_id)
+
+        # (1) no uncertainty: no submission of the strategy may still produce an execution
+        recovery = strategy_recovery_status(session, strategy_id, now=now)
+        # G2: an order that reached (or may have reached) the broker with no broker evidence, no
+        # 4xx rejection and no legacy failure marker is UNESTABLISHED: it may still produce an
+        # execution, so nothing else is authorized, whether or not a Job links it.
+        local_unestablished = [
+            order
+            for order in rows.orders
+            if order.reached_broker
+            and not order.has_broker_evidence
+            and order.status is not OrderLifecycleState.REJECTED
+            and not (order.status is OrderLifecycleState.SUBMISSION_FAILED and not order.attempts)
+        ]
+        if recovery.gate_code is GateCode.OUTCOME_UNRESOLVED or local_unestablished:
+            return _StartBlocked(
+                reason=GateCode.OUTCOME_UNRESOLVED.value,
+                action=BLOCKED_ACTION_OUTCOME_UNRESOLVED,
+                message=(
+                    f"An uncertain order outcome of strategy '{strategy_id}' is unresolved; "
+                    "paper execution halted before any intent was registered."
+                ),
+                extra={"required_job_type": REQUIRED_JOB_TYPE},
+            )
+        # (2) verified basis
+        verification = verify_evaluation_basis(rows)
+        if verification.failure is not None:
+            return _StartBlocked(
+                reason="evaluation_basis_unverified",
+                action="blocked_evaluation_basis_unverified",
+                message=(
+                    "The evaluation's portfolio basis is not verified against the strategy's "
+                    f"executions ({verification.failure.value}); nothing was registered or sent."
+                ),
+                extra={"detail": verification.failure.value},
+            )
+        # (4)-(6) replay, justification, session allowance (computed above)
+        if not eligible:
+            return _StartNoop(dispositions, existing_payloads)
+
+        executor_job_id, lease_owner = _executor_identity(settings, job_id)
+        planned = [
+            PlannedIntent(
+                symbol_id=item.candidate.symbol_id,
+                side=item.candidate.side.value,
+                quantity=item.candidate.quantity,
+                client_order_id=derive_order_identity(
+                    prefix=settings.execution.client_order_id_prefix,
+                    strategy_id=strategy_id,
+                    session_date=item.candidate.session_date,
+                    symbol=item.candidate.symbol,
+                    side=item.candidate.side,
+                    quantity=item.candidate.quantity,
+                ).client_order_id,
+                decision_fingerprint=item.fingerprint,
+                risk_event_id=item.candidate.risk_event_id,
+                reference_price=item.candidate.reference_price,
+                prior_execution_refs=item.prior_execution_refs,
+            )
+            for item in eligible
+        ]
+        operation = create_operation(
+            session,
+            strategy_pk=strategy_row_id,
+            as_of_session=as_of_session,
+            risk_run_id=source_risk_run_id,
+            intents=planned,
+            job_id=executor_job_id,
+            basis_verification=verification.record,
+        )
+        return _OperationStart(
+            operation_id=operation.id,
+            epoch=operation.execution_epoch,
+            executor_job_id=executor_job_id,
+            lease_owner=lease_owner,
+            dispositions=dispositions,
+            existing_orders=existing_payloads,
+        )
+
+
+@dataclass(frozen=True)
+class _IntentView:
+    """One pinned intent as the loop sees it (identity never changes)."""
+
+    intent_id: uuid.UUID
+    sequence: int
+    symbol_id: uuid.UUID
+    symbol: str
+    side: str
+    quantity: Decimal
+    reference_price: Decimal | None
+    client_order_id: str
+    risk_event_id: uuid.UUID | None
+    paper_order_id: uuid.UUID | None
+    session_date: date
+
+
+@dataclass
+class _LoopState:
+    submitted_orders: list[dict[str, Any]] = field(default_factory=list)
+    existing_orders: list[dict[str, Any]] = field(default_factory=list)
+    reused_orders: list[dict[str, Any]] = field(default_factory=list)
+    versioned_orders: list[dict[str, Any]] = field(default_factory=list)
+    rejected_orders: list[dict[str, Any]] = field(default_factory=list)
+    skipped_by_kill_switch: list[dict[str, Any]] = field(default_factory=list)
+    skipped_by_ownership: list[dict[str, Any]] = field(default_factory=list)
+    halt: str | None = None
+    kill_switch: dict[str, Any] | None = None
+    ownership_block: str | None = None
+    final_state: OperationState = OperationState.RUNNING
+    final_reason: str | None = None
+
+
+def _load_open_intents(session: Session, operation_id: uuid.UUID) -> list[_IntentView]:
+    """The operation's still-unsent intents in plan order: open, and ``planned`` /
+    ``registered_unsent`` / ``not_sent`` (an intent that was submitted, rejected or is in doubt
+    is never sent again by this loop; it is the SAME intent, S3-R4 case a)."""
+
+    operation = session.get(ExecutionOperation, operation_id)
+    assert operation is not None
+    facts = load_intent_facts(session, [operation_id])[operation_id]
+    sendable = {
+        SubmissionIntentState.PLANNED,
+        SubmissionIntentState.REGISTERED_UNSENT,
+        SubmissionIntentState.NOT_SENT,
+    }
+    return [
+        _IntentView(
+            intent_id=fact.row.id,
+            sequence=fact.row.sequence,
+            symbol_id=fact.row.symbol_id,
+            symbol=fact.ticker,
+            side=fact.row.side,
+            quantity=fact.row.quantity,
+            reference_price=fact.row.reference_price,
+            client_order_id=fact.row.client_order_id,
+            risk_event_id=fact.row.risk_event_id,
+            paper_order_id=fact.row.paper_order_id,
+            session_date=operation.as_of_session,
+        )
+        for fact in facts
+        if fact.row.disposition == IntentDisposition.OPEN.value and fact.state in sendable
+    ]
+
+
+def _skipped_entry(view: _IntentView) -> dict[str, Any]:
+    return {
+        "symbol": view.symbol,
+        "side": view.side,
+        "quantity": float(view.quantity),
+        "session_date": view.session_date.isoformat(),
+        "source_risk_event_id": str(view.risk_event_id) if view.risk_event_id else None,
+    }
+
+
+def _operation_summary(settings: Settings, operation_id: uuid.UUID) -> dict[str, Any]:
+    with session_scope(settings) as session:
+        operation = session.get(ExecutionOperation, operation_id)
+        if operation is None:
+            raise LookupError(f"Missing execution operation '{operation_id}'.")
+        session.refresh(operation)
+        state = OperationState(operation.state)
+        return {
+            "id": str(operation.id),
+            "state": state.value,
+            "reason": operation.reason,
+            "reason_detail": operation.reason_detail,
+            "next_action": next_action(state, operation.reason).value,
+        }
+
+
+def _move_running(
+    ctx: _ExecutionContext,
+    to_state: OperationState,
+    reason: str,
+    detail: str | None = None,
+) -> None:
+    """Fenced move of a RUNNING operation to a paused / requires_reevaluation state.
+
+    A stale executor (lost epoch, Job or state) changes nothing and raises
+    ``OperationConflictError``."""
+
+    validate_state_reason(to_state, reason)
+    with session_scope(ctx.settings) as session:
+        updated = cas_update_operation(
+            session,
+            ctx.fence,
+            {
+                "state": to_state.value,
+                "reason": reason,
+                "reason_detail": detail[:64] if detail else None,
+                "state_changed_at": clock.now_utc(),
+            },
+        )
+    if updated != 1:
+        raise OperationConflictError(ctx.fence.operation_id, "stale executor fence")
+
+
+def _best_effort_pause(ctx: _ExecutionContext) -> None:
+    """A crash inside the loop pauses a still-RUNNING operation (paused/awaiting_reconciliation)
+    before the exception propagates, never overwriting a more specific pause already written
+    (an ambiguous result's paused/outcome_unresolved always wins) and never raising."""
+
+    try:
+        with session_scope(ctx.settings) as session:
+            cas_update_operation(
+                session,
+                ctx.fence,
+                {
+                    "state": OperationState.PAUSED.value,
+                    "reason": PausedReason.AWAITING_RECONCILIATION.value,
+                    "reason_detail": None,
+                    "state_changed_at": clock.now_utc(),
+                },
+                from_states=(OperationState.RUNNING,),
+            )
+    except Exception:
+        ctx.logger.warning("paper_operation_best_effort_pause_failed", exc_info=True)
+
+
+def _persist_fenced(ctx: _ExecutionContext, write: Callable[[Session], None]) -> bool:
+    """Run ``write`` in one transaction while the executor's fence holds (the operation row is
+    locked FOR SHARE, so a takeover cannot interleave). Returns False, writing nothing, once
+    authority is lost."""
+
+    with session_scope(ctx.settings) as session:
+        if not fence_held(session, ctx.fence, lock=True):
+            return False
+        write(session)
+    return True
+
+
+def _run_operation_loop(ctx: _ExecutionContext, *, continuation: bool = False) -> _LoopState:
+    """The sequential, pause-aware submission loop (D-17).
+
+    Intents are submitted one at a time in plan order. Before EVERY broker action the fixed-
+    precedence permission check runs; after every broker result whose effects are not accounted
+    (accepted: working, partially filled, or already terminal but not yet synced) the operation
+    PAUSES and the remaining intents stay ``planned`` (never registered, never sent). A rejected
+    order continues to the next intent after its own permission check; an ambiguous result
+    pauses ``outcome_unresolved`` and the exception propagates (the Job lands uncertain). When
+    every intent was rejected the operation is ``completed``. Continue (20.1-16) reuses this
+    loop with ``continuation=True``.
+    """
+
+    state = _LoopState()
+    with session_scope(ctx.settings) as session:
+        pending = _load_open_intents(session, ctx.fence.operation_id)
+    for index, view in enumerate(pending):
+        with session_scope(ctx.settings) as session:
+            outcome = check_intent_permission(
+                session,
+                strategy_id=ctx.strategy_id,
+                as_of_session=ctx.as_of_session,
+                risk_run_id=ctx.risk_run_id,
+                intent=PinnedIntent(
+                    symbol=view.symbol,
+                    side=view.side,
+                    quantity=view.quantity,
+                    reference_price=view.reference_price,
+                    client_order_id=view.client_order_id,
+                    intent_id=view.intent_id,
+                ),
+                price_source=ctx.price_source,
+                settings=ctx.settings,
+                continuation=continuation,
+                now=clock.now_utc(),
+            )
+        if not outcome.ok:
+            _apply_permission_outcome(ctx, state, outcome, pending[index:])
+            return state
+        if not _execute_pinned_intent(ctx, state, view, outcome):
+            return state
+    # Every intent ended REJECTED (an accepted order would have paused the operation).
+    with session_scope(ctx.settings) as session:
+        transition(
+            session,
+            ctx.fence.operation_id,
+            OperationState.COMPLETED,
+            fence=ctx.fence,
+            now=clock.now_utc(),
+        )
+    state.final_state = OperationState.COMPLETED
+    return state
+
+
+def _apply_permission_outcome(
+    ctx: _ExecutionContext,
+    state: _LoopState,
+    outcome: PermissionOutcome,
+    remaining: Sequence[_IntentView],
+) -> None:
+    """Persist a refused permission check: pause, requires_reevaluation or terminate. Nothing
+    further is registered or sent; the unsent intents are preserved with unchanged identity."""
+
+    assert outcome.reason is not None
+    if outcome.verdict is PermissionVerdict.PAUSE:
+        _move_running(ctx, OperationState.PAUSED, outcome.reason, outcome.detail)
+        state.final_state = OperationState.PAUSED
+        if outcome.reason == PausedReason.KILL_SWITCH_TRIPPED.value:
+            state.halt = "kill_switch"
+            state.kill_switch = outcome.details.get("kill_switch")
+            state.skipped_by_kill_switch = [_skipped_entry(view) for view in remaining]
+        elif outcome.reason == PausedReason.NOT_ACTIVE_PAPER_STRATEGY.value:
+            state.halt = "ownership"
+            state.ownership_block = outcome.detail
+            state.skipped_by_ownership = [
+                {**_skipped_entry(view), "ownership_block": outcome.detail} for view in remaining
+            ]
+    elif outcome.verdict is PermissionVerdict.REEVALUATE:
+        _move_running(ctx, OperationState.REQUIRES_REEVALUATION, outcome.reason, outcome.detail)
+        state.final_state = OperationState.REQUIRES_REEVALUATION
+    else:
+        with session_scope(ctx.settings) as session:
+            transition(
+                session,
+                ctx.fence.operation_id,
+                OperationState.TERMINATED,
+                outcome.reason,
+                fence=ctx.fence,
+                ended_by="executor",
+                now=clock.now_utc(),
+            )
+        state.final_state = OperationState.TERMINATED
+    state.final_reason = outcome.reason
+
+
+def _candidate_for_view(
+    session: Session, view: _IntentView, risk_run_id: uuid.UUID
+) -> PaperExecutionCandidate:
+    """The execution candidate of a pinned intent, rebuilt from its approved risk event."""
+
+    event = session.get(RiskEvent, view.risk_event_id) if view.risk_event_id else None
+    if event is not None:
+        symbol = session.get(Symbol, event.symbol_id)
+        assert symbol is not None
+        candidate = _candidate_from_risk_event(event, symbol)
+        if candidate is not None:
+            return candidate
+    return PaperExecutionCandidate(
+        risk_event_id=view.risk_event_id or uuid.UUID(int=0),
+        source_risk_run_id=risk_run_id,
+        symbol_id=view.symbol_id,
+        symbol=view.symbol,
+        session_date=view.session_date,
+        side=OrderSide(view.side),
+        quantity=view.quantity,
+        reference_price=view.reference_price or Decimal("0"),
+        signal_reason="",
+        decision_reason="",
+        risk_metadata={},
+    )
+
+
+def create_new_version(
+    session: Session,
+    *,
+    strategy_id: str,
+    candidate: PaperExecutionCandidate,
+    identity: DerivedOrderIdentity,
+) -> PaperIntentDecision:
+    """Register ``intent_version + 1`` of a (strategy, session, symbol, side) identity (S3-R4).
+
+    Refused with ``VersionBypassRefusedError`` (``version_bypass_refused``) when ANY earlier
+    version of the identity reached or may have reached the broker (accepted in any state,
+    rejected, ambiguous, or a legacy order without proof): a new version is never a way around
+    the session allowance or an unresolved outcome. Unreachable from the start loop for intents
+    that already belong to an operation (a start only creates new intents for a new
+    operation); this assertion guards every other caller."""
+
+    orders = load_strategy_order_facts(session, strategy_id)
+    same_key = [
+        order
+        for order in orders
+        if order.symbol == candidate.symbol
+        and order.side == candidate.side.value
+        and order.session_date == candidate.session_date
+    ]
+    for order in same_key:
+        if order.reached_broker:
+            raise VersionBypassRefusedError(None)
+    predecessor = same_key[-1] if same_key else None
+    version = (
+        (max(_order_version(session, o.paper_order_id) for o in same_key) + 1) if same_key else 1
+    )
+    return PaperIntentDecision(
+        action="create_new_version" if same_key else "create_new",
+        identity=identity,
+        intent_version=version,
+        existing_order_id=None,
+        supersedes_paper_order_id=predecessor.paper_order_id if predecessor else None,
+        supersedes_client_order_id=None,
+        summary={
+            "action": "create_new_version" if same_key else "create_new",
+            "reason": "material_change_never_sent" if same_key else "new_material_intent",
+            "client_order_id": identity.client_order_id,
+            "intent_hash": identity.intent_hash,
+            "intent_version": version,
+            "source_risk_event_id": str(candidate.risk_event_id),
+        },
+    )
+
+
+def _order_version(session: Session, paper_order_id: uuid.UUID) -> int:
+    order = session.get(PaperOrder, paper_order_id)
+    return order.intent_version if order is not None else 1
+
+
+def _execute_pinned_intent(
+    ctx: _ExecutionContext,
+    state: _LoopState,
+    view: _IntentView,
+    permission: PermissionOutcome,
+) -> bool:
+    """Register one pinned intent, send it through the guarded single send path and classify the
+    result. Returns True to continue with the next intent, False when the loop must stop."""
+
+    run_id = ctx.run_id
+    logger = ctx.logger
+    order_type = ctx.settings.execution.default_order_type
+    time_in_force = ctx.settings.execution.default_time_in_force
+
+    # ---- registration (fenced): existing intent decision logic, unchanged identities --------
+    registration: dict[str, Any] = {}
+
+    def register(session: Session) -> None:
+        candidate = _candidate_for_view(session, view, ctx.risk_run_id)
+        decision = _resolve_paper_intent_decision(
+            session,
+            strategy_row_id=ctx.strategy_row_id,
+            strategy_id=ctx.strategy_id,
+            prefix=ctx.settings.execution.client_order_id_prefix,
+            candidate=candidate,
+            failure_threshold=ctx.failure_threshold,
+        )
+        registration["candidate"] = candidate
+        registration["decision"] = decision
+        if decision.action == "create_new_version":
+            create_new_version(
+                session,
+                strategy_id=ctx.strategy_id,
+                candidate=candidate,
+                identity=decision.identity,
+            )
+        if decision.action == "reuse_existing":
+            existing_order = session.get(PaperOrder, decision.existing_order_id)
+            if existing_order is None:
+                raise LookupError(f"Missing reusable paper_order '{decision.existing_order_id}'.")
+            _record_intent_decision_event(
+                session,
+                strategy_run_id=run_id,
+                paper_order_id=existing_order.id,
+                event_type="paper_order_reused",
+                message=(
+                    f"Reused existing intent '{existing_order.client_order_id}' for identical "
+                    "material order inputs; no new submission was attempted."
+                ),
+                details=decision.summary,
+            )
+            payload = _paper_order_payload(
+                existing_order,
+                intent_decision=decision.summary,
+                supersedes_client_order_id=decision.supersedes_client_order_id,
+            )
+            state.existing_orders.append(payload)
+            state.reused_orders.append(payload)
+            _link_intent(session, view.intent_id, existing_order.id)
+            registration["reused_not_sent"] = True
+            return
+
+        if decision.action == "retry_existing" and decision.existing_order_id is not None:
+            guarded_order = session.get(PaperOrder, decision.existing_order_id)
+            if guarded_order is None:
+                raise LookupError(f"Missing retryable paper_order '{decision.existing_order_id}'.")
+            prior_attempts = load_submission_attempts(session, guarded_order.id)
+            prior_class = classify_submission(prior_attempts)
+            if prior_class is not None and prior_class != SubmissionClass.NOT_SENT:
+                guard_error = AmbiguousOrderSubmissionError(
+                    "Order submission history is not clean "
+                    f"(submission_class={prior_class.value}); the intent was not re-sent.",
+                    submission_class=prior_class,
+                    attempts=summarize_attempts(prior_attempts),
+                    reason="history_not_clean",
+                )
+                _park_intent_unknown(
+                    session,
+                    ctx.settings,
+                    order=guarded_order,
+                    run_id=run_id,
+                    error=guard_error,
+                    trigger_source=ctx.trigger_source,
+                )
+                registration["guard_error"] = guard_error
+                return
+
+        if decision.existing_order_id is None:
+            paper_order = PaperOrder(
+                strategy_run_id=run_id,
+                source_risk_event_id=candidate.risk_event_id,
+                symbol_id=candidate.symbol_id,
+                intended_session_date=candidate.session_date,
+                side=candidate.side.value,
+                quantity=candidate.quantity,
+                order_type=order_type,
+                time_in_force=time_in_force,
+                intent_hash=decision.identity.intent_hash,
+                intent_version=decision.intent_version,
+                supersedes_paper_order_id=decision.supersedes_paper_order_id,
+                client_order_id=decision.identity.client_order_id,
+                status=OrderLifecycleState.PENDING_SUBMISSION,
+                broker_payload={},
+            )
+            session.add(paper_order)
+            session.flush()
+            pending_order = paper_order
+            transition_event_type = OrderTransitionEventType.INTENT_REGISTERED
+        else:
+            retrieved_order = session.get(PaperOrder, decision.existing_order_id)
+            if retrieved_order is None:
+                raise LookupError(f"Missing retryable paper_order '{decision.existing_order_id}'.")
+            pending_order = retrieved_order
+            transition_event_type = OrderTransitionEventType.RETRY_REQUESTED
+
+        pending_order.strategy_run_id = run_id
+        apply_order_transition(
+            pending_order.id,
+            OrderTransitionRequest(
+                strategy_run_id=run_id,
+                event_type=transition_event_type,
+                details={
+                    "trigger_source": ctx.trigger_source,
+                    "source_risk_event_id": str(candidate.risk_event_id),
+                    "intent_decision": decision.summary,
+                },
+            ),
+            session=session,
+            settings=ctx.settings,
+        )
+        pending_order.submission_attempt_count += 1
+        pending_order.last_submission_attempt_at = datetime.now(UTC)
+        pending_order.last_submission_error = None
+        session.flush()
+        registration["pending_order_id"] = pending_order.id
+        registration["client_order_id"] = pending_order.client_order_id
+        registration["intent_hash"] = pending_order.intent_hash
+        registration["intent_version"] = pending_order.intent_version
+        _link_intent(session, view.intent_id, pending_order.id)
+        # The permission check that allowed this send, with the fresh price observation (audit).
+        session.add(
+            ExecutionEvent(
+                strategy_run_id=run_id,
+                paper_order_id=pending_order.id,
+                event_type="intent_permission_checked",
+                severity="info",
+                blocks_execution=False,
+                event_at=datetime.now(UTC),
+                message=(
+                    f"Permission check passed for intent '{pending_order.client_order_id}' "
+                    "(window, provenance, pauses, fresh price, portfolio risk)."
+                ),
+                details=permission.audit(),
+            )
+        )
+        if decision.action == "create_new_version":
+            _record_intent_decision_event(
+                session,
+                strategy_run_id=run_id,
+                paper_order_id=pending_order.id,
+                event_type="paper_order_versioned",
+                message=(
+                    f"Created intent version {pending_order.intent_version} after superseding "
+                    f"broker-touched order '{decision.supersedes_client_order_id}'."
+                ),
+                details=decision.summary,
+            )
+        session.flush()
+
+    if not _persist_fenced(ctx, register):
+        raise OperationConflictError(ctx.fence.operation_id, "stale executor fence")
+    guard_error = registration.get("guard_error")
+    if guard_error is not None:
+        _move_running(ctx, OperationState.PAUSED, PausedReason.OUTCOME_UNRESOLVED.value)
+        state.final_state = OperationState.PAUSED
+        state.final_reason = PausedReason.OUTCOME_UNRESOLVED.value
+        raise guard_error
+    if registration.get("reused_not_sent"):
+        # Identical material intent already exists and may not be re-sent (retry threshold):
+        # nothing is sent and the operation pauses; End is available.
+        _move_running(
+            ctx,
+            OperationState.PAUSED,
+            PausedReason.BROKER_UNAVAILABLE.value,
+            "retry_threshold_exceeded",
+        )
+        state.final_state = OperationState.PAUSED
+        state.final_reason = PausedReason.BROKER_UNAVAILABLE.value
+        return False
+
+    candidate: PaperExecutionCandidate = registration["candidate"]
+    decision: PaperIntentDecision = registration["decision"]
+    pending_order_id: uuid.UUID = registration["pending_order_id"]
+    order_intent = OrderIntent(
+        strategy_id=ctx.strategy_id,
+        symbol=candidate.symbol,
+        side=candidate.side,
+        quantity=candidate.quantity,
+        intended_session=candidate.session_date,
+        client_order_id=registration["client_order_id"],
+        intent_hash=registration["intent_hash"],
+        intent_version=registration["intent_version"],
+        reference_price=candidate.reference_price,
+        metadata={
+            "signal_reason": candidate.signal_reason,
+            "decision_reason": candidate.decision_reason,
+            "risk_metadata": candidate.risk_metadata,
+            "source_risk_run_id": str(candidate.source_risk_run_id),
+            "source_risk_event_id": str(candidate.risk_event_id),
+        },
+    )
+
+    # ---- the guarded single send path (S1-R3) -------------------------------------------------
+    try:
+        result = _send_authorized(
+            ctx,
+            intent_id=view.intent_id,
+            paper_order_id=pending_order_id,
+            order_intent=order_intent,
+        )
+    except SendRefusedError as exc:
+        # T1 refused: ZERO POST. An intent that is not provably unsent (or an unresolved outcome
+        # elsewhere) pauses outcome_unresolved; a lost authority ends the executor.
+        if exc.refusal in (SendRefusal.OUTCOME_UNRESOLVED, SendRefusal.INTENT_NOT_SENDABLE):
+            _move_running(ctx, OperationState.PAUSED, PausedReason.OUTCOME_UNRESOLVED.value)
+            state.final_state = OperationState.PAUSED
+            state.final_reason = PausedReason.OUTCOME_UNRESOLVED.value
+            return False
+        raise OperationConflictError(
+            ctx.fence.operation_id, f"send_refused:{exc.refusal.value}"
+        ) from exc
+    except AmbiguousOrderSubmissionError as exc:
+        ambiguous_error = exc
+
+        # D-12: the request may have reached the broker. The intent is parked UNKNOWN (never
+        # re-sent), the operation pauses outcome_unresolved in its own committed transaction and
+        # the exception is RE-RAISED so the Job lands failed with outcome_uncertain.
+        def park(session: Session) -> None:
+            ambiguous_order = session.get(PaperOrder, pending_order_id)
+            if ambiguous_order is not None:
+                _park_intent_unknown(
+                    session,
+                    ctx.settings,
+                    order=ambiguous_order,
+                    run_id=run_id,
+                    error=ambiguous_error,
+                    trigger_source=ctx.trigger_source,
+                )
+            cas_update_operation(
+                session,
+                ctx.fence,
+                {
+                    "state": OperationState.PAUSED.value,
+                    "reason": PausedReason.OUTCOME_UNRESOLVED.value,
+                    "reason_detail": None,
+                    "state_changed_at": clock.now_utc(),
+                },
+            )
+
+        _persist_fenced(ctx, park)
+        state.final_state = OperationState.PAUSED
+        state.final_reason = PausedReason.OUTCOME_UNRESOLVED.value
+        raise
+    except OrderRejectedError as exc:
+        rejected_error = exc
+        # D-12: a 4xx refusal is final: the intent ends REJECTED and the loop continues to the
+        # next intent after its own permission check.
+        rejected: dict[str, Any] = {}
+
+        def reject(session: Session) -> None:
+            rejected_order = session.get(PaperOrder, pending_order_id)
+            if rejected_order is None:
+                return
+            rejected_order.last_submission_error = str(rejected_error)
+            rejected_order.broker_payload = {
+                "error": str(rejected_error),
+                "submission_class": rejected_error.submission_class.value,
+                "http_status": rejected_error.http_status,
+            }
+            apply_order_transition(
+                rejected_order.id,
+                OrderTransitionRequest(
+                    strategy_run_id=run_id,
+                    event_type=OrderTransitionEventType.BROKER_REJECTED,
+                    details={
+                        "submission_class": rejected_error.submission_class.value,
+                        "http_status": rejected_error.http_status,
+                        "attempt_numbers": list(rejected_error.attempt_numbers),
+                        "trigger_source": ctx.trigger_source,
+                    },
+                ),
+                session=session,
+                settings=ctx.settings,
+            )
+            session.flush()
+            session.refresh(rejected_order)
+            rejected.update(
+                _paper_order_payload(
+                    rejected_order,
+                    intent_decision=decision.summary,
+                    supersedes_client_order_id=decision.supersedes_client_order_id,
+                )
+            )
+
+        if not _persist_fenced(ctx, reject):
+            raise ExecutionAuthorityLostAfterSendError(
+                f"Order '{order_intent.client_order_id}' was rejected after authority was lost."
+            ) from exc
+        state.rejected_orders.append(rejected)
+        return True
+    except OrderNotSentError as exc:
+        not_sent_error = exc
+
+        # Every attempt failed before a connection was made (or the authorization expired): the
+        # outcome is CERTAIN. The intent stays SUBMISSION_FAILED (retryable), the operation
+        # pauses broker_unavailable and the Job ends normally (no re-raise).
+        def not_sent(session: Session) -> None:
+            failed_order = session.get(PaperOrder, pending_order_id)
+            if failed_order is None:
+                return
+            failed_order.last_submission_error = str(not_sent_error)
+            failed_order.broker_payload = {"error": str(not_sent_error)}
+            apply_order_transition(
+                failed_order.id,
+                OrderTransitionRequest(
+                    strategy_run_id=run_id,
+                    event_type=OrderTransitionEventType.SUBMISSION_FAILED,
+                    details={"error": str(not_sent_error), "trigger_source": ctx.trigger_source},
+                ),
+                session=session,
+                settings=ctx.settings,
+            )
+            cas_update_operation(
+                session,
+                ctx.fence,
+                {
+                    "state": OperationState.PAUSED.value,
+                    "reason": PausedReason.BROKER_UNAVAILABLE.value,
+                    "reason_detail": (not_sent_error.reason or "order_not_sent")[:64],
+                    "state_changed_at": clock.now_utc(),
+                },
+            )
+
+        if not _persist_fenced(ctx, not_sent):
+            raise OperationConflictError(ctx.fence.operation_id, "stale executor fence") from exc
+        state.final_state = OperationState.PAUSED
+        state.final_reason = PausedReason.BROKER_UNAVAILABLE.value
+        return False
+    except Exception as exc:
+        failure_error = exc
+        failure_error = exc
+
+        # Any other failure before a result: no broker side effect is known. SUBMISSION_FAILED
+        # (clean failure, no reconciliation scheduled); the caller pauses the operation
+        # best-effort (paused/awaiting_reconciliation) before the exception propagates.
+        def failed(session: Session) -> None:
+            failed_order = session.get(PaperOrder, pending_order_id)
+            if failed_order is None:
+                return
+            failed_order.last_submission_error = str(failure_error)
+            failed_order.broker_payload = {"error": str(failure_error)}
+            apply_order_transition(
+                failed_order.id,
+                OrderTransitionRequest(
+                    strategy_run_id=run_id,
+                    event_type=OrderTransitionEventType.SUBMISSION_FAILED,
+                    details={"error": str(failure_error), "trigger_source": ctx.trigger_source},
+                ),
+                session=session,
+                settings=ctx.settings,
+            )
+
+        _persist_fenced(ctx, failed)
+        raise
+
+    # ---- the broker accepted: record it, then PAUSE (TL-1: effects not yet accounted) ---------
+    try:
+
+        def accepted(session: Session) -> None:
+            persisted_order = session.get(PaperOrder, pending_order_id)
+            if persisted_order is None:
+                raise LookupError(f"Missing pending paper_order '{pending_order_id}'.")
+            transition_recorded_at = datetime.now(UTC)
+            persisted_order.broker_order_id = result.broker_order_id or None
+            persisted_order.broker_status = result.broker_status
+            persisted_order.submitted_at = result.submitted_at
+            persisted_order.last_submission_error = None
+            persisted_order.broker_payload = result.raw_payload
+            apply_order_transition(
+                persisted_order.id,
+                OrderTransitionRequest(
+                    strategy_run_id=run_id,
+                    event_type=_broker_transition_event(result.status),
+                    details={
+                        "broker_order_id": result.broker_order_id,
+                        "broker_status": result.broker_status,
+                        "trigger_source": ctx.trigger_source,
+                    },
+                    event_at=transition_recorded_at,
+                ),
+                session=session,
+                settings=ctx.settings,
+            )
+            session.flush()
+            session.refresh(persisted_order)
+            payload = _paper_order_payload(
+                persisted_order,
+                intent_decision=decision.summary,
+                supersedes_client_order_id=decision.supersedes_client_order_id,
+            )
+            state.submitted_orders.append(payload)
+            if decision.action == "retry_existing":
+                state.reused_orders.append(payload)
+            if decision.action == "create_new_version":
+                state.versioned_orders.append(payload)
+            # TL-1 / D-17: every accepted order (working, partially filled, or already terminal
+            # but not yet synced) pauses the operation in the SAME transaction as its record.
+            cas_update_operation(
+                session,
+                ctx.fence,
+                {
+                    "state": OperationState.PAUSED.value,
+                    "reason": PausedReason.WORKING_ORDER_COMMITMENTS_UNACCOUNTED.value,
+                    "reason_detail": None,
+                    "state_changed_at": clock.now_utc(),
+                },
+            )
+
+        if not _persist_fenced(ctx, accepted):
+            raise ExecutionAuthorityLostAfterSendError(
+                f"Order '{order_intent.client_order_id}' was accepted by the broker after the "
+                "executor lost authority; broker-order-sync and recovery establish it."
+            )
+    except Exception as exc:
+        # DB-06: the broker has ALREADY accepted this order but the local write rolled back; a
+        # reconciliation pass must be scheduled so the divergence is discovered and corrected.
+        schedule_reconciliation_after_partial_failure(
+            ctx.settings,
+            logger=logger,
+            strategy_id=ctx.strategy_id,
+            run_id=run_id,
+            paper_order_id=pending_order_id,
+            session_date=candidate.session_date,
+            client_order_id=order_intent.client_order_id,
+            broker_order_id=result.broker_order_id,
+            trigger_source=ctx.trigger_source,
+            error=exc,
+        )
+        raise
+    state.final_state = OperationState.PAUSED
+    state.final_reason = PausedReason.WORKING_ORDER_COMMITMENTS_UNACCOUNTED.value
+    return False
+
+
+def _link_intent(session: Session, intent_id: uuid.UUID, paper_order_id: uuid.UUID) -> None:
+    session.execute(
+        update(ExecutionOperationIntent)
+        .where(ExecutionOperationIntent.id == intent_id)
+        .values(paper_order_id=paper_order_id)
+        .execution_options(synchronize_session=False)
+    )
+
+
+def _send_authorized(
+    ctx: _ExecutionContext,
+    *,
+    intent_id: uuid.UUID,
+    paper_order_id: uuid.UUID,
+    order_intent: OrderIntent,
+) -> OrderSubmissionResult:
+    """The SINGLE send path: transaction T1 (``authorize_send``) commits the attempt row and the
+    executor's authority BEFORE the POST; with no committed attempt (a refused T1) nothing is
+    sent. The bound ``GuardedAttemptLog`` carries the authorization into the order client: its
+    first ``begin_attempt`` returns the pre-authorized attempt, every retry runs its own T1, the
+    wall-clock deadline is re-checked immediately before the request is handed to the HTTP
+    client, and outcomes are recorded through the normal path while the fence holds, otherwise
+    through ``complete_attempt_late``.
+    """
+
+    authorization = authorize_send(
+        ctx.fence.operation_id,
+        intent_id,
+        ctx.fence.epoch,
+        ctx.fence.job_id,
+        lease_owner=ctx.lease_owner,
+        settings=ctx.settings,
+    )
+    log = GuardedAttemptLog(
+        ctx.settings,
+        fence=ctx.fence,
+        lease_owner=ctx.lease_owner,
+        intent_id=intent_id,
+        paper_order_id=paper_order_id,
+        strategy_run_id=ctx.run_id,
+        authorization=authorization,
+    )
+    number = authorization.attempt_number
+    with bind_attempt_log(log):
+        try:
+            if log.send_deadline_passed(number):
+                log.complete_attempt(
+                    number,
+                    outcome_class=AttemptOutcomeClass.DEADLINE_EXPIRED,
+                    error_type="AuthorizationDeadlineExpired",
+                )
+                raise OrderNotSentError(
+                    "Order was not sent: the send authorization expired before the request "
+                    "was handed to the HTTP client.",
+                    submission_class=SubmissionClass.NOT_SENT,
+                    attempts=[(number, AttemptOutcomeClass.DEADLINE_EXPIRED.value)],
+                    reason="deadline_expired",
+                )
+            result = ctx.broker_execution.submit_order(order_intent)
+        except (AmbiguousOrderSubmissionError, OrderRejectedError, OrderNotSentError) as typed:
+            if not log.first_attempt_taken:
+                # A client that raised a typed outcome without recording its attempt: the
+                # outcome class follows the type (an ambiguous result stays an open attempt).
+                if isinstance(typed, OrderRejectedError):
+                    _complete_untaken(
+                        ctx,
+                        log,
+                        AttemptOutcomeClass.REJECTED,
+                        error_type=type(typed).__name__,
+                        http_status=typed.http_status,
+                    )
+                elif isinstance(typed, OrderNotSentError):
+                    _complete_untaken(
+                        ctx,
+                        log,
+                        AttemptOutcomeClass.PRE_CONNECTION,
+                        error_type=type(typed).__name__,
+                    )
+            raise
+        except Exception as exc:
+            if not log.first_attempt_taken:
+                # The client never began the pre-authorized attempt, so no request left the
+                # process (the client contract: begin_attempt precedes every POST).
+                _complete_untaken(
+                    ctx, log, AttemptOutcomeClass.PRE_CONNECTION, error_type=type(exc).__name__
+                )
+            raise
+    if not log.first_attempt_taken:
+        _complete_untaken(ctx, log, AttemptOutcomeClass.ACCEPTED)
+    return result
+
+
+def _complete_untaken(
+    ctx: _ExecutionContext,
+    log: GuardedAttemptLog,
+    outcome: AttemptOutcomeClass,
+    *,
+    error_type: str | None = None,
+    http_status: int | None = None,
+) -> None:
+    try:
+        log.complete_attempt(
+            log.first_attempt_number,
+            outcome_class=outcome,
+            error_type=error_type,
+            http_status=http_status,
+        )
+    except Exception:
+        ctx.logger.warning("paper_send_attempt_not_completed", exc_info=True)
 
 
 def _resolve_source_risk_run(

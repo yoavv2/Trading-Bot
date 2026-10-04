@@ -24,6 +24,11 @@ Taxonomy (closed):
   expired_unsent, cancelled_unsent. (Round 5 removed ``broker_confirmed_not_received``:
   a broker statement never changes an intent state.)
 
+Fail-closed begin (S1-R3, 20.1-15): ``DbSubmissionAttemptLog.begin_attempt`` works ONLY inside
+transaction T1 (``operations.authorize_send``, which opens ``send_authorization_scope``), so no
+attempt row, and therefore no POST, can exist without a committed authorization. Every other
+caller gets ``AttemptNotAuthorizedError``.
+
 This module deliberately does not import the Alpaca client module (the client
 imports this one) and nothing under ``jobs/``. The attempt table is append-only here: there is
 no delete path and no update of ``started_at``; an outcome is written once.
@@ -91,6 +96,24 @@ class SubmissionIntentState(StrEnum):
     REJECTED = "rejected"
     EXPIRED_UNSENT = "expired_unsent"
     CANCELLED_UNSENT = "cancelled_unsent"
+
+
+class AttemptNotAuthorizedError(RuntimeError):
+    """``begin_attempt`` was called outside transaction T1 (the send authorization)."""
+
+
+_T1_ACTIVE: ContextVar[bool] = ContextVar("submission_attempt_t1_active", default=False)
+
+
+@contextmanager
+def send_authorization_scope() -> Iterator[None]:
+    """Mark the enclosed block as transaction T1 (S1-R3); only ``authorize_send`` opens it."""
+
+    token = _T1_ACTIVE.set(True)
+    try:
+        yield
+    finally:
+        _T1_ACTIVE.reset(token)
 
 
 class AttemptAlreadyCompletedError(RuntimeError):
@@ -356,13 +379,23 @@ class DbSubmissionAttemptLog:
                 select(PaperOrder.created_at).where(PaperOrder.id == self._paper_order_id)
             ).scalar_one_or_none()
 
-    def begin_attempt(self, session: Session | None = None) -> int:
-        if session is not None:
-            return self._begin(session)
-        with session_scope(self._settings) as own_session:
-            return self._begin(own_session)
+    def begin_attempt(self, session: Session | None = None, **columns: object) -> int:
+        """Insert the begin-attempt row (outcome NULL). Fails closed outside transaction T1:
+        raises ``AttemptNotAuthorizedError`` unless called inside ``send_authorization_scope``
+        (``columns`` carry the T1 fencing columns: started_at, execution_epoch, executor_job_id,
+        authorization_deadline)."""
 
-    def _begin(self, session: Session) -> int:
+        if not _T1_ACTIVE.get():
+            raise AttemptNotAuthorizedError(
+                "begin_attempt is callable only inside transaction T1 (authorize_send); "
+                "refusing to open an attempt row without a committed authorization."
+            )
+        if session is not None:
+            return self._begin(session, columns)
+        with session_scope(self._settings) as own_session:
+            return self._begin(own_session, columns)
+
+    def _begin(self, session: Session, columns: dict[str, object]) -> int:
         # attempt_number spans ALL earlier attempts of the order (across sessions).
         highest = session.execute(
             select(func.max(OrderSubmissionAttempt.attempt_number)).where(
@@ -370,12 +403,13 @@ class DbSubmissionAttemptLog:
             )
         ).scalar_one()
         number = int(highest or 0) + 1
+        values: dict[str, object] = {"started_at": datetime.now(UTC), **columns}
         session.add(
             OrderSubmissionAttempt(
                 paper_order_id=self._paper_order_id,
                 strategy_run_id=self._strategy_run_id,
                 attempt_number=number,
-                started_at=datetime.now(UTC),
+                **values,
             )
         )
         session.flush()

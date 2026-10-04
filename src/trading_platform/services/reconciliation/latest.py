@@ -117,11 +117,13 @@ def latest_standalone_reconciliation(
     strategy_public_id: str | None = None,
     scope: ReconciliationScopeFilter = "either",
     completed_after: datetime | None = None,
+    completed_before: datetime | None = None,
 ) -> StandaloneReconciliation | None:
     """Newest COMPLETED standalone reconciliation across the requested scope(s).
 
     ``strategy_public_id`` narrows only the strategy half; the account half always
-    qualifies. ``completed_after`` keeps runs completed strictly after that instant.
+    qualifies. ``completed_after`` keeps runs completed strictly after that instant and
+    ``completed_before`` runs completed at or before it (20.1-15 evaluation-basis window).
     At most two statements regardless of history size (one per scope).
     """
 
@@ -134,6 +136,10 @@ def latest_standalone_reconciliation(
         if completed_after is not None:
             account_stmt = account_stmt.where(
                 AccountReconciliationRun.completed_at > completed_after
+            )
+        if completed_before is not None:
+            account_stmt = account_stmt.where(
+                AccountReconciliationRun.completed_at <= completed_before
             )
         account_run = session.execute(
             account_stmt.order_by(AccountReconciliationRun.completed_at.desc()).limit(1)
@@ -169,6 +175,8 @@ def latest_standalone_reconciliation(
             strategy_stmt = strategy_stmt.where(Strategy.strategy_id == strategy_public_id)
         if completed_after is not None:
             strategy_stmt = strategy_stmt.where(StrategyRun.completed_at > completed_after)
+        if completed_before is not None:
+            strategy_stmt = strategy_stmt.where(StrategyRun.completed_at <= completed_before)
         row = session.execute(
             strategy_stmt.order_by(StrategyRun.completed_at.desc()).limit(1)
         ).one_or_none()

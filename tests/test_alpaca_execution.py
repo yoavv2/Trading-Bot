@@ -14,6 +14,7 @@ import psycopg
 import pytest
 from alembic import command
 from sqlalchemy import select
+from tests.support.paper_execution_seams import allow_direct_paper_execution
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -43,6 +44,7 @@ from trading_platform.services.execution.attempts import (
     NullSubmissionAttemptLog,
     bind_attempt_log,
 )
+from trading_platform.services.execution.operations import OperationOpenError
 from trading_platform.strategies.registry import build_default_registry
 
 
@@ -406,41 +408,18 @@ def test_run_paper_order_submission_persists_idempotent_paper_orders(
     assert second_execution_service.submitted_intents == []
 
 
-def test_run_paper_order_submission_versions_material_change_in_alpaca_flow(
+def test_run_paper_order_submission_does_not_version_while_the_operation_is_open_in_alpaca_flow(
     migrated_execution_db: str,
 ) -> None:
+    """20.1-15 (changed from 'versions material change in alpaca flow'): the first run's accepted
+    order pauses its operation; a follow-up evaluation with a changed quantity cannot start a
+    second operation (typed `operation_open`) and nothing is versioned. Material-change
+    versioning itself is refused for any identity that reached the broker
+    (`version_bypass_refused`, tests/test_paper_execution.py)."""
     _risk_run_id, _approved_event_id = _seed_approved_risk_batch()
     settings = load_settings()
 
-    class UniqueExecutionService(FakeExecutionService):
-        def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
-            self.submitted_intents.append(intent)
-            broker_order_id = f"alpaca-{intent.symbol.lower()}-{intent.intent_version:03d}"
-            return OrderSubmissionResult(
-                client_order_id=intent.client_order_id,
-                broker_order_id=broker_order_id,
-                symbol=intent.symbol,
-                side=intent.side,
-                quantity=intent.quantity,
-                order_type=intent.order_type,
-                time_in_force=intent.time_in_force,
-                status=ExecutionOrderStatus.PENDING,
-                broker_status="new",
-                submitted_at=datetime(2024, 1, 5, 14, 35, tzinfo=UTC),
-                raw_payload={
-                    "id": broker_order_id,
-                    "client_order_id": intent.client_order_id,
-                    "symbol": intent.symbol,
-                    "side": intent.side.value,
-                    "qty": str(intent.quantity),
-                    "type": intent.order_type.value,
-                    "time_in_force": intent.time_in_force.value,
-                    "status": "new",
-                    "submitted_at": "2024-01-05T14:35:00Z",
-                },
-            )
-
-    initial_execution_service = UniqueExecutionService()
+    initial_execution_service = FakeExecutionService()
     initial_report = run_paper_order_submission(
         "trend_following_daily",
         as_of_session=date(2024, 1, 5),
@@ -448,30 +427,32 @@ def test_run_paper_order_submission_versions_material_change_in_alpaca_flow(
         settings=settings,
         execution_service=initial_execution_service,
     )
-    followup_risk_run_id, followup_event_id = _seed_followup_risk_event(quantity="12.000000")
+    followup_risk_run_id, _followup_event_id = _seed_followup_risk_event(quantity="12.000000")
 
-    versioned_execution_service = UniqueExecutionService()
-    versioned_report = run_paper_order_submission(
-        "trend_following_daily",
-        as_of_session=date(2024, 1, 5),
-        risk_run_id=str(followup_risk_run_id),
-        trigger_source="version_submit",
-        settings=settings,
-        execution_service=versioned_execution_service,
-    )
+    followup_execution_service = FakeExecutionService()
+    with pytest.raises(OperationOpenError):
+        run_paper_order_submission(
+            "trend_following_daily",
+            as_of_session=date(2024, 1, 5),
+            risk_run_id=str(followup_risk_run_id),
+            trigger_source="version_submit",
+            settings=settings,
+            execution_service=followup_execution_service,
+        )
 
     assert initial_report.result_summary["submitted_count"] == 1
-    assert versioned_report.result_summary["submitted_count"] == 1
-    assert versioned_report.result_summary["versioned_count"] == 1
-    assert len(versioned_execution_service.submitted_intents) == 1
-    assert versioned_execution_service.submitted_intents[0].intent_version == 2
-
+    assert initial_report.result_summary["operation"]["state"] == "paused"
+    assert followup_execution_service.submitted_intents == []
     with session_scope(settings) as session:
-        paper_orders = session.execute(
-            select(PaperOrder).order_by(PaperOrder.intent_version.asc(), PaperOrder.created_at.asc())
-        ).scalars().all()
+        paper_orders = session.execute(select(PaperOrder)).scalars().all()
+    assert len(paper_orders) == 1
+    assert paper_orders[0].intent_version == 1
 
-    assert len(paper_orders) == 2
-    assert paper_orders[1].intent_version == 2
-    assert paper_orders[1].supersedes_paper_order_id == paper_orders[0].id
-    assert paper_orders[1].source_risk_event_id == followup_event_id
+
+@pytest.fixture(autouse=True)
+def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20.1-15: this module's subject is not the per-intent permission check or the S1 guard
+    (tests/test_operation_permission.py, tests/test_paper_session_operations.py): see
+    tests/support/paper_execution_seams.py."""
+
+    allow_direct_paper_execution(monkeypatch)

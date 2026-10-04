@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from tests.support.paper_eligibility import allow_paper_execution
+from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import (
     clear_active_paper_strategy,
     seed_registered_strategy,
@@ -29,6 +30,7 @@ from tests.test_backtest_runner import migrated_backtest_db, strategy_config_ove
 from tests.test_job_operations_e2e import _run_worker_once, job_operations_env  # noqa: F401
 from tests.test_paper_execution import (
     FakeExecutionService,
+    _begin_attempt_through_bound_log,
     _seed_approved_risk_batch,
     migrated_paper_db,  # noqa: F401
 )
@@ -51,6 +53,7 @@ from trading_platform.api.app import create_app
 from trading_platform.core.settings import load_settings
 from trading_platform.db.models import (
     ActivePaperStrategy,
+    AttemptOutcomeClass,
     ExecutionEvent,
     Job,
     JobFailureReason,
@@ -82,13 +85,14 @@ from trading_platform.services.active_paper_strategy import (
     ActivePaperStrategyUnavailableError,
     OwnershipBlock,
 )
-from trading_platform.services.alpaca import BrokerAccountSnapshot
+from trading_platform.services.alpaca import BrokerAccountSnapshot, OrderRejectedError
 from trading_platform.services.execution import (
     OrderIntent,
     OrderSubmissionResult,
     run_paper_order_submission,
     run_paper_session,
 )
+from trading_platform.services.execution.attempts import SubmissionClass
 from trading_platform.services.operator_controls import OperatorControlService
 from trading_platform.services.risk import run_risk_evaluation
 
@@ -600,7 +604,10 @@ def test_handover_between_job_submit_and_worker_claim_blocks_the_job_run(
 
 
 class OwnershipLosingExecutionService(FakeExecutionService):
-    """Submits the first candidate, then hands the account to another strategy."""
+    """Sends the first candidate, hands the account to another strategy and has the broker REJECT
+    it (20.1-15: an ACCEPTED first order pauses the operation before a second permission check
+    could see the lost ownership, so the 'between steps' loss needs a result that lets the loop
+    continue; the accepted-first behaviour is pinned in tests/test_paper_session_operations.py)."""
 
     def __init__(self, *, settings) -> None:
         super().__init__()
@@ -609,9 +616,19 @@ class OwnershipLosingExecutionService(FakeExecutionService):
     def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
         if self.submitted_intents:
             raise AssertionError("no further order may be submitted after ownership is lost")
-        result = super().submit_order(intent)
+        began = _begin_attempt_through_bound_log()
+        self.submitted_intents.append(intent)
         set_active_paper_strategy(self._settings, OTHER, reason="mid-run handover fixture")
-        return result
+        if began is not None:
+            began[0].complete_attempt(  # type: ignore[attr-defined]
+                began[1], outcome_class=AttemptOutcomeClass.REJECTED, http_status=403
+            )
+        raise OrderRejectedError(
+            "rejected",
+            submission_class=SubmissionClass.REJECTED,
+            attempts=[(1, "rejected")],
+            http_status=403,
+        )
 
 
 def test_ownership_lost_mid_run_halts_remaining_candidates(migrated_paper_db: str) -> None:  # noqa: F811
@@ -634,10 +651,14 @@ def test_ownership_lost_mid_run_halts_remaining_candidates(migrated_paper_db: st
     assert summary["action"] == "blocked_mid_run_not_active_paper_strategy"
     assert summary["blocked_reason"] == BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY
     assert summary["ownership_block"] == OwnershipBlock.STRATEGY_NOT_ACTIVE_PAPER_STRATEGY.value
-    assert summary["submitted_count"] == 1
+    assert summary["submitted_count"] == 0
+    assert len(summary["rejected_orders"]) == 1
     assert summary["skipped_by_ownership_count"] == 1
     assert summary["skipped_by_kill_switch_count"] == 0
     assert len(execution.submitted_intents) == 1
+    assert summary["operation"]["state"] == "paused"
+    assert summary["operation"]["reason"] == "not_active_paper_strategy"
+    assert summary["operation"]["next_action"] == "end_operation_then_reevaluate"
 
     submitted_symbol = execution.submitted_intents[0].symbol
     assert {entry["symbol"] for entry in summary["skipped_by_ownership"]} == (
@@ -645,9 +666,9 @@ def test_ownership_lost_mid_run_halts_remaining_candidates(migrated_paper_db: st
     )
     with session_scope(settings) as session:
         orders = session.execute(select(PaperOrder)).scalars().all()
-        # The already-submitted order is untouched and nothing further was registered.
+        # The already-sent (and rejected) order is untouched and nothing further was registered.
         assert [order.symbol_ref.ticker for order in orders] == [submitted_symbol]
-        assert orders[0].status == OrderLifecycleState.SUBMITTED
+        assert orders[0].status == OrderLifecycleState.REJECTED
         blocked_events = (
             session.execute(
                 select(ExecutionEvent).where(
@@ -662,18 +683,23 @@ def test_ownership_lost_mid_run_halts_remaining_candidates(migrated_paper_db: st
         assert blocked_events[0].details["blocked_reason"] == BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY
 
 
-def test_kill_switch_takes_precedence_when_both_trip_mid_run(migrated_paper_db: str) -> None:  # noqa: F811
+def test_ownership_takes_precedence_over_kill_switch_when_both_trip_mid_run(
+    migrated_paper_db: str,  # noqa: F811
+) -> None:
+    """20.1-15 (changed): the per-intent permission check has ONE fixed precedence (owner ->
+    enabled -> kill switch, plan <interfaces>), so when both trip between steps the operation
+    pauses `not_active_paper_strategy` (legacy action `blocked_mid_run_not_active_paper_strategy`).
+    The run-level gates BEFORE the loop still read the kill switch first (unchanged)."""
     _seed_approved_risk_batch()
     settings = load_settings()
     seed_registered_strategy(settings, OTHER)
 
     class _BothTrip(OwnershipLosingExecutionService):
         def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
-            result = super().submit_order(intent)
             OperatorControlService(settings=self._settings).trip_kill_switch(
                 reason="both trip", actor="pytest", trigger_source="pytest"
             )
-            return result
+            return super().submit_order(intent)
 
     execution = _BothTrip(settings=settings)
     report = run_paper_order_submission(
@@ -684,9 +710,10 @@ def test_kill_switch_takes_precedence_when_both_trip_mid_run(migrated_paper_db: 
         trigger_source="pytest",
     )
 
-    assert report.result_summary["action"] == "blocked_mid_run_global_kill_switch"
-    assert report.result_summary["skipped_by_kill_switch_count"] == 1
-    assert report.result_summary["skipped_by_ownership_count"] == 0
+    assert report.result_summary["action"] == "blocked_mid_run_not_active_paper_strategy"
+    assert report.result_summary["skipped_by_ownership_count"] == 1
+    assert report.result_summary["skipped_by_kill_switch_count"] == 0
+    assert report.result_summary["operation"]["reason"] == "not_active_paper_strategy"
     assert len(execution.submitted_intents) == 1
 
 
@@ -762,8 +789,9 @@ def test_each_ownership_gate_issues_exactly_one_fresh_statement(
     settings = load_settings()
     engine = get_engine(settings)
 
-    # Happy path with two candidates: run_paper_session pre-check (1) + guarded
-    # body (1) + one fresh re-read per candidate (2).
+    # Happy path: run_paper_session pre-check (1) + guarded body (1) + the SER lock and the
+    # owner re-check of operation creation (2, 20.1-15) + one fresh read per processed intent
+    # (1: the first accepted order pauses the operation, so only one intent is processed).
     with count_queries(engine) as counter:
         report = run_paper_session(
             STRATEGY_ID,
@@ -773,7 +801,7 @@ def test_each_ownership_gate_issues_exactly_one_fresh_statement(
             trigger_source="pytest",
         )
     assert report.action != "blocked_not_active_paper_strategy"
-    assert len(_ownership_statements(counter)) == 1 + 1 + 2
+    assert len(_ownership_statements(counter)) == 1 + 1 + 2 + 1
 
     # Blocked path: pre-check (1) + the guarded body's own re-read (1).
     clear_active_paper_strategy(settings)
@@ -813,12 +841,20 @@ def test_engine_reads_go_through_the_one_gate_loader(
         execution_service=FakeExecutionService(),
         trigger_source="pytest",
     )
-    assert len(calls) == 1 + 1 + 2
+    # pre-check (1) + guarded body (1) + operation creation (1) + the first intent's permission
+    # check (1); the loop's second candidate is never reached (pause after the first accepted).
+    assert len(calls) == 1 + 1 + 1 + 1
 
     source = (_ROOT / "src/trading_platform/services/execution/submit_orders.py").read_text()
     assert "load_kill_switch_state" not in source
-    assert source.count("read_trading_gate_state(") >= 3
+    assert source.count("read_trading_gate_state(") >= 2
+    assert source.count("operator_controls.load_trading_gate_state(") >= 1
     assert source.count("ownership_block_for(") >= 3
+    permission_source = (
+        _ROOT / "src/trading_platform/services/execution/permission.py"
+    ).read_text()
+    assert "operator_controls.load_trading_gate_state(" in permission_source
+    assert "ownership_block_for(" in permission_source
 
 
 _PAPER_PATH_MODULES = (
@@ -880,3 +916,12 @@ def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
         "reconciliation_not_clean",
     }
     assert {m.value for m in ReconciliationSubmitConflict} == expected
+
+
+@pytest.fixture(autouse=True)
+def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20.1-15: this module's subject is not the per-intent permission check or the S1 guard
+    (tests/test_operation_permission.py, tests/test_paper_session_operations.py): see
+    tests/support/paper_execution_seams.py."""
+
+    allow_direct_paper_execution(monkeypatch)
