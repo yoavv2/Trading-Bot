@@ -1,4 +1,15 @@
-"""Risk-validation pipeline for strategy signals."""
+"""Risk-validation pipeline for strategy signals.
+
+Evaluation provenance (D-25/D-26, PROV-01): ``run_risk_evaluation`` records every
+read it makes through the shared market-data accessors -- signal generation,
+portfolio valuation and the stale-data checks -- as an input manifest in the
+run's ``result_summary['evaluation_manifest']``. ``verify_risk_run_manifest``
+re-executes it so execution can confirm the evaluation used the currently valid
+data and signal settings. Provenance is NOT current portfolio risk: cash,
+positions, open orders and risk limits are checked fresh at execution and are
+deliberately outside the manifest. Strategy, risk and portfolio code reach the
+bar/session tables only through the recorded accessors (boundary-tested).
+"""
 
 from __future__ import annotations
 
@@ -24,6 +35,15 @@ from trading_platform.db.models import (
     Symbol,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services.evaluation_manifest import (
+    EvaluationManifest,
+    ManifestFormatError,
+    ManifestRecorder,
+    ManifestVerification,
+    ManifestVerificationStatus,
+    compute_settings_digest,
+    verify_manifest,
+)
 from trading_platform.services.market_data_access import (
     latest_completed_session,
     missing_bars_for_session,
@@ -35,6 +55,7 @@ from trading_platform.services.portfolio import (
     PortfolioState,
     PositionSnapshot,
 )
+from trading_platform.services.read_recording import recording
 from trading_platform.services.symbol_readiness import SymbolReadiness, symbols_readiness
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 from trading_platform.strategies.signals import Signal, SignalBatch, SignalDirection
@@ -542,22 +563,28 @@ def run_risk_evaluation(
 
             ensure_strategy_record(session, metadata)
             symbol_map = _ensure_symbol_rows(session, metadata.universe)
-            batch = strategy.generate_signals(session, as_of_session)
-            portfolio_service = PortfolioService(resolved_settings)
-            # D-27: evaluation persists no account snapshot; the basis is
-            # recorded on this run's result_summary instead.
-            portfolio_state, portfolio_basis = portfolio_service.load_state_with_basis(
-                session,
-                strategy_id=metadata.strategy_id,
-                as_of_session=as_of_session,
-            )
-            risk_result = PortfolioRiskService(resolved_settings).validate(
-                RiskEvaluationRequest(
-                    db_session=session,
-                    signal_batch=batch,
-                    portfolio_state=portfolio_state,
+            # D-25: signal generation, portfolio valuation and risk validation
+            # read market data only through the shared accessors; every such
+            # read is recorded into the input manifest.
+            manifest_recorder = ManifestRecorder()
+            with recording(manifest_recorder):
+                batch = strategy.generate_signals(session, as_of_session)
+                portfolio_service = PortfolioService(resolved_settings)
+                # D-27: evaluation persists no account snapshot; the basis is
+                # recorded on this run's result_summary instead.
+                portfolio_state, portfolio_basis = portfolio_service.load_state_with_basis(
+                    session,
+                    strategy_id=metadata.strategy_id,
+                    as_of_session=as_of_session,
                 )
-            )
+                risk_result = PortfolioRiskService(resolved_settings).validate(
+                    RiskEvaluationRequest(
+                        db_session=session,
+                        signal_batch=batch,
+                        portfolio_state=portfolio_state,
+                    )
+                )
+            evaluation_manifest = manifest_recorder.build(compute_settings_digest(metadata))
 
             for decision in risk_result.decisions:
                 session.add(
@@ -587,6 +614,7 @@ def run_risk_evaluation(
             "decision_codes": [decision.code.value for decision in risk_result.decisions],
             "portfolio": resolved_settings.portfolio.model_dump(mode="json"),
             "portfolio_basis": portfolio_basis.to_dict(),
+            "evaluation_manifest": evaluation_manifest.to_dict(),
         }
     except Exception as exc:
         _update_risk_run(
@@ -712,6 +740,62 @@ def is_eligible_risk_run(
     if row is None:
         return False
     return row.parameters_snapshot.get("as_of_session") == as_of_session.isoformat()
+
+
+def latest_eligible_risk_run_id(
+    *,
+    strategy_id: str,
+    as_of_session: date,
+    settings: Settings,
+) -> uuid.UUID | None:
+    """Read-only: the latest SUCCEEDED risk-evaluation run of the strategy for the
+    session (same predicate as :func:`is_eligible_risk_run`), or ``None``."""
+
+    target = as_of_session.isoformat()
+    with session_scope(settings) as session:
+        rows = session.execute(
+            select(StrategyRun)
+            .join(Strategy, Strategy.id == StrategyRun.strategy_id)
+            .where(
+                StrategyRun.run_type == StrategyRunType.RISK_EVALUATION,
+                StrategyRun.status == StrategyRunStatus.SUCCEEDED,
+                Strategy.strategy_id == strategy_id,
+            )
+            .order_by(StrategyRun.started_at.desc())
+        ).scalars()
+        for run in rows:
+            if run.parameters_snapshot.get("as_of_session") == target:
+                return run.id
+    return None
+
+
+def verify_risk_run_manifest(
+    *,
+    risk_run_id: uuid.UUID,
+    strategy_id: str,
+    settings: Settings,
+    registry: StrategyRegistry | None = None,
+) -> ManifestVerification:
+    """Read-only provenance check of a risk run (D-25/D-26).
+
+    Loads the run's stored manifest and re-executes it against the current data
+    and the registered strategy's current signal settings. A run without a
+    manifest (evaluated before 20.1-06, or a malformed/unknown-version manifest)
+    cannot be verified: ``manifest_missing``. Performs no writes.
+    """
+
+    with session_scope(settings) as session:
+        run = session.get(StrategyRun, risk_run_id)
+        raw = run.result_summary.get("evaluation_manifest") if run is not None else None
+        if raw is None:
+            return ManifestVerification(ManifestVerificationStatus.MANIFEST_MISSING)
+        try:
+            manifest = EvaluationManifest.from_dict(raw)
+        except ManifestFormatError:
+            return ManifestVerification(ManifestVerificationStatus.MANIFEST_MISSING)
+        resolved_registry = registry or build_default_registry(settings)
+        current_digest = compute_settings_digest(resolved_registry.resolve(strategy_id).metadata)
+        return verify_manifest(session, manifest, current_settings_digest=current_digest)
 
 
 def _ensure_symbol_rows(session: Session, tickers: tuple[str, ...]) -> dict[str, Symbol]:
