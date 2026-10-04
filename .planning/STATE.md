@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20.1-07-PLAN.md (wave 3 done)
+stopped_at: Completed 20.1-06-PLAN.md
 last_updated: "2026-10-04T06:28:53.267Z"
 last_activity: 2026-10-04 -- Phase 20.1 execution started
 progress:
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-30)
 ## Current Position
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
-Plan: 7 of 16 (waves 1-3 complete; next wave 4: 20.1-06, 20.1-08)
+Plan: 8 of 16 (next 20.1-08)
 Status: Executing Phase 20.1
 Last activity: 2026-10-04 -- Phase 20.1 execution started
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
