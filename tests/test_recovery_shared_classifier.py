@@ -28,7 +28,11 @@ from tests.support.account_check_fixtures import (
 )
 from tests.support.calendar_facts import seed_calendar
 from tests.support.migrated_db import migrated_database
-from tests.support.operation_fixtures import seed_operation, seed_operation_job
+from tests.support.operation_fixtures import (
+    arrange_sendable_gate,
+    seed_operation,
+    seed_operation_job,
+)
 from tests.support.paper_ownership import set_active_paper_strategy
 from tests.support.recovery_fixtures import (
     OTHER,
@@ -61,6 +65,7 @@ from trading_platform.db.session import session_scope
 from trading_platform.jobs.handlers.paper_session_submission import PaperSessionSubmissionSpec
 from trading_platform.jobs.registry import JobSubmissionConflictError
 from trading_platform.services.execution import operations as ops
+from trading_platform.services.execution import permission as permission_module
 from trading_platform.services.execution.attempts import (
     AttemptRecord,
     SubmissionEvidence,
@@ -525,9 +530,11 @@ def test_recovery_read_is_read_only_evidence_and_never_releases_an_intent(
     ids=["A_lease_loss_pending", "B_non_refusal_exception_submission_failed"],
 )
 def test_saf01_operation_bound_unsent_intent_on_flagged_job_is_sendable_after_clean_reconciliation(
-    shared_db: str, status: OrderLifecycleState
+    shared_db: str, status: OrderLifecycleState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def build(session: Any) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+        # 20.1-20: T1 re-reads owner / enabled / kill switch / window (arrangement only).
+        arrange_sendable_gate(session, now=datetime.now(UTC))
         flagged = seed_job(session, completed_at=at(0))  # FAILED, outcome_uncertain
         run = seed_paper_run(session, flagged)
         executor = seed_operation_job(
@@ -566,6 +573,15 @@ def test_saf01_operation_bound_unsent_intent_on_flagged_job_is_sendable_after_cl
     assert _a5_passed()
     PaperSessionSubmissionSpec(load_settings())._require_recovery_resolved(
         strategy_id=OWNER, as_of_session=SESSION_DATE
+    )
+    # the fixture's evaluation session is historical: the window verdict is the one fact this
+    # test does not arrange (same seam as tests/support/paper_execution_seams.py)
+    monkeypatch.setattr(
+        permission_module,
+        "evaluation_window_facts",
+        lambda *a, **k: permission_module.WindowFacts(
+            verdict=ops.WindowVerdict.OPEN, session_opens_at=None
+        ),
     )
     auth = ops.authorize_send(operation_id, intent_id, 3, executor_id, lease_owner="worker-1")
     assert auth.attempt_number == 1

@@ -1935,6 +1935,19 @@ def _operation_summary(settings: Settings, operation_id: uuid.UUID) -> dict[str,
         }
 
 
+#: SAF-02: T1 refusals that pause the operation through the existing path, with EXISTING closed
+#: pause reasons only (no new state or reason). An elapsed / superseded window pauses here as
+#: ``execution_window_not_open`` on purpose: T1 must not run the termination write inside the send
+#: transaction; the lazy expiry (D-21, ``touch_operation``) terminates it on its next touch.
+_SEND_REFUSAL_PAUSE: dict[SendRefusal, PausedReason] = {
+    SendRefusal.KILL_SWITCH_TRIPPED: PausedReason.KILL_SWITCH_TRIPPED,
+    SendRefusal.STRATEGY_DISABLED: PausedReason.STRATEGY_DISABLED,
+    SendRefusal.NOT_ACTIVE_PAPER_STRATEGY: PausedReason.NOT_ACTIVE_PAPER_STRATEGY,
+    SendRefusal.EXECUTION_WINDOW_CLOSED: PausedReason.EXECUTION_WINDOW_NOT_OPEN,
+    SendRefusal.PRICE_STALE: PausedReason.PRICE_UNAVAILABLE,
+}
+
+
 def _move_running(
     ctx: _ExecutionContext,
     to_state: OperationState,
@@ -2415,6 +2428,18 @@ def _execute_pinned_intent(
             _move_running(ctx, OperationState.PAUSED, PausedReason.OUTCOME_UNRESOLVED.value)
             state.final_state = OperationState.PAUSED
             state.final_reason = PausedReason.OUTCOME_UNRESOLVED.value
+            return False
+        # SAF-02: T1 re-read the gate / window / price and one of them now says no (first
+        # attempt or an in-loop retry). Nothing was POSTed by this attempt; the operation pauses
+        # through the existing path with an existing closed reason and the intent stays unsent.
+        pause_reason = _SEND_REFUSAL_PAUSE.get(exc.refusal)
+        if pause_reason is not None:
+            detail = exc.detail or (
+                "price_stale" if exc.refusal is SendRefusal.PRICE_STALE else None
+            )
+            _move_running(ctx, OperationState.PAUSED, pause_reason.value, detail)
+            state.final_state = OperationState.PAUSED
+            state.final_reason = pause_reason.value
             return False
         raise OperationConflictError(
             ctx.fence.operation_id, f"send_refused:{exc.refusal.value}"

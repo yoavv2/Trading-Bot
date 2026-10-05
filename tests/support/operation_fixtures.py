@@ -9,13 +9,15 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
+from tests.support.paper_ownership import set_active_paper_strategy
 from tests.support.recovery_fixtures import OWNER, SESSION_DATE, strategy_row
 
+from trading_platform.core.settings import load_settings
 from trading_platform.db.models import (
     AttemptOutcomeClass,
     ExecutionOperation,
@@ -31,7 +33,13 @@ from trading_platform.db.models import (
     StrategyRunStatus,
     StrategyRunType,
     Symbol,
+    SystemControl,
 )
+from trading_platform.db.models.system_control import (
+    GLOBAL_KILL_SWITCH_NAME,
+    KillSwitchState,
+)
+from trading_platform.services.calendar import upsert_market_sessions
 
 
 def seed_risk_run(
@@ -217,3 +225,25 @@ def seed_operation_intent(
     session.add(row)
     session.flush()
     return SeededIntent(row=row, order=order)
+
+
+def arrange_sendable_gate(session: Session, *, strategy_id: str = OWNER, now: datetime) -> None:
+    """Arrange everything transaction T1 re-reads (20.1-20) so a send is authorized at ``now``.
+
+    The strategy row is enabled and is the explicit paper owner, the global kill switch is
+    armed, and persisted calendar rows cover ``now`` (the evaluation session's execution window
+    is open when ``now`` lies inside it). The CALLER patches ``clock.now_utc`` to ``now``: T1
+    judges the window against the application clock. Direct writes, tests only.
+    """
+
+    strategy_row(session, strategy_id, enabled=True)
+    set_active_paper_strategy(session, strategy_id)
+    session.execute(
+        update(SystemControl)
+        .where(SystemControl.name == GLOBAL_KILL_SWITCH_NAME)
+        .values(state=KillSwitchState.ARMED)
+    )
+    exchange = load_settings().market_data.calendar.exchange
+    day = now.date()
+    upsert_market_sessions(session, day - timedelta(days=14), day + timedelta(days=14), exchange)
+    session.flush()

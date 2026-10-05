@@ -386,6 +386,13 @@ class SendRefusal(StrEnum):
     INTENT_NOT_REGISTERED = "intent_not_registered"
     INTENT_NOT_SENDABLE = "intent_not_sendable"
     OUTCOME_UNRESOLVED = "outcome_unresolved"
+    # 20.1-20 (SAF-02): the gate, window and price are re-read in EVERY T1 (first attempt and
+    # each in-loop retry), not once per intent.
+    KILL_SWITCH_TRIPPED = "kill_switch_tripped"
+    STRATEGY_DISABLED = "strategy_disabled"
+    NOT_ACTIVE_PAPER_STRATEGY = "not_active_paper_strategy"
+    EXECUTION_WINDOW_CLOSED = "execution_window_closed"
+    PRICE_STALE = "price_stale"
 
 
 class SendRefusedError(OperationError):
@@ -1605,6 +1612,36 @@ class SendAuthorization:
     local_deadline: datetime
 
 
+def _require_sendable_gate(
+    session: Session,
+    operation: ExecutionOperation,
+    strategy_public_id: str,
+    settings: Settings,
+) -> None:
+    """T1's per-attempt re-check (SAF-02): owner, kill switch, enabled, window.
+
+    Reads only (no locking clause on any gate row). Function-level imports: the operator
+    controls and the permission module both import this module."""
+
+    from trading_platform.services import operator_controls
+    from trading_platform.services.execution import permission
+
+    gate = operator_controls.load_trading_gate_state(session, strategy_id=strategy_public_id)
+    block = gate.ownership_block_for(strategy_public_id)
+    if block is not None:
+        raise SendRefusedError(SendRefusal.NOT_ACTIVE_PAPER_STRATEGY, block.value)
+    if gate.kill_switch.is_tripped:
+        raise SendRefusedError(SendRefusal.KILL_SWITCH_TRIPPED)
+    if gate.strategy is None or not gate.strategy.is_execution_enabled:
+        raise SendRefusedError(SendRefusal.STRATEGY_DISABLED)
+    now = clock.now_utc()
+    facts = permission.evaluation_window_facts(
+        session, as_of_session=operation.as_of_session, now=now, settings=settings
+    )
+    if facts.verdict is not WindowVerdict.OPEN:
+        raise SendRefusedError(SendRefusal.EXECUTION_WINDOW_CLOSED, facts.verdict.value)
+
+
 def authorize_send(
     operation_id: uuid.UUID,
     intent_id: uuid.UUID,
@@ -1629,6 +1666,12 @@ def authorize_send(
     attempt, including in-loop retries after ``pre_connection``, needs its own call. Raises
     ``SendRefusedError`` and sends nothing when any check fails; the caller POSTs only after
     this returns.
+
+    20.1-20 (SAF-02): T1 also re-reads owner, enabled, kill switch (one non-locking statement,
+    the R-Q1 loader) and the window verdict of the operation's evaluation session against the
+    application clock. Lock order unchanged: operation row, then order row; the gate rows
+    are never locked (``set_active_paper_strategy`` and ``_prepare_start`` lock the singleton
+    first, so a lock here could invert them).
     """
 
     resolved = settings or load_settings()
@@ -1659,6 +1702,10 @@ def authorize_send(
         ).scalar_one_or_none()
         if lease_ok is None:
             raise SendRefusedError(SendRefusal.LEASE_LOST)
+        public_id = session.execute(
+            select(Strategy.strategy_id).where(Strategy.id == operation.strategy_id)
+        ).scalar_one()
+        _require_sendable_gate(session, operation, public_id, resolved)
         intent = session.execute(
             select(ExecutionOperationIntent).where(
                 ExecutionOperationIntent.id == intent_id,
@@ -1704,9 +1751,6 @@ def authorize_send(
                 SendRefusal.INTENT_NOT_SENDABLE,
                 submission_class.value if submission_class is not None else order.status.value,
             )
-        public_id = session.execute(
-            select(Strategy.strategy_id).where(Strategy.id == operation.strategy_id)
-        ).scalar_one()
         status = strategy_recovery_status(session, public_id, now=clock.now_utc())
         if status.gate_code is GateCode.OUTCOME_UNRESOLVED:
             raise SendRefusedError(SendRefusal.OUTCOME_UNRESOLVED)

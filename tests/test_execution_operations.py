@@ -22,6 +22,7 @@ from sqlalchemy import func, select, text
 from tests.support.calendar_facts import et, seed_calendar
 from tests.support.migrated_db import migrated_database
 from tests.support.operation_fixtures import (
+    arrange_sendable_gate,
     seed_operation,
     seed_operation_intent,
     seed_operation_job,
@@ -83,11 +84,17 @@ AMBIGUOUS = AttemptOutcomeClass.AMBIGUOUS
 ACCEPTED = AttemptOutcomeClass.ACCEPTED
 
 
+_REAL_NOW = clock.now_utc
+_OPS_MONKEYPATCH: list[pytest.MonkeyPatch] = []
+
+
 @pytest.fixture()
 def ops_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    _OPS_MONKEYPATCH[:] = [monkeypatch]
     with migrated_database(monkeypatch, "execution_operations") as name:
         seed_calendar(date(2025, 11, 24), date(2026, 1, 9))
         yield name
+    _OPS_MONKEYPATCH.clear()
 
 
 def _now(monkeypatch: pytest.MonkeyPatch, instant: datetime) -> None:
@@ -161,6 +168,11 @@ def test_closed_enum_value_sets_are_pinned() -> None:
         "intent_not_registered",
         "intent_not_sendable",
         "outcome_unresolved",
+        "kill_switch_tripped",
+        "strategy_disabled",
+        "not_active_paper_strategy",
+        "execution_window_closed",
+        "price_stale",
     }
 
 
@@ -1027,7 +1039,12 @@ def _t1_setup(
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """A running operation at ``epoch`` held by one live Job with one registered intent."""
 
+    # 20.1-20: T1 re-reads owner / enabled / kill switch / window; arrange them, and put the
+    # application clock inside the window unless the test already moved it.
+    if _OPS_MONKEYPATCH and clock.now_utc is _REAL_NOW:
+        _OPS_MONKEYPATCH[0].setattr(clock, "now_utc", lambda: IN_WINDOW)
     with session_scope(load_settings()) as session:
+        arrange_sendable_gate(session, now=IN_WINDOW)
         job = seed_operation_job(
             session,
             status=job_status,
