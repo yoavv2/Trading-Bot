@@ -50,7 +50,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from trading_platform.core.settings import Settings, get_strategy_config
+from trading_platform.core.settings import Settings, get_strategy_config, load_settings
 from trading_platform.db.models import (
     ExecutionOperation,
     ExecutionOperationIntent,
@@ -100,8 +100,15 @@ _TERMINAL_LOCAL = frozenset(
 
 
 class BasisFailure(StrEnum):
-    """Closed details of ``evaluation_basis_unverified`` (in precedence order)."""
+    """Closed details of ``evaluation_basis_unverified`` (in precedence order).
 
+    ``basis_not_broker_observed`` / ``basis_stale`` (SAF-09) come first: the recorded cash basis
+    must be a broker-observed snapshot (never the configured-starting-cash fallback) that was no
+    older than ``execution.account_snapshot_max_age_seconds`` when the evaluation recorded it.
+    """
+
+    BASIS_NOT_BROKER_OBSERVED = "basis_not_broker_observed"
+    BASIS_STALE = "basis_stale"
     PREDATES_EXECUTIONS = "predates_executions"
     EXECUTIONS_NOT_SYNCED = "executions_not_synced"
     FILLS_NOT_INGESTED = "fills_not_ingested"
@@ -225,6 +232,10 @@ class BasisRows:
     risk_completed_at: datetime | None
     basis_source: str | None
     basis_snapshot_id: str | None
+    #: Age of the recorded basis snapshot when the evaluation recorded it (None when unrecorded).
+    basis_age_seconds: float | None
+    #: ``execution.account_snapshot_max_age_seconds`` at verification time (SAF-09).
+    max_basis_age_seconds: int
     #: The evaluation's recorded basis positions of THIS strategy: symbol -> quantity.
     basis_positions: Mapping[str, Decimal]
     #: Positions derived from the ingested fills of THIS strategy: symbol -> net quantity.
@@ -271,6 +282,15 @@ def execution_watermark(rows: BasisRows) -> datetime | None:
 
 def verify_evaluation_basis(rows: BasisRows) -> BasisVerification:
     """Pure verification of the evaluation basis against the strategy's execution history."""
+
+    # SAF-09: the recorded cash basis must be broker-observed and fresh, whatever the history.
+    # A hand-seeded run that recorded no basis (source None) is judged by the rules below only.
+    if rows.basis_source == "configured_starting_cash":
+        return BasisVerification(BasisFailure.BASIS_NOT_BROKER_OBSERVED)
+    if rows.basis_source == "broker_sync" and (
+        rows.basis_age_seconds is None or rows.basis_age_seconds > rows.max_basis_age_seconds
+    ):
+        return BasisVerification(BasisFailure.BASIS_STALE)
 
     earlier = verification_orders(rows)
     if not earlier:
@@ -566,6 +586,13 @@ def _find_sync(session: Session, snapshot_id: str | None) -> SyncFact | None:
     )
 
 
+def _basis_age_seconds(basis: Mapping[str, Any]) -> float | None:
+    raw = basis.get("age_seconds")
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        return None
+    return float(raw)
+
+
 def load_basis_verification_rows(
     session: Session, *, strategy_public_id: str, risk_run: StrategyRun
 ) -> BasisRows:
@@ -594,6 +621,8 @@ def load_basis_verification_rows(
         risk_completed_at=risk_completed,
         basis_source=basis.get("source") if isinstance(basis.get("source"), str) else None,
         basis_snapshot_id=snapshot_id,
+        basis_age_seconds=_basis_age_seconds(basis),
+        max_basis_age_seconds=load_settings().execution.account_snapshot_max_age_seconds,
         basis_positions=_basis_positions(basis, strategy_public_id),
         local_positions=(
             _derived_local_positions(session, strategy_public_id, excluding_risk_run=risk_run.id)

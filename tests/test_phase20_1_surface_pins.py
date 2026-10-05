@@ -364,7 +364,9 @@ def test_closed_enums_pinned() -> None:
         "replay_of_earlier_decision",
     }
     assert values(BasisFailure) == {
+        "basis_not_broker_observed",
         "basis_positions_mismatch",
+        "basis_stale",
         "executions_not_synced",
         "fills_not_ingested",
         "predates_executions",

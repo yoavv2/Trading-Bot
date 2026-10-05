@@ -91,6 +91,9 @@ def sync_paper_state(
         broker_fills = client.list_fills()
         broker_positions = client.list_positions()
         broker_account = client.get_account()
+        # SAF-09 (c): the observation is stamped AFTER the account read, with the application
+        # clock, so an overlapping sync that read the account later is always the later one.
+        account_observed_at = clock.now_utc()
 
         with session_scope(resolved_settings) as session:
             strategy_record = ensure_strategy_record(session, strategy.metadata)
@@ -156,7 +159,7 @@ def sync_paper_state(
                 strategy_record.id,
                 broker_account,
                 broker_positions,
-                synced_at=synced_at,
+                snapshot_at=account_observed_at,
             )
 
             return PaperStateSyncReport(
@@ -203,6 +206,9 @@ def sync_account_state(
         broker_fills = client.list_fills()
         broker_positions = client.list_positions()
         broker_account = client.get_account()
+        # SAF-09 (c): the observation is stamped AFTER the account read, with the application
+        # clock, so an overlapping sync that read the account later is always the later one.
+        account_observed_at = clock.now_utc()
 
         with session_scope(resolved_settings) as session:
             local_orders = (
@@ -253,7 +259,7 @@ def sync_account_state(
                 None,
                 broker_account,
                 broker_positions,
-                synced_at=synced_at,
+                snapshot_at=account_observed_at,
             )
 
             return AccountStateSyncReport(
@@ -546,7 +552,7 @@ def _record_broker_account_snapshot(
     broker_account: BrokerAccountSnapshot,
     broker_positions: list[BrokerPositionSnapshot],
     *,
-    synced_at: datetime,
+    snapshot_at: datetime,
 ) -> AccountSnapshot:
     gross_exposure = sum(
         (abs(position.market_value) for position in broker_positions), start=Decimal("0")
@@ -555,7 +561,7 @@ def _record_broker_account_snapshot(
         strategy_id=strategy_row_id,
         source_run_id=None,
         snapshot_source="broker_sync",
-        snapshot_at=synced_at,
+        snapshot_at=snapshot_at,
         cash=broker_account.cash,
         gross_exposure=gross_exposure,
         total_equity=broker_account.equity,

@@ -10,6 +10,7 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from trading_platform.core import clock
 from trading_platform.core.settings import PortfolioSettings, Settings, load_settings
 from trading_platform.db.models import AccountSnapshot, Position, Strategy
 from trading_platform.services.account_baseline import latest_broker_observed_account_snapshot
@@ -92,6 +93,21 @@ class PortfolioBasis:
             "snapshot_at": self.snapshot_at.isoformat() if self.snapshot_at else None,
             "age_seconds": self.age_seconds,
         }
+
+
+def execution_basis_problem(basis: PortfolioBasis, *, max_age_seconds: int) -> str | None:
+    """Why ``basis`` may not size or send an order, or None when it may (COR-01, SAF-09).
+
+    Execution sizes only against cash from a broker-observed account snapshot that is at most
+    ``max_age_seconds`` old. The configured-starting-cash fallback stays available for research
+    and evaluation but never for a send.
+    """
+
+    if basis.source != "broker_sync":
+        return "account_snapshot_missing"
+    if basis.age_seconds is None or basis.age_seconds > max_age_seconds:
+        return "account_snapshot_stale"
+    return None
 
 
 @dataclass(frozen=True)
@@ -252,7 +268,7 @@ class PortfolioService:
             open_symbols=frozenset(strategy_symbols),
             total_open_positions=len(open_rows),
         )
-        reference_now = now or datetime.now(UTC)
+        reference_now = now or clock.now_utc()
         basis_source: BasisSource = (
             "broker_sync" if latest_snapshot is not None else "configured_starting_cash"
         )

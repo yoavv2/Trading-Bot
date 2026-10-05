@@ -377,6 +377,10 @@ class ExecutionSettings(BaseModel):
     # S1-R3: how long a committed T1 authorization stays valid for handing the request to the
     # HTTP client (a wall-clock deadline; it narrows the late-POST window, it bounds nothing).
     send_authorization_ttl_seconds: int = Field(default=5, ge=1)
+    # COR-01/SAF-09: the broker-observed cash basis must be at most this old for execution;
+    # default 6 h (one regular session). Older, or no broker snapshot at all, pauses the
+    # operation awaiting_reconciliation and refuses basis verification.
+    account_snapshot_max_age_seconds: int = Field(default=21600, ge=60)
     paper_session_runner: PaperSessionRunnerSettings = PaperSessionRunnerSettings()
     safety: ExecutionSafetySettings = ExecutionSafetySettings()
 

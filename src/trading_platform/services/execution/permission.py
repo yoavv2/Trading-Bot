@@ -67,7 +67,7 @@ from trading_platform.services.execution.operations import (
     risk_limit_failed,
     window_verdict,
 )
-from trading_platform.services.portfolio import PortfolioService
+from trading_platform.services.portfolio import PortfolioService, execution_basis_problem
 from trading_platform.services.reconciliation.latest import (
     StandaloneReconciliation,
     latest_broker_effect_at,
@@ -542,9 +542,16 @@ def check_intent_permission(
     assert observation is not None
 
     # (5) portfolio risk at the fresh price against the refreshed portfolio
-    state = PortfolioService(settings).load_state(
-        session, strategy_id=strategy_id, as_of_session=as_of_session
+    # COR-01/SAF-09: sizing uses cash from a broker-observed snapshot no older than
+    # execution.account_snapshot_max_age_seconds; the configured-cash fallback never sizes a send.
+    state, basis = PortfolioService(settings).load_state_with_basis(
+        session, strategy_id=strategy_id, as_of_session=as_of_session, now=at
     )
+    basis_problem = execution_basis_problem(
+        basis, max_age_seconds=settings.execution.account_snapshot_max_age_seconds
+    )
+    if basis_problem is not None:
+        return _pause("risk", PausedReason.AWAITING_RECONCILIATION, basis_problem)
     revalidation = revalidate_pinned_intent(
         PinnedIntentSpec(
             symbol=intent.symbol,

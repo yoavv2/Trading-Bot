@@ -23,6 +23,8 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from trading_platform.core import clock
+from trading_platform.core.settings import load_settings
 from trading_platform.db.models import (
     AccountReconciliationRun,
     AccountSnapshot,
@@ -42,6 +44,33 @@ _LOCAL_TO_BROKER = {
     OrderLifecycleState.EXPIRED: "expired",
     OrderLifecycleState.REJECTED: "rejected",
 }
+
+
+def seed_fresh_broker_snapshot(
+    session: Session, *, cash: Decimal | None = None, at: datetime | None = None
+) -> AccountSnapshot:
+    """Seed one broker-observed account snapshot (strategy NULL, ``broker_sync``) (SAF-09).
+
+    Execution sizes only against cash from a fresh broker-observed snapshot, so a test that sends
+    arranges one BEFORE its evaluation. ``cash`` defaults to the configured starting cash so the
+    sized quantities are unchanged; ``at`` defaults to the application clock.
+    """
+
+    resolved_cash = cash if cash is not None else load_settings().portfolio.starting_cash_decimal
+    snapshot = AccountSnapshot(
+        strategy_id=None,
+        source_run_id=None,
+        snapshot_source="broker_sync",
+        snapshot_at=at or clock.now_utc(),
+        cash=resolved_cash,
+        gross_exposure=Decimal("0"),
+        total_equity=resolved_cash,
+        buying_power=resolved_cash,
+        open_positions=0,
+    )
+    session.add(snapshot)
+    session.flush()
+    return snapshot
 
 
 @dataclass(frozen=True)
