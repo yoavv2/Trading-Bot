@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import update
 from sqlalchemy.orm import Session
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.calendar_facts import seed_calendar
 from tests.support.migrated_db import migrated_database
 from tests.support.operation_fixtures import seed_risk_run
@@ -208,6 +209,7 @@ def test_no_blocker_means_the_per_intent_check_is_ok(
     """No blocker -> the per-intent check does not pause (owner, enabled, kill switch, recovery,
     working orders, reconciliation)."""
 
+    seed_fresh_broker_snapshot(db, at=IN_WINDOW)  # SAF-09 (20.1-24): a fresh observed account
     assert current_trading_blockers(db) == []
     assert _permission(db, monkeypatch).ok
 

@@ -17,6 +17,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.calendar_facts import (
     FakeStrategy,
     clock_at,
@@ -85,6 +86,9 @@ def _evaluate(as_of: date) -> uuid.UUID:
     """A REAL risk evaluation: it persists the input manifest the submit-time
     provenance check (PROV-01, D-25) verifies."""
 
+    # SAF-09 (20.1-24): the evaluation sizes on a fresh broker-observed account snapshot.
+    with session_scope(load_settings()) as session:
+        seed_fresh_broker_snapshot(session)
     report = run_risk_evaluation(
         STRATEGY_ID, as_of_session=as_of, trigger_source="test_suite", settings=load_settings()
     )

@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from sqlalchemy import update
 from sqlalchemy.orm import Session
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.calendar_facts import et, seed_calendar
 from tests.support.migrated_db import migrated_database
 from tests.support.operation_fixtures import seed_risk_run
@@ -372,6 +373,7 @@ def test_ok_when_every_check_passes_and_the_audit_carries_the_observation(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     risk_run = seed_risk_run(db)
+    seed_fresh_broker_snapshot(db, at=IN_WINDOW)  # SAF-09 (20.1-24): a fresh observed account
     world = World()
 
     outcome, source = _run_check(db, world, risk_run, monkeypatch)
@@ -538,6 +540,7 @@ def test_fresh_plus_two_percent_with_enough_cash_is_ok_and_unchanged(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     risk_run = seed_risk_run(db)
+    seed_fresh_broker_snapshot(db, at=IN_WINDOW)  # SAF-09 (20.1-24): a fresh observed account
     world = World()
     world.price = _fresh(world, "102")
 
@@ -553,6 +556,7 @@ def test_a_symbol_the_account_does_not_hold_needs_only_a_fresh_trade(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     risk_run = seed_risk_run(db)
+    seed_fresh_broker_snapshot(db, at=IN_WINDOW)  # SAF-09 (20.1-24): a fresh observed account
     world = World()
     world.price = observation(
         "ZZZZ", "100", observed_at=world.now - timedelta(seconds=3), fetched_at=world.now
@@ -567,6 +571,7 @@ def test_plus_six_percent_pauses_beyond_tolerance_and_the_same_intent_passes_whe
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     risk_run = seed_risk_run(db)
+    seed_fresh_broker_snapshot(db, at=IN_WINDOW)  # SAF-09 (20.1-24): a fresh observed account
     world = World()
     world.price = _fresh(world, "106")
 
@@ -682,6 +687,7 @@ def test_future_dated_trade_is_price_invalid(db: Session, monkeypatch: pytest.Mo
 
 def test_trade_within_future_skew_is_accepted(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     risk_run = seed_risk_run(db)
+    seed_fresh_broker_snapshot(db, at=IN_WINDOW)  # SAF-09 (20.1-24): a fresh observed account
     world = World()
     skew = world.settings.execution.pre_send_price_future_skew_seconds
     world.price = observation(
@@ -724,6 +730,7 @@ def test_tolerance_and_age_settings_take_effect(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     risk_run = seed_risk_run(db)
+    seed_fresh_broker_snapshot(db, at=IN_WINDOW)  # SAF-09 (20.1-24): a fresh observed account
     base = load_settings()
     loose = base.model_copy(
         update={
