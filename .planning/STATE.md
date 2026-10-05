@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "Completed 20.1-28-PLAN.md (gap closure r2; next 20.1-29)"
+stopped_at: "Completed 20.1-29-PLAN.md (gap closure r2; next 20.1-30)"
 last_updated: "2026-10-05T15:50:05.508Z"
-last_activity: 2026-10-06 -- 20.1-28 complete (WR-01 read model on the shared verdict; WR-08 retry guard, V-3)
+last_activity: 2026-10-06 -- 20.1-29 complete (required E2E regressions a/b1/b2/b3 on product paths; CR-01 fix holds)
 progress:
   total_phases: 6
   completed_phases: 4
@@ -298,5 +298,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-10-05T15:50:05.497Z
-Stopped at: Completed 20.1-28-PLAN.md (gap closure r2; next 20.1-29)
+Stopped at: Completed 20.1-29-PLAN.md (gap closure r2; next 20.1-30)
 Resume file: None
