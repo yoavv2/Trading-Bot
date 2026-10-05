@@ -27,6 +27,7 @@ from tests.support.recovery_fixtures import (
     seed_account_run,
     seed_intent,
     seed_job,
+    seed_operation_bound_intent,
     seed_paper_run,
     seed_recording,
     seed_strategy_reconciliation,
@@ -545,13 +546,157 @@ def test_crash_left_pending_order_is_an_intent_even_without_a_flagged_job(recove
     assert status.gate_code is GateCode.OUTCOME_UNRESOLVED
     assert status.jobs == () and len(status.intents) == 1
 
-    # An ordinary registered-but-unattempted order is NOT an uncertain intent.
+    # A LEGACY registered-but-unattempted order (no operation intent row) is never proven not sent.
     def plain(session: Any) -> None:
         run = seed_paper_run(session, None, OTHER)
         seed_intent(session, run, status=OrderLifecycleState.PENDING_SUBMISSION, attempts=())
 
     _arrange(plain)
-    assert _status(OTHER).resolved
+    # 20.1-17 gap (a): was `_status(OTHER).resolved`. A legacy zero-attempt pending order is never
+    # proven not sent (TL-4); run-time G2 already refused it, so the predicate must agree.
+    other = _status(OTHER)
+    assert other.gate_code is GateCode.OUTCOME_UNRESOLVED
+    assert [i.classification for i in other.intents] == [RecoveryClassification.NOT_FOUND]
+
+
+def test_operation_bound_unattempted_order_is_not_an_uncertain_intent(recovery_db: str) -> None:
+    """The case the former assertion protected: the registered_unsent intent of a paused
+    operation (an attempt-log-registered zero-attempt pending order) creates no gate."""
+
+    def build(session: Any) -> None:
+        run = seed_paper_run(session, None, OTHER)
+        seed_operation_bound_intent(
+            session,
+            run,
+            status=OrderLifecycleState.PENDING_SUBMISSION,
+            attempts=(),
+            strategy_id=OTHER,
+        )
+
+    _arrange(build)
+    status = _status(OTHER)
+    assert status.resolved and status.gate_code is None
+    assert status.intents == ()
+    assert _issue_kinds() == []
+
+
+@pytest.mark.parametrize(
+    ("status", "attempts", "expected"),
+    [
+        (OrderLifecycleState.PENDING_SUBMISSION, (), RecoveryClassification.NOT_SENT),
+        (OrderLifecycleState.SUBMISSION_FAILED, (), RecoveryClassification.NOT_SENT),
+        (OrderLifecycleState.UNKNOWN, (), RecoveryClassification.NOT_FOUND),
+        (OrderLifecycleState.SUBMISSION_FAILED, (AMBIGUOUS,), RecoveryClassification.NOT_FOUND),
+    ],
+)
+def test_operation_bound_attempt_history_classification(
+    recovery_db: str,
+    status: OrderLifecycleState,
+    attempts: tuple[AttemptOutcomeClass | None, ...],
+    expected: Any,
+) -> None:
+    """On a FLAGGED Job an attempt-log-registered order is classified by the shared function:
+    zero attempts prove not-sent for pending_submission / submission_failed (SAF-01 A/B)."""
+
+    def build(session: Any) -> None:
+        job = seed_job(session, completed_at=at(0))
+        run = seed_paper_run(session, job)
+        seed_operation_bound_intent(session, run, status=status, attempts=attempts)
+
+    _arrange(build)
+    (intent,) = _status().intents
+    assert intent.classification is expected
+    assert intent.established == (expected is RecoveryClassification.NOT_SENT)
+
+
+@pytest.mark.parametrize(
+    "status", [OrderLifecycleState.PENDING_SUBMISSION, OrderLifecycleState.SUBMISSION_FAILED]
+)
+def test_operation_bound_unsent_order_on_a_flagged_job_waits_only_for_reconciliation(
+    recovery_db: str, status: OrderLifecycleState
+) -> None:
+    """SAF-01 A/B: the attempt log proves it was never sent, so only the fresh clean
+    reconciliation after the Job is missing; once it exists the strategy resolves."""
+
+    def build(session: Any) -> None:
+        job = seed_job(session, completed_at=at(0))
+        run = seed_paper_run(session, job)
+        seed_operation_bound_intent(session, run, status=status, attempts=())
+
+    _arrange(build)
+    assert _status().gate_code is GateCode.RECONCILIATION_REQUIRED
+    _clean_account_run(5)
+    assert _status().gate_code is None
+
+
+@pytest.mark.parametrize(
+    "status", [OrderLifecycleState.PENDING_SUBMISSION, OrderLifecycleState.SUBMISSION_FAILED]
+)
+@pytest.mark.parametrize(
+    "outcomes",
+    [(AMBIGUOUS,), (AttemptOutcomeClass.ACCEPTED,), (AttemptOutcomeClass.DUPLICATE_REPORTED,)],
+)
+def test_unflagged_unparked_ambiguous_order_is_an_intent(
+    recovery_db: str, status: OrderLifecycleState, outcomes: tuple[AttemptOutcomeClass, ...]
+) -> None:
+    """20.1-17 gap (b): an order whose attempt completed ambiguous / accepted-without-id /
+    exists_reported, never parked UNKNOWN, on a Job NOT flagged outcome_uncertain, is listed
+    under its originating Job and gates the strategy."""
+
+    def build(session: Any) -> uuid.UUID:
+        job = seed_job(session, uncertain=False, status=JobStatus.CANCELLED, completed_at=at(0))
+        run = seed_paper_run(session, job)
+        seed_operation_bound_intent(session, run, status=status, attempts=outcomes)
+        return job.id
+
+    job_id = _arrange(build)
+    status_read = _status()
+    assert status_read.gate_code is GateCode.OUTCOME_UNRESOLVED
+    (intent,) = status_read.intents
+    assert intent.job_id == job_id
+    assert intent.classification is RecoveryClassification.NOT_FOUND
+    assert status_read.jobs == ()  # only flagged Jobs are listed as uncertain Jobs
+
+
+def test_unflagged_shapes_that_prove_not_sent_create_no_gate(recovery_db: str) -> None:
+    def build(session: Any) -> None:
+        job = seed_job(session, uncertain=False, status=JobStatus.CANCELLED, completed_at=at(0))
+        run = seed_paper_run(session, job)
+        seed_operation_bound_intent(
+            session, run, status=OrderLifecycleState.SUBMISSION_FAILED, attempts=(PRE_CONNECTION,)
+        )
+        seed_operation_bound_intent(
+            session,
+            run,
+            status=OrderLifecycleState.SUBMISSION_FAILED,
+            attempts=(AttemptOutcomeClass.REJECTED,),
+            ticker="MSFT",
+        )
+        seed_operation_bound_intent(
+            session, run, status=OrderLifecycleState.PENDING_SUBMISSION, attempts=(), ticker="NVDA"
+        )
+
+    _arrange(build)
+    status = _status()
+    assert status.resolved and status.intents == ()
+
+
+def test_unflagged_unknown_order_with_a_not_sent_history_is_still_listed(recovery_db: str) -> None:
+    """The existing UNKNOWN liveness behaviour: listed (as not_sent) so the next sync pass can
+    move it to submission_failed; it awaits a reconciliation, it is not unestablished."""
+
+    def build(session: Any) -> None:
+        job = seed_job(session, uncertain=False, status=JobStatus.CANCELLED, completed_at=at(0))
+        run = seed_paper_run(session, job)
+        seed_operation_bound_intent(
+            session, run, status=OrderLifecycleState.UNKNOWN, attempts=(PRE_CONNECTION,)
+        )
+
+    _arrange(build)
+    status = _status()
+    (intent,) = status.intents
+    assert intent.classification is RecoveryClassification.NOT_SENT
+    assert status.gate_code is GateCode.RECONCILIATION_REQUIRED
 
 
 def test_unflagged_unknown_order_is_an_intent(recovery_db: str) -> None:
@@ -1103,7 +1248,9 @@ def test_statement_writer_unknown_intent_and_not_on_the_missing_order_path(
             session, strategy_id=OTHER, attempts=(PRE_CONNECTION,)
         )
         run = seed_paper_run(session, None)
-        plain = seed_intent(
+        # An attempt-log-registered (operation-bound) unattempted order; a LEGACY one is
+        # unestablished since 20.1-17 and therefore on the missing-order path.
+        plain = seed_operation_bound_intent(
             session, run, status=OrderLifecycleState.PENDING_SUBMISSION, attempts=()
         )
         return found.id, not_sent.id, plain.id
@@ -1150,6 +1297,52 @@ def test_status_reads_issue_at_most_two_statements_independent_of_history(recove
     _grow_history(1)
     small = measure()
     _grow_history(10)
+    large = measure()
+    assert small == large == (2, 2, 2)
+
+
+def _grow_unflagged_shapes(multiplier: int) -> None:
+    def build(session: Any) -> None:
+        for index in range(multiplier):
+            job = seed_job(
+                session, uncertain=False, status=JobStatus.CANCELLED, completed_at=at(index)
+            )
+            run = seed_paper_run(session, job)
+            seed_operation_bound_intent(
+                session, run, status=OrderLifecycleState.SUBMISSION_FAILED, attempts=(AMBIGUOUS,)
+            )
+            seed_intent(
+                session,
+                run,
+                status=OrderLifecycleState.PENDING_SUBMISSION,
+                attempts=(),
+                ticker="MSFT",
+            )
+            seed_operation_bound_intent(
+                session,
+                run,
+                status=OrderLifecycleState.PENDING_SUBMISSION,
+                attempts=(),
+                ticker="NVDA",
+            )
+
+    _arrange(build)
+
+
+def test_status_reads_stay_within_two_statements_with_unflagged_shapes(recovery_db: str) -> None:
+    def measure() -> tuple[int, int, int]:
+        with session_scope(load_settings()) as session:
+            with count_queries(session) as strategy_counter:
+                strategy_recovery_status(session, OWNER)
+            with count_queries(session) as account_counter:
+                account_recovery_status(session)
+            with count_queries(session) as issue_counter:
+                outcome_issue_inputs(session)
+        return strategy_counter.count, account_counter.count, issue_counter.count
+
+    _grow_unflagged_shapes(1)
+    small = measure()
+    _grow_unflagged_shapes(10)
     large = measure()
     assert small == large == (2, 2, 2)
 
@@ -1362,7 +1555,9 @@ def test_resubmission_is_never_permitted_whatever_the_real_operation_state(
         record_broker_statement(
             session, order.id, "not_received", "ticket-9", "broker support: not received", "op"
         )
-    status = _status(operation_view=recovery.DbOperationView(), now=timeline.now + timedelta(hours=1))
+    status = _status(
+        operation_view=recovery.DbOperationView(), now=timeline.now + timedelta(hours=1)
+    )
     (intent,) = status.intents
     assert intent.absence_evidence_complete and intent.statement is not None
     assert intent.resubmission_permitted is False

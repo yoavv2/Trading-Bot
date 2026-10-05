@@ -174,6 +174,70 @@ def seed_intent(
     return order
 
 
+def seed_operation_bound_intent(
+    session: Session,
+    run: StrategyRun,
+    *,
+    status: OrderLifecycleState = OrderLifecycleState.PENDING_SUBMISSION,
+    attempts: Sequence[AttemptOutcomeClass | None] = (),
+    strategy_id: str = OWNER,
+    operation: Any | None = None,
+    operation_state: str = "terminated",
+    operation_reason: str | None = "cancelled_by_operator",
+    ticker: str = "AAPL",
+    quantity: str = "10",
+) -> PaperOrder:
+    """An ATTEMPT-LOG-REGISTERED order (20.1-17): the pinned intent row of an execution operation
+    is written FIRST (``created_at`` explicitly before the order's), the order is registered as its
+    realisation and linked back, exactly the order the production T1 path produces. Contrast
+    ``seed_intent`` alone, which is a LEGACY order (no operation intent row).
+
+    ``operation`` reuses an existing operation (at most one open operation per strategy exists);
+    by default a terminated one is created, so no open-operation check (A1) is disturbed.
+    """
+
+    from datetime import timedelta
+
+    from tests.support.operation_fixtures import seed_operation
+
+    from trading_platform.db.models import ExecutionOperationIntent
+
+    order = seed_intent(
+        session, run, status=status, attempts=attempts, ticker=ticker, quantity=quantity
+    )
+    if operation is None:
+        operation = seed_operation(
+            session, strategy_id=strategy_id, state=operation_state, reason=operation_reason
+        )
+    sequence = (
+        session.execute(
+            select(ExecutionOperationIntent.sequence)
+            .where(ExecutionOperationIntent.operation_id == operation.id)
+            .order_by(ExecutionOperationIntent.sequence.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        or 0
+    ) + 1
+    session.add(
+        ExecutionOperationIntent(
+            operation_id=operation.id,
+            sequence=sequence,
+            symbol_id=order.symbol_id,
+            side=order.side,
+            quantity=order.quantity,
+            reference_price=Decimal("100"),
+            client_order_id=order.client_order_id,
+            paper_order_id=order.id,
+            decision_fingerprint=uuid.uuid4().hex + uuid.uuid4().hex,
+            prior_execution_refs=[],
+            disposition="open",
+            created_at=order.created_at - timedelta(seconds=1),
+        )
+    )
+    session.flush()
+    return order
+
+
 def seed_uncertain_session(
     session: Session,
     *,

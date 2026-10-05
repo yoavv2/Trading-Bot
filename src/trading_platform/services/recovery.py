@@ -13,7 +13,12 @@ Resolution rules (03 sec.3.7 B, amended round 5, 2026-10-04):
   linked ``paper_execution`` run, or a ``broker-order-sync`` Job; zero order rows alone
   never proves it), ``not_sent`` (its OWN attempt history proves it never left the
   process), ``rejected_at_submission`` (a recorded 4xx) or ``found_verified`` (the broker
-  shows the order, in any state, matched by id);
+  shows the order, in any state, matched by id). ``not_sent`` and the unestablished rest come
+  from the ONE shared function ``attempts.classify_submission_evidence`` (20.1-17), the same
+  verdict the run-time send guard G2 reads: zero attempt rows prove not-sent only for an
+  attempt-log-registered (operation-bound) pending_submission / submission_failed order, so a
+  legacy zero-attempt order is never ``not_sent``. The predicate lists such an order, and an
+  unparked ambiguous order, whether or not its Job is flagged ``outcome_uncertain``;
 * a never-found order stays unresolved whatever the elapsed time, the absence evidence,
   a broker statement or a terminated executor; there is no resend path
   (``resubmission_permitted`` is False for every intent);
@@ -72,8 +77,9 @@ from trading_platform.services.broker_jobs import (
 from trading_platform.services.broker_status import BrokerStatusClass, classify_broker_status
 from trading_platform.services.execution.attempts import (
     AttemptRecord,
-    SubmissionClass,
-    classify_submission,
+    SubmissionEvidence,
+    attempt_log_registered,
+    classify_submission_evidence,
 )
 
 # ---------------------------------------------------------------------------
@@ -141,7 +147,8 @@ class OperationView(Protocol):
     """Seam to the execution-operation record (the real view is ``DbOperationView``).
 
     Only used to REPORT the operation context of an intent; the predicate itself never
-    reads it (ending or expiring an operation resolves nothing, J-2).
+    reads operation STATE (ending or expiring an operation resolves nothing, J-2). It reads the
+    pinned intent rows only to decide attempt-log registration (``first_intent_at``, 20.1-17).
     """
 
     def state_for_intent(self, session: Session, paper_order_id: uuid.UUID) -> OperationState: ...
@@ -444,6 +451,7 @@ def classify_intent(
     broker_status: str | None,
     attempts: Sequence[AttemptRecord],
     records: Sequence[RecordView],
+    attempt_log_registered: bool,
 ) -> tuple[RecoveryClassification, BrokerState | None, UnresolvedReason | None]:
     """Per-intent classification (closed), evaluated in this order.
 
@@ -452,11 +460,12 @@ def classify_intent(
        beats the attempt history, which cannot contradict it);
     2. a locally REJECTED order, or a complete history whose class is ``rejected``:
        ``rejected_at_submission``;
-    3. a complete history whose every attempt is ``pre_connection`` or ``deadline_expired``
-       (the order's OWN attempt log proves it never left the process): ``not_sent``. A
-       history with no attempt row is never ``not_sent``: without an operation (20.1-11)
-       an order cannot prove it was registered under the attempt-log invariant, so a legacy
-       order is classified only by broker evidence;
+    3. the shared ``classify_submission_evidence`` (the verdict the run-time send guard reads):
+       ``proven_not_sent`` -> ``not_sent`` (a complete history of pre_connection /
+       deadline_expired attempts, or ZERO attempt rows for an attempt-log-registered order in
+       pending_submission / submission_failed); ``rejected`` -> ``rejected_at_submission``. A
+       legacy order (no attempt rows, not operation-bound) is never ``not_sent`` (TL-4): it is
+       classified only by broker evidence;
     4. otherwise the order is not at the broker: ``unresolved(reason)`` when the latest
        recorded classification says so, else ``not_found``. Time, absence evidence, a
        statement and executor termination never change this.
@@ -473,12 +482,16 @@ def classify_intent(
         return RecoveryClassification.FOUND_VERIFIED, state, None
     if order_status == OrderLifecycleState.REJECTED.value:
         return RecoveryClassification.REJECTED_AT_SUBMISSION, None, None
-    if attempts:
-        submission_class = classify_submission(list(attempts))
-        if submission_class is SubmissionClass.NOT_SENT:
-            return RecoveryClassification.NOT_SENT, None, None
-        if submission_class is SubmissionClass.REJECTED:
-            return RecoveryClassification.REJECTED_AT_SUBMISSION, None, None
+    evidence = classify_submission_evidence(
+        status=order_status,
+        broker_order_id=broker_order_id,
+        attempts=attempts,
+        attempt_log_registered=attempt_log_registered,
+    )
+    if evidence is SubmissionEvidence.PROVEN_NOT_SENT:
+        return RecoveryClassification.NOT_SENT, None, None
+    if evidence is SubmissionEvidence.REJECTED:
+        return RecoveryClassification.REJECTED_AT_SUBMISSION, None, None
     latest = latest_classification_record(records)
     if latest is not None and latest.classification is RecoveryClassification.UNRESOLVED:
         return RecoveryClassification.UNRESOLVED, None, latest.unresolved_reason
@@ -548,13 +561,19 @@ _ORDER_COLUMNS = f"""
                 'http_status', a.http_status, 'error_type', a.error_type,
                 'broker_message', a.broker_message) ORDER BY a.attempt_number), '[]'::json)
        FROM order_submission_attempts a WHERE a.paper_order_id = po.id) AS attempts,
+    po.created_at AS order_created_at,
+    (SELECT min(oi.created_at) FROM execution_operation_intents oi
+      WHERE oi.paper_order_id = po.id) AS first_intent_at,
     (SELECT coalesce(json_agg({_RECORD_JSON} ORDER BY r.created_at, r.id), '[]'::json)
        FROM recovery_records r WHERE r.paper_order_id = po.id) AS order_records
 """
 
 #: Statement 1: uncertain Jobs with their linked paper_execution runs and orders, plus the
-#: unflagged unestablished orders (UNKNOWN, or PENDING_SUBMISSION with an attempt that has no
-#: outcome), with attempt logs and recovery records as correlated JSON.
+#: unflagged candidate orders (UNKNOWN, or without a broker id and still pending_submission /
+#: submission_failed; ``_load_intents`` keeps only the UNESTABLISHED ones through the shared
+#: classifier), with attempt logs, the attempt-log registration inputs and recovery records as
+#: correlated JSON. ``origin_job_id`` is the Job of the order's run (the flagged Job, or the
+#: unflagged originating Job).
 _INTENTS_SQL = f"""
 WITH flagged AS (
     SELECT j.id, j.job_type, j.status::text AS job_status, j.completed_at,
@@ -573,7 +592,8 @@ SELECT f.id AS job_id, f.job_type AS job_type, f.job_status AS job_status,
        (SELECT coalesce(json_agg({_RECORD_JSON} ORDER BY r.created_at, r.id), '[]'::json)
           FROM recovery_records r
          WHERE r.job_id = f.id AND r.paper_order_id IS NULL) AS job_records,
-       {_ORDER_COLUMNS}
+       {_ORDER_COLUMNS},
+       f.id AS origin_job_id
   FROM flagged f
   LEFT JOIN strategy_runs sr ON sr.job_id = f.id AND sr.run_type = 'paper_execution'
   LEFT JOIN paper_orders po ON po.strategy_run_id = sr.id
@@ -585,14 +605,13 @@ SELECT f.id AS job_id, f.job_type AS job_type, f.job_status AS job_status,
 UNION ALL
 SELECT NULL::uuid, NULL::text, NULL::text, NULL::timestamptz, NULL::text,
        0::bigint, '[]'::json,
-       {_ORDER_COLUMNS}
+       {_ORDER_COLUMNS},
+       sr.job_id AS origin_job_id
   FROM paper_orders po
   JOIN strategy_runs sr ON sr.id = po.strategy_run_id
   JOIN strategies st ON st.id = sr.strategy_id
  WHERE (po.status = 'unknown'
-        OR (po.status = 'pending_submission'
-            AND EXISTS (SELECT 1 FROM order_submission_attempts na
-                         WHERE na.paper_order_id = po.id AND na.completed_at IS NULL)))
+        OR (po.broker_order_id IS NULL AND po.status IN ('pending_submission', 'submission_failed')))
    AND (CAST(:sid AS text) IS NULL OR st.strategy_id = CAST(:sid AS text))
    AND (CAST(:order_id AS uuid) IS NULL OR po.id = CAST(:order_id AS uuid))
    AND NOT EXISTS (SELECT 1 FROM flagged ff
@@ -742,13 +761,25 @@ def _load_intents(
             continue
         records = [_record_from_json(r) for r in (row["order_records"] or [])]
         attempts = tuple(_attempt_from_json(a) for a in (row["attempts"] or []))
+        registered = attempt_log_registered(
+            has_attempts=bool(attempts),
+            order_created_at=_parse_dt(row["order_created_at"]),  # type: ignore[arg-type]
+            first_intent_created_at=_parse_dt(row["first_intent_at"]),
+        )
         classification, broker_state, reason = classify_intent(
             order_status=row["order_status"],
             broker_order_id=row["broker_order_id"],
             broker_status=row["broker_status"],
             attempts=attempts,
             records=records,
+            attempt_log_registered=registered,
         )
+        if job_id is None and row["order_status"] != "unknown":
+            # An unflagged order is an uncertain outcome only when the shared classifier leaves
+            # it UNESTABLISHED (20.1-17); a proven-not-sent or rejected pending/failed order
+            # (e.g. the registered_unsent intent of a paused operation) creates no gate.
+            if classification in _ESTABLISHED_CLASSIFICATIONS:
+                continue
         evidence = tuple(r for r in records if r.kind is RecoveryRecordKind.ABSENCE_EVIDENCE)
         statement = next(
             (r for r in records if r.kind is RecoveryRecordKind.BROKER_STATEMENT), None
@@ -758,7 +789,8 @@ def _load_intents(
         intents.append(
             IntentRecovery(
                 intent_id=row["order_id"],
-                job_id=job_id,
+                # The flagged Job, or (unflagged branch) the originating Job of the order's run.
+                job_id=row["origin_job_id"],
                 strategy_id=row["order_strategy"],
                 client_order_id=row["client_order_id"],
                 order_status=row["order_status"],
@@ -1224,10 +1256,13 @@ def get_job_recovery(
     if callable(batch):
         prefetched = batch(session, [i.intent_id for i in own if i.intent_id is not None])
     job_is_uncertain = any(j.job_id == job_id for j in status.jobs)
-    if not job_is_uncertain:
-        gate: GateCode | None = None
-    elif any(i.blocking for i in own):
+    gate: GateCode | None
+    if any(i.blocking for i in own):
+        # An unestablished intent blocks whether or not its Job is flagged outcome_uncertain
+        # (20.1-17: the unflagged origin Job of a legacy / unparked ambiguous order).
         gate = GateCode.OUTCOME_UNRESOLVED
+    elif not job_is_uncertain:
+        gate = None
     else:
         gate = (
             status.gate_code
