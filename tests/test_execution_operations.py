@@ -1533,11 +1533,10 @@ def test_attempt_rows_without_executor_identity_are_never_completed_late(ops_db:
 
 
 def test_fenced_cas_update_operation_affects_zero_rows_when_stale(ops_db: str) -> None:
-    """SAF-11: the dead, non-atomic fenced helpers (``cas_set_intent_disposition``,
-    ``cas_update_order``) are deleted; the production fenced writer is ``cas_update_operation``."""
+    """SAF-11: the dead, non-atomic fenced intent/order helpers are deleted; the only fenced
+    CAS writer left is ``cas_update_operation``."""
 
-    assert not hasattr(ops, "cas_set_intent_disposition")
-    assert not hasattr(ops, "cas_update_order")
+    assert [name for name in dir(ops) if name.startswith("cas_")] == ["cas_update_operation"]
     operation_id, _intent_id, job_id = _t1_setup()
     stale = Fence(operation_id, 2, job_id)
     wrong_job = Fence(operation_id, 3, uuid.uuid4())
