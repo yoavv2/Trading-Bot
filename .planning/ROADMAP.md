@@ -425,7 +425,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 **Gap r2 wave 3**
 
 - [x] 20.1-29-PLAN.md — Required E2E regressions (a) Continue after SAF-01 release and (b) M15 retry / Start-path reuse, product paths only (REC-01, REC-02, PAPER-02)
-- [ ] 20.1-30-PLAN.md — Required E2E regressions (c) genuine ambiguity stays blocked and (d) one consumer-agreement matrix incl. order-less flagged Job control (blocked; OD-1 open decision, see 20.1-OD-1-DRAFT.md) (REC-01, REC-02, PAPER-02, COR-06)
+- [x] 20.1-30-PLAN.md — Required E2E regressions (c) genuine ambiguity stays blocked and (d) one consumer-agreement matrix incl. order-less flagged Job control (blocked; OD-1 open decision, see 20.1-OD-1-DRAFT.md) (REC-01, REC-02, PAPER-02, COR-06)
 - [ ] 20.1-31-PLAN.md — Runbook 05 + HUMAN-UAT: CR-01 fix note marked PENDING VERIFICATION; interim prohibition unchanged (docs only) (REC-01, REC-02)
 
 **UI hint**: yes (legacy-console compatibility only)
@@ -498,7 +498,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 29/31 | In Progress (gap closure r2 executing) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 30/31 | In Progress (gap closure r2 executing) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |

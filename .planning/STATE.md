@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "Completed 20.1-29-PLAN.md (gap closure r2; next 20.1-30)"
+stopped_at: "Completed 20.1-30-PLAN.md (gap closure r2; next 20.1-31)"
 last_updated: "2026-10-05T15:50:05.508Z"
-last_activity: 2026-10-06 -- 20.1-29 complete (required E2E regressions a/b1/b2/b3 on product paths; CR-01 fix holds)
+last_activity: 2026-10-06 -- 20.1-30 complete (required regressions c genuine ambiguity stays blocked and d agreement matrix; S14 display/gate mismatch open; OD-1 control blocked)
 progress:
   total_phases: 6
   completed_phases: 4
@@ -298,5 +298,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-10-05T15:50:05.497Z
-Stopped at: Completed 20.1-29-PLAN.md (gap closure r2; next 20.1-30)
+Stopped at: Completed 20.1-30-PLAN.md (gap closure r2; next 20.1-31)
 Resume file: None
