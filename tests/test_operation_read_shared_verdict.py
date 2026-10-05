@@ -62,6 +62,7 @@ from trading_platform.db.models import (
     JobStatus,
     OrderEvent,
     OrderLifecycleState,
+    OrderTransitionEventType,
     PaperOrder,
 )
 from trading_platform.db.session import session_scope
@@ -384,6 +385,19 @@ def test_rejected_history_is_applied_not_parked_unknown(
     assert _events(older, "submission_outcome_uncertain") == 0  # no uncertainty manufactured
     types = _order_event_types(older)
     assert "broker_rejected:accepted" in types
+    # the rejection is recorded on the REGISTERING run (operation 2's run), not the origin run
+    with session_scope(load_settings()) as session:
+        rejected_row = session.execute(
+            select(OrderEvent).where(
+                OrderEvent.paper_order_id == older,
+                OrderEvent.event_type == OrderTransitionEventType.BROKER_REJECTED,
+            )
+        ).scalar_one()
+        registering_run = session.execute(
+            select(PaperOrder.strategy_run_id).where(PaperOrder.client_order_id != cid)
+        ).scalar_one()
+    assert rejected_row.strategy_run_id == registering_run
+    assert rejected_row.strategy_run_id != order.strategy_run_id  # origin run unchanged
     assert not any(t.startswith("broker_status_unknown") for t in types)
     summary = report.result_summary
     assert summary["operation"]["state"] == "completed"  # the loop continued; every intent rejected
