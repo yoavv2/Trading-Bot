@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20.1-17-PLAN.md (gap closure; next 20.1-18)
+stopped_at: "20.1-17 complete; paused before wave 2 (weekly usage 96%). Open: tests/test_paper_session_job_type.py::test_run_paper_session_threads_job_id_to_both_created_runs red (legacy zero-attempt pending seed now blocked by D-15 gate, same class as 20.1-17 authorized deviation; needs user approval to reseed). Next: /gsd-execute-phase 20.1 --gaps-only (wave 2: 18,19,20)"
 last_updated: "2026-10-05T12:05:40.181Z"
 last_activity: 2026-10-05
 progress:
