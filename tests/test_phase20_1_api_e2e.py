@@ -44,6 +44,7 @@ from tests.support.scripted_broker import ScriptedAlpaca
 from tests.support.symbol_metadata import ready_symbol_fields
 
 from trading_platform.api.app import create_app
+from trading_platform.api.routes import market_data as market_data_route
 from trading_platform.core import clock
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.base import Base
@@ -117,6 +118,17 @@ def row_counts() -> dict[str, int]:
         for name in _all_tables():
             counts[name] = int(session.execute(text(f'SELECT count(*) FROM "{name}"')).scalar_one())
     return counts
+
+
+JOB_BOOKKEEPING_TABLES = frozenset(
+    {"jobs", "job_events", "job_logs", "job_mutations", "job_dependencies"}
+)
+
+
+def business_counts() -> dict[str, int]:
+    """Row counts of every application table EXCEPT the Job bookkeeping of the request itself."""
+
+    return {k: v for k, v in row_counts().items() if k not in JOB_BOOKKEEPING_TABLES}
 
 
 @dataclass
@@ -390,7 +402,14 @@ def seed_rising_bars(
                 symbol = Symbol(ticker=ticker, **ready_symbol_fields())
                 session.add(symbol)
                 session.flush()
+            existing = set(
+                session.execute(
+                    select(DailyBarModel.session_date).where(DailyBarModel.symbol_id == symbol.id)
+                ).scalars()
+            )
             for session_date in session_dates:
+                if session_date in existing:
+                    continue
                 close = rising_close(ticker, session_date)
                 session.add(
                     DailyBarModel(
@@ -473,6 +492,9 @@ def phase201_env(
         for module in _submission_modules():
             if hasattr(module, "_default_clock"):
                 monkeypatch.setattr(module, "_default_clock", harness_now)
+
+        # The calendar-state read (R4) has its own server-time seam.
+        monkeypatch.setattr(market_data_route, "_now", harness_now)
 
         broker = ScriptedAlpaca(now=lambda: max(datetime.now(UTC), cell["now"]))
         original_init = AlpacaClient.__init__
@@ -1357,7 +1379,7 @@ def record_statement(env: Phase201Env, intent_id: str, statement: str = "not_rec
     )
 
 
-def test_e8_ambiguous_submission_never_found_statement_while_open_is_evidence_only(
+def test_e8_ambiguous_submission_order_never_found_statement_while_open_is_evidence_only(
     phase201_env: Phase201Env,
 ) -> None:
     """E8 | Requirements: [COR-06, REC-01, REC-02]
@@ -1413,7 +1435,7 @@ def test_e8_ambiguous_submission_never_found_statement_while_open_is_evidence_on
     assert env.broker.post_count == 1 and env.broker.posts_for(first_cid) == 1
 
 
-def test_e8_ambiguous_submission_never_found_statement_after_end_does_not_resend(
+def test_e8_ambiguous_submission_order_never_found_statement_after_end_does_not_resend(
     phase201_env: Phase201Env,
 ) -> None:
     """E8 | Requirements: [COR-06, REC-01, REC-02]
@@ -1442,7 +1464,7 @@ def test_e8_ambiguous_submission_never_found_statement_after_end_does_not_resend
     assert env.broker.post_count == 1 and env.broker.posts_for(first_cid) == 1
 
 
-def test_e8_ambiguous_submission_never_found_late_order_found_resolves(
+def test_e8_ambiguous_submission_order_never_found_late_order_found_resolves(
     phase201_env: Phase201Env,
 ) -> None:
     """E8 | Requirements: [COR-06, REC-01, REC-02]
@@ -1494,6 +1516,471 @@ def test_e8_no_withdrawal_route(phase201_env: Phase201Env) -> None:
     """
 
     env = phase201_env
+    env.expect_posts(0)
     paths = [getattr(route, "path", "") for route in env.client.app.routes]
     assert paths and not [path for path in paths if "withdraw" in path.lower()]
     assert not [path for path in paths if "cancel" in path and "orders" in path]
+
+
+
+# ---------------------------------------------------------------------------
+# Scenarios E9 - E15
+# ---------------------------------------------------------------------------
+
+PAPER_BOOK_TABLES = ("paper_orders", "paper_fills", "positions", "active_paper_strategy")
+
+
+def test_e9_external_activity(phase201_env: Phase201Env) -> None:
+    """E9 | Requirements: [EXT-01, COR-05, ACCT-01]
+
+    Decisions: D-10 (external orders must be terminal and net flat to be recorded), D-05
+    (unrecognized activity blocks until recorded), D-27 (recording writes no order, fill, position
+    or ownership and ends with a FRESH account check in the same Job).
+
+    SPEC CONFLICT (reported): the plan text names a submit-time 409 ``reconciliation_not_clean``
+    for the start; that code is a RECOVERY gate code and applies only while an uncertain outcome
+    exists (D-15). With unrecognized activity and no uncertain outcome the start is accepted
+    (202) and REFUSED AT RUN TIME: the Job's in-session reconciliation blocks it
+    (``blocked_reconciliation``), no operation is created and nothing is sent. Asserted as it is.
+    """
+
+    env = phase201_env
+    env.expect_posts(1)  # only the final allowed session sends
+    env.own()
+    env.evaluate()
+
+    bought = env.broker.inject_external_order("AAPL", "buy", 5, "filled", price=100)
+    sold = env.broker.inject_external_order("AAPL", "sell", 5, "filled", price=101)
+    still_open = env.broker.inject_external_order("MSFT", "buy", 3, "new")
+
+    # M5: the unrecognized items are reported, with origin tags, and the reconciliation blocks.
+    reconciled = env.reconcile()
+    assert reconciled["result_summary"]["blocks_execution"] is True
+    run = account_run_row(reconciled["result_summary"]["run_id"])
+    assert run["blocks_execution"] is True
+    assert run["classification_summary"]["orders"]["unrecognized"] == 3
+    assert "origin_tags" in run["classification_summary"]
+    aps = env.get("/api/v1/controls/active-paper-strategy").json()
+    assert next(c for c in aps["checks"] if c["id"] == "A4")["reason_code"] == "unrecognized_items"
+
+    # M10 is refused at run time: blocked_reconciliation, zero POSTs, no operation.
+    refused = env.run_session()
+    assert refused["status"] == "succeeded"
+    assert refused["result_summary"]["action"] == "blocked_reconciliation"
+    assert "operation" not in refused["result_summary"] or refused["result_summary"]["operation"] is None
+    assert env.get(f"/api/v1/execution-operations?strategy_id={STRATEGY}").json()["count"] == 0
+    assert env.broker.post_count == 0
+
+    # M9 with an OPEN external order: FAILED domain_conflict external_order_not_terminal, no writes.
+    before = business_counts()
+    rejected = env.run_job(
+        "record-external-activity",
+        {
+            "order_ids": [bought["id"], sold["id"], still_open["id"]],
+            "reason": "manual round trip plus an open order",
+        },
+    )
+    assert rejected["status"] == "failed" and rejected["failure_reason"] == "domain_conflict"
+    assert rejected["failure_message"].startswith("external_order_not_terminal")
+    assert business_counts() == before  # nothing stored by the refused recording
+
+    # Neutralize at the broker (itself external activity), then record everything: recorded AND
+    # the fresh account check in the same Job is clean.
+    env.broker.terminal(still_open["id"], "canceled")
+    before = business_counts()
+    recorded = env.run_job(
+        "record-external-activity",
+        {
+            "order_ids": [bought["id"], sold["id"], still_open["id"]],
+            "reason": "manual round trip, all terminal and net flat",
+        },
+    )
+    assert recorded["status"] == "succeeded", recorded.get("failure_message")
+    assert recorded["result_summary"]["outcome"] == "clean"
+    assert recorded["result_summary"]["blocks_execution"] is False
+    assert len(recorded["result_summary"]["recorded_activity_ids"]) == 3
+    after = business_counts()
+    assert after["external_broker_activity"] == before["external_broker_activity"] + 3
+    for table in PAPER_BOOK_TABLES:  # recording writes no orders, fills, positions or ownership
+        assert after[table] == before[table], table
+
+    # The session is allowed now.
+    allowed = env.run_session()
+    assert allowed["status"] == "succeeded", allowed.get("failure_message")
+    assert operation_of(allowed)["state"] == "paused"
+    assert env.broker.post_count == 1
+
+
+def test_e10_historical_execution(phase201_env: Phase201Env) -> None:
+    """E10 | Requirements: [COR-04]
+
+    Decisions: D-23 (paper execution only for the fresh evaluation session inside its window;
+    research is ungated). A paper-session for an old evaluation session is the typed 409
+    ``historical_execution_rejected`` (20.1-05 ``JobSubmissionConflictError``); a risk-evaluation
+    (research) for the same date still succeeds.
+    """
+
+    env = phase201_env
+    env.expect_posts(0)
+    env.own()
+    env.evaluate()
+
+    env.set_clock(et(2025, 12, 3, 10, 0))  # the evaluation session is no longer the previous one
+    rejected = env.start_session()
+    assert env.conflict_code(rejected) == "historical_execution_rejected"
+    detail = rejected.json()["detail"]
+    assert detail["job_type"] == "paper-session" and detail["as_of_session"] == "2025-12-01"
+
+    research = env.run_job(
+        "risk-evaluation", {"strategy_id": STRATEGY, "as_of_session": EVAL_SESSION.isoformat()}
+    )
+    assert research["status"] == "succeeded", research.get("failure_message")
+    assert env.broker.post_count == 0
+
+
+def test_e11_window_expiry(phase201_env: Phase201Env) -> None:
+    """E11 | Requirements: [COR-04, REC-02]
+
+    Decisions: D-18 (lazy window expiry on the next touch: unsent intents ``expired_unsent``,
+    sent orders untouched), D-17/TL-2 (a working order from the expired operation still blocks
+    every new session until it is terminal and synced), S3-R4 (new start needs sync + clean
+    reconciliation + a NEW evaluation), J-2 (zero cancel calls).
+    """
+
+    env = phase201_env
+    env.expect_posts(2)  # the working AAPL order, then the first action of the next day
+    env.own()
+    env.evaluate()
+    started = env.run_session()
+    operation_id = operation_of(started)["id"]
+    first_cid = intents_of(env, operation_id)["AAPL"]["client_order_id"]
+    assert operation_of(started)["reason"] == "working_order_commitments_unaccounted"
+
+    # The clock moves past the cutoff; the next touch (Continue) terminates the operation.
+    env.set_clock(et(2025, 12, 2, 15, 50))
+    touched = env.run_continue(operation_id)  # accepted past the window so the run can end it
+    assert touched["status"] == "succeeded", touched.get("failure_message")
+    assert operation_of(touched)["state"] == "terminated"
+    read = env.operation(operation_id)
+    assert read["persisted_state"] == "terminated"  # persisted by the touch, not only read lazily
+    assert read["reason"] == "execution_window_elapsed"
+    states = intent_states_of(env, operation_id)
+    assert states["AAPL"] == "submitted"
+    assert states["MSFT"] == "expired_unsent" and states["NVDA"] == "expired_unsent"
+    assert env.broker.post_count == 1 and env.broker.cancel_calls == 0
+
+    # A working order from it still blocks a new session (next trading day, new evaluation).
+    evaluation_session = env.next_trading_day()
+    env.evaluate(evaluation_session)
+    blocked = env.start_session(evaluation_session)
+    assert env.conflict_code(blocked) == "working_order_commitments_unaccounted"
+
+    # The order becomes terminal and is synced: still not enough without the clean reconciliation.
+    env.broker.fill_order(first_cid)
+    env.sync("strategy", strategy_id=STRATEGY, as_of_session=EVAL_SESSION.isoformat())
+    env.evaluate(evaluation_session)
+    skipped = env.start_session(evaluation_session)
+    assert env.conflict_code(skipped) == "evaluation_basis_unverified"
+    assert skipped.json()["detail"]["reason"] == "reconciliation_missing"
+
+    # Sync, clean standalone reconciliation, THEN the new evaluation: a new session is allowed.
+    env.settle()
+    env.evaluate(evaluation_session)
+    fresh = env.run_session(evaluation_session)
+    assert fresh["status"] == "succeeded", fresh.get("failure_message")
+    assert env.broker.post_count == 2
+    assert env.broker.posts_for(first_cid) == 1
+
+
+
+def symbol_readiness(env: Phase201Env, symbol: str) -> tuple[str, str | None]:
+    state = env.get(f"/api/v1/market-data/calendar-state?strategy_id={STRATEGY}").json()
+    rows = state["evaluation_sessions"][STRATEGY]["symbols"]
+    row = next(item for item in rows if item["symbol"] == symbol)
+    return row["metadata"], row["metadata_reason"]
+
+
+def test_e12_symbol_metadata(phase201_env: Phase201Env) -> None:
+    """E12 | Requirements: [COR-03, COR-04]
+
+    Decisions: D-28/COR-03 (batch outcomes complete/partial/failed, kept distinct from the Job
+    lifecycle; the ``jobs`` table gains no column), D-29 (a symbol without metadata is
+    ``not_ready(missing_metadata)`` and its candidate is rejected ``symbol_not_ready`` while the
+    other symbols trade), R4 (calendar-state per-symbol readiness).
+    """
+
+    env = phase201_env
+    env.expect_posts(2)  # AAPL on start, MSFT on Continue; never NVDA
+    env.own()
+    env.broker.default_status = "filled"
+    with session_scope(load_settings()) as session:
+        columns_before = {
+            row[0]
+            for row in session.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs'")
+            )
+        }
+        nvda = session.execute(select(Symbol).where(Symbol.ticker == "NVDA")).scalar_one()
+        nvda.metadata_provider = None
+        nvda.market = None
+        nvda.primary_exchange = None
+        nvda.symbol_type = None
+    assert symbol_readiness(env, "NVDA") == ("not_ready", "missing_metadata")
+    assert symbol_readiness(env, "AAPL") == ("ready", None)
+
+    # M3 with one unknown ticker: the Job succeeded, the OUTCOME is partial with a per-symbol reason.
+    env.market.unknown_tickers.add("NVDA")
+    partial = env.run_job("sync-symbol-metadata", {"symbols": list(UNIVERSE)})
+    assert partial["status"] == "succeeded" and partial["outcome"] == "partial"
+    assert partial["result_summary"]["failures"] == [{"symbol": "NVDA", "reason": "not_found"}]
+    assert sorted(partial["result_summary"]["synced"]) == ["AAPL", "MSFT"]
+    assert symbol_readiness(env, "NVDA") == ("not_ready", "missing_metadata")  # R4
+
+    # A provider authentication failure: the WHOLE operation failed, nothing was marked synced.
+    env.market.unknown_tickers.clear()
+    env.market.metadata_auth_failure = True
+    failed = env.run_job("sync-symbol-metadata", {"symbols": ["NVDA"]})
+    assert failed["status"] == "failed" and failed["outcome"] == "failed"
+    with session_scope(load_settings()) as session:
+        nvda_provider = session.execute(
+            select(Symbol.metadata_provider).where(Symbol.ticker == "NVDA")
+        ).scalar_one()
+    assert nvda_provider is None
+    env.market.metadata_auth_failure = False
+
+    # COR-03 batch outcome of ingest-bars: one failed symbol -> partial, all failed -> failed.
+    env.market.failing_bars = {"MSFT"}
+    one_failed = env.run_job(
+        "ingest-bars",
+        {"from_date": "2025-12-01", "to_date": "2025-12-01", "symbols": ["AAPL", "MSFT"]},
+    )
+    assert one_failed["status"] == "succeeded" and one_failed["outcome"] == "partial"
+    env.market.failing_bars = {"AAPL", "MSFT"}
+    all_failed = env.run_job(
+        "ingest-bars",
+        {"from_date": "2025-12-01", "to_date": "2025-12-01", "symbols": ["AAPL", "MSFT"]},
+    )
+    assert all_failed["status"] == "failed" and all_failed["outcome"] == "failed"
+    env.market.failing_bars = set()
+
+    # The evaluation rejects the not-ready symbol; the others trade.
+    evaluation = env.evaluate()
+    from trading_platform.db.models import RiskEvent
+
+    with session_scope(load_settings()) as session:
+        decisions = {
+            ticker: (outcome, code)
+            for ticker, outcome, code in session.execute(
+                select(Symbol.ticker, RiskEvent.outcome, RiskEvent.decision_code)
+                .join(Symbol, Symbol.id == RiskEvent.symbol_id)
+                .where(RiskEvent.strategy_run_id == uuid.UUID(evaluation["result_summary"]["run_id"]))
+            )
+        }
+    assert decisions["NVDA"] == ("rejected", "symbol_not_ready")
+    assert decisions["AAPL"] == ("approved", "approved") and decisions["MSFT"] == ("approved", "approved")
+
+    started = env.run_session()
+    operation_id = operation_of(started)["id"]
+    assert set(intents_of(env, operation_id)) == {"AAPL", "MSFT"}  # NVDA has no intent
+    env.settle()
+    env.run_continue(operation_id)
+    sent = [env.broker.order_for(cid)["symbol"] for cid in env.broker.post_client_order_ids]
+    assert sent == ["AAPL", "MSFT"]
+
+    with session_scope(load_settings()) as session:
+        columns_after = {
+            row[0]
+            for row in session.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs'")
+            )
+        }
+    assert columns_after == columns_before and "outcome" not in columns_after
+
+
+def seed_falling_bars(session_date: date, close: int = 90) -> None:
+    """One bar per universe symbol at a low close, so the trend strategy's exit condition holds for
+    a held symbol and no entry signal exists for the others."""
+
+    with session_scope(load_settings()) as session:
+        for ticker in UNIVERSE:
+            symbol_id = session.execute(select(Symbol.id).where(Symbol.ticker == ticker)).scalar_one()
+            session.add(
+                DailyBarModel(
+                    symbol_id=symbol_id,
+                    session_date=session_date,
+                    open=Decimal(close),
+                    high=Decimal(close + 1),
+                    low=Decimal(close - 1),
+                    close=Decimal(close),
+                    volume=1000,
+                    adjusted=True,
+                    provider="polygon",
+                )
+            )
+
+
+def test_e13_handover(phase201_env: Phase201Env) -> None:
+    """E13 | Requirements: [PAPER-02]
+
+    Decisions: D-04 (handover only through the guarded control), D-04/TL-6 (flat required: A3),
+    A7 (the outgoing owner must be disabled), new owner starts disabled, the old owner no longer
+    passes the submit-time ownership gate.
+
+    The position is OWNED and consistent: the real entry fill, and later the real exit fill of the
+    strategy's own next-day exit signal, both synchronized and reconciled clean.
+    """
+
+    env = phase201_env
+    env.expect_posts(2)  # the entry, and the exit that flattens the book
+    env.own()
+    env.broker.default_status = "filled"
+    env.evaluate()
+    started = env.run_session()
+    operation_id = operation_of(started)["id"]
+    end_operation(env, operation_id)  # A1: no open operation
+    _, reconciled = env.settle()
+    assert reconciled["result_summary"]["blocks_execution"] is False
+    assert [p["symbol"] for p in env.broker.positions()] == ["AAPL"]
+
+    # M6 with a position: the first failing check is A3; A7 (owner enabled) fails as well.
+    refused = env.put_owner(OTHER_STRATEGY)
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["code"] == "check_failed:A3", detail
+    assert {"A3", "A7"} <= set(detail["failed_checks"])
+    a3 = next(c for c in detail["checks"] if c["id"] == "A3")
+    assert a3["reason_code"] == "open_positions"
+    assert env.get("/api/v1/controls/active-paper-strategy").json()["strategy_id"] == STRATEGY
+
+    # The strategy's own exit signal on the next trading day flattens the book (owned exit fill).
+    seed_falling_bars(EXEC_SESSION)
+    evaluation_session = env.next_trading_day(EXEC_SESSION)
+    env.evaluate(evaluation_session)
+    exited = env.run_session(evaluation_session)
+    assert exited["status"] == "succeeded", exited.get("failure_message")
+    exit_operation_id = operation_of(exited)["id"]
+    assert [i["side"] for i in env.operation(exit_operation_id)["intents"]] == ["sell"]
+    end_operation(env, exit_operation_id)
+
+    # Outgoing owner disabled, flat, account sync (owner scope derives the position) + reconciliation.
+    assert env.set_strategy_status(STRATEGY, "disabled").status_code == 200
+    _, reconciled = env.settle()
+    assert reconciled["result_summary"]["blocks_execution"] is False
+    assert env.broker.positions() == []
+
+    handed_over = env.put_owner(OTHER_STRATEGY, "handover to the second strategy")
+    assert handed_over.status_code == 200, handed_over.text
+    body = handed_over.json()
+    assert body["kind"] == "handover" and body["previous_strategy_id"] == STRATEGY
+    assert body["active_paper_strategy"]["strategy_id"] == OTHER_STRATEGY
+    assert env.get(f"/api/v1/controls/strategies/{OTHER_STRATEGY}").json()["status"] == "disabled"
+
+    # The old owner no longer passes the submit-time ownership gate.
+    old = env.start_session(evaluation_session)
+    assert env.conflict_code(old) == "strategy_not_active_paper_strategy"
+
+
+def test_e14_mutations_disabled(phase201_env: Phase201Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """E14 | Requirements: [COMPAT-01]
+
+    Decisions: ORCH-07/D-19 (every mutating route is guarded by ``orchestration.mutations_enabled``
+    ahead of body and path validation). With the flag false EVERY new mutating route returns 403
+    ``mutations_disabled`` and a full-table row-count snapshot is identical before and after.
+    """
+
+    env = phase201_env
+    env.expect_posts(1)  # only the ambiguous POST of the arrangement (made while enabled)
+    job, operation_id, _, intent_id = ambiguous_session(env, "read_timeout_without_create")
+
+    monkeypatch.setenv("TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED", "false")
+    clear_settings_cache()
+    assert load_settings().orchestration.mutations_enabled is False
+    before = row_counts()
+    with TestClient(create_app()) as disabled:
+        assert disabled.app.state.settings.orchestration.mutations_enabled is False
+        responses = {
+            "PUT /controls/active-paper-strategy": disabled.put(
+                "/api/v1/controls/active-paper-strategy",
+                json={"strategy_id": OTHER_STRATEGY, "reason": "x"},
+            ),
+            "POST /execution-operations/{id}/end": disabled.post(
+                f"/api/v1/execution-operations/{operation_id}/end", json={"reason": "x"}
+            ),
+            "POST /recovery/intents/{id}/broker-statement": disabled.post(
+                f"/api/v1/recovery/intents/{intent_id}/broker-statement",
+                json={"statement": "not_received", "reference": "t", "reason": "r"},
+            ),
+            "POST /jobs record-external-activity": disabled.post(
+                "/api/v1/jobs",
+                headers={"Idempotency-Key": "e14-record"},
+                json={
+                    "job_type": "record-external-activity",
+                    "payload": {"order_ids": ["abc"], "reason": "x"},
+                },
+            ),
+            "POST /jobs paper-session continue": disabled.post(
+                "/api/v1/jobs",
+                headers={"Idempotency-Key": "e14-continue"},
+                json={
+                    "job_type": "paper-session",
+                    "payload": {"mode": "continue", "operation_id": operation_id},
+                },
+            ),
+        }
+    for name, response in responses.items():
+        assert response.status_code == 403, (name, response.text)
+        assert response.json()["detail"]["code"] == "mutations_disabled", name
+    assert row_counts() == before  # zero writes anywhere
+    assert env.broker.post_count == 1
+
+
+def test_e15_legacy_console_truthfulness_api_half(phase201_env: Phase201Env) -> None:
+    """E15 | Requirements: [COMPAT-01]
+
+    API half of the legacy-console truthfulness scenario. SPEC CONFLICT (reported): 05 E15 is a
+    console-rendering scenario while this gate is HTTP-only and edits nothing under ``console/``;
+    this test asserts over HTTP the FACTS the console renders from, and the console half is the
+    vitest suite of plan 20.1-14 (run as a named verify step of this plan).
+
+    Facts: the catalog marks ``paper-session`` and ``record-external-activity`` ``api_only``; a
+    paper-session Job whose operation paused is lifecycle ``succeeded`` with outcome ``paused``
+    (never plain success); the payloads the account forms post (``{scope: 'account'}``) are
+    accepted with NO owner and run to SUCCEEDED; the active-paper-strategy read returns a null
+    owner with ``no_active_paper_strategy`` blocking trading; analytics ``latest_reconciliation``
+    is the account-scope run.
+    """
+
+    env = phase201_env
+    env.expect_posts(1)
+
+    catalog = env.get("/api/v1/job-types").json()
+    items = catalog["items"] if isinstance(catalog, dict) else catalog
+    by_type = {item["job_type"]: item for item in items}
+    assert by_type["paper-session"]["console_submission"] == "api_only"
+    assert by_type["record-external-activity"]["console_submission"] == "api_only"
+    assert by_type["reconciliation"]["console_submission"] != "api_only"
+    assert by_type["broker-order-sync"]["console_submission"] != "api_only"
+
+    # The two forms post {scope: 'account'}: accepted with NO owner and run to SUCCEEDED.
+    synced = env.run_job("broker-order-sync", {"scope": "account"})
+    reconciled = env.run_job("reconciliation", {"scope": "account"})
+    assert synced["status"] == "succeeded" and reconciled["status"] == "succeeded"
+    view = env.get("/api/v1/controls/active-paper-strategy").json()
+    assert view["strategy_id"] is None
+    assert "no_active_paper_strategy" in view["trading_blocked_reasons"]
+
+    # A paper-session Job whose operation paused is never plain success.
+    env.own()
+    # analytics latest_reconciliation is the account-scope run (not a stale strategy run).
+    analytics = env.get(f"/api/v1/analytics/strategies/{STRATEGY}").json()
+    latest = analytics["paper"]["latest_reconciliation"]
+    assert latest["scope"] == "account"
+    assert latest["run_id"] == reconciled["result_summary"]["run_id"]
+
+    env.evaluate()
+    paused = env.run_session()
+    assert paused["status"] == "succeeded"
+    assert paused["outcome"] == "paused"
+    assert paused["outcome_reason"] == "working_order_commitments_unaccounted"
+    assert paused["operation"]["state"] == "paused"
+    assert paused["operation"]["id"] == operation_of(paused)["id"]
