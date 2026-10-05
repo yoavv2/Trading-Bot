@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "Gap closure r2 executed + re-verified: human_needed (9/9 SC, CR-01 closed in code). Pending: human UAT on real stack, live Alpaca checks, user decision to lift CR-01 interim prohibition, OD-1, account_snapshots, S14, review WR-01/WR-02. Phase NOT complete."
+stopped_at: "Gap closure r2 executed; re-verification gaps_found (G-1: matcher treats never-sent pending_submission with count>=1 as MISSING_BROKER, so SAF-01 release never reaches a clean real reconciliation; fail-closed). CR-01 re-parent fixed. Interim prohibition in force. Pending user: G-1 gap planning, OD-1, account_snapshots, S14, review WR-01/IN-02, WR-02, REQUIREMENTS status. Phase NOT complete."
 last_updated: "2026-10-05T15:50:05.508Z"
 last_activity: 2026-10-06 -- 20.1-31 complete (runbook 05 + HUMAN-UAT CR-01 fix note marked PENDING VERIFICATION; interim prohibition unchanged; Deferred (not resolved) list in SUMMARY); gap closure r2 executed, verification pending
 progress:
