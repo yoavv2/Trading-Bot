@@ -409,7 +409,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 **Gap wave 5**
 
 - [x] 20.1-24-PLAN.md — SAF-09 test rollout: `seed_fresh_broker_snapshot` arranged in the 14 session-running test modules, arrangement only (COR-01, REC-02)
-- [ ] 20.1-25-PLAN.md — Runbook 05 + HUMAN-UAT amended: W-1 owner-scope sync, W-2 run-time refusal, TL-4 terminal states, SAF-02/03/09 operator consequences (docs only) (ACCT-01, EXT-01, REC-01, COR-01, COMPAT-01)
+- [x] 20.1-25-PLAN.md — Runbook 05 + HUMAN-UAT amended: W-1 owner-scope sync, W-2 run-time refusal, TL-4 terminal states, SAF-02/03/09 operator consequences (docs only) (ACCT-01, EXT-01, REC-01, COR-01, COMPAT-01)
 
 **UI hint**: yes (legacy-console compatibility only)
 
@@ -481,7 +481,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 24/25 | In Progress (gap closure 17-25 executing) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 25/25 | In Progress (gap closure executed; verification pending) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
