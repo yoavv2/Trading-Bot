@@ -22,15 +22,27 @@ Resolution rules (03 sec.3.7 B, amended round 5, 2026-10-04):
 * a never-found order stays unresolved whatever the elapsed time, the absence evidence,
   a broker statement or a terminated executor; there is no resend path
   (``resubmission_permitted`` is False for every intent);
-* TERMINAL states (TL-4, SAF-04; no new route, no new job type, 20.1-19): (a) a FLAGGED
-  paper-session Job (a start Job or a Continue Job) whose linked ``paper_execution`` run left
-  zero order rows stays ``unresolved(execution_path_unproven)``; (b) a legacy order the broker
-  never had (no attempt rows, no operation intent) stays ``not_found``/unresolved. Neither is
-  released by a broker sync, absence evidence, a ``not_received`` statement, a clean
-  reconciliation, End/expiry or elapsed time. The only exit is the broker showing the order
-  (``found_verified``, then the fresh clean reconciliation of the next bullet); nothing
-  releases a Job-level ``execution_path_unproven`` entry in this version. Both stay visible
-  through ``GET /api/v1/jobs/{id}/recovery`` and keep check A5 failing;
+* TERMINAL states (TL-4, SAF-04; no new route, no new job type, 20.1-19): (a) a legacy order
+  the broker never had (no attempt rows, no operation intent) stays ``not_found`` / unresolved
+  (TL-4(a)); (b) a FLAGGED paper-session Job none of whose paper_execution runs originates,
+  registers or retries an order (and which made no attempt) stays
+  ``unresolved(execution_path_unproven)``: the absence of an order alone is not proof that
+  nothing could be sent. (b) is the CURRENT behaviour, not an approved terminal state: whether
+  durable positive evidence plus revoked executor authority may establish ``nothing_submitted``
+  is open decision OD-1 (20.1-OD-1-DRAFT.md). Neither is released by a broker sync, absence
+  evidence, a ``not_received`` statement, a clean reconciliation, End/expiry or elapsed time.
+  The only exit of (a) is the broker showing the order (``found_verified``, then the fresh clean
+  reconciliation of the next bullet); nothing releases a Job-level ``execution_path_unproven``
+  entry in this version. Both stay visible through ``GET /api/v1/jobs/{id}/recovery`` and keep
+  check A5 failing;
+* Durable linkage (CR-01, 2026-10-05): ``paper_orders.strategy_run_id`` is the ORIGIN run and is
+  immutable. An order is attributed to a flagged Job when (1) it originates on one of the Job's
+  paper_execution runs, (2) an accepted ``intent_registered`` / ``retry_requested``
+  ``order_events`` row ties it to one of those runs (every later Continue / retry / Start run
+  that registered it; ``_order_registered_on_run_sql``), or (3) one of its attempts carries the
+  Job as ``executor_job_id``. An order may therefore be listed under several flagged Jobs
+  (once per Job, and never in the unflagged branch while a flagged Job owns it); a sync pass
+  assesses it once;
 * resolution also needs a fresh CLEAN standalone reconciliation (account or owner level,
   never the in-session check) completed after the latest broker-touching effect;
 * a strategy with no uncertain Job and no unestablished intent is resolved outright.
@@ -579,6 +591,35 @@ _ORDER_COLUMNS = f"""
        FROM recovery_records r WHERE r.paper_order_id = po.id) AS order_records
 """
 
+_SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _order_registered_on_run_sql(order_alias: str, run_alias: str) -> str:
+    """SQL predicate: the order ORIGINATES on the run, or an accepted registration row ties it
+    to the run (CR-01, user decision 2026-10-05, durable historical linkage).
+
+    ``paper_orders.strategy_run_id`` is the ORIGIN run and never changes. Every later run that
+    registered or retried the order (Continue, M15 retry, a new Start) is recorded by the
+    accepted ``intent_registered`` / ``retry_requested`` ``order_events`` row ``register()``
+    writes on that run in the same transaction as the registration; the origin's own
+    ``intent_registered`` row is read the same way. This is the ONE place the history source
+    is named: the flagged-Job join and the unflagged-branch exclusion of ``_INTENTS_SQL`` both
+    use it, so an order is never attributed to a Job in one branch and listed in the other.
+    Rejected rows never attribute. Both aliases must be plain SQL identifiers.
+    """
+
+    for alias in (order_alias, run_alias):
+        if not _SQL_IDENTIFIER.match(alias):
+            raise ValueError(f"SQL alias must be a plain identifier, got {alias!r}")
+    o, r = order_alias, run_alias
+    return (
+        f"({o}.strategy_run_id = {r}.id OR EXISTS ("
+        f"SELECT 1 FROM order_events oe WHERE oe.paper_order_id = {o}.id "
+        f"AND oe.strategy_run_id = {r}.id AND oe.outcome = 'accepted' "
+        "AND oe.event_type IN ('intent_registered', 'retry_requested')))"
+    )
+
+
 #: Statement 1: uncertain Jobs with their linked paper_execution runs and orders, plus the
 #: unflagged candidate orders (UNKNOWN, or without a broker id and still pending_submission /
 #: submission_failed; ``_load_intents`` keeps only the UNESTABLISHED ones through the shared
@@ -607,7 +648,7 @@ SELECT f.id AS job_id, f.job_type AS job_type, f.job_status AS job_status,
        f.id AS origin_job_id
   FROM flagged f
   LEFT JOIN strategy_runs sr ON sr.job_id = f.id AND sr.run_type = 'paper_execution'
-  LEFT JOIN paper_orders po ON po.strategy_run_id = sr.id
+  LEFT JOIN paper_orders po ON {_order_registered_on_run_sql("po", "sr")}
        OR EXISTS (SELECT 1 FROM order_submission_attempts oa
                    WHERE oa.paper_order_id = po.id AND oa.executor_job_id = f.id
                      AND sr.id IS NOT NULL)
@@ -627,7 +668,7 @@ SELECT NULL::uuid, NULL::text, NULL::text, NULL::timestamptz, NULL::text,
    AND (CAST(:order_id AS uuid) IS NULL OR po.id = CAST(:order_id AS uuid))
    AND NOT EXISTS (SELECT 1 FROM flagged ff
                     JOIN strategy_runs fr ON fr.job_id = ff.id AND fr.run_type = 'paper_execution'
-                   WHERE fr.id = po.strategy_run_id)
+                   WHERE {_order_registered_on_run_sql("po", "fr")})
    AND NOT EXISTS (SELECT 1 FROM flagged ff
                     JOIN order_submission_attempts oa ON oa.executor_job_id = ff.id
                     JOIN strategy_runs fr ON fr.job_id = ff.id AND fr.run_type = 'paper_execution'
@@ -753,6 +794,7 @@ def _load_intents(
     ).mappings()
     jobs: dict[uuid.UUID, _JobFacts] = {}
     intents: list[IntentRecovery] = []
+    listed_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
     for row in rows:
         job_id = row["job_id"]
         job: _JobFacts | None = None
@@ -771,6 +813,13 @@ def _load_intents(
                 jobs[job_id] = job
         if row["order_id"] is None:
             continue
+        if job_id is not None:
+            # An order is listed ONCE per flagged Job even when several of the Job's runs
+            # registered it (the join yields one row per (run, order) pair).
+            pair = (job_id, row["order_id"])
+            if pair in listed_pairs:
+                continue
+            listed_pairs.add(pair)
         records = [_record_from_json(r) for r in (row["order_records"] or [])]
         attempts = tuple(_attempt_from_json(a) for a in (row["attempts"] or []))
         registered = attempt_log_registered(
@@ -1512,9 +1561,16 @@ def assess_unestablished_intents(
             position_qty.get(str(getattr(position, "symbol", "")), Decimal("0")) + signed
         )
 
+    assessed: set[uuid.UUID] = set()
     for intent in intents:
         if intent.intent_id is None:
             continue
+        # CR-01: an order may be attributed to several flagged Jobs (origin and every later
+        # registering Job). It is looked up, transitioned and evidenced ONCE per pass; the
+        # records are keyed by the order, so every attributed Job's R3 sees them.
+        if intent.intent_id in assessed:
+            continue
+        assessed.add(intent.intent_id)
         order = session.get(PaperOrder, intent.intent_id)
         if order is None:
             continue

@@ -25,12 +25,26 @@ What each test pins:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+from tests.support.operation_fixtures import seed_operation, seed_operation_job
 from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_execution_seams import allow_direct_paper_execution
+from tests.support.query_counter import count_queries
+from tests.support.recovery_agreement import assert_recovery_consumers_agree
+from tests.support.recovery_fixtures import (
+    OWNER,
+    at,
+    seed_account_run,
+    seed_job,
+    seed_operation_bound_intent,
+    seed_paper_run,
+)
 from tests.test_paper_execution import migrated_paper_db  # noqa: F401  (database fixture)
 from tests.test_paper_session_operations import (
     DEFAULT_BATCH,
@@ -52,16 +66,45 @@ from tests.test_paper_session_operations import (
     takeover,
     terminate_lock_holder,
 )
+from tests.test_recovery_predicate import LookupBroker
+from tests.test_recovery_shared_classifier import (  # noqa: F401  (fixtures + helpers reuse)
+    _a5_passed,
+    _arrange,
+    _gate,
+    http,
+    shared_db,
+)
 
 from trading_platform.core.settings import load_settings
 from trading_platform.db.models import (
+    AccountReconciliationRun,
+    AttemptOutcomeClass,
+    ExecutionEvent,
+    Job,
+    JobStatus,
     OrderEvent,
+    OrderLifecycleState,
     OrderSubmissionAttempt,
+    OrderTransitionOutcome,
     PaperOrder,
+    RecoveryRecord,
     StrategyRun,
 )
 from trading_platform.db.models.order_event import OrderTransitionEventType
 from trading_platform.db.session import session_scope
+from trading_platform.services.execution.sync_orders import sync_account_state
+from trading_platform.services.execution.transition import (
+    OrderTransitionRequest,
+    apply_order_transition,
+)
+from trading_platform.services.recovery import (
+    AbsenceEvidenceItem,
+    GateCode,
+    RecoveryClassification,
+    UnresolvedReason,
+    account_recovery_status,
+    strategy_recovery_status,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -206,3 +249,486 @@ def test_first_registration_records_its_own_run(migrated_paper_db: str) -> None:
         registrations = _accepted_registrations(session, order.id)
         origin = order.strategy_run_id
     assert registrations == {("intent_registered", origin)}
+
+
+# ===========================================================================
+# Recovery predicate: attribution by durable registration history (Task 2)
+# ===========================================================================
+
+PENDING = OrderLifecycleState.PENDING_SUBMISSION
+FAILED = OrderLifecycleState.SUBMISSION_FAILED
+UNKNOWN = OrderLifecycleState.UNKNOWN
+
+
+@dataclass
+class World:
+    """The SAF-01 shape: a flagged Job J1 (run R1) whose operation-bound order was never sent,
+    and the executor Job of the operation that may later retry it."""
+
+    j1: uuid.UUID
+    r1: uuid.UUID
+    order_id: uuid.UUID
+    executor: uuid.UUID
+    operation_id: uuid.UUID
+    r2: uuid.UUID | None = None
+
+
+def _executor_and_operation(session: Any) -> tuple[Any, Any]:
+    executor = seed_operation_job(
+        session,
+        status=JobStatus.RUNNING,
+        lease_owner="worker-1",
+        lease_expires_at=datetime(2100, 1, 1, tzinfo=UTC),
+    )
+    operation = seed_operation(
+        session,
+        state="running",
+        reason=None,
+        epoch=3,
+        executor_job=executor,
+        jobs=[(executor, "start")],
+    )
+    return executor, operation
+
+
+def _saf01_world(session: Any, status: OrderLifecycleState) -> World:
+    flagged = seed_job(session, completed_at=at(0))
+    run = seed_paper_run(session, flagged)
+    executor, operation = _executor_and_operation(session)
+    order = seed_operation_bound_intent(
+        session, run, status=status, attempts=(), operation=operation
+    )
+    return World(flagged.id, run.id, order.id, executor.id, operation.id)
+
+
+def _registration_event(
+    session: Any,
+    *,
+    order_id: uuid.UUID,
+    run_id: uuid.UUID,
+    event_type: OrderTransitionEventType,
+    outcome: OrderTransitionOutcome = OrderTransitionOutcome.ACCEPTED,
+    from_state: OrderLifecycleState = PENDING,
+) -> None:
+    session.add(
+        OrderEvent(
+            paper_order_id=order_id,
+            strategy_run_id=run_id,
+            from_state=from_state,
+            to_state=PENDING,
+            event_type=event_type,
+            outcome=outcome,
+            event_at=at(0),
+            details={},
+        )
+    )
+    session.flush()
+
+
+def _reregister(session: Any, world: World) -> uuid.UUID:
+    """Exactly the write set ``register()`` performs for ``retry_existing`` after the fix: a run
+    for the executor Job and the accepted ``retry_requested`` transition on it; the order's own
+    run is NOT touched."""
+
+    executor = session.get(Job, world.executor)
+    run = seed_paper_run(session, executor)
+    apply_order_transition(
+        world.order_id,
+        OrderTransitionRequest(
+            strategy_run_id=run.id,
+            event_type=OrderTransitionEventType.RETRY_REQUESTED,
+            details={"trigger_source": "continue"},
+        ),
+        session=session,
+        settings=load_settings(),
+    )
+    world.r2 = run.id
+    return run.id
+
+
+def _flag(session: Any, job_id: uuid.UUID, *, completed_at: datetime) -> None:
+    job = session.get(Job, job_id)
+    job.status = JobStatus.FAILED
+    job.outcome_uncertain = True
+    job.completed_at = completed_at
+    job.lease_owner = None
+    job.lease_expires_at = None
+    session.flush()
+
+
+def _status(strategy_id: str = OWNER) -> Any:
+    with session_scope(load_settings()) as session:
+        return strategy_recovery_status(session, strategy_id)
+
+
+def _entries(job_id: uuid.UUID, order_id: uuid.UUID | None = None) -> list[Any]:
+    return [
+        i
+        for i in _status().intents
+        if i.job_id == job_id and (order_id is None or i.intent_id == order_id)
+    ]
+
+
+def _unproven(job_id: uuid.UUID) -> bool:
+    return any(
+        i.intent_id is None and i.unresolved_reason is UnresolvedReason.EXECUTION_PATH_UNPROVEN
+        for i in _entries(job_id)
+    )
+
+
+@pytest.mark.parametrize(
+    "status", [PENDING, FAILED], ids=["pending_submission", "submission_failed"]
+)
+@pytest.mark.parametrize("shape", ["reregistered", "reparented_before_fix"])
+def test_cr01_saf01_release_survives_reregistration(
+    http: TestClient, status: OrderLifecycleState, shape: str
+) -> None:
+    """CR-01 (permanent repro). SAF-01: an operation-bound unsent order on a flagged Job is
+    released by a fresh clean reconciliation. A Continue / retry Job that re-registers the order
+    on its own run must not undo that release.
+
+    ``reregistered`` applies the post-fix write set (the order keeps its origin run). The
+    ``reparented_before_fix`` shape is the exact data the pre-fix ``register()`` left behind
+    (the order on the retrying run, J1's registration only in its intent_registered event),
+    seeded by INSERT so it stays valid under the 0029 trigger; it failed at the plan base."""
+
+    if shape == "reregistered":
+        world = _arrange(lambda s: _saf01_world(s, status))
+        _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+        assert _gate() is None and _a5_passed()  # the SAF-01 release
+        _arrange(lambda s: _reregister(s, world))
+    else:
+
+        def build(session: Any) -> World:
+            flagged = seed_job(session, completed_at=at(0))
+            run1 = seed_paper_run(session, flagged)
+            executor, operation = _executor_and_operation(session)
+            run2 = seed_paper_run(session, executor)
+            order = seed_operation_bound_intent(
+                session, run2, status=status, attempts=(), operation=operation
+            )
+            _registration_event(
+                session,
+                order_id=order.id,
+                run_id=run1.id,
+                event_type=OrderTransitionEventType.INTENT_REGISTERED,
+            )
+            _registration_event(
+                session,
+                order_id=order.id,
+                run_id=run2.id,
+                event_type=OrderTransitionEventType.RETRY_REQUESTED,
+                from_state=status,
+            )
+            return World(flagged.id, run1.id, order.id, executor.id, operation.id, run2.id)
+
+        world = _arrange(build)
+        _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+
+    assert _gate() is None
+    assert _a5_passed()
+    assert not _unproven(world.j1)
+    gate = assert_recovery_consumers_agree(
+        http,
+        strategy_id=OWNER,
+        linked_job_ids=[world.j1],
+        registering_flagged_job_ids=[world.j1],
+        operation_id=world.operation_id,
+    )
+    assert gate is None
+    body = http.get(f"/api/v1/jobs/{world.j1}/recovery").json()
+    assert [(i["intent_id"], i["classification"], i["blocking"]) for i in body["intents"]] == [
+        (str(world.order_id), "not_sent", False)
+    ]
+    assert body["gate_code"] is None
+
+
+def test_crashed_retrying_job_is_attributed_not_execution_path_unproven(http: TestClient) -> None:
+    """No new uncertainty: a Continue / retry Job that re-registered an order and crashed before
+    T1 (flagged, zero attempts) lists the order (not_sent); it and the origin Job are NOT
+    execution_path_unproven. The gate needs the NEWER clean reconciliation, then releases."""
+
+    world = _arrange(lambda s: _saf01_world(s, PENDING))
+    _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+    _arrange(lambda s: _reregister(s, world))
+    _arrange(lambda s: _flag(s, world.executor, completed_at=at(40)))
+
+    history: list[GateCode | None] = []
+    agree: dict[str, Any] = {
+        "strategy_id": OWNER,
+        "linked_job_ids": [world.j1, world.executor],
+        "registering_flagged_job_ids": [world.j1, world.executor],
+        "operation_id": world.operation_id,
+    }
+    history.append(assert_recovery_consumers_agree(http, **agree))
+    for job_id in (world.j1, world.executor):
+        assert not _unproven(job_id)
+        listed = http.get(f"/api/v1/jobs/{job_id}/recovery").json()["intents"]
+        assert [(i["intent_id"], i["classification"]) for i in listed] == [
+            (str(world.order_id), "not_sent")
+        ]
+    _arrange(lambda s: seed_account_run(s, completed_at=at(50)))
+    history.append(assert_recovery_consumers_agree(http, **agree))
+
+    assert history == [GateCode.RECONCILIATION_REQUIRED, None]
+    with session_scope(load_settings()) as session:
+        runs = (
+            session.execute(
+                select(AccountReconciliationRun.completed_at).order_by(
+                    AccountReconciliationRun.completed_at
+                )
+            )
+            .scalars()
+            .all()
+        )
+        executor_done = session.get(Job, world.executor).completed_at
+    first, second = runs
+    assert first < executor_done < second  # the two relations the gate history relies on
+
+
+def _unestablished_two_job_world(session: Any, *, with_operation: bool) -> World:
+    """An UNKNOWN order with an ambiguous attempt: origin on J1's run R1 (flagged), re-registered
+    on the run(s) of a second flagged Job E (history rows) which also made the attempt."""
+
+    flagged = seed_job(session, completed_at=at(0))
+    run1 = seed_paper_run(session, flagged)
+    executor, operation = _executor_and_operation(session)
+    order = seed_operation_bound_intent(
+        session,
+        run1,
+        status=UNKNOWN,
+        attempts=(),
+        operation=operation if with_operation else None,
+    )
+    # The ambiguous attempt was made by the second Job (attempt rows are complete-once: the
+    # executor is set at INSERT).
+    session.add(
+        OrderSubmissionAttempt(
+            paper_order_id=order.id,
+            strategy_run_id=run1.id,
+            attempt_number=1,
+            started_at=at(1),
+            completed_at=at(1),
+            outcome_class=AttemptOutcomeClass.AMBIGUOUS.value,
+            executor_job_id=executor.id,
+        )
+    )
+    session.flush()
+    run2 = seed_paper_run(session, executor)
+    run3 = seed_paper_run(session, executor)  # a second run of the same Job: still listed once
+    for run in (run2, run3):
+        _registration_event(
+            session,
+            order_id=order.id,
+            run_id=run.id,
+            event_type=OrderTransitionEventType.RETRY_REQUESTED,
+            from_state=UNKNOWN,
+        )
+    _flag(session, executor.id, completed_at=at(10))
+    return World(flagged.id, run1.id, order.id, executor.id, operation.id, run2.id)
+
+
+def test_order_linked_to_two_flagged_jobs_is_listed_once_per_job_and_blocks(
+    http: TestClient,
+) -> None:
+    world = _arrange(lambda s: _unestablished_two_job_world(s, with_operation=True))
+    _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+
+    gate = assert_recovery_consumers_agree(
+        http,
+        strategy_id=OWNER,
+        linked_job_ids=[world.j1, world.executor],
+        registering_flagged_job_ids=[world.j1, world.executor],
+        operation_id=world.operation_id,
+    )
+
+    assert gate is GateCode.OUTCOME_UNRESOLVED  # a genuinely ambiguous order blocks
+    entries = [i for i in _status().intents if i.intent_id == world.order_id]
+    assert sorted(str(i.job_id) for i in entries) == sorted(
+        [str(world.j1), str(world.executor)]
+    )  # once per Job, never twice for one Job, never in the unflagged branch (job_id set)
+    assert all(i.blocking for i in entries)
+    for job_id in (world.j1, world.executor):
+        body = http.get(f"/api/v1/jobs/{job_id}/recovery").json()
+        assert body["gate_code"] == "outcome_unresolved"
+        assert [i["intent_id"] for i in body["intents"]] == [str(world.order_id)]
+
+
+def test_job_without_any_order_linkage_stays_execution_path_unproven(http: TestClient) -> None:
+    """Blocking is not loosened (user decision 4; open decision OD-1): a flagged paper-session
+    Job whose runs neither originate, register nor retry any order stays
+    unresolved(execution_path_unproven) today; a broker-order-sync Job stays nothing_submitted."""
+
+    def build(session: Any) -> tuple[uuid.UUID, uuid.UUID]:
+        flagged = seed_job(session, completed_at=at(0))
+        seed_paper_run(session, flagged)
+        sync = seed_job(session, job_type="broker-order-sync", completed_at=at(0))
+        return flagged.id, sync.id
+
+    j1, sync_job = _arrange(build)
+    _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+
+    assert _unproven(j1)
+    assert [i.classification for i in _entries(sync_job)] == [
+        RecoveryClassification.NOTHING_SUBMITTED
+    ]
+    assert _gate() is GateCode.OUTCOME_UNRESOLVED
+    assert (
+        assert_recovery_consumers_agree(http, strategy_id=OWNER, linked_job_ids=[j1, sync_job])
+        is GateCode.OUTCOME_UNRESOLVED
+    )
+
+
+def test_reuse_only_job_stays_execution_path_unproven(http: TestClient) -> None:
+    """A flagged Job whose run only REUSED an existing order (reuse_existing writes an
+    ExecutionEvent ``paper_order_reused`` and NO order_events row) registered nothing: the
+    absence of an order alone is not proof nothing could be sent (OD-1 is open, not approved)."""
+
+    def build(session: Any) -> tuple[uuid.UUID, uuid.UUID]:
+        flagged = seed_job(session, completed_at=at(0))
+        run1 = seed_paper_run(session, flagged)
+        origin_job = seed_job(session, uncertain=False, status=JobStatus.SUCCEEDED)
+        run_origin = seed_paper_run(session, origin_job)
+        order = seed_operation_bound_intent(session, run_origin, status=PENDING, attempts=())
+        session.add(
+            ExecutionEvent(
+                strategy_run_id=run1.id,
+                paper_order_id=order.id,
+                event_type="paper_order_reused",
+                severity="info",
+                blocks_execution=False,
+                event_at=at(0),
+                message="Reused existing intent; no new submission was attempted.",
+                details={},
+            )
+        )
+        session.flush()
+        return flagged.id, order.id
+
+    j1, order_id = _arrange(build)
+    _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+
+    assert _unproven(j1)
+    assert _entries(j1, order_id) == []
+    assert _gate() is GateCode.OUTCOME_UNRESOLVED
+
+
+def test_rejected_registration_event_does_not_attribute(http: TestClient) -> None:
+    """Only ACCEPTED intent_registered / retry_requested rows attribute an order to a run."""
+
+    def build(session: Any) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+        flagged = seed_job(session, completed_at=at(0))
+        run1 = seed_paper_run(session, flagged)
+        origin_job = seed_job(session, uncertain=False, status=JobStatus.SUCCEEDED)
+        run_origin = seed_paper_run(session, origin_job)
+        order = seed_operation_bound_intent(session, run_origin, status=PENDING, attempts=())
+        _registration_event(
+            session,
+            order_id=order.id,
+            run_id=run1.id,
+            event_type=OrderTransitionEventType.RETRY_REQUESTED,
+            outcome=OrderTransitionOutcome.REJECTED,
+        )
+        return flagged.id, run1.id, order.id
+
+    j1, run1, order_id = _arrange(build)
+    _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+
+    assert _unproven(j1) and _entries(j1, order_id) == []
+    # control: the same row, accepted, attributes the order to J1 and releases it
+    _arrange(
+        lambda s: _registration_event(
+            s,
+            order_id=order_id,
+            run_id=run1,
+            event_type=OrderTransitionEventType.RETRY_REQUESTED,
+        )
+    )
+    assert not _unproven(j1)
+    assert [i.classification for i in _entries(j1, order_id)] == [RecoveryClassification.NOT_SENT]
+    assert _gate() is None
+
+
+def test_status_reads_keep_two_statements_with_history_arm(shared_db: str) -> None:
+    world = _arrange(lambda s: _unestablished_two_job_world(s, with_operation=True))
+    del world
+    with session_scope(load_settings()) as session:
+        with count_queries(session) as strategy_counter:
+            strategy_recovery_status(session, OWNER)
+        with count_queries(session) as account_counter:
+            account_recovery_status(session)
+    assert strategy_counter.count == 2
+    assert account_counter.count == 2
+
+
+def _lookup_world(shape: str) -> World:
+    if shape == "unestablished":
+        return _arrange(lambda s: _unestablished_two_job_world(s, with_operation=True))
+
+    def build(session: Any) -> World:
+        # UNKNOWN, attempt history proves not sent (pre_connection), operation-bound: the
+        # liveness branch returns it to submission_failed. Attributed to J1 (origin) and E.
+        flagged = seed_job(session, completed_at=at(0))
+        run1 = seed_paper_run(session, flagged)
+        executor, operation = _executor_and_operation(session)
+        order = seed_operation_bound_intent(
+            session,
+            run1,
+            status=UNKNOWN,
+            attempts=(AttemptOutcomeClass.PRE_CONNECTION,),
+            operation=operation,
+        )
+        run2 = seed_paper_run(session, executor)
+        _registration_event(
+            session,
+            order_id=order.id,
+            run_id=run2.id,
+            event_type=OrderTransitionEventType.RETRY_REQUESTED,
+            from_state=UNKNOWN,
+        )
+        _flag(session, executor.id, completed_at=at(10))
+        return World(flagged.id, run1.id, order.id, executor.id, operation.id, run2.id)
+
+    return _arrange(build)
+
+
+@pytest.mark.parametrize("shape", ["unestablished", "unknown_proven_not_sent"])
+def test_sync_assessment_looks_up_an_order_once_across_two_flagged_jobs(
+    shared_db: str, shape: str
+) -> None:
+    """W6: an order attributed to two flagged Jobs is looked up, transitioned and evidenced ONCE
+    per sync pass (the evidence is keyed by the order, so both Jobs' R3 see it), with zero POST."""
+
+    world = _lookup_world(shape)
+    broker = LookupBroker()
+
+    sync_account_state(settings=load_settings(), broker_client=broker)
+
+    assert broker.post_count == 0
+    with session_scope(load_settings()) as session:
+        a_records = session.execute(
+            select(func.count())
+            .select_from(RecoveryRecord)
+            .where(
+                RecoveryRecord.paper_order_id == world.order_id,
+                RecoveryRecord.evidence_item == AbsenceEvidenceItem.A_CLIENT_ORDER_ID_404.value,
+            )
+        ).scalar_one()
+        transitions = session.execute(
+            select(func.count())
+            .select_from(OrderEvent)
+            .where(
+                OrderEvent.paper_order_id == world.order_id,
+                OrderEvent.event_type == OrderTransitionEventType.SUBMISSION_FAILED,
+            )
+        ).scalar_one()
+        status = session.get(PaperOrder, world.order_id).status
+    if shape == "unestablished":
+        assert broker.lookup_calls == 1
+        assert a_records == 1
+        assert transitions == 0
+        assert status is UNKNOWN
+    else:
+        assert broker.lookup_calls == 0  # proven not sent: nothing to look up
+        assert transitions == 1  # exactly one liveness transition
+        assert status is FAILED
