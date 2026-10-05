@@ -37,7 +37,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import and_, exists, func, select, text, update
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1368,56 +1368,6 @@ def cas_update_operation(
     return _rowcount(result)
 
 
-def cas_set_intent_disposition(
-    session: Session,
-    fence: Fence,
-    intent_id: uuid.UUID,
-    disposition: IntentDisposition,
-    *,
-    now: datetime | None = None,
-) -> int:
-    """Fenced disposition write of one OPEN intent (0 rows when stale or already final)."""
-
-    result = session.execute(
-        update(ExecutionOperationIntent)
-        .where(
-            ExecutionOperationIntent.id == intent_id,
-            ExecutionOperationIntent.operation_id == fence.operation_id,
-            ExecutionOperationIntent.disposition == IntentDisposition.OPEN.value,
-            exists().where(
-                *_fence_conditions(fence),
-                ExecutionOperation.state == OperationState.RUNNING.value,
-            ),
-        )
-        .values(disposition=disposition.value, disposition_at=now or clock.now_utc())
-        .execution_options(synchronize_session=False)
-    )
-    return _rowcount(result)
-
-
-def cas_update_order(
-    session: Session, fence: Fence, paper_order_id: uuid.UUID, values: Mapping[str, Any]
-) -> int:
-    """Fenced UPDATE of an operation intent's PaperOrder (0 rows once the executor is stale)."""
-
-    authority = (
-        select(ExecutionOperationIntent.id)
-        .join(ExecutionOperation, ExecutionOperation.id == ExecutionOperationIntent.operation_id)
-        .where(
-            ExecutionOperationIntent.paper_order_id == paper_order_id,
-            *_fence_conditions(fence),
-            ExecutionOperation.state == OperationState.RUNNING.value,
-        )
-    )
-    result = session.execute(
-        update(PaperOrder)
-        .where(PaperOrder.id == paper_order_id, authority.exists())
-        .values(**dict(values))
-        .execution_options(synchronize_session=False)
-    )
-    return _rowcount(result)
-
-
 # ---------------------------------------------------------------------------
 # S1-R3: takeover (acquire_execution), send authorization (T1), late completion
 # ---------------------------------------------------------------------------
@@ -1944,9 +1894,7 @@ __all__ = [
     "authorize_send",
     "adopt_running_operation",
     "begin_continuation",
-    "cas_set_intent_disposition",
     "cas_update_operation",
-    "cas_update_order",
     "complete_attempt_late",
     "compute_effective_state",
     "create_operation",

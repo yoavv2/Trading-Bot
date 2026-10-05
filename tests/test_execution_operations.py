@@ -1532,38 +1532,20 @@ def test_attempt_rows_without_executor_identity_are_never_completed_late(ops_db:
         ops.complete_attempt_late(attempt_id, ACCEPTED, executor_job_id=job_id, execution_epoch=3)
 
 
-def test_every_fenced_cas_helper_affects_zero_rows_when_stale(ops_db: str) -> None:
-    operation_id, intent_id, job_id = _t1_setup()
-    with session_scope(load_settings()) as session:
-        intent = session.get(ExecutionOperationIntent, intent_id)
-        assert intent is not None and intent.paper_order_id is not None
-        order_id = intent.paper_order_id
+def test_fenced_cas_update_operation_affects_zero_rows_when_stale(ops_db: str) -> None:
+    """SAF-11: the dead, non-atomic fenced helpers (``cas_set_intent_disposition``,
+    ``cas_update_order``) are deleted; the production fenced writer is ``cas_update_operation``."""
+
+    assert not hasattr(ops, "cas_set_intent_disposition")
+    assert not hasattr(ops, "cas_update_order")
+    operation_id, _intent_id, job_id = _t1_setup()
     stale = Fence(operation_id, 2, job_id)
     wrong_job = Fence(operation_id, 3, uuid.uuid4())
     good = Fence(operation_id, 3, job_id)
     with session_scope(load_settings()) as session:
         for fence in (stale, wrong_job):
             assert ops.cas_update_operation(session, fence, {"reason_detail": "x"}) == 0
-            assert (
-                ops.cas_set_intent_disposition(
-                    session, fence, intent_id, IntentDisposition.EXPIRED_UNSENT
-                )
-                == 0
-            )
-            assert (
-                ops.cas_update_order(
-                    session, fence, order_id, {"status": OrderLifecycleState.UNKNOWN}
-                )
-                == 0
-            )
         assert ops.cas_update_operation(session, good, {"reason_detail": "x"}) == 1
-        assert ops.cas_update_order(session, good, order_id, {"last_submission_error": "e"}) == 1
-        assert (
-            ops.cas_set_intent_disposition(
-                session, good, intent_id, IntentDisposition.CANCELLED_UNSENT
-            )
-            == 1
-        )
         # A paused operation is no longer writable by its former executor.
         ops.cas_update_operation(
             session, good, {"state": "paused", "reason": "kill_switch_tripped"}
