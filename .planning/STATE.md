@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Phase 20.1 gap-closure plans 17-25 created and checked (SC4/REC-01 gap, SAF-01..12, W-1/W-2 runbook); ready to execute --gaps-only
-last_updated: "2026-10-05T09:16:58.166Z"
-last_activity: 2026-10-05 -- Phase 20.1 planning complete
+stopped_at: Phase 20.1 gap-closure execution started (plans 17-25, --gaps-only)
+last_updated: "2026-10-05T11:03:49.142Z"
+last_activity: 2026-10-05 -- Phase 20.1 execution started
 progress:
   total_phases: 6
   completed_phases: 4
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-30)
 ## Current Position
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
-Plan: 16 of 16 executed — verification: gaps_found (see 20.1-VERIFICATION.md, 20.1-REVIEW.md)
-Status: Ready to execute
-Last activity: 2026-10-05 -- Phase 20.1 planning complete
+Plan: 17 of 25 (gap closure 17-25 executing; 1-16 complete)
+Status: Executing Phase 20.1
+Last activity: 2026-10-05 -- Phase 20.1 execution started
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
 
 v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
