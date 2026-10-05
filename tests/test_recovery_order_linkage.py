@@ -24,9 +24,11 @@ What each test pins:
 
 from __future__ import annotations
 
+import ast
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -732,3 +734,25 @@ def test_sync_assessment_looks_up_an_order_once_across_two_flagged_jobs(
         assert broker.lookup_calls == 0  # proven not sent: nothing to look up
         assert transitions == 1  # exactly one liveness transition
         assert status is FAILED
+
+
+def test_no_src_statement_reassigns_an_order_run() -> None:
+    """CR-01 source pin: no statement in src assigns ``<x>.strategy_run_id`` (an order's origin
+    run is immutable). The 0029 trigger of plan 20.1-27 is the second line of defence."""
+
+    root = Path(__file__).resolve().parents[1] / "src" / "trading_platform"
+    offenders: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AugAssign | ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                for sub in ast.walk(target):
+                    if isinstance(sub, ast.Attribute) and sub.attr == "strategy_run_id":
+                        offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert offenders == [], f"an order's run is reassigned at: {offenders}"
