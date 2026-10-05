@@ -727,12 +727,19 @@ def test_harness_clock_reaches_submit_run_time_and_lazy_expiry(phase201_env: Pha
     # (c) lazy expiry: past the cutoff of the SAME day nothing wrote, the read already says so.
     env.set_clock(et(2025, 12, 2, 15, 50))
     persisted = env.operation(operation_id)
-    assert persisted["persisted_state"] == "paused"
-    assert persisted["state"] == "terminated" or persisted["will_end"] is True, persisted
+    assert persisted["persisted_state"] == "paused"  # nothing wrote
+    assert persisted["persisted_reason"] == "working_order_commitments_unaccounted"
+    assert persisted["state"] == "terminated" and persisted["reason"] == "execution_window_elapsed"
+    assert persisted["will_end"] is True and persisted["window"] == "elapsed"
 
-    # (b) run time: a Continue accepted after the cutoff ends the operation in the worker.
-    env.set_clock(et(2025, 12, 2, 10, 5))
-    assert env.operation(operation_id)["state"] == "paused"  # inside the window again
+    # (b) run time: a Continue accepted after the cutoff ends the operation in the WORKER, which
+    # reads the same patched time (the run-time window check) and persists the termination.
+    touched = env.run_continue(operation_id)
+    assert touched["status"] == "succeeded", touched.get("failure_message")
+    after = env.operation(operation_id)
+    assert after["persisted_state"] == "terminated"
+    assert after["persisted_reason"] == "execution_window_elapsed"
+    assert env.broker.post_count == 1  # nothing was sent past the window
 
 
 def test_harness_29_sep_fixture_shape(phase201_env: Phase201Env) -> None:
@@ -893,7 +900,7 @@ def test_e2_29_sep_carry_over(phase201_env: Phase201Env) -> None:
     assert a5["passed"] is False and a5["reason_code"] == "unresolved_outcome"
     job_refs = {ref["id"] for ref in a5["evidence_refs"] if ref["kind"] == "job"}
     assert job_refs == {str(job_id) for job_id in ids}
-    assert "outcome_unresolved" in view["trading_blocked_reasons"] or view["trading_blocked_reasons"]
+    assert view["trading_blocked_reasons"] == ["no_active_paper_strategy"]
 
     for job_id in ids:
         recovery = env.get(f"/api/v1/jobs/{job_id}/recovery")
@@ -1012,10 +1019,13 @@ def test_e4_immediately_filled_order(phase201_env: Phase201Env) -> None:
     Decisions: D-17/TL-1 (an order already filled in the POST response still pauses: its effects
     are not synced), D-19 (Continue after sync + clean reconciliation).
 
-    OBSERVATION (reported): the account-scope sync alone leaves the broker position untracked
-    locally (it never creates a Position), so the account reconciliation is blocking
-    (MISSING_LOCAL) and a Continue run pauses ``reconciliation_blocking``; after the owner-scope
-    sync the reconciliation is clean and Continue sends the next intent.
+    LIMITATION PINNED (a decision is pending, reported in the SUMMARY): the account-scope sync
+    alone leaves the broker position untracked locally (it never creates a Position, D-09), so the
+    account reconciliation is blocking (MISSING_LOCAL) and a Continue run pauses
+    ``reconciliation_blocking``, although 05 M4 / procedure 2 say "account or owner" sync. The
+    stall assertion below documents CURRENT behaviour, not a desired invariant; if the product
+    decision changes it, update this test with that decision. After the owner-scope sync the
+    reconciliation is clean and Continue sends the next intent.
     """
 
     env = phase201_env
@@ -1567,6 +1577,9 @@ def test_e9_external_activity(phase201_env: Phase201Env) -> None:
     refused = env.run_session()
     assert refused["status"] == "succeeded"
     assert refused["result_summary"]["action"] == "blocked_reconciliation"
+    # the Job read says so truthfully: outcome blocked, never a plain success (COMPAT-01).
+    assert (refused["outcome"], refused["outcome_reason"]) == ("blocked", "reconciliation")
+    assert refused["operation"] is None
     assert "operation" not in refused["result_summary"] or refused["result_summary"]["operation"] is None
     assert env.get(f"/api/v1/execution-operations?strategy_id={STRATEGY}").json()["count"] == 0
     assert env.broker.post_count == 0
@@ -1855,6 +1868,14 @@ def test_e13_handover(phase201_env: Phase201Env) -> None:
     # The strategy's own exit signal on the next trading day flattens the book (owned exit fill).
     seed_falling_bars(EXEC_SESSION)
     evaluation_session = env.next_trading_day(EXEC_SESSION)
+    # S3-R4: a new start after earlier orders needs sync + a clean standalone reconciliation + a NEW
+    # evaluation; with the reconciliation skipped the start is 409 evaluation_basis_unverified.
+    env.sync("strategy", strategy_id=STRATEGY, as_of_session=EVAL_SESSION.isoformat())
+    env.evaluate(evaluation_session)
+    skipped = env.start_session(evaluation_session)
+    assert env.conflict_code(skipped) == "evaluation_basis_unverified"
+    assert skipped.json()["detail"]["reason"] == "reconciliation_missing"
+    assert env.reconcile()["result_summary"]["blocks_execution"] is False
     env.evaluate(evaluation_session)
     exited = env.run_session(evaluation_session)
     assert exited["status"] == "succeeded", exited.get("failure_message")
