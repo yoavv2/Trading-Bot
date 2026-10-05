@@ -100,6 +100,7 @@ from trading_platform.services.execution.intent_identity import (
     load_strategy_order_facts,
     portfolio_state_digest,
     risk_config_digest,
+    unestablished_orders,
     verify_evaluation_basis,
 )
 from trading_platform.services.execution.operations import (
@@ -1771,17 +1772,12 @@ def _prepare_start(
 
         # (1) no uncertainty: no submission of the strategy may still produce an execution
         recovery = strategy_recovery_status(session, strategy_id, now=now)
-        # G2: an order that reached (or may have reached) the broker with no broker evidence, no
-        # 4xx rejection and no legacy failure marker is UNESTABLISHED: it may still produce an
-        # execution, so nothing else is authorized, whether or not a Job links it.
-        local_unestablished = [
-            order
-            for order in rows.orders
-            if order.reached_broker
-            and not order.has_broker_evidence
-            and order.status is not OrderLifecycleState.REJECTED
-            and not (order.status is OrderLifecycleState.SUBMISSION_FAILED and not order.attempts)
-        ]
+        # G2: an order whose shared classification (attempts.classify_submission_evidence) is
+        # UNESTABLISHED reached or may have reached the broker with no broker evidence and no
+        # established rejection, and never proven not sent (a legacy zero-attempt order included,
+        # TL-4): it may still produce an execution, so nothing else is authorized, whether or not
+        # a Job links it.
+        local_unestablished = unestablished_orders(rows.orders)
         if recovery.gate_code is GateCode.OUTCOME_UNRESOLVED or local_unestablished:
             return _StartBlocked(
                 reason=GateCode.OUTCOME_UNRESOLVED.value,

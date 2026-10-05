@@ -240,14 +240,82 @@ def derive_intent_state(
     return SubmissionIntentState.REGISTERED_UNSENT
 
 
-def _has_broker_evidence(order: PaperOrder) -> bool:
-    """Broker evidence on the order: a broker id, a broker-applied status or a REJECTED state."""
+class SubmissionEvidence(StrEnum):
+    """The ONE classification of "was this order sent?", closed to four values.
 
-    return bool(
-        order.broker_order_id
-        or order.status in _SUBMITTED_STATUSES
-        or order.status == OrderLifecycleState.REJECTED
-    )
+    Shared by the run-time send guard (G2), the takeover rule, basis verification and the
+    recovery predicate (20.1-17; VERIFICATION gap SC4/REC-01, REVIEW SAF-01).
+    """
+
+    BROKER_EVIDENCE = "broker_evidence"
+    REJECTED = "rejected"
+    PROVEN_NOT_SENT = "proven_not_sent"
+    UNESTABLISHED = "unestablished"
+
+
+def attempt_log_registered(
+    *,
+    has_attempts: bool,
+    order_created_at: datetime,
+    first_intent_created_at: datetime | None,
+) -> bool:
+    """Registered under the attempt-log invariant (S1-R3).
+
+    True with at least one attempt row, or when the order was registered as the realisation of
+    a pinned operation intent: created at or after the EARLIEST intent row that ever referenced
+    it (an order retried by a later operation's intent is still operation-bound; the row that
+    first referenced it pre-dates its registration). False when no pinned intent ever referenced
+    the order, and for a legacy order that only a LATER reuse row references.
+    """
+
+    if has_attempts:
+        return True
+    if first_intent_created_at is None:
+        return False
+    return _utc(order_created_at) >= _utc(first_intent_created_at)
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def classify_submission_evidence(
+    *,
+    status: OrderLifecycleState | str,
+    broker_order_id: str | None,
+    attempts: Sequence[AttemptRecord],
+    attempt_log_registered: bool,
+) -> SubmissionEvidence:
+    """Closed verdict for one order, evaluated in this order:
+
+    1. broker evidence (a broker id or a broker-applied status): ``BROKER_EVIDENCE``;
+    2. a locally REJECTED order: ``REJECTED``;
+    3. attempt rows present: ``PROVEN_NOT_SENT`` only when the whole history is complete
+       pre_connection / deadline_expired, ``REJECTED`` for a recorded 4xx class, otherwise
+       ``UNESTABLISHED`` (NULL, ambiguous, exists_reported or accepted without a broker id);
+    4. no attempt row: ``PROVEN_NOT_SENT`` only for an attempt-log-registered order in
+       ``pending_submission`` or ``submission_failed``; a legacy order (and any ``unknown``
+       order) is ``UNESTABLISHED``.
+    """
+
+    order_status = OrderLifecycleState(status)
+    if broker_order_id or order_status in _SUBMITTED_STATUSES:
+        return SubmissionEvidence.BROKER_EVIDENCE
+    if order_status == OrderLifecycleState.REJECTED:
+        return SubmissionEvidence.REJECTED
+    if attempts:
+        submission_class = classify_submission(attempts)
+        if submission_class is SubmissionClass.NOT_SENT:
+            return SubmissionEvidence.PROVEN_NOT_SENT
+        if submission_class is SubmissionClass.REJECTED:
+            return SubmissionEvidence.REJECTED
+        return SubmissionEvidence.UNESTABLISHED
+    if attempt_log_registered and order_status in (
+        OrderLifecycleState.PENDING_SUBMISSION,
+        OrderLifecycleState.SUBMISSION_FAILED,
+    ):
+        return SubmissionEvidence.PROVEN_NOT_SENT
+    return SubmissionEvidence.UNESTABLISHED
 
 
 def proven_not_sent(
@@ -258,26 +326,30 @@ def proven_not_sent(
 ) -> bool:
     """True only with POSITIVE evidence that no request for this intent ever left the process.
 
-    S1-R3 (round 5): an intent is proven not sent only when EVERY attempt of its whole
-    history is ``pre_connection`` or ``deadline_expired`` with a complete outcome. Zero
-    attempt rows prove it ONLY for an intent registered under the attempt-log invariant
-    (``attempt_log_registered``: it is operation-bound, i.e. registered as the realisation
-    of a pinned operation intent, or it has at least one attempt row), because that
-    invariant makes a POST without an earlier committed attempt row impossible. A LEGACY
-    order (registered before the attempt log: no attempt rows, not operation-bound) is
-    NEVER proven not sent, and neither is a NULL outcome, a timeout or transport error
-    after connect, a 5xx/429, exists_reported, accepted or rejected, nor any broker
-    evidence (broker id, broker-applied status, fills). No order at all (a planned
-    intent) was never sent.
+    ``classify_submission_evidence(...) is PROVEN_NOT_SENT`` (S1-R3, round 5): an intent is
+    proven not sent only when EVERY attempt of its whole history is ``pre_connection`` or
+    ``deadline_expired`` with a complete outcome. Zero attempt rows prove it ONLY for an
+    intent registered under the attempt-log invariant (``attempt_log_registered``) in
+    ``pending_submission`` OR ``submission_failed`` (SAF-01 B, 20.1-17: a SUBMISSION_FAILED order
+    with no attempt row exists only when the failure happened before T1 committed, so no request
+    can have left the process), because that invariant makes a POST without an earlier committed
+    attempt row impossible. A LEGACY order (no attempt rows, not operation-bound) is NEVER
+    proven not sent, and neither is a NULL outcome, a timeout or transport error after connect,
+    a 5xx/429, exists_reported, accepted or rejected, nor any broker evidence (broker id,
+    broker-applied status, fills). No order at all (a planned intent) was never sent.
     """
 
     if order is None:
         return True
-    if _has_broker_evidence(order):
-        return False
-    if attempts:
-        return classify_submission(attempts) is SubmissionClass.NOT_SENT
-    return attempt_log_registered and order.status == OrderLifecycleState.PENDING_SUBMISSION
+    return (
+        classify_submission_evidence(
+            status=order.status,
+            broker_order_id=order.broker_order_id,
+            attempts=attempts,
+            attempt_log_registered=attempt_log_registered,
+        )
+        is SubmissionEvidence.PROVEN_NOT_SENT
+    )
 
 
 def reached_or_may_have_reached_broker(

@@ -1775,6 +1775,8 @@ def test_legacy_order_without_attempts_is_never_proven_not_sent(migrated_paper_d
 def test_legacy_submission_failed_order_is_not_retried_by_a_followup(
     migrated_paper_db: str,
 ) -> None:  # noqa: F811
+    """20.1-17 (TL-4): a legacy failed submission is never proven not sent; G2 blocks the start
+    before any allowance check."""
     from tests.test_paper_execution import _seed_existing_paper_order
 
     run, events = seed_batch(DEFAULT_BATCH[:1], manifest=manifest())
@@ -1793,7 +1795,10 @@ def test_legacy_submission_failed_order_is_not_retried_by_a_followup(
 
     report = _start(service, risk_run_id=follow)
 
-    assert dispositions(report) == [("AAPL", "buy", "action_already_submitted")]
+    # 20.1-17 (TL-4): was action_already_submitted (gate-neutral carve-out, removed); the legacy
+    # order is UNESTABLISHED, so G2 blocks the start with zero POST and no candidate dispositions.
+    assert report.result_summary["action"] == "blocked_outcome_unresolved"
+    assert dispositions(report) == []
     assert service.post_attempts == 0
 
 

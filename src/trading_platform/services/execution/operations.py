@@ -78,9 +78,11 @@ from trading_platform.services.execution.attempts import (
     AttemptAlreadyCompletedError,
     AttemptRecord,
     DbSubmissionAttemptLog,
-    SubmissionClass,
+    SubmissionEvidence,
     SubmissionIntentState,
+    attempt_log_registered,
     classify_submission,
+    classify_submission_evidence,
     derive_intent_state,
     proven_not_sent,
     send_authorization_scope,
@@ -732,13 +734,12 @@ def _attempt_log_registered(
     *,
     earliest_intent_created_at: datetime | None = None,
 ) -> bool:
-    """Registered under the attempt-log invariant (S1-R3).
+    """Registered under the attempt-log invariant (S1-R3): delegates to the shared
+    ``attempts.attempt_log_registered`` (20.1-17), the single definition of the rule.
 
-    True when the order has at least one attempt row, or when it was registered as the
-    realisation of a pinned intent: created at or after the EARLIEST intent row that ever
-    referenced it (an order retried by a later operation's intent is still operation-bound; the
-    row that first referenced it pre-dates its registration). A legacy order reused later
-    (created BEFORE every intent row that references it, no attempts) is never proven not sent.
+    An order retried by a later operation's intent is still operation-bound (the earliest intent
+    row that references it pre-dates its registration); a legacy order reused later (created
+    BEFORE every intent row that references it, no attempts) is never proven not sent.
     """
 
     if attempts:
@@ -748,7 +749,11 @@ def _attempt_log_registered(
     reference = (
         earliest_intent_created_at if earliest_intent_created_at is not None else row.created_at
     )
-    return order.created_at >= min(reference, row.created_at)
+    return attempt_log_registered(
+        has_attempts=False,
+        order_created_at=order.created_at,
+        first_intent_created_at=min(reference, row.created_at),
+    )
 
 
 _LOCALLY_TERMINAL_STATUSES = frozenset(
@@ -1457,16 +1462,18 @@ def _in_doubt(fact: IntentFact) -> bool:
         OrderLifecycleState.UNKNOWN,
     ):
         return False
-    submission_class = classify_submission(fact.attempts)
-    if submission_class in (
-        SubmissionClass.AMBIGUOUS,
-        SubmissionClass.EXISTS_REPORTED,
-        SubmissionClass.ACCEPTED,
-    ):
-        return True
-    # An UNKNOWN order with no attempt row at all (a legacy order) is unestablished too; an
-    # UNKNOWN order whose attempts all prove not-sent is left to the recovery liveness path.
-    return order.status == OrderLifecycleState.UNKNOWN and submission_class is None
+    # The shared classification (20.1-17): UNESTABLISHED is exactly "may still have been sent and
+    # no broker evidence" (NULL/ambiguous/exists_reported/accepted attempts, an UNKNOWN order or a
+    # legacy zero-attempt order); a proven-not-sent order is left to the recovery liveness path.
+    return (
+        classify_submission_evidence(
+            status=order.status,
+            broker_order_id=order.broker_order_id,
+            attempts=fact.attempts,
+            attempt_log_registered=fact.attempt_log_registered,
+        )
+        is SubmissionEvidence.UNESTABLISHED
+    )
 
 
 def acquire_execution(

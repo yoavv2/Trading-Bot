@@ -267,9 +267,14 @@ def test_legacy_order_without_attempts_is_never_proven_not_sent() -> None:
         OrderLifecycleState.FILLED,
         OrderLifecycleState.REJECTED,
         OrderLifecycleState.UNKNOWN,
-        OrderLifecycleState.SUBMISSION_FAILED,
     ):
         assert not proven_not_sent(_Order(status), [], attempt_log_registered=True)  # type: ignore[arg-type]
+    # SAF-01 B (20.1-17): a registered SUBMISSION_FAILED order with no attempt row failed before
+    # T1 committed; nothing can have been sent.
+    failed = _Order(OrderLifecycleState.SUBMISSION_FAILED)
+    assert proven_not_sent(failed, [], attempt_log_registered=True)  # type: ignore[arg-type]
+    # LEGACY (TL-4): a failed submission with no attempt row and no operation is never proven.
+    assert not proven_not_sent(failed, [], attempt_log_registered=False)  # type: ignore[arg-type]
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
     def record(outcome: AttemptOutcomeClass | None) -> AttemptRecord:

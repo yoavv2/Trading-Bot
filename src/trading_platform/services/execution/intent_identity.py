@@ -68,6 +68,9 @@ from trading_platform.db.models import (
 from trading_platform.services.broker_status import BrokerStatusClass, classify_broker_status
 from trading_platform.services.execution.attempts import (
     AttemptRecord,
+    SubmissionEvidence,
+    attempt_log_registered,
+    classify_submission_evidence,
     reached_or_may_have_reached_broker,
 )
 from trading_platform.services.execution.attempts import (
@@ -174,6 +177,9 @@ class OrderFact:
     #: Registered under the attempt-log invariant: operation-bound or has an attempt row.
     attempt_log_registered: bool
     reached_broker: bool
+    #: The shared classification (20.1-17): the same verdict G2, takeover and the recovery
+    #: predicate read.
+    submission_evidence: SubmissionEvidence
 
     @property
     def has_broker_evidence(self) -> bool:
@@ -289,13 +295,14 @@ def verify_evaluation_basis(rows: BasisRows) -> BasisVerification:
     for order in earlier:
         needs_apply = order.has_broker_evidence
         if not needs_apply:
-            if order.status is OrderLifecycleState.REJECTED:
-                continue  # rejected at submission: the broker never created an order
-            if order.status is OrderLifecycleState.SUBMISSION_FAILED and not order.attempts:
-                continue  # a legacy failed submission: gate-neutral (Phase 20 classification)
-            if order.reached_broker:
-                return BasisVerification(BasisFailure.EXECUTIONS_NOT_SYNCED)
-            continue  # never sent (proven not sent): nothing to sync
+            if order.submission_evidence in (
+                SubmissionEvidence.REJECTED,
+                SubmissionEvidence.PROVEN_NOT_SENT,
+            ):
+                continue  # rejected at submission / proven never sent: nothing to sync
+            # UNESTABLISHED (20.1-17, TL-4: a legacy failed submission is never proven not sent):
+            # the order may still produce an execution the sync has not applied.
+            return BasisVerification(BasisFailure.EXECUTIONS_NOT_SYNCED)
         applied = sync.applied.get(str(order.paper_order_id))
         if applied is None or classify_broker_status(applied.broker_status) not in (
             BrokerStatusClass.TERMINAL,
@@ -412,10 +419,9 @@ def load_strategy_order_facts(session: Session, strategy_public_id: str) -> tupl
             .group_by(OrderEvent.paper_order_id)
         ).all()
     )
-    # Registered under the attempt-log invariant (S1-R3): an attempt row exists, or the order was
-    # created at or after the EARLIEST pinned intent that references it (the same rule as
-    # ``operations._attempt_log_registered``); a legacy order that only a LATER reuse row
-    # references is never proven not sent.
+    # Registered under the attempt-log invariant (S1-R3): the shared rule
+    # ``attempts.attempt_log_registered`` (an attempt row exists, or the order was created at or
+    # after the EARLIEST pinned intent that references it).
     first_intent_at = dict(
         session.execute(
             select(
@@ -429,8 +435,11 @@ def load_strategy_order_facts(session: Session, strategy_public_id: str) -> tupl
     facts: list[OrderFact] = []
     for order, ticker, source_run_id in rows:
         attempts = tuple(attempts_by_order.get(order.id, ()))
-        first_at = first_intent_at.get(order.id)
-        registered = bool(attempts) or (first_at is not None and order.created_at >= first_at)
+        registered = attempt_log_registered(
+            has_attempts=bool(attempts),
+            order_created_at=order.created_at,
+            first_intent_created_at=first_intent_at.get(order.id),
+        )
         facts.append(
             OrderFact(
                 paper_order_id=order.id,
@@ -455,9 +464,24 @@ def load_strategy_order_facts(session: Session, strategy_public_id: str) -> tupl
                 reached_broker=reached_or_may_have_reached_broker(
                     order, attempts, attempt_log_registered=registered
                 ),
+                submission_evidence=classify_submission_evidence(
+                    status=order.status,
+                    broker_order_id=order.broker_order_id,
+                    attempts=attempts,
+                    attempt_log_registered=registered,
+                ),
             )
         )
     return tuple(facts)
+
+
+def unestablished_orders(orders: Sequence[OrderFact]) -> tuple[OrderFact, ...]:
+    """G2 (20.1-17): the orders whose shared classification is UNESTABLISHED, i.e. that reached
+    or may have reached the broker with no broker evidence and no established rejection."""
+
+    return tuple(
+        order for order in orders if order.submission_evidence is SubmissionEvidence.UNESTABLISHED
+    )
 
 
 def _derived_local_positions(
@@ -807,5 +831,6 @@ __all__ = [
     "load_strategy_order_facts",
     "portfolio_state_digest",
     "risk_config_digest",
+    "unestablished_orders",
     "verify_evaluation_basis",
 ]
