@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "Gap closure r2 plans 20.1-26..31 revised per user decisions (V-1, V-2 retention, V-3, OD-1 open, Phase 21 migration -> 0030); checker clean of blockers. CR-01 interim prohibition in force. Open: OD-1, account_snapshots deletion, WR-02..06, WR-08 T1 half. Next: /gsd-execute-phase 20.1 --gaps-only (awaiting user go)"
+stopped_at: "Completed 20.1-26-PLAN.md (gap closure r2; next 20.1-27)"
 last_updated: "2026-10-05T15:50:05.508Z"
-last_activity: 2026-10-05 -- 20.1-25 complete (runbook and UAT docs)
+last_activity: 2026-10-05 -- 20.1-26 complete (CR-01 durable order linkage)
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 88
-  completed_plans: 80
+  completed_plans: 81
   percent: 67
 ---
 
@@ -298,5 +298,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-10-05T15:50:05.497Z
-Stopped at: Completed 20.1-25-PLAN.md (gap closure 17-25 executed; verification pending)
+Stopped at: Completed 20.1-26-PLAN.md (gap closure r2; next 20.1-27)
 Resume file: None
