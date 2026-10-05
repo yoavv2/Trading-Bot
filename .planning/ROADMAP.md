@@ -404,7 +404,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 **Gap wave 4**
 
-- [ ] 20.1-23-PLAN.md — Broker-observed, fresh cash basis enforced for execution; snapshot stamped after the account read; E2E harness sync step (SAF-09) (COR-01, REC-02)
+- [x] 20.1-23-PLAN.md — Broker-observed, fresh cash basis enforced for execution; snapshot stamped after the account read; E2E harness sync step (SAF-09) (COR-01, REC-02)
 
 **Gap wave 5**
 
@@ -481,7 +481,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 22/25 | In Progress (gap closure 17-25 executing) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 23/25 | In Progress (gap closure 17-25 executing) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
