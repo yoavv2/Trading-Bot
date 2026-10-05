@@ -111,6 +111,7 @@ from trading_platform.services.execution.operations import (
     OperationOpenError,
     PausedReason,
     PlannedIntent,
+    ReevaluationReason,
     RiskRunAlreadyOperatedError,
     SendRefusal,
     SendRefusedError,
@@ -1447,6 +1448,70 @@ class ContinuationIdentityChangedError(RuntimeError):
         self.action = action
 
 
+class PinnedIdentityMismatchError(RuntimeError):
+    """The identity the executor would send differs from the PINNED intent (SAF-03 / D-19 / S2-R3).
+
+    Raised inside the registration transaction before any write, so it rolls back with nothing
+    registered, re-linked or sent. ``field`` is the FIRST differing one in the fixed order symbol,
+    side, quantity, client_order_id: the client_order_id embeds ``intent_hash[:18]`` over symbol,
+    side and quantity, so a material drift is attributed to the material field and a bare
+    client_order_id mismatch can only come from the prefix / settings."""
+
+    def __init__(self, field: str, *, pinned: str, derived: str) -> None:
+        super().__init__(f"pinned_identity_mismatch:{field}")
+        self.field = field
+        self.pinned = pinned
+        self.derived = derived
+
+
+def _assert_pinned_identity(
+    session: Session,
+    view: _IntentView,
+    decision: PaperIntentDecision,
+    candidate: PaperExecutionCandidate,
+) -> None:
+    """Assert, before any registration write, that what the branch would send IS the pinned row.
+
+    New orders (create_new / create_new_version) are checked through the candidate and the freshly
+    derived client_order_id; an existing order (reuse_existing / retry_existing) is checked through
+    its own persisted identity, never through the freshly derived client_order_id (an order
+    registered under an older prefix keeps its identity)."""
+
+    existing = (
+        session.get(PaperOrder, decision.existing_order_id)
+        if decision.existing_order_id is not None
+        else None
+    )
+    if existing is not None:
+        symbol_matches = existing.symbol_id == view.symbol_id
+        symbol_pair = (str(existing.symbol_id), str(view.symbol_id))
+        side, quantity, client_order_id = (
+            existing.side,
+            existing.quantity,
+            existing.client_order_id,
+        )
+    else:
+        symbol_matches = candidate.symbol == view.symbol and candidate.symbol_id == view.symbol_id
+        symbol_pair = (candidate.symbol, view.symbol)
+        side, quantity, client_order_id = (
+            candidate.side.value,
+            candidate.quantity,
+            decision.identity.client_order_id,
+        )
+    if not symbol_matches:
+        raise PinnedIdentityMismatchError("symbol", pinned=symbol_pair[1], derived=symbol_pair[0])
+    if side != view.side:
+        raise PinnedIdentityMismatchError("side", pinned=view.side, derived=str(side))
+    if Decimal(quantity) != view.quantity:
+        raise PinnedIdentityMismatchError(
+            "quantity", pinned=str(view.quantity), derived=str(quantity)
+        )
+    if client_order_id != view.client_order_id:
+        raise PinnedIdentityMismatchError(
+            "client_order_id", pinned=view.client_order_id, derived=str(client_order_id)
+        )
+
+
 def _executor_identity(settings: Settings, job_id: uuid.UUID | None) -> tuple[uuid.UUID, str]:
     """The Job that will hold execution authority and the lease owner it holds NOW.
 
@@ -2195,6 +2260,55 @@ def _order_version(session: Session, paper_order_id: uuid.UUID) -> int:
     return order.intent_version if order is not None else 1
 
 
+def _refuse_pinned_identity_mismatch(
+    ctx: _ExecutionContext,
+    state: _LoopState,
+    view: _IntentView,
+    mismatch: PinnedIdentityMismatchError,
+) -> bool:
+    """SAF-03: nothing was registered or sent; the operation moves to ``requires_reevaluation``
+    through the existing closed reasons and the loop stops WITHOUT raising (a failed paper-session
+    Job is forced outcome_uncertain, which with zero orders would land in the TL-4
+    execution_path_unproven state)."""
+
+    reason = (
+        ReevaluationReason.STRATEGY_SETTINGS_CHANGED
+        if mismatch.field == "client_order_id"
+        else ReevaluationReason.EVALUATION_DATA_CHANGED
+    )
+    detail = f"pinned_identity_mismatch:{mismatch.field}"
+
+    def record(session: Session) -> None:
+        session.add(
+            ExecutionEvent(
+                strategy_run_id=ctx.run_id,
+                paper_order_id=None,
+                event_type="pinned_identity_mismatch",
+                severity="warning",
+                blocks_execution=False,
+                event_at=datetime.now(UTC),
+                message=(
+                    f"The identity to send for pinned intent '{view.client_order_id}' differs "
+                    f"from the pinned identity ({mismatch.field}); nothing was registered or "
+                    "sent and the operation requires re-evaluation."
+                ),
+                details={
+                    "field": mismatch.field,
+                    "pinned": mismatch.pinned,
+                    "derived": mismatch.derived,
+                    "intent_id": str(view.intent_id),
+                },
+            )
+        )
+
+    if not _persist_fenced(ctx, record):
+        raise OperationConflictError(ctx.fence.operation_id, "stale executor fence")
+    _move_running(ctx, OperationState.REQUIRES_REEVALUATION, reason.value, detail)
+    state.final_state = OperationState.REQUIRES_REEVALUATION
+    state.final_reason = reason.value
+    return False
+
+
 def _execute_pinned_intent(
     ctx: _ExecutionContext,
     state: _LoopState,
@@ -2226,6 +2340,10 @@ def _execute_pinned_intent(
         )
         registration["candidate"] = candidate
         registration["decision"] = decision
+        # SAF-03: BEFORE any branch write (and before the continuation-action refusal below, so a
+        # drifted identity is a re-evaluation rather than a failed Job) the identity that would be
+        # sent must equal the pinned intent; a mismatch rolls this transaction back.
+        _assert_pinned_identity(session, view, decision, candidate)
         if continuation and decision.action not in _CONTINUATION_ACTIONS:
             # D-19 / R-6: Continue only ever sends the pinned intent under its ORIGINAL identity;
             # a new version is never a way to send "the same" action again.
@@ -2370,7 +2488,11 @@ def _execute_pinned_intent(
             )
         session.flush()
 
-    if not _persist_fenced(ctx, register):
+    try:
+        registered = _persist_fenced(ctx, register)
+    except PinnedIdentityMismatchError as mismatch:
+        return _refuse_pinned_identity_mismatch(ctx, state, view, mismatch)
+    if not registered:
         raise OperationConflictError(ctx.fence.operation_id, "stale executor fence")
     guard_error = registration.get("guard_error")
     if guard_error is not None:
@@ -2396,11 +2518,13 @@ def _execute_pinned_intent(
     pending_order_id: uuid.UUID = registration["pending_order_id"]
     order_intent = OrderIntent(
         strategy_id=ctx.strategy_id,
-        symbol=candidate.symbol,
-        side=candidate.side,
-        quantity=candidate.quantity,
+        # SAF-03: the identity sent is the PINNED view (asserted equal in register()), never the
+        # candidate rebuilt from the risk event.
+        symbol=view.symbol,
+        side=OrderSide(view.side),
+        quantity=view.quantity,
         intended_session=candidate.session_date,
-        client_order_id=registration["client_order_id"],
+        client_order_id=view.client_order_id,
         intent_hash=registration["intent_hash"],
         intent_version=registration["intent_version"],
         reference_price=candidate.reference_price,

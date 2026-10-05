@@ -14,6 +14,7 @@ the broker (``ScriptedExecutionService``) and the price source are replaced.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
 
@@ -36,7 +37,7 @@ from tests.test_paper_session_operations import (
     seed_clean_reconciliation_after_now,
 )
 
-from trading_platform.core.settings import load_settings
+from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models import (
     ExecutionEvent,
     ExecutionOperationIntent,
@@ -51,9 +52,18 @@ PREFIX_ENV = "TRADING_PLATFORM_EXECUTION__CLIENT_ORDER_ID_PREFIX"
 
 
 @pytest.fixture(autouse=True)
-def _seams(monkeypatch: pytest.MonkeyPatch) -> FreshPriceSource:
+def _seams(monkeypatch: pytest.MonkeyPatch) -> Iterator[FreshPriceSource]:
     allow_paper_execution(monkeypatch)
-    return allow_direct_paper_execution(monkeypatch)
+    yield allow_direct_paper_execution(monkeypatch)
+    monkeypatch.undo()
+    clear_settings_cache()  # a prefix override must not leak into a sibling test
+
+
+def _set_prefix(monkeypatch: pytest.MonkeyPatch, prefix: str) -> None:
+    """Change ``execution.client_order_id_prefix`` for the next ``load_settings()``."""
+
+    monkeypatch.setenv(PREFIX_ENV, prefix)
+    clear_settings_cache()
 
 
 def _price_paused_single_intent() -> uuid.UUID:
@@ -131,7 +141,7 @@ def test_prefix_change_between_price_pause_and_continue_sends_nothing(
     operation_id = _price_paused_single_intent()
     before = _intent_row()
     assert before[0] is None and before[2] == Decimal("10")
-    monkeypatch.setenv(PREFIX_ENV, "zz")  # symbol, side and quantity unchanged
+    _set_prefix(monkeypatch, "zz")  # symbol, side and quantity unchanged
     resumed = ScriptedExecutionService(["accept"])
 
     report = run_continue(resumed, operation_id=operation_id)
@@ -175,7 +185,7 @@ def test_prefix_and_quantity_change_reports_quantity_first(
     operation_id = _price_paused_single_intent()
     before = _intent_row()
     _mutate_risk_event_quantity("12")
-    monkeypatch.setenv(PREFIX_ENV, "zz")
+    _set_prefix(monkeypatch, "zz")
     resumed = ScriptedExecutionService(["accept"])
 
     report = run_continue(resumed, operation_id=operation_id)
