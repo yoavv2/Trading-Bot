@@ -14,7 +14,10 @@ stayed green. These tests run the finished code (20.1-26 durable linkage, 20.1-2
 * (b2) an M15 retry of the failed START Job resolves per the 20.1-15 rule and never reaches
   registration;
 * (b3) the Start-path reuse decision: after End, a clean M5, a fresh evaluation and a new start,
-  the earlier proven-not-sent order is re-registered (``retry_existing``) and POSTed once.
+  the earlier proven-not-sent order is re-registered (``retry_existing``) and POSTed once;
+* (b3-session) the same scenario with the new start entering through the SESSION entry point
+  ``run_paper_session`` (D-15 session recovery gate, pre-lock recovery and reconciliation), with
+  fake execution / broker clients.
 
 What is INJECTED (and nothing else): the simulated worker crash before T1 (a held worker whose lock
 connection is terminated, or a one-shot exception before T1) and the passage of time (a lease
@@ -43,12 +46,16 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_execution_seams import TEST_LEASE_OWNER, allow_direct_paper_execution
 from tests.support.recovery_agreement import assert_recovery_consumers_agree
 from tests.support.recovery_fixtures import seed_account_run
 from tests.test_attribution_reconciliation import _broker_fill, _broker_order
-from tests.test_paper_execution import migrated_paper_db  # noqa: F401  (database fixture)
+from tests.test_paper_execution import (  # noqa: F401  (migrated_paper_db is the database fixture)
+    FakeBrokerClient,
+    migrated_paper_db,
+)
 from tests.test_paper_session_operations import (
     DEFAULT_BATCH,
     SESSION,
@@ -94,9 +101,13 @@ from trading_platform.jobs.lifecycle import JobTransitionRequest, apply_job_tran
 from trading_platform.jobs.queue import claim_next_job, reclaim_lost_jobs
 from trading_platform.jobs.registry import JobSubmissionConflictError, build_default_registry
 from trading_platform.orchestration.job_mutations import JobOrchestrationService
+from trading_platform.services.alpaca import BrokerAccountSnapshot
 from trading_platform.services.execution import submit_orders as submit_orders_module
 from trading_platform.services.execution.operations import end_operation
-from trading_platform.services.execution.submit_orders import build_client_order_id
+from trading_platform.services.execution.submit_orders import (
+    build_client_order_id,
+    run_paper_session,
+)
 from trading_platform.services.execution.sync_orders import sync_account_state
 from trading_platform.services.paper_account_checks import _check_a5
 from trading_platform.services.recovery import (
@@ -918,4 +929,187 @@ def test_b3_new_start_after_end_reuses_the_proven_not_sent_order_once(
         http, **_agree(world, linked=[j1, j4], flagged=[j1, j4], operation_id=new_operation)
     )
     _record(http, world, gate, flagged=[j1, j4], expect=None)
+    assert GateCode.OUTCOME_UNRESOLVED not in world.history, world.history
+
+
+def _clean_fake_broker() -> FakeBrokerClient:
+    """The read-side broker client of ``run_paper_session`` (recovery / reconciliation reads only;
+    nothing is ever POSTed through it)."""
+
+    return FakeBrokerClient(
+        orders=[],
+        fills=[],
+        positions=[],
+        account=BrokerAccountSnapshot(
+            cash=Decimal("100000.000000"),
+            buying_power=Decimal("100000.000000"),
+            equity=Decimal("100000.000000"),
+            long_market_value=Decimal("0"),
+            short_market_value=Decimal("0"),
+            raw_payload={"equity": "100000.000000"},
+        ),
+    )
+
+
+_SESSION_PENDING_FINDING = (
+    "PRODUCT FINDING (20.1-29 follow-up): the session entry point run_paper_session blocks the "
+    "Start of a SAF-01-released proven-not-sent pending_submission order. Its pre-lock "
+    "reconciliation (reconcile_paper_execution -> matcher._is_local_order_active) treats a "
+    "pending_submission order whose submission_attempt_count != 0 as active, and registration "
+    "(submit_orders, before T1) already incremented that counter to 1 although no "
+    "order_submission_attempts row exists and nothing was ever POSTed; the broker therefore (truly) "
+    "does not report the order and the finding MISSING_BROKER (blocks_execution) yields action "
+    "blocked_reconciliation: no re-POST, no execution run. The D-15 session gate itself is "
+    "evaluated and returns None. PaperSessionJobHandler calls run_paper_session, so a real worker "
+    "Start is blocked (fail-closed) while the direct start path (b3) reuses the order."
+)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(
+            PENDING,
+            id="pending_submission",
+            marks=pytest.mark.xfail(
+                strict=True, raises=AssertionError, reason=_SESSION_PENDING_FINDING
+            ),
+        ),
+        pytest.param(FAILED, id="submission_failed"),
+    ],
+)
+def test_b3_new_start_after_end_through_run_paper_session(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    """(b3, session entry point) The scenario of (b3), but the new start goes through
+    ``run_paper_session``: its D-15 session-level recovery gate and its pre-lock recovery /
+    reconciliation (fake execution service and fake read-side broker client) must neither block a
+    SAF-01-released proven-not-sent order nor cause a second POST."""
+
+    timeline = Timeline()
+    world = _saf01_shape(status, monkeypatch, timeline)
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    with session_scope(load_settings()) as session:  # End (M12)
+        end_operation(session, op, operator_reason="cr01 b3 session end", actor="pytest")
+    assert _order(order_id).status.value == status and attempt_outcomes(cid1) == []
+
+    recon_a = timeline.next()
+    assert recon_a > world.j1_completed_at
+    _clean_reconciliation(recon_a)
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+    _record(http, world, gate, flagged=[j1], expect=None)
+
+    # execution sizes only on a fresh broker-observed snapshot (no configured-cash fallback)
+    with session_scope(load_settings()) as session:
+        seed_fresh_broker_snapshot(session)
+    new_run = evaluation(DEFAULT_BATCH[:1], as_of="2024-01-08", base=timeline.next())
+    assert new_run != world.risk_run
+    with session_scope(load_settings()) as session:
+        quantity = session.execute(
+            select(RiskEvent.proposed_quantity).where(RiskEvent.strategy_run_id == new_run)
+        ).scalar_one()
+    assert quantity == _order(order_id).quantity
+    derived = build_client_order_id(
+        prefix=load_settings().execution.client_order_id_prefix,
+        strategy_id=STRATEGY,
+        session_date=SESSION,
+        symbol="AAPL",
+        side="buy",
+        quantity=Decimal(quantity),
+    )
+    assert derived == cid1
+    assert _validate(new_run)["risk_run_id"] == str(new_run)
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+    _record(http, world, gate, flagged=[j1], expect=None)
+
+    # M10 through the SESSION entry point. The D-15 gate is observed (not replaced): the spy
+    # records the real answer and passes it through.
+    gate_answers: list[str | None] = []
+    real_gate = submit_orders_module._recovery_gate_code
+
+    def spying_gate(settings: Any, strategy_id: str) -> str | None:
+        answer = real_gate(settings, strategy_id)
+        gate_answers.append(answer)
+        return answer
+
+    monkeypatch.setattr(submit_orders_module, "_recovery_gate_code", spying_gate)
+    j4 = _start_job(new_run)
+    report = run_paper_session(
+        STRATEGY,
+        as_of_session=SESSION,
+        risk_run_id=str(new_run),
+        trigger_source="pytest",
+        settings=load_settings(),
+        execution_service=broker.service(),
+        broker_client=_clean_fake_broker(),
+        job_id=j4,
+    )
+    # the D-15 session gate was evaluated exactly once, answered None, and did not block
+    assert gate_answers == [None], gate_answers
+    assert report.action != "blocked_outcome_unresolved", report.action
+    # the run went through the session path (pre-lock recovery + reconciliation ran for this Job)
+    # and reached submission: the session-level reconciliation must not block the released order
+    summary = report.result_summary
+    reconciliation = (
+        summary.get("reconciliation") or summary.get("session_preflight", {}).get("reconciliation")
+    ) or {}
+    assert report.action == "submitted_missing_orders", (
+        report.action,
+        broker.received,
+        [(f["event_type"], f["message"]) for f in reconciliation.get("findings", [])],
+    )
+    r4 = _run_of(j4)
+    assert report.reconciliation_run_id is not None
+    assert report.execution_run_id == str(r4)
+    with session_scope(load_settings()) as session:
+        reconciliation_run = session.get(StrategyRun, uuid.UUID(str(report.reconciliation_run_id)))
+        assert reconciliation_run is not None and reconciliation_run.job_id == j4
+
+    new_operation = uuid.UUID(report.result_summary["operation"]["id"])
+    assert new_operation != op
+    submitted = report.result_summary["submitted_orders"]
+    assert [o["client_order_id"] for o in submitted] == [cid1]
+    assert submitted[0]["intent_decision"]["action"] == "retry_existing"
+    assert broker.received == {cid1: 1}  # POST once
+    assert attempt_outcomes(cid1) == [(1, "accepted")]
+    with session_scope(load_settings()) as session:
+        attempt = session.execute(
+            select(OrderSubmissionAttempt).where(OrderSubmissionAttempt.paper_order_id == order_id)
+        ).scalar_one()
+        assert attempt.executor_job_id == j4 and attempt.strategy_run_id == r4
+        assert _accepted_registrations(session, order_id) == {
+            ("intent_registered", world.r1),
+            ("retry_requested", r4),
+        }
+    assert _order(order_id).strategy_run_id == world.r1  # the origin run is kept
+    assert not _unproven(j1)
+    assert _job_row(j4).completed_at is None and _job_row(j4).status is JobStatus.RUNNING
+    gate = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j4], flagged=[j1, j4], operation_id=new_operation)
+    )
+    _record(http, world, gate, flagged=[j1, j4], expect=None)
+
+    finished_j4 = timeline.next()
+    _finish_job(j4, finished_j4)
+    gate = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j4], flagged=[j1, j4], operation_id=new_operation)
+    )
+    _record(http, world, gate, flagged=[j1, j4], expect=GateCode.RECONCILIATION_REQUIRED)
+
+    # settle exactly as C5 of regression (a): A5 passes after settling
+    _filled_sync(order_id)
+    recon_b = timeline.next()
+    assert recon_b > finished_j4
+    _clean_reconciliation(recon_b)
+    gate = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j4], flagged=[j1, j4], operation_id=new_operation)
+    )
+    _record(http, world, gate, flagged=[j1, j4], expect=None)
+    assert _a5_passed()
     assert GateCode.OUTCOME_UNRESOLVED not in world.history, world.history
