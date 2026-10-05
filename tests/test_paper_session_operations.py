@@ -154,7 +154,9 @@ def seed_batch(
         session.flush()
         events: dict[str, uuid.UUID] = {}
         for ticker, quantity, price in batch:
-            symbol = session.execute(select(Symbol).where(Symbol.ticker == ticker)).scalar_one_or_none()
+            symbol = session.execute(
+                select(Symbol).where(Symbol.ticker == ticker)
+            ).scalar_one_or_none()
             if symbol is None:
                 symbol = Symbol(ticker=ticker, active=True)
                 session.add(symbol)
@@ -197,7 +199,9 @@ class ScriptedExecutionService(ExecutionService):
     def describe(self) -> dict[str, object]:
         return {"service": "execution", "status": "available", "provider": "scripted"}
 
-    def _result(self, intent: OrderIntent, status: ExecutionOrderStatus, raw: str) -> OrderSubmissionResult:
+    def _result(
+        self, intent: OrderIntent, status: ExecutionOrderStatus, raw: str
+    ) -> OrderSubmissionResult:
         return OrderSubmissionResult(
             client_order_id=intent.client_order_id,
             broker_order_id=f"scripted-{intent.symbol.lower()}-{uuid.uuid4().hex[:8]}",
@@ -267,6 +271,7 @@ def _start(
     price_source: Any = None,
     trigger_source: str = "pytest",
     session_date: date = SESSION,
+    job_id: uuid.UUID | None = None,
 ) -> Any:
     return run_paper_order_submission(
         STRATEGY,
@@ -276,6 +281,7 @@ def _start(
         execution_service=service,
         trigger_source=trigger_source,
         price_source=price_source,
+        job_id=job_id,
     )
 
 
@@ -284,7 +290,11 @@ def operation_row(operation_id: str | uuid.UUID | None = None) -> ExecutionOpera
         statement = select(ExecutionOperation)
         if operation_id is not None:
             statement = statement.where(ExecutionOperation.id == uuid.UUID(str(operation_id)))
-        operation = session.execute(statement.order_by(ExecutionOperation.created_at.desc())).scalars().first()
+        operation = (
+            session.execute(statement.order_by(ExecutionOperation.created_at.desc()))
+            .scalars()
+            .first()
+        )
         assert operation is not None
         session.expunge(operation)
         return operation
@@ -337,16 +347,28 @@ def test_first_order_working_pauses_and_preserves_unsent_intents(migrated_paper_
         assert session.execute(select(func.count()).select_from(PaperOrder)).scalar_one() == 1
         # S2-R3 audit: the permission check that allowed the send, with the fresh price
         # observation, is stored with the order it allowed.
-        checked = session.execute(
-            select(ExecutionEvent).where(ExecutionEvent.event_type == "intent_permission_checked")
-        ).scalars().all()
+        checked = (
+            session.execute(
+                select(ExecutionEvent).where(
+                    ExecutionEvent.event_type == "intent_permission_checked"
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert len(checked) == 1
         assert checked[0].details["verdict"] == "ok"
         assert checked[0].details["price_observation"]["symbol"] == "AAPL"
         assert checked[0].details["price_observation"]["source"] == "test_fresh"
-        unsent = session.execute(
-            select(ExecutionOperationIntent).where(ExecutionOperationIntent.paper_order_id.is_(None))
-        ).scalars().all()
+        unsent = (
+            session.execute(
+                select(ExecutionOperationIntent).where(
+                    ExecutionOperationIntent.paper_order_id.is_(None)
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert sorted(item.quantity for item in unsent) == [Decimal("2"), Decimal("5")]
         # never registered, never sent: their identities are preserved on the pinned rows
         assert all(item.client_order_id.startswith("tp-20240105-") for item in unsent)
@@ -360,7 +382,10 @@ def test_immediate_fill_not_synced_pauses_tl1(migrated_paper_db: str) -> None:  
     report = _start(service)
 
     operation = report.result_summary["operation"]
-    assert (operation["state"], operation["reason"]) == ("paused", "working_order_commitments_unaccounted")
+    assert (operation["state"], operation["reason"]) == (
+        "paused",
+        "working_order_commitments_unaccounted",
+    )
     assert service.post_attempts == 1
     with session_scope(load_settings()) as session:
         order = session.execute(select(PaperOrder)).scalar_one()
@@ -653,7 +678,9 @@ def test_run_report_is_additive(migrated_paper_db: str) -> None:  # noqa: F811
         "session_preflight",
     }
     assert legacy_keys <= set(summary)
-    assert report.action == "submitted_missing_orders"  # every existing action value keeps its meaning
+    assert (
+        report.action == "submitted_missing_orders"
+    )  # every existing action value keeps its meaning
     assert summary["stage"] == "completed"
     assert set(summary["operation"]) == {"id", "state", "reason", "reason_detail", "next_action"}
     assert report.to_dict()["operation_id"] == summary["operation"]["id"]
@@ -787,7 +814,9 @@ def test_start_path_never_versions_existing_intents(  # noqa: F811
                 session,
                 strategy_id=STRATEGY,
                 candidate=submit_orders_module._candidate_from_risk_event(
-                    session.execute(select(RiskEvent).where(RiskEvent.id == order.source_risk_event_id)).scalar_one(),
+                    session.execute(
+                        select(RiskEvent).where(RiskEvent.id == order.source_risk_event_id)
+                    ).scalar_one(),
                     session.get(Symbol, order.symbol_id),
                 ),
                 identity=derive_order_identity(
@@ -835,7 +864,10 @@ def test_manifest_change_requires_reevaluation_sends_nothing_then_end_cancels_un
     report = _start(service)
 
     operation = report.result_summary["operation"]
-    assert (operation["state"], operation["reason"]) == ("requires_reevaluation", "evaluation_data_changed")
+    assert (operation["state"], operation["reason"]) == (
+        "requires_reevaluation",
+        "evaluation_data_changed",
+    )
     assert operation["next_action"] == "end_operation_then_reevaluate"
     assert service.post_attempts == 0 and count(PaperOrder) == 0
     finish_jobs()
@@ -1068,7 +1100,9 @@ def test_run_time_reports_the_typed_conflicts(migrated_paper_db: str) -> None:  
         _start(ScriptedExecutionService(["accept"]), risk_run_id=risk_run)
 
 
-def test_submit_precedence_of_start_mode_gates(migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+def test_submit_precedence_of_start_mode_gates(
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: F811
     """Fixed precedence: recovery gate -> operation_open -> working_order_commitments_unaccounted ->
     risk_run_already_operated -> evaluation_basis_unverified. Each adjacent pair, both true."""
     risk_run, _ = seed_batch(DEFAULT_BATCH[:2])
@@ -1246,7 +1280,9 @@ def test_paused_operation_left_past_its_window_does_not_fail_the_next_days_start
 # ---------------------------------------------------------------------------
 
 
-def manifest(digest: str = "bars-d1", *, as_of: str = "2024-01-05", settings_digest: str = "sd1") -> dict[str, Any]:
+def manifest(
+    digest: str = "bars-d1", *, as_of: str = "2024-01-05", settings_digest: str = "sd1"
+) -> dict[str, Any]:
     """An evaluation manifest whose RESOLVED as-of bound (``as_of``) is time-derived: a re-run
     over the same data yields the same decision inputs whatever that bound is."""
 
@@ -1285,12 +1321,16 @@ def settle(
     from trading_platform.db.models import PaperFill
 
     with session_scope(load_settings()) as session:
-        order = session.execute(
-            select(PaperOrder)
-            .join(Symbol, Symbol.id == PaperOrder.symbol_id)
-            .where(Symbol.ticker == ticker, PaperOrder.side == side)
-            .order_by(PaperOrder.created_at.desc())
-        ).scalars().first()
+        order = (
+            session.execute(
+                select(PaperOrder)
+                .join(Symbol, Symbol.id == PaperOrder.symbol_id)
+                .where(Symbol.ticker == ticker, PaperOrder.side == side)
+                .order_by(PaperOrder.created_at.desc())
+            )
+            .scalars()
+            .first()
+        )
         assert order is not None, (ticker, side)
         order.status = status
         order.broker_status = {
@@ -1353,9 +1393,15 @@ def put_position(ticker: str, quantity: str) -> None:
     with session_scope(load_settings()) as session:
         strategy_pk = session.execute(select(StrategyRun.strategy_id).limit(1)).scalar_one()
         symbol_id = session.execute(select(Symbol.id).where(Symbol.ticker == ticker)).scalar_one()
-        position = session.execute(
-            select(Position).where(Position.strategy_id == strategy_pk, Position.symbol_id == symbol_id)
-        ).scalars().first()
+        position = (
+            session.execute(
+                select(Position).where(
+                    Position.strategy_id == strategy_pk, Position.symbol_id == symbol_id
+                )
+            )
+            .scalars()
+            .first()
+        )
         if position is None:
             session.add(
                 Position(
@@ -1390,7 +1436,9 @@ def dispositions(report: Any) -> list[tuple[str, str, str]]:
     ]
 
 
-def test_repeated_evaluation_against_unchanged_inputs_is_a_replay_zero_post(migrated_paper_db: str) -> None:  # noqa: F811
+def test_repeated_evaluation_against_unchanged_inputs_is_a_replay_zero_post(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A1: run 1 submits intent 1 (accepted, expires unfilled). After sync + clean reconciliation,
     two re-evaluations with identical data, settings, risk policy and portfolio (different run ids,
     wall-clock times and resolved as-of bounds) both return noop_existing_orders with
@@ -1408,12 +1456,16 @@ def test_repeated_evaluation_against_unchanged_inputs_is_a_replay_zero_post(migr
         report = _start(service, risk_run_id=again)
         assert report.result_summary["action"] == "noop_existing_orders"
         assert dispositions(report) == [("AAPL", "buy", "replay_of_earlier_decision")]
-        assert report.result_summary["candidate_dispositions"][0]["earlier_intent_id"] == str(first_intent)
+        assert report.result_summary["candidate_dispositions"][0]["earlier_intent_id"] == str(
+            first_intent
+        )
         assert service.post_attempts == 0
     assert count(PaperOrder) == 1
 
 
-def test_repeated_evaluation_after_a_broker_rejection_is_also_a_replay(migrated_paper_db: str) -> None:  # noqa: F811
+def test_repeated_evaluation_after_a_broker_rejection_is_also_a_replay(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     first = evaluation(DEFAULT_BATCH[:1], verified=False)
     _start(ScriptedExecutionService(["reject"]), risk_run_id=first)  # a completed operation
     finish_jobs()
@@ -1436,7 +1488,9 @@ def operation_intent_ids() -> list[uuid.UUID]:
         )
 
 
-def test_new_evaluation_after_a_verified_fill_needs_the_synced_and_reconciled_basis(migrated_paper_db: str) -> None:  # noqa: F811
+def test_new_evaluation_after_a_verified_fill_needs_the_synced_and_reconciled_basis(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A2: a start on an evaluation made before the sync -> evaluation_basis_unverified
     (predates_executions); after sync without a standalone reconciliation -> reconciliation_missing;
     after sync + clean reconciliation the held symbol is rejected (zero POST)."""
@@ -1468,7 +1522,9 @@ def test_new_evaluation_after_a_verified_fill_needs_the_synced_and_reconciled_ba
     assert service.post_attempts == 0
 
 
-def test_partial_fills_remainder_is_not_pursued_and_the_ingestion_gap_is_refused(migrated_paper_db: str) -> None:  # noqa: F811
+def test_partial_fills_remainder_is_not_pursued_and_the_ingestion_gap_is_refused(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A3: a buy of 10 fills 4 and expires: basis position 4, the entry is rejected (held), the
     remainder 6 is not pursued (TL-11), position 4 is present in the risk state, zero POST. A
     fill-ingestion gap (broker filled 4, local 3) -> fills_not_ingested."""
@@ -1508,8 +1564,12 @@ def test_partial_fills_remainder_is_not_pursued_and_the_ingestion_gap_is_refused
     assert service.post_attempts == 0
     assert count(PaperOrder) == 1  # the unfilled remainder is not topped up
     with session_scope(load_settings()) as session:
-        state = PortfolioService(load_settings()).load_state(session, strategy_id=STRATEGY, as_of_session=SESSION)
-    assert "AAPL" in state.open_symbols and state.position_count == 1  # position 4 in the risk state
+        state = PortfolioService(load_settings()).load_state(
+            session, strategy_id=STRATEGY, as_of_session=SESSION
+        )
+    assert (
+        "AAPL" in state.open_symbols and state.position_count == 1
+    )  # position 4 in the risk state
 
 
 def test_a_partially_filled_order_still_working_blocks_submission(migrated_paper_db: str) -> None:  # noqa: F811
@@ -1523,7 +1583,9 @@ def test_a_partially_filled_order_still_working_blocks_submission(migrated_paper
     assert error.code == "working_order_commitments_unaccounted"
 
 
-def test_partial_exit_in_the_same_evaluation_session_is_action_already_submitted(migrated_paper_db: str) -> None:  # noqa: F811
+def test_partial_exit_in_the_same_evaluation_session_is_action_already_submitted(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A3 PARTIAL EXIT (TL-10): a sell of 10 fills 6 and expires; a new evaluation of the SAME
     session (corrected bars) -> action_already_submitted, zero POST, position 4 preserved."""
     earlier_session = date(2024, 1, 4)
@@ -1573,7 +1635,9 @@ def test_end_with_nothing_sent_does_not_consume_the_allowance(migrated_paper_db:
     assert count(ExecutionOperation) == 2
 
 
-def test_end_after_one_fill_then_verified_evaluation_sends_only_justified_candidates(migrated_paper_db: str) -> None:  # noqa: F811
+def test_end_after_one_fill_then_verified_evaluation_sends_only_justified_candidates(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A4(ii) + A6 mixed run: after AAPL filled (End cancelled MSFT) the verified evaluation
     refuses the held AAPL and sends the never-sent MSFT; the run summary lists AAPL's disposition
     alongside MSFT's new intent."""
@@ -1584,7 +1648,9 @@ def test_end_after_one_fill_then_verified_evaluation_sends_only_justified_candid
 
     # corrected bars for the same session: AAPL (already submitted) and MSFT (never sent)
     second = evaluation(
-        [("AAPL", "11", "120"), ("MSFT", "5", "300")], digest="bars-corrected", positions=[("AAPL", "10")]
+        [("AAPL", "11", "120"), ("MSFT", "5", "300")],
+        digest="bars-corrected",
+        positions=[("AAPL", "10")],
     )
     service = ScriptedExecutionService(["accept"])
     report = _start(service, risk_run_id=second)
@@ -1595,7 +1661,9 @@ def test_end_after_one_fill_then_verified_evaluation_sends_only_justified_candid
     assert report.result_summary["operation"]["state"] == "paused"
 
 
-def test_corrected_bars_after_a_submission_are_action_already_submitted(migrated_paper_db: str) -> None:  # noqa: F811
+def test_corrected_bars_after_a_submission_are_action_already_submitted(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A4(iii): corrected bars for the same evaluation session after a submission -> new
     fingerprints, but action_already_submitted for the (symbol, side) already submitted, zero POST."""
     first = evaluation(DEFAULT_BATCH[:1], verified=False)
@@ -1611,7 +1679,9 @@ def test_corrected_bars_after_a_submission_are_action_already_submitted(migrated
     assert service.post_attempts == 0
 
 
-def test_completed_evaluation_replay_is_noop_existing_orders_zero_post(migrated_paper_db: str) -> None:  # noqa: F811
+def test_completed_evaluation_replay_is_noop_existing_orders_zero_post(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A5."""
     run = evaluation(DEFAULT_BATCH[:2], verified=False)
     _start(ScriptedExecutionService(["reject", "reject"]), risk_run_id=run)
@@ -1631,7 +1701,9 @@ def test_completed_evaluation_replay_is_noop_existing_orders_zero_post(migrated_
     assert count(ExecutionOperation) == 1
 
 
-def test_broker_rejected_action_consumes_allowance_despite_changed_fingerprint(migrated_paper_db: str) -> None:  # noqa: F811
+def test_broker_rejected_action_consumes_allowance_despite_changed_fingerprint(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """A6 (round 6): intent 1 (buy X) is rejected at submission (4xx). A new evaluation of the SAME
     session with corrected bars (changed fingerprint, portfolio still flat) -> action_already_submitted;
     with an unchanged fingerprint -> replay_of_earlier_decision; a mixed run records X's disposition
@@ -1659,9 +1731,13 @@ def test_broker_rejected_action_consumes_allowance_despite_changed_fingerprint(m
     assert report.result_summary["submitted_count"] == 1
 
 
-def test_a_proven_not_sent_intent_of_the_same_key_does_not_consume_the_allowance(migrated_paper_db: str) -> None:  # noqa: F811
+def test_a_proven_not_sent_intent_of_the_same_key_does_not_consume_the_allowance(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     first = evaluation([("AAPL", "10", "120")], verified=False)
-    paused = _start(ScriptedExecutionService(["not_sent"]), risk_run_id=first)  # registered, never sent
+    paused = _start(
+        ScriptedExecutionService(["not_sent"]), risk_run_id=first
+    )  # registered, never sent
     assert paused.result_summary["operation"]["reason"] == "broker_unavailable"
     end_all_open_operations()  # the unsent intent becomes cancelled_unsent
 
@@ -1696,7 +1772,9 @@ def test_legacy_order_without_attempts_is_never_proven_not_sent(migrated_paper_d
     assert service.post_attempts == 0
 
 
-def test_legacy_submission_failed_order_is_not_retried_by_a_followup(migrated_paper_db: str) -> None:  # noqa: F811
+def test_legacy_submission_failed_order_is_not_retried_by_a_followup(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     from tests.test_paper_execution import _seed_existing_paper_order
 
     run, events = seed_batch(DEFAULT_BATCH[:1], manifest=manifest())
@@ -1728,7 +1806,9 @@ def test_changed_risk_configuration_alone_never_proves_a_new_intent(  # noqa: F8
     _start(ScriptedExecutionService(["accept"]), risk_run_id=first)
     settle("AAPL", OrderLifecycleState.EXPIRED)
     end_all_open_operations()
-    monkeypatch.setattr(submit_orders_module, "risk_config_digest", lambda settings, strategy_id: "other-limits")
+    monkeypatch.setattr(
+        submit_orders_module, "risk_config_digest", lambda settings, strategy_id: "other-limits"
+    )
     again = evaluation(DEFAULT_BATCH[:1])
     service = ScriptedExecutionService(["accept"])
 
@@ -1738,7 +1818,9 @@ def test_changed_risk_configuration_alone_never_proves_a_new_intent(  # noqa: F8
     assert service.post_attempts == 0
 
 
-def test_unrelated_portfolio_change_changes_the_digest_but_not_the_allowance(migrated_paper_db: str) -> None:  # noqa: F811
+def test_unrelated_portfolio_change_changes_the_digest_but_not_the_allowance(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """N1(c): another symbol's position was closed by a later sync (portfolio digest changes); the
     (session, symbol, side) already submitted -> action_already_submitted, zero POST."""
     first = evaluation(DEFAULT_BATCH[:1], positions=[("ZZZ", "5")])
@@ -1755,7 +1837,9 @@ def test_unrelated_portfolio_change_changes_the_digest_but_not_the_allowance(mig
     assert service.post_attempts == 0
 
 
-def test_justified_later_session_exit_sends_exactly_one_whole_position_sell(migrated_paper_db: str) -> None:  # noqa: F811
+def test_justified_later_session_exit_sends_exactly_one_whole_position_sell(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """N2: a verified held position and an evaluation of a LATER session whose exit rule fires ->
     exactly one sell POST of the whole position, a new intent whose prior_execution_refs name the
     buy; a second start on that risk run -> noop_existing_orders; corrected bars of that later
@@ -1767,7 +1851,9 @@ def test_justified_later_session_exit_sends_exactly_one_whole_position_sell(migr
     put_position("AAPL", "10")
     end_all_open_operations()
 
-    exit_run = evaluation(DEFAULT_BATCH[:1], session_date=exit_session, side="exit", positions=[("AAPL", "10")])
+    exit_run = evaluation(
+        DEFAULT_BATCH[:1], session_date=exit_session, side="exit", positions=[("AAPL", "10")]
+    )
     service = ScriptedExecutionService(["accept"])
     report = _start(service, risk_run_id=exit_run)
 
@@ -1776,9 +1862,11 @@ def test_justified_later_session_exit_sends_exactly_one_whole_position_sell(migr
     ]
     with session_scope(load_settings()) as session:
         sell_intent = session.execute(
-            select(ExecutionOperationIntent).join(
+            select(ExecutionOperationIntent)
+            .join(
                 ExecutionOperation, ExecutionOperation.id == ExecutionOperationIntent.operation_id
-            ).where(ExecutionOperation.risk_run_id == exit_run)
+            )
+            .where(ExecutionOperation.risk_run_id == exit_run)
         ).scalar_one()
     assert str(buy_order) in sell_intent.prior_execution_refs
     assert report.result_summary["operation"]["state"] == "paused"
@@ -1790,7 +1878,11 @@ def test_justified_later_session_exit_sends_exactly_one_whole_position_sell(migr
     put_position("AAPL", "0")
     end_all_open_operations()
     corrected = evaluation(
-        DEFAULT_BATCH[:1], session_date=exit_session, side="exit", digest="bars-corrected", positions=[]
+        DEFAULT_BATCH[:1],
+        session_date=exit_session,
+        side="exit",
+        digest="bars-corrected",
+        positions=[],
     )
     refused = ScriptedExecutionService(["accept"])
     report = _start(refused, risk_run_id=corrected)
@@ -1801,7 +1893,9 @@ def test_justified_later_session_exit_sends_exactly_one_whole_position_sell(migr
     )
 
 
-def test_unresolved_earlier_submission_blocks_despite_a_changed_fingerprint(migrated_paper_db: str) -> None:  # noqa: F811
+def test_unresolved_earlier_submission_blocks_despite_a_changed_fingerprint(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """N3: an in-doubt buy on X (timeout, never found) plus a new evaluation with changed data ->
     409 outcome_unresolved at submit and blocked_outcome_unresolved at run time; a candidate on a
     different symbol Y is blocked too; no intent_version + 1; zero POST."""
@@ -1907,7 +2001,9 @@ def continue_operation(service: ExecutionService, *, price_source: Any = None) -
     return ContinueOutcome(run_continue(service, price_source=price_source))
 
 
-def test_earlier_fill_does_not_request_reevaluation_and_intent_two_sent_unchanged(migrated_paper_db: str) -> None:  # noqa: F811
+def test_earlier_fill_does_not_request_reevaluation_and_intent_two_sent_unchanged(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """D-26/H-2: after intent 1 fills (cash reduced as planned) and sync + clean reconciliation, the
     continuation finds the manifest matching, intent 2 passes revalidate_pinned_intent against the
     refreshed portfolio and is sent UNCHANGED with its original client_order_id."""
@@ -1919,7 +2015,9 @@ def test_earlier_fill_does_not_request_reevaluation_and_intent_two_sent_unchange
     operation_id = uuid.UUID(report.result_summary["operation"]["id"])
     with session_scope(load_settings()) as session:
         second_intent = session.execute(
-            select(ExecutionOperationIntent).where(ExecutionOperationIntent.paper_order_id.is_(None))
+            select(ExecutionOperationIntent).where(
+                ExecutionOperationIntent.paper_order_id.is_(None)
+            )
         ).scalar_one()
         planned_client_order_id = second_intent.client_order_id
         planned_quantity = second_intent.quantity
@@ -1951,7 +2049,9 @@ def test_earlier_fill_does_not_request_reevaluation_and_intent_two_sent_unchange
     assert first.post_attempts == 1  # intent 1 was never resent
 
 
-def test_cash_shortfall_after_a_fill_requires_reevaluation_insufficient_cash(migrated_paper_db: str) -> None:  # noqa: F811
+def test_cash_shortfall_after_a_fill_requires_reevaluation_insufficient_cash(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     from trading_platform.db.models import AccountSnapshot
 
     run, _ = seed_batch(DEFAULT_BATCH[:2], manifest=manifest())
@@ -1990,7 +2090,9 @@ def test_cash_shortfall_after_a_fill_requires_reevaluation_insufficient_cash(mig
     assert sorted(row.quantity for row in rows) == [Decimal("5"), Decimal("10")]
 
 
-def test_price_moved_pause_then_the_same_intent_is_sent_once_when_the_price_is_back(migrated_paper_db: str) -> None:  # noqa: F811
+def test_price_moved_pause_then_the_same_intent_is_sent_once_when_the_price_is_back(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """N4 (PD-1): +6% pauses with nothing sent; at +2% the continuation sends the same pinned
     intent once with its original client_order_id."""
     run, _ = seed_batch(DEFAULT_BATCH[:1], manifest=manifest())
@@ -2009,14 +2111,18 @@ def test_price_moved_pause_then_the_same_intent_is_sent_once_when_the_price_is_b
     seed_clean_reconciliation_after_now()
     resumed = ScriptedExecutionService(["accept"])
 
-    state = continue_operation(resumed, price_source=ScriptedPriceSource([observation("AAPL", "122.4")]))
+    state = continue_operation(
+        resumed, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+    )
 
     assert [i.client_order_id for i in resumed.submitted_intents] == [original_id]
     assert state.final_reason == "working_order_commitments_unaccounted"
     assert operation_row(operation_id).state == "paused"
 
 
-def test_fresh_price_cash_failure_then_end_and_unchanged_reevaluation_sends_once(migrated_paper_db: str) -> None:  # noqa: F811
+def test_fresh_price_cash_failure_then_end_and_unchanged_reevaluation_sends_once(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """N4 (second half): a fresh-price insufficient_cash -> requires_reevaluation; End + an
     UNCHANGED re-evaluation with a fresh price that passes -> one POST through a new operation, with
     no data, settings or portfolio change needed."""
@@ -2056,7 +2162,9 @@ def test_fresh_price_cash_failure_then_end_and_unchanged_reevaluation_sends_once
 
     again = evaluation(DEFAULT_BATCH[:1], as_of="2024-01-08", verified=False)
     service = ScriptedExecutionService(["accept"])
-    report = _start(service, risk_run_id=again, price_source=ScriptedPriceSource([observation("AAPL", "122")]))
+    report = _start(
+        service, risk_run_id=again, price_source=ScriptedPriceSource([observation("AAPL", "122")])
+    )
 
     assert service.post_attempts == 1
     assert report.result_summary["operation"]["state"] == "paused"
@@ -2158,7 +2266,9 @@ def test_partial_exit_remainder_per_strategy(  # noqa: F811
     settle("AAPL", OrderLifecycleState.FILLED, fills="10")
     put_position("AAPL", "10")
     end_all_open_operations()
-    exit_run = evaluation(DEFAULT_BATCH[:1], session_date=exit_session, side="exit", positions=[("AAPL", "10")])
+    exit_run = evaluation(
+        DEFAULT_BATCH[:1], session_date=exit_session, side="exit", positions=[("AAPL", "10")]
+    )
     _start(ScriptedExecutionService(["accept"]), risk_run_id=exit_run, session_date=exit_session)
     settle("AAPL", OrderLifecycleState.EXPIRED, side="sell", fills="6")
     put_position("AAPL", "4")
@@ -2169,9 +2279,16 @@ def test_partial_exit_remainder_per_strategy(  # noqa: F811
         session_date = date(2024, 1, 8 + index)
         service = ScriptedExecutionService(["accept"])
         if signal == "flat":
-            seed_batch([], session_date=session_date, manifest=manifest(f"flat-{index}", as_of=session_date.isoformat()))
+            seed_batch(
+                [],
+                session_date=session_date,
+                manifest=manifest(f"flat-{index}", as_of=session_date.isoformat()),
+            )
             report = run_paper_session(
-                STRATEGY, as_of_session=session_date, settings=load_settings(), execution_service=service
+                STRATEGY,
+                as_of_session=session_date,
+                settings=load_settings(),
+                execution_service=service,
             )
             assert report.action == "noop_no_candidates"
             assert service.post_attempts == 0
@@ -2192,7 +2309,9 @@ def test_partial_exit_remainder_per_strategy(  # noqa: F811
     assert sells == [sells_in_session]
 
 
-def test_after_kill_switch_reset_and_the_continuation_checks_the_session_continues(migrated_paper_db: str) -> None:  # noqa: F811
+def test_after_kill_switch_reset_and_the_continuation_checks_the_session_continues(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     """D-18: a tripped kill switch between steps pauses the operation with the unsent intents
     preserved; after the reset (and sync + clean reconciliation) the loop continues with the SAME
     pinned intents."""
@@ -2208,7 +2327,9 @@ def test_after_kill_switch_reset_and_the_continuation_checks_the_session_continu
     assert paused.result_summary["operation"]["reason"] == "kill_switch_tripped"
     with session_scope(settings) as session:
         planned = session.execute(
-            select(ExecutionOperationIntent).where(ExecutionOperationIntent.paper_order_id.is_(None))
+            select(ExecutionOperationIntent).where(
+                ExecutionOperationIntent.paper_order_id.is_(None)
+            )
         ).scalar_one()
         planned_id = planned.client_order_id
 
@@ -2270,7 +2391,9 @@ def test_a_registered_never_sent_order_is_retried_by_a_later_operations_intent( 
     def maybe_lose_lease(ctx: Any, **kwargs: Any) -> Any:
         if armed["lose_lease"]:
             with session_scope(settings) as session:
-                session.execute(update(Job).values(lease_expires_at=datetime(2020, 1, 1, tzinfo=UTC)))
+                session.execute(
+                    update(Job).values(lease_expires_at=datetime(2020, 1, 1, tzinfo=UTC))
+                )
         return real_send(ctx, **kwargs)
 
     monkeypatch.setattr(submit_orders_module, "_send_authorized", maybe_lose_lease)
@@ -2285,9 +2408,9 @@ def test_a_registered_never_sent_order_is_retried_by_a_later_operations_intent( 
     armed["lose_lease"] = False
     end_all_open_operations()
     with session_scope(settings) as session:
-        assert [d for d in session.execute(select(ExecutionOperationIntent.disposition)).scalars()] == [
-            "cancelled_unsent"
-        ]
+        assert [
+            d for d in session.execute(select(ExecutionOperationIntent.disposition)).scalars()
+        ] == ["cancelled_unsent"]
 
     again = evaluation(DEFAULT_BATCH[:1], as_of="2024-01-08")
     service = ScriptedExecutionService(["accept"])
@@ -2341,7 +2464,9 @@ def _paused_two_intent_operation() -> tuple[uuid.UUID, ScriptedExecutionService,
     operation_id = uuid.UUID(report.result_summary["operation"]["id"])
     with session_scope(load_settings()) as session:
         planned = session.execute(
-            select(ExecutionOperationIntent).where(ExecutionOperationIntent.paper_order_id.is_(None))
+            select(ExecutionOperationIntent).where(
+                ExecutionOperationIntent.paper_order_id.is_(None)
+            )
         ).scalar_one()
         planned_client_order_id = planned.client_order_id
     return operation_id, first, planned_client_order_id
@@ -2428,7 +2553,10 @@ def test_continue_on_non_paused_operation_refused(migrated_paper_db: str) -> Non
     service = ScriptedExecutionService(["accept"])
     report = run_continue(service, operation_id=operation_id)
     assert report.action == "continue_operation_terminated"
-    assert (report.operation_state, report.operation_reason) == ("terminated", "cancelled_by_operator")
+    assert (report.operation_state, report.operation_reason) == (
+        "terminated",
+        "cancelled_by_operator",
+    )
     assert service.post_attempts == 0
     # any other non-paused state is a lost compare-and-set: the typed domain conflict
     with session_scope(load_settings()) as session:
@@ -2448,7 +2576,9 @@ def test_continue_refuses_a_running_operation_with_a_live_job(migrated_paper_db:
     seed_batch(DEFAULT_BATCH[:1])
     with session_scope(load_settings()) as session:
         job = seed_operation_job(session, status=JobStatus.RUNNING, strategy_id=STRATEGY)
-        operation = seed_operation(session, state="running", reason=None, strategy_id=STRATEGY, jobs=[(job, "start")])
+        operation = seed_operation(
+            session, state="running", reason=None, strategy_id=STRATEGY, jobs=[(job, "start")]
+        )
         operation_id = operation.id
 
     error = _continue_conflict(operation_id)
@@ -2488,13 +2618,21 @@ def test_continue_manifest_change_requires_reevaluation_sends_nothing_then_end_c
     with session_scope(load_settings()) as session:
         end_operation(session, operation_id, operator_reason="stale evaluation", actor="pytest")
     with session_scope(load_settings()) as session:
-        dispositions_after = session.execute(
-            select(ExecutionOperationIntent.disposition).order_by(ExecutionOperationIntent.sequence)
-        ).scalars().all()
+        dispositions_after = (
+            session.execute(
+                select(ExecutionOperationIntent.disposition).order_by(
+                    ExecutionOperationIntent.sequence
+                )
+            )
+            .scalars()
+            .all()
+        )
     assert list(dispositions_after) == ["open", "cancelled_unsent"]
 
 
-def test_continue_risk_limit_failure_requires_reevaluation_without_replan(migrated_paper_db: str) -> None:  # noqa: F811
+def test_continue_risk_limit_failure_requires_reevaluation_without_replan(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     from trading_platform.db.models import AccountSnapshot
 
     operation_id, _first, _planned = _paused_two_intent_operation()
@@ -2564,7 +2702,9 @@ def test_continuation_function_makes_no_reconciliation_or_recovery_calls() -> No
     import inspect
     import textwrap
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(submit_orders_module.run_paper_continuation)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(submit_orders_module.run_paper_continuation))
+    )
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
         node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
     }
@@ -2586,7 +2726,9 @@ def test_continue_after_window_elapsed_terminates_expired_unsent_only(  # noqa: 
     seed_calendar(date(2025, 11, 24), date(2026, 1, 9))
     session_date = date(2025, 12, 2)
     monkeypatch.setattr(clock, "now_utc", lambda: et(2025, 12, 3, 9, 40))
-    run, _ = seed_batch(DEFAULT_BATCH[:2], session_date=session_date, manifest=manifest(as_of="2025-12-02"))
+    run, _ = seed_batch(
+        DEFAULT_BATCH[:2], session_date=session_date, manifest=manifest(as_of="2025-12-02")
+    )
     first = run_paper_order_submission(
         STRATEGY,
         as_of_session=session_date,
@@ -2607,15 +2749,21 @@ def test_continue_after_window_elapsed_terminates_expired_unsent_only(  # noqa: 
 
     assert service.post_attempts == 0
     assert report.action == "continue_operation_terminated"
-    assert (report.operation_state, report.operation_reason) == ("terminated", "execution_window_elapsed")
+    assert (report.operation_state, report.operation_reason) == (
+        "terminated",
+        "execution_window_elapsed",
+    )
     with session_scope(load_settings()) as session:
         rows = session.execute(
-            select(ExecutionOperationIntent.sequence, ExecutionOperationIntent.disposition).order_by(
-                ExecutionOperationIntent.sequence
-            )
+            select(
+                ExecutionOperationIntent.sequence, ExecutionOperationIntent.disposition
+            ).order_by(ExecutionOperationIntent.sequence)
         ).all()
     # the submitted intent keeps its disposition; only the unsent one expired
-    assert [(sequence, disposition) for sequence, disposition in rows] == [(1, "open"), (2, "expired_unsent")]
+    assert [(sequence, disposition) for sequence, disposition in rows] == [
+        (1, "open"),
+        (2, "expired_unsent"),
+    ]
 
 
 def test_two_concurrent_continues_at_most_one_proceeds_and_no_intent_submitted_twice(  # noqa: F811
@@ -2630,13 +2778,19 @@ def test_two_concurrent_continues_at_most_one_proceeds_and_no_intent_submitted_t
     start_gate = threading.Barrier(2)
     results: list[Any] = []
     services = [ScriptedExecutionService(["accept"]), ScriptedExecutionService(["accept"])]
-    job_ids = [continue_job(operation_id, lease_owner="worker-a"), continue_job(operation_id, lease_owner="worker-b")]
+    job_ids = [
+        continue_job(operation_id, lease_owner="worker-a"),
+        continue_job(operation_id, lease_owner="worker-b"),
+    ]
 
     def worker(index: int) -> None:
         start_gate.wait()
         try:
             results.append(
-                ("ok", run_continue(services[index], operation_id=operation_id, job_id=job_ids[index]))
+                (
+                    "ok",
+                    run_continue(services[index], operation_id=operation_id, job_id=job_ids[index]),
+                )
             )
         except Exception as exc:  # the loser: lock denial or a lost compare-and-set
             results.append(("error", exc))
@@ -2737,7 +2891,9 @@ def test_not_received_statement_never_makes_an_in_doubt_intent_sendable(  # noqa
     now["value"] += timedelta(seconds=load_settings().execution.recovery_absence_grace_seconds + 1)
     sync_account_state(settings=load_settings(), broker_client=broker)
     with session_scope(load_settings()) as session:
-        record_broker_statement(session, order_id, "not_received", "ticket-1", "support: not received", "op")
+        record_broker_statement(
+            session, order_id, "not_received", "ticket-1", "support: not received", "op"
+        )
     seed_clean_reconciliation_after_now()
 
     for _ in range(2):  # before and after End
@@ -2770,8 +2926,15 @@ def test_end_or_expiry_with_working_order_and_ambiguous_intent_keeps_both_blocki
 
     with session_scope(load_settings()) as session:
         paper_run = seed_paper_run(session, None)
-        seed_intent(session, paper_run, status=OrderLifecycleState.UNKNOWN, attempts=(AttemptOutcomeClass.AMBIGUOUS,))
-    assert _conflict(run).code == "outcome_unresolved"  # the recovery gate wins over the working-order gate
+        seed_intent(
+            session,
+            paper_run,
+            status=OrderLifecycleState.UNKNOWN,
+            attempts=(AttemptOutcomeClass.AMBIGUOUS,),
+        )
+    assert (
+        _conflict(run).code == "outcome_unresolved"
+    )  # the recovery gate wins over the working-order gate
     with session_scope(load_settings()) as session:
         dispositions = session.execute(select(ExecutionOperationIntent.disposition)).scalars().all()
     assert sorted(dispositions) == ["cancelled_unsent", "cancelled_unsent", "open"]
@@ -2795,13 +2958,21 @@ def _price_paused_operation(price: str = "127.2") -> tuple[uuid.UUID, str, uuid.
     assert count(PaperOrder) == 0
     with session_scope(load_settings()) as session:
         intent = session.execute(select(ExecutionOperationIntent)).scalar_one()
-        identity = (intent.id, intent.client_order_id, intent.symbol_id, intent.side, intent.quantity)
+        identity = (
+            intent.id,
+            intent.client_order_id,
+            intent.symbol_id,
+            intent.side,
+            intent.quantity,
+        )
     finish_jobs()
     seed_clean_reconciliation_after_now()
     return uuid.UUID(paused.result_summary["operation"]["id"]), identity[1], identity[0]
 
 
-def test_price_pause_continue_sends_same_pinned_intent_after_all_checks(migrated_paper_db: str) -> None:  # noqa: F811
+def test_price_pause_continue_sends_same_pinned_intent_after_all_checks(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     operation_id, client_order_id, intent_id = _price_paused_operation()
     with session_scope(load_settings()) as session:
         before = session.get(ExecutionOperationIntent, intent_id)
@@ -2821,22 +2992,38 @@ def test_price_pause_continue_sends_same_pinned_intent_after_all_checks(migrated
     back = ScriptedExecutionService(["accept"])
 
     report = run_continue(
-        back, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+        back,
+        operation_id=operation_id,
+        price_source=ScriptedPriceSource([observation("AAPL", "122.4")]),
     )
 
     assert [i.client_order_id for i in back.submitted_intents] == [client_order_id]
     assert report.operation_reason == "working_order_commitments_unaccounted"
     with session_scope(load_settings()) as session:
         after = session.get(ExecutionOperationIntent, intent_id)
-        assert (after.client_order_id, after.symbol_id, after.side, after.quantity) == identity_before
-        assert session.execute(select(func.count()).select_from(ExecutionOperationIntent)).scalar_one() == 1
+        assert (
+            after.client_order_id,
+            after.symbol_id,
+            after.side,
+            after.quantity,
+        ) == identity_before
+        assert (
+            session.execute(select(func.count()).select_from(ExecutionOperationIntent)).scalar_one()
+            == 1
+        )
         order = session.execute(select(PaperOrder)).scalar_one()
-        assert (order.client_order_id, order.intent_version) == (client_order_id, 1)  # no new version
+        assert (order.client_order_id, order.intent_version) == (
+            client_order_id,
+            1,
+        )  # no new version
 
 
 @pytest.mark.parametrize(
     ("status", "reason"),
-    [("evaluation_data_changed", "evaluation_data_changed"), ("strategy_settings_changed", "strategy_settings_changed")],
+    [
+        ("evaluation_data_changed", "evaluation_data_changed"),
+        ("strategy_settings_changed", "strategy_settings_changed"),
+    ],
 )
 def test_price_pause_then_data_change_requires_reevaluation(  # noqa: F811
     migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch, status: str, reason: str
@@ -2855,7 +3042,9 @@ def test_price_pause_then_data_change_requires_reevaluation(  # noqa: F811
     service = ScriptedExecutionService(["accept"])
 
     report = run_continue(
-        service, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+        service,
+        operation_id=operation_id,
+        price_source=ScriptedPriceSource([observation("AAPL", "122.4")]),
     )
 
     assert service.post_attempts == 0
@@ -2868,7 +3057,9 @@ def test_price_pause_window_expiry_terminates_despite_price_recovery(  # noqa: F
     seed_calendar(date(2025, 11, 24), date(2026, 1, 9))
     session_date = date(2025, 12, 2)
     monkeypatch.setattr(clock, "now_utc", lambda: et(2025, 12, 3, 9, 40))
-    run, _ = seed_batch(DEFAULT_BATCH[:1], session_date=session_date, manifest=manifest(as_of="2025-12-02"))
+    run, _ = seed_batch(
+        DEFAULT_BATCH[:1], session_date=session_date, manifest=manifest(as_of="2025-12-02")
+    )
     paused = run_paper_order_submission(
         STRATEGY,
         as_of_session=session_date,
@@ -2886,29 +3077,823 @@ def test_price_pause_window_expiry_terminates_despite_price_recovery(  # noqa: F
     service = ScriptedExecutionService(["accept"])
 
     report = run_continue(
-        service, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+        service,
+        operation_id=operation_id,
+        price_source=ScriptedPriceSource([observation("AAPL", "122.4")]),
     )
 
     assert service.post_attempts == 0
-    assert (report.operation_state, report.operation_reason) == ("terminated", "execution_window_elapsed")
+    assert (report.operation_state, report.operation_reason) == (
+        "terminated",
+        "execution_window_elapsed",
+    )
     with session_scope(load_settings()) as session:
-        assert session.execute(select(ExecutionOperationIntent.disposition)).scalar_one() == "expired_unsent"
+        assert (
+            session.execute(select(ExecutionOperationIntent.disposition)).scalar_one()
+            == "expired_unsent"
+        )
 
 
-def test_price_pause_continue_blocked_by_unresolved_earlier_submission(migrated_paper_db: str) -> None:  # noqa: F811
+def test_price_pause_continue_blocked_by_unresolved_earlier_submission(
+    migrated_paper_db: str,
+) -> None:  # noqa: F811
     from tests.support.recovery_fixtures import seed_intent, seed_paper_run
 
     operation_id, _client_order_id, _intent_id = _price_paused_operation()
     with session_scope(load_settings()) as session:
         paper_run = seed_paper_run(session, None)
-        seed_intent(session, paper_run, status=OrderLifecycleState.UNKNOWN, attempts=(AttemptOutcomeClass.AMBIGUOUS,))
+        seed_intent(
+            session,
+            paper_run,
+            status=OrderLifecycleState.UNKNOWN,
+            attempts=(AttemptOutcomeClass.AMBIGUOUS,),
+        )
     assert _continue_conflict(operation_id).code == "outcome_unresolved"
     service = ScriptedExecutionService(["accept"])
 
     # a Job queued before the earlier outcome appeared: the run-time gate pauses, zero POST
     report = run_continue(
-        service, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+        service,
+        operation_id=operation_id,
+        price_source=ScriptedPriceSource([observation("AAPL", "122.4")]),
     )
 
     assert service.post_attempts == 0
     assert (report.operation_state, report.operation_reason) == ("paused", "outcome_unresolved")
+
+
+# ---------------------------------------------------------------------------
+# 20.1-16 Task 2: S1-R3 takeover scenarios (the real Alpaca client behind a scripted transport)
+# ---------------------------------------------------------------------------
+
+
+class Gate:
+    """A one-shot rendezvous: the held thread signals ``arrived`` and waits for ``release``."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self.arrived = threading.Event()
+        self.release = threading.Event()
+
+    def hold(self) -> None:
+        self.arrived.set()
+        assert self.release.wait(60), "the test never released the held request"
+
+    def wait_arrived(self) -> None:
+        assert self.arrived.wait(60), "the worker never reached the hook"
+
+
+@dataclass
+class S1Broker:
+    """A fake Alpaca broker behind ``httpx.MockTransport`` for the S1 scenarios.
+
+    ``script`` gives one action per POST (the last repeats): ``accept`` | ``read_timeout`` (the
+    request reached the broker, the answer never arrives) | ``connect_error`` (the request never
+    leaves the process). ``before_request`` blocks BEFORE the request reaches the broker (the
+    suspension after the final deadline check); ``hold_request`` blocks AFTER the broker received it
+    and before it answers (a delayed request that has left the process).
+    """
+
+    script: list[str] = field(default_factory=lambda: ["accept"])
+    before_request: Gate | None = None
+    hold_request: Gate | None = None
+    received: dict[str, int] = field(default_factory=dict)
+    orders: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        import json
+
+        body = json.loads(request.content)
+        client_order_id = body["client_order_id"]
+        action = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+        if self.before_request is not None:
+            gate, self.before_request = self.before_request, None
+            gate.hold()
+        if action == "connect_error":
+            raise httpx.ConnectError("connection refused", request=request)
+        self.received[client_order_id] = self.received.get(client_order_id, 0) + 1
+        if self.hold_request is not None:
+            gate, self.hold_request = self.hold_request, None
+            gate.hold()
+        if action == "read_timeout":
+            raise httpx.ReadTimeout("the broker never answered", request=request)
+        order = {
+            "id": f"b-{uuid.uuid4().hex[:10]}",
+            "client_order_id": client_order_id,
+            "symbol": body["symbol"],
+            "qty": body["qty"],
+            "side": body["side"],
+            "type": body["type"],
+            "time_in_force": body["time_in_force"],
+            "status": "new",
+            "submitted_at": datetime.now(UTC).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        self.orders[client_order_id] = order
+        return httpx.Response(200, json=order)
+
+    def service(self) -> ExecutionService:
+        client = AlpacaClient(
+            AlpacaBrokerSettings(
+                api_key="k", api_secret="s", max_retries=2, retry_backoff_factor=0.0
+            ),
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(self.handler),
+                base_url="https://paper-api.alpaca.markets",
+            ),
+        )
+        return AlpacaExecutionService(load_settings().broker.alpaca, client=client)
+
+
+class Worker:
+    """A worker thread whose result or exception is captured."""
+
+    def __init__(self, fn: Callable[[], Any]) -> None:
+        import threading
+
+        self.result: Any = None
+        self.error: BaseException | None = None
+        self._fn = fn
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        try:
+            self.result = self._fn()
+        except BaseException as exc:  # captured for the test to assert on
+            self.error = exc
+
+    def start(self) -> Worker:
+        self.thread.start()
+        return self
+
+    def join(self) -> None:
+        self.thread.join(timeout=60)
+        assert not self.thread.is_alive(), "worker did not finish"
+
+
+def terminate_lock_holder() -> None:
+    """``pg_terminate_backend`` on the connection that holds the session advisory lock."""
+
+    from sqlalchemy import text
+
+    from trading_platform.services.concurrency_guard import advisory_lock_key
+    from trading_platform.services.execution.operations import _lock_classid_objid
+
+    classid, objid = _lock_classid_objid(advisory_lock_key(STRATEGY, SESSION))
+    with session_scope(load_settings()) as session:
+        pids = (
+            session.execute(
+                text(
+                    "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted "
+                    "AND classid::bigint = :c AND objid::bigint = :o"
+                ),
+                {"c": classid, "o": objid},
+            )
+            .scalars()
+            .all()
+        )
+        assert pids, "no advisory lock holder to terminate"
+        for pid in pids:
+            session.execute(text("SELECT pg_terminate_backend(:pid)"), {"pid": pid})
+
+
+def reclaim_job(job_id: uuid.UUID) -> None:
+    """The lease expired and the reclaim failed the Job with an uncertain outcome."""
+
+    with session_scope(load_settings()) as session:
+        session.execute(
+            update(Job)
+            .where(Job.id == job_id)
+            .values(
+                status=JobStatus.FAILED,
+                outcome_uncertain=True,
+                completed_at=datetime.now(UTC),
+                lease_expires_at=datetime(2020, 1, 1, tzinfo=UTC),
+            )
+        )
+
+
+def intent_rows() -> list[tuple[uuid.UUID, str]]:
+    with session_scope(load_settings()) as session:
+        rows = session.execute(
+            select(ExecutionOperationIntent.id, ExecutionOperationIntent.client_order_id).order_by(
+                ExecutionOperationIntent.sequence
+            )
+        ).all()
+    return [(row_id, client_order_id) for row_id, client_order_id in rows]
+
+
+def attempt_outcomes(client_order_id: str) -> list[tuple[int, str | None]]:
+    with session_scope(load_settings()) as session:
+        rows = session.execute(
+            select(OrderSubmissionAttempt.attempt_number, OrderSubmissionAttempt.outcome_class)
+            .join(PaperOrder, PaperOrder.id == OrderSubmissionAttempt.paper_order_id)
+            .where(PaperOrder.client_order_id == client_order_id)
+            .order_by(OrderSubmissionAttempt.attempt_number)
+        ).all()
+    return [(number, str(outcome) if outcome is not None else None) for number, outcome in rows]
+
+
+def takeover(operation_id: uuid.UUID, *, lease_owner: str = "worker-b") -> tuple[Any, uuid.UUID]:
+    """Service-level S1 takeover from a second connection: link a new Job, take the (now free)
+    advisory lock and commit the epoch CAS."""
+
+    from trading_platform.services.concurrency_guard import session_run_lock
+    from trading_platform.services.execution.operations import (
+        acquire_execution,
+        adopt_running_operation,
+    )
+
+    job_b = continue_job(operation_id, lease_owner=lease_owner)
+    with session_scope(load_settings()) as session:
+        adopt_running_operation(session, operation_id, job_b)
+    with session_run_lock(
+        strategy_id=STRATEGY, session_date=SESSION, settings=load_settings()
+    ) as lock:
+        acquisition = acquire_execution(operation_id, job_b, lock, settings=load_settings())
+    return acquisition, job_b
+
+
+def probe_send(
+    operation_id: uuid.UUID,
+    intent_id: uuid.UUID,
+    epoch: int,
+    job_id: uuid.UUID,
+    *,
+    lease_owner: str,
+) -> Any:
+    """Run the REAL transaction T1 for an intent against an operation forced RUNNING at the
+    probing executor's fence; return the refusal (an authorization would be an assertion error).
+    The forced state is restored afterwards."""
+
+    from trading_platform.services.execution.operations import SendRefusedError, authorize_send
+
+    with session_scope(load_settings()) as session:
+        previous = session.execute(
+            select(ExecutionOperation.state, ExecutionOperation.reason).where(
+                ExecutionOperation.id == operation_id
+            )
+        ).one()
+        session.execute(
+            update(ExecutionOperation)
+            .where(ExecutionOperation.id == operation_id)
+            .values(state="running", reason=None, reason_detail=None, executor_job_id=job_id)
+        )
+    try:
+        with pytest.raises(SendRefusedError) as excinfo:
+            authorize_send(operation_id, intent_id, epoch, job_id, lease_owner=lease_owner)
+        return excinfo.value.refusal
+    finally:
+        with session_scope(load_settings()) as session:
+            session.execute(
+                update(ExecutionOperation)
+                .where(ExecutionOperation.id == operation_id)
+                .values(state=previous.state, reason=previous.reason)
+            )
+
+
+def start_job() -> uuid.UUID:
+    """A RUNNING start-mode Job holding a lease; the run it executes is linked to it, so the
+    recovery predicate sees the Job (and its uncertain outcome once it is reclaimed)."""
+
+    from tests.support.paper_execution_seams import TEST_LEASE_OWNER
+
+    with session_scope(load_settings()) as session:
+        job = Job(
+            job_type="paper-session",
+            payload={},
+            status=JobStatus.RUNNING,
+            lease_owner=TEST_LEASE_OWNER,
+            lease_expires_at=datetime.now(UTC) + timedelta(days=1),
+        )
+        session.add(job)
+        session.flush()
+        return job.id
+
+
+def run_worker_a(broker: S1Broker, run: uuid.UUID) -> Worker:
+    job_id = start_job()
+    return Worker(lambda: _start(broker.service(), risk_run_id=run, job_id=job_id)).start()
+
+
+def test_s1_r3_lock_lost_between_attempt_record_and_post(migrated_paper_db: str) -> None:  # noqa: F811
+    """S1-R3: worker A commits T1 for intent 1 (attempt row, outcome NULL) and stops just before its
+    request reaches the broker. Its lock connection is terminated and its Job reclaimed. A product-
+    level Continue is refused at submit (outcome_unresolved); the fencing takeover (second
+    connection) parks intent 1 UNKNOWN and refuses every send; A's ONE recorded POST then reaches
+    the broker (POST count 1) and is completed late; afterwards recovery finds the order, a clean
+    reconciliation resolves the outcome and worker C sends intent 2 exactly once."""
+    from tests.test_recovery_predicate import LookupBroker, _snapshot_for
+
+    from trading_platform.services.execution.operations import (
+        Fence,
+        SendRefusal,
+        cas_update_operation,
+    )
+    from trading_platform.services.execution.sync_orders import sync_account_state
+
+    run, _ = seed_batch(DEFAULT_BATCH[:2], manifest=manifest())
+    broker = S1Broker(before_request=Gate())
+    gate = broker.before_request
+    assert gate is not None
+    worker_a = run_worker_a(broker, run)
+    gate.wait_arrived()
+
+    # T1 committed: one attempt row with NO outcome, carrying A's epoch and Job
+    operation = operation_row()
+    (intent1, cid1), (intent2, cid2) = intent_rows()
+    epoch_a = operation.execution_epoch  # the start executor holds the creation epoch (0)
+    assert operation.state == "running"
+    job_a = operation.executor_job_id
+    assert attempt_outcomes(cid1) == [(1, None)] and broker.received == {}
+
+    terminate_lock_holder()
+    reclaim_job(job_a)
+    finish_jobs()
+
+    # FIRST LINE: the recovery gate refuses a product-level Continue; no takeover Job is admitted
+    assert _continue_conflict(operation.id).code == "outcome_unresolved"
+
+    # SECOND LINE (fencing), from a second connection while A is still held at the hook
+    acquisition, job_b = takeover(operation.id)
+    assert acquisition.epoch == epoch_a + 1 and acquisition.paused is True
+    assert acquisition.in_doubt_intent_ids == (intent1,)
+    after = operation_row()
+    assert (after.state, after.reason, after.execution_epoch) == (
+        "paused",
+        "outcome_unresolved",
+        epoch_a + 1,
+    )
+    with session_scope(load_settings()) as session:
+        assert (
+            session.execute(select(PaperOrder.status)).scalar_one() == OrderLifecycleState.UNKNOWN
+        )
+    assert (
+        probe_send(operation.id, intent1, epoch_a + 1, job_b, lease_owner="worker-b")
+        == SendRefusal.INTENT_NOT_SENDABLE
+    )
+    assert broker.received == {}  # B never POSTed
+
+    # release A: its ONE recorded request reaches the broker, accepted; the outcome lands late
+    gate.release.set()
+    worker_a.join()
+    assert worker_a.error is not None  # A lost authority: its order/state writes are fenced
+    assert broker.received == {cid1: 1}
+    assert attempt_outcomes(cid1) == [(1, "accepted")]
+    with session_scope(load_settings()) as session:
+        late_events = session.execute(
+            select(func.count())
+            .select_from(ExecutionEvent)
+            .where(ExecutionEvent.event_type == "late_attempt_outcome")
+        ).scalar_one()
+        assert late_events == 1
+        # A's fenced state write affects 0 rows
+        assert (
+            cas_update_operation(
+                session, Fence(operation.id, epoch_a, job_a), {"reason": "stale_write"}
+            )
+            == 0
+        )
+    assert operation_row().state == "paused"
+    # A's T1 for intent 2 is refused: zero POST
+    assert probe_send(operation.id, intent2, epoch_a, job_a, lease_owner="test-worker") in {
+        SendRefusal.STALE_EPOCH,
+        SendRefusal.WRONG_EXECUTOR,
+    }
+    assert intent1 and len(broker.received) == 1
+
+    # recovery: broker-order-sync finds the order by client_order_id (found_verified)
+    with session_scope(load_settings()) as session:
+        order_id = session.execute(select(PaperOrder.id)).scalar_one()
+    lookup = LookupBroker(lookup={cid1: _snapshot_for(order_id, broker_status="filled")})
+    sync_account_state(settings=load_settings(), broker_client=lookup)
+    assert lookup.post_count == 0
+    with session_scope(load_settings()) as session:
+        assert session.execute(select(PaperOrder.status)).scalar_one() == OrderLifecycleState.FILLED
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+
+    # worker C (epoch 3) sends intent 2 exactly once
+    assert _continue_validate(operation.id)["mode"] == "continue"
+    report = run_continue(broker.service(), operation_id=operation.id)
+
+    assert operation_row().execution_epoch == epoch_a + 2  # worker C
+    assert report.operation_reason == "working_order_commitments_unaccounted"
+    assert broker.received == {cid1: 1, cid2: 1}  # intent 1 POSTs == 1, intent 2 POSTs == 1
+    assert len(broker.orders) == 2
+
+
+def _s1_world(
+    broker: S1Broker, *, batch: Sequence[tuple[str, str, str]] = DEFAULT_BATCH[:2]
+) -> tuple[Worker, Any]:
+    """Worker A runs a start session against ``broker``; returns it and the operation row once A is
+    at its hook (the caller set the broker gate)."""
+
+    run, _ = seed_batch(batch, manifest=manifest())
+    return run_worker_a(broker, run), run
+
+
+def _recover_by_client_order_id(client_order_id: str, *, status: str = "filled") -> Any:
+    """broker-order-sync that finds the order by client_order_id (found_verified, H-1)."""
+    from tests.test_recovery_predicate import LookupBroker, _snapshot_for
+
+    from trading_platform.services.execution.sync_orders import sync_account_state
+
+    with session_scope(load_settings()) as session:
+        order_id = session.execute(
+            select(PaperOrder.id).where(PaperOrder.client_order_id == client_order_id)
+        ).scalar_one()
+    lookup = LookupBroker(lookup={client_order_id: _snapshot_for(order_id, broker_status=status)})
+    sync_account_state(settings=load_settings(), broker_client=lookup)
+    assert lookup.post_count == 0
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    return lookup
+
+
+def test_s1_continue_refused_while_lock_held(migrated_paper_db: str) -> None:  # noqa: F811
+    """Continue while A still holds the session lock -> operation_executor_active, zero POSTs."""
+    from trading_platform.services.execution.operations import OperationExecutorActiveError
+
+    broker = S1Broker(before_request=Gate())
+    gate = broker.before_request
+    assert gate is not None
+    worker_a, _run = _s1_world(broker)
+    gate.wait_arrived()
+    operation = operation_row()
+    other = S1Broker()
+
+    with pytest.raises(OperationExecutorActiveError):
+        run_continue(other.service(), operation_id=operation.id)
+
+    assert other.received == {} and broker.received == {}
+    gate.release.set()
+    worker_a.join()
+    assert len(broker.received) == 1  # A's own single POST
+    assert worker_a.error is None
+
+
+def test_s1_v1_read_timeout_after_takeover_leaves_the_intent_unresolved_and_never_resends(  # noqa: F811
+    migrated_paper_db: str,
+) -> None:
+    """(v1) A's POST ends in a read timeout: its attempt is ambiguous, intent 1 stays unresolved and
+    no resend is authorized at all."""
+    from trading_platform.services.execution.operations import SendRefusal
+
+    broker = S1Broker(script=["read_timeout"], before_request=Gate())
+    gate = broker.before_request
+    assert gate is not None
+    worker_a, _run = _s1_world(broker)
+    gate.wait_arrived()
+    operation = operation_row()
+    (intent1, cid1), _second = intent_rows()
+    terminate_lock_holder()
+    reclaim_job(operation.executor_job_id)
+    acquisition, job_b = takeover(operation.id)
+    assert acquisition.paused
+
+    gate.release.set()
+    worker_a.join()
+
+    assert worker_a.error is not None
+    assert broker.received == {cid1: 1}
+    assert attempt_outcomes(cid1) == [(1, "ambiguous")]
+    assert probe_send(operation.id, intent1, acquisition.epoch, job_b, lease_owner="worker-b") == (
+        SendRefusal.INTENT_NOT_SENDABLE
+    )
+    finish_jobs()
+    assert _continue_conflict(operation.id).code == "outcome_unresolved"
+    assert broker.received == {cid1: 1}
+
+
+def test_s1_v2_pre_connection_failure_after_takeover_begins_no_second_attempt(  # noqa: F811
+    migrated_paper_db: str,
+) -> None:
+    """(v2) A's first POST fails pre_connection after its lock is gone: A's retry T1 is refused, A
+    never begins attempt #2, the log is complete pre_connection, and once recovery establishes
+    not_sent a new executor sends the intent once (a proven-not-sent send, not a resend)."""
+    from tests.test_recovery_predicate import LookupBroker
+
+    from trading_platform.services.execution.sync_orders import sync_account_state
+
+    broker = S1Broker(script=["connect_error", "accept"], before_request=Gate())
+    gate = broker.before_request
+    assert gate is not None
+    worker_a, _run = _s1_world(broker)
+    gate.wait_arrived()
+    operation = operation_row()
+    (_intent1, cid1), _second = intent_rows()
+    terminate_lock_holder()
+    reclaim_job(operation.executor_job_id)
+    acquisition, _job_b = takeover(operation.id)
+    assert acquisition.paused
+
+    gate.release.set()
+    worker_a.join()
+
+    assert worker_a.error is not None
+    assert attempt_outcomes(cid1) == [(1, "pre_connection")]  # no attempt #2
+    assert broker.received == {}  # the request never left the process
+    # recovery establishes not_sent: UNKNOWN -> SUBMISSION_FAILED, nothing found at the broker
+    finish_jobs()
+    sync_account_state(settings=load_settings(), broker_client=LookupBroker())
+    with session_scope(load_settings()) as session:
+        assert (
+            session.execute(select(PaperOrder.status)).scalar_one()
+            == OrderLifecycleState.SUBMISSION_FAILED
+        )
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    assert _continue_validate(operation.id)["mode"] == "continue"
+
+    report = run_continue(broker.service(), operation_id=operation.id)
+
+    assert broker.received == {cid1: 1}  # sent once by the new executor
+    assert report.operation_state == "paused"
+    assert attempt_outcomes(cid1) == [(1, "pre_connection"), (2, "accepted")]
+
+
+def test_s1_v3_suspension_before_the_final_deadline_check_sends_nothing(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(v3) A is suspended between T1 and the final deadline check past its authorization_deadline:
+    on waking it sends nothing and records deadline_expired (a suspension AFTER the check is S-a)."""
+    import dataclasses
+
+    from trading_platform.services.execution import send_guard
+
+    gate = Gate()
+    real_check = send_guard.GuardedAttemptLog.send_deadline_passed
+
+    def suspended(self: Any, number: int) -> bool:
+        gate.hold()
+        authorization = self._authorizations[number]
+        self._authorizations[number] = dataclasses.replace(
+            authorization, local_deadline=datetime.now(UTC) - timedelta(seconds=1)
+        )
+        return real_check(self, number)
+
+    monkeypatch.setattr(send_guard.GuardedAttemptLog, "send_deadline_passed", suspended)
+    broker = S1Broker()
+    worker_a, _run = _s1_world(broker)
+    gate.wait_arrived()
+    operation = operation_row()
+    (_intent1, cid1), _second = intent_rows()
+    terminate_lock_holder()
+    reclaim_job(operation.executor_job_id)
+    acquisition, _job_b = takeover(operation.id)
+    assert acquisition.paused
+
+    gate.release.set()
+    worker_a.join()
+
+    assert worker_a.error is not None
+    assert broker.received == {}  # nothing was sent
+    assert attempt_outcomes(cid1) == [(1, "deadline_expired")]
+
+
+def test_s1_suspension_after_final_deadline_check(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(S-a) A passes T1 and the final deadline check, then is suspended AFTER the check and before
+    the request reaches the broker for longer than the deadline. Takeover marks intent 1 in doubt and
+    every authorize_send probe is refused. A then resumes and its request reaches the broker late
+    (POST count 1, accepted). THE DEADLINE DID NOT STOP THIS LATE REQUEST (L5): it bounds nothing
+    once the check has passed; only the fencing prevents a SECOND submission."""
+    from trading_platform.services.execution.operations import SendRefusal
+
+    real_authorize = submit_orders_module.authorize_send
+    monkeypatch.setattr(
+        submit_orders_module,
+        "authorize_send",
+        lambda *args, **kwargs: real_authorize(*args, **{**kwargs, "ttl_seconds": 1}),
+    )
+    broker = S1Broker(before_request=Gate())
+    gate = broker.before_request
+    assert gate is not None
+    worker_a, _run = _s1_world(broker)
+    gate.wait_arrived()
+    operation = operation_row()
+    (intent1, cid1), _second = intent_rows()
+    terminate_lock_holder()
+    reclaim_job(operation.executor_job_id)
+    import time
+
+    time.sleep(1.3)  # longer than the 1 s authorization deadline
+    with session_scope(load_settings()) as session:
+        deadline = session.execute(
+            select(OrderSubmissionAttempt.authorization_deadline)
+        ).scalar_one()
+        assert deadline < datetime.now(UTC)
+    acquisition, job_b = takeover(operation.id)
+    assert acquisition.paused and acquisition.in_doubt_intent_ids == (intent1,)
+    for _ in range(2):  # every probe is refused, before and after the late request
+        assert probe_send(
+            operation.id, intent1, acquisition.epoch, job_b, lease_owner="worker-b"
+        ) == (SendRefusal.INTENT_NOT_SENDABLE)
+
+    gate.release.set()
+    worker_a.join()
+
+    assert broker.received == {cid1: 1}  # the late request reached the broker
+    assert attempt_outcomes(cid1) == [(1, "accepted")]  # not deadline_expired: the check had passed
+    assert probe_send(operation.id, intent1, acquisition.epoch, job_b, lease_owner="worker-b") == (
+        SendRefusal.INTENT_NOT_SENDABLE
+    )
+    _recover_by_client_order_id(cid1)  # recovery finds and classifies it
+    with session_scope(load_settings()) as session:
+        assert session.execute(select(PaperOrder.status)).scalar_one() == OrderLifecycleState.FILLED
+    assert broker.received == {cid1: 1} and len(broker.orders) == 1
+
+
+def _absence_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, datetime]:
+    now = {"value": datetime.now(UTC)}
+    monkeypatch.setattr(clock, "now_utc", lambda: now["value"])
+    return now
+
+
+def _complete_absence_evidence_and_statement(now: dict[str, datetime], client_order_id: str) -> Any:
+    """Two syncs over the grace period (the broker never has the order) and the operator's
+    ``not_received`` statement: evidence only."""
+    from tests.test_recovery_predicate import LookupBroker
+
+    from trading_platform.services.execution.sync_orders import sync_account_state
+    from trading_platform.services.recovery import record_broker_statement
+
+    broker = LookupBroker()
+    sync_account_state(settings=load_settings(), broker_client=broker)
+    now["value"] += timedelta(seconds=load_settings().execution.recovery_absence_grace_seconds + 1)
+    sync_account_state(settings=load_settings(), broker_client=broker)
+    with session_scope(load_settings()) as session:
+        order_id = session.execute(
+            select(PaperOrder.id).where(PaperOrder.client_order_id == client_order_id)
+        ).scalar_one()
+        result = record_broker_statement(
+            session, order_id, "not_received", "ticket-1", "broker support: not received", "op"
+        )
+    assert broker.post_count == 0
+    return result
+
+
+def test_s1_recorded_timeout_then_takeover(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(S-b) A's POST ends in a read timeout and A RECORDS the attempt outcome as ambiguous (the
+    outcome field is populated); A's Job fails (A dies before it can pause the operation). A
+    product-level Continue is refused 409 outcome_unresolved; at service level acquire_execution
+    still treats the intent as in doubt although its attempt has an outcome, and authorize_send is
+    refused (submission class ambiguous). Zero second POST; only broker evidence can change that; a
+    recorded not_received statement does not."""
+    from trading_platform.services.execution.operations import SendRefusal
+
+    class ProcessKilled(RuntimeError):
+        """A dies right after recording the outcome, before it can pause the operation."""
+
+    real_persist = submit_orders_module._persist_fenced
+
+    def killed_before_the_pause(ctx: Any, write: Any) -> bool:
+        if getattr(write, "__name__", "") == "park":
+            raise ProcessKilled()
+        return real_persist(ctx, write)
+
+    monkeypatch.setattr(submit_orders_module, "_persist_fenced", killed_before_the_pause)
+    monkeypatch.setattr(submit_orders_module, "_best_effort_pause", lambda *a, **k: None)
+    broker = S1Broker(script=["read_timeout"])
+    run, _ = seed_batch(DEFAULT_BATCH[:2], manifest=manifest())
+    with pytest.raises(ProcessKilled):
+        _start(broker.service(), risk_run_id=run, job_id=start_job())
+    monkeypatch.setattr(submit_orders_module, "_persist_fenced", real_persist)
+    operation = operation_row()
+    (intent1, cid1), _second = intent_rows()
+    assert operation.state == "running"  # A died before the pause
+    assert attempt_outcomes(cid1) == [(1, "ambiguous")]  # the outcome IS recorded
+    reclaim_job(operation.executor_job_id)
+    finish_jobs()
+    assert _continue_conflict(operation.id).code == "outcome_unresolved"
+
+    acquisition, job_b = takeover(operation.id)
+
+    assert acquisition.paused and acquisition.in_doubt_intent_ids == (intent1,)
+    assert probe_send(operation.id, intent1, acquisition.epoch, job_b, lease_owner="worker-b") == (
+        SendRefusal.INTENT_NOT_SENDABLE
+    )
+    now = _absence_clock(monkeypatch)
+    _complete_absence_evidence_and_statement(now, cid1)
+    assert _continue_conflict(operation.id).code == "outcome_unresolved"  # a statement does not
+    assert broker.received == {cid1: 1}
+    _recover_by_client_order_id(cid1)  # only broker evidence changes it
+    assert _continue_validate(operation.id)["mode"] == "continue"
+    assert broker.received == {cid1: 1}
+
+
+def test_s1_delayed_request_executor_terminated_statement_recorded_no_resend(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(S-c, round 5, 2026-10-04) A's request has LEFT the process (the fake transport received it)
+    but the fake broker holds it; A is terminated (lock connection killed, lease reclaimed, Job
+    FAILED). Recovery collects complete absence evidence and the operator records a not_received
+    statement. The intent stays unresolved (not_found, statement attached as evidence), resubmission
+    is not permitted, a Continue, a start on a NEW evaluation, an End followed by a new evaluation
+    and an ownership handover/release are all refused, create_new_version is version_bypass_refused
+    and authorize_send is refused: POST count stays 1. The held request is then released: the
+    broker accepts it, sync finds it by client_order_id and after a clean reconciliation the outcome
+    resolves; the late original is the only order."""
+    from trading_platform.services.execution.intent_identity import VersionBypassRefusedError
+    from trading_platform.services.execution.operations import SendRefusal
+    from trading_platform.services.operator_controls import AccountCheckFailedError
+    from trading_platform.services.recovery import (
+        GateCode,
+        RecoveryClassification,
+        strategy_recovery_status,
+    )
+
+    broker = S1Broker(hold_request=Gate())
+    gate = broker.hold_request
+    assert gate is not None
+    worker_a, first_run = _s1_world(broker)
+    gate.wait_arrived()
+    operation = operation_row()
+    (intent1, cid1), _second = intent_rows()
+    assert broker.received == {cid1: 1}  # the request left the process; the broker holds it
+    terminate_lock_holder()
+    reclaim_job(operation.executor_job_id)
+    finish_jobs()
+    now = _absence_clock(monkeypatch)
+
+    statement = _complete_absence_evidence_and_statement(now, cid1)
+
+    assert statement.classification is RecoveryClassification.NOT_FOUND
+    with session_scope(load_settings()) as session:
+        status = strategy_recovery_status(session, STRATEGY, now=now["value"] + timedelta(hours=1))
+    intent = next(item for item in status.intents if item.client_order_id == cid1)
+    assert intent.absence_evidence_complete and intent.statement is not None
+    assert intent.resubmission_permitted is False
+    assert status.gate_code is GateCode.OUTCOME_UNRESOLVED
+    seed_clean_reconciliation_after_now()
+    assert _continue_conflict(operation.id).code == "outcome_unresolved"
+    new_evaluation = evaluation(
+        DEFAULT_BATCH[:1], as_of="2024-01-08", digest="bars-d2", verified=False
+    )
+    assert _conflict(new_evaluation).code == "outcome_unresolved"
+
+    control = OperatorControlService(settings=load_settings())
+    with pytest.raises(AccountCheckFailedError) as open_refusal:
+        control.set_active_paper_strategy(None, reason="release", actor="pytest")
+    assert open_refusal.value.code == "check_failed:A1"  # A1 first while the operation is open
+    assert "A5" in open_refusal.value.failed_checks
+
+    with session_scope(load_settings()) as session:
+        end_operation(session, operation.id, operator_reason="cancel", actor="pytest")
+    assert _conflict(new_evaluation).code == "outcome_unresolved"  # End never resolves it
+    with pytest.raises(AccountCheckFailedError) as ended_refusal:
+        control.set_active_paper_strategy(None, reason="release", actor="pytest")
+    assert "A5" in ended_refusal.value.failed_checks
+
+    with session_scope(load_settings()) as session:
+        order = session.execute(select(PaperOrder)).scalar_one()
+        from trading_platform.services.execution.idempotency import derive_order_identity
+
+        with pytest.raises(VersionBypassRefusedError):
+            submit_orders_module.create_new_version(
+                session,
+                strategy_id=STRATEGY,
+                candidate=submit_orders_module._candidate_from_risk_event(
+                    session.execute(
+                        select(RiskEvent).where(RiskEvent.id == order.source_risk_event_id)
+                    ).scalar_one(),
+                    session.get(Symbol, order.symbol_id),
+                ),
+                identity=derive_order_identity(
+                    prefix="tp",
+                    strategy_id=STRATEGY,
+                    session_date=SESSION,
+                    symbol="AAPL",
+                    side="buy",
+                    quantity=order.quantity,
+                ),
+            )
+    probe_job = continue_job(operation.id, lease_owner="probe-worker")
+    assert (
+        probe_send(
+            operation.id,
+            intent1,
+            operation_row().execution_epoch,
+            probe_job,
+            lease_owner="probe-worker",
+        )
+        == SendRefusal.INTENT_NOT_SENDABLE
+    )
+    assert broker.received == {cid1: 1}  # POST count for the intent stays 1
+
+    gate.release.set()  # the delayed original is accepted by the broker
+    worker_a.join()
+    assert broker.received == {cid1: 1} and len(broker.orders) == 1
+    _recover_by_client_order_id(cid1)
+    with session_scope(load_settings()) as session:
+        resolved = strategy_recovery_status(
+            session, STRATEGY, now=now["value"] + timedelta(hours=2)
+        )
+    assert resolved.gate_code is None
+    assert broker.received == {cid1: 1} and len(broker.orders) == 1
+    del first_run

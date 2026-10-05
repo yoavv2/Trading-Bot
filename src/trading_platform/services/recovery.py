@@ -577,6 +577,9 @@ SELECT f.id AS job_id, f.job_type AS job_type, f.job_status AS job_status,
   FROM flagged f
   LEFT JOIN strategy_runs sr ON sr.job_id = f.id AND sr.run_type = 'paper_execution'
   LEFT JOIN paper_orders po ON po.strategy_run_id = sr.id
+       OR EXISTS (SELECT 1 FROM order_submission_attempts oa
+                   WHERE oa.paper_order_id = po.id AND oa.executor_job_id = f.id
+                     AND sr.id IS NOT NULL)
   LEFT JOIN strategies st ON st.id = sr.strategy_id
  WHERE (CAST(:order_id AS uuid) IS NULL OR po.id = CAST(:order_id AS uuid))
 UNION ALL
@@ -595,6 +598,10 @@ SELECT NULL::uuid, NULL::text, NULL::text, NULL::timestamptz, NULL::text,
    AND NOT EXISTS (SELECT 1 FROM flagged ff
                     JOIN strategy_runs fr ON fr.job_id = ff.id AND fr.run_type = 'paper_execution'
                    WHERE fr.id = po.strategy_run_id)
+   AND NOT EXISTS (SELECT 1 FROM flagged ff
+                    JOIN order_submission_attempts oa ON oa.executor_job_id = ff.id
+                    JOIN strategy_runs fr ON fr.job_id = ff.id AND fr.run_type = 'paper_execution'
+                   WHERE oa.paper_order_id = po.id)
 """
 
 #: Statement 2: the reconciliation facts. Per-strategy effect times (NULL group =
