@@ -419,7 +419,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 **Gap r2 wave 2**
 
-- [ ] 20.1-27-PLAN.md — Migration 0029: paper_orders origin run immutable, order_events append-only, TRUNCATE (incl. CASCADE) guards on the evidence tables, evidence-delete protection (retention-policy change, user decision 2026-10-05; 0028 protections unchanged); pin flips (REC-01, REC-02, COR-06)
+- [ ] 20.1-27-PLAN.md — Migration 0029: paper_orders origin run immutable, order_events append-only, TRUNCATE (incl. CASCADE) guards on the evidence tables, evidence-delete protection incl. reconciliation evidence (W4) (retention-policy change, user decision 2026-10-05; 0028 protections unchanged; account_snapshots deletion left OPEN); pin flips (REC-01, REC-02, COR-06)
 - [ ] 20.1-28-PLAN.md — WR-01 operation read model / End result list by the shared verdict; WR-08 retry_existing guard on the shared verdict over the full attempt history (ambiguous/unfinished dominate a later rejection; TL-10 key consumed) (REC-01, REC-02, COR-06)
 
 **Gap r2 wave 3**
