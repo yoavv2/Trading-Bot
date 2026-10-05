@@ -2,7 +2,10 @@
 
 One row per HTTP attempt of an order POST. A row is committed before the
 attempt (outcome NULL) and completed exactly once after it. The table is
-append-only in code: there is no delete path and an outcome is written once.
+append-only and complete-once IN THE DATABASE (migration 0028 trigger, SAF-10): DELETE and
+every UPDATE except the single NULL-to-outcome completion and the ``strategy_run_id``
+FK null-out are rejected. ``paper_order_id`` is ON DELETE RESTRICT so deleting an order
+can never erase its attempt evidence (which would make its intent look re-sendable).
 """
 
 from __future__ import annotations
@@ -61,7 +64,8 @@ class OrderSubmissionAttempt(TimestampedModel, Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     paper_order_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("paper_orders.id", ondelete="CASCADE"),
+        # RESTRICT (0028): attempt evidence is never erased by deleting its order.
+        ForeignKey("paper_orders.id", ondelete="RESTRICT"),
         nullable=False,
     )
     strategy_run_id: Mapped[uuid.UUID | None] = mapped_column(

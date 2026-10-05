@@ -118,7 +118,8 @@ def test_schema_columns_and_foreign_keys(migrated_db: str) -> None:
         for fk in inspector.get_foreign_keys("order_submission_attempts")
     }
     assert fks == {
-        "paper_order_id": ("paper_orders", "CASCADE"),
+        # 0028 (SAF-10): evidence is never erased by deleting its order.
+        "paper_order_id": ("paper_orders", "RESTRICT"),
         "strategy_run_id": ("strategy_runs", "SET NULL"),
     }
 
@@ -178,16 +179,34 @@ def test_attempt_number_must_be_positive(migrated_db: str) -> None:
         _insert("NULL, NULL", {"oid": order_id, "n": 0})
 
 
-def test_paper_order_delete_cascades_and_run_delete_nulls_the_run(migrated_db: str) -> None:
-    order_id, run_id = _create_order()
-    _insert("NULL, NULL", {"oid": order_id, "n": 1})
+def test_paper_order_delete_is_restricted_and_run_delete_nulls_the_run(migrated_db: str) -> None:
+    order_id, _order_run_id = _create_order()
+    # A SEPARATE run that owns no orders: deleting the order's own run is rejected because
+    # paper_orders.strategy_run_id cascades into the RESTRICT FK (0028).
+    _other_order_id, separate_run_id = _create_order()
+    # strategy_run_id is set in the INSERT: the append-only trigger rejects a later UPDATE.
     with session_scope(load_settings()) as session:
         session.execute(
-            text("UPDATE order_submission_attempts SET strategy_run_id = :rid"), {"rid": run_id}
+            text(
+                "INSERT INTO order_submission_attempts "
+                "(id, paper_order_id, strategy_run_id, attempt_number, started_at) "
+                "VALUES (:id, :oid, :rid, 1, now())"
+            ),
+            {"id": uuid.uuid4(), "oid": order_id, "rid": separate_run_id},
         )
-    with session_scope(load_settings()) as session:
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM paper_orders WHERE id = :oid"), {"oid": order_id})
-        assert session.execute(text("SELECT count(*) FROM order_submission_attempts")).scalar_one() == 0
+    with session_scope(load_settings()) as session:
+        assert session.execute(text("SELECT count(*) FROM order_submission_attempts")).scalar_one() == 1
+    # The separate run owns a paper order (from _create_order), so drop that order first.
+    with session_scope(load_settings()) as session:
+        session.execute(text("DELETE FROM paper_orders WHERE id = :oid"), {"oid": _other_order_id})
+        session.execute(text("DELETE FROM strategy_runs WHERE id = :rid"), {"rid": separate_run_id})
+    with session_scope(load_settings()) as session:
+        run_ref = session.execute(
+            text("SELECT strategy_run_id FROM order_submission_attempts")
+        ).scalar_one()
+        assert run_ref is None
 
 
 def test_downgrade_drops_table_and_reupgrade_restores_it(migrated_db: str) -> None:

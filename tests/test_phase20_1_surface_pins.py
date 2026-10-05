@@ -160,8 +160,9 @@ def test_alembic_chain_is_linear_from_0021() -> None:
         "0025_phase20_1_external_broker_activity",
         "0026_phase20_1_recovery_records",
         "0027_phase20_1_execution_operations",
+        "0028_phase20_1_attempt_log_append_only",
     ]
-    assert heads[0] == "0027_phase20_1_execution_operations"
+    assert heads[0] == "0028_phase20_1_attempt_log_append_only"
     # each revision descends from the previous one (linear).
     for previous, current in zip(chain, chain[1:], strict=False):
         assert script.get_revision(current).down_revision == previous
