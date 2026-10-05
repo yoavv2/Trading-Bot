@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Phase 20.1 gap-closure execution started (plans 17-25, --gaps-only)
-last_updated: "2026-10-05T11:03:49.142Z"
-last_activity: 2026-10-05 -- Phase 20.1 execution started
+stopped_at: Completed 20.1-17-PLAN.md (gap closure; next 20.1-18)
+last_updated: "2026-10-05T12:05:40.181Z"
+last_activity: 2026-10-05
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 88
-  completed_plans: 71
+  completed_plans: 72
   percent: 67
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-30)
 ## Current Position
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
-Plan: 17 of 25 (gap closure 17-25 executing; 1-16 complete)
+Plan: 18 of 25 (gap closure 17-25 executing; 1-16 complete)
 Status: Executing Phase 20.1
-Last activity: 2026-10-05 -- Phase 20.1 execution started
+Last activity: 2026-10-05 -- 20.1-17 complete
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
 
 v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
@@ -101,6 +101,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1
 | Phase 20 P26 | 20min | 3 tasks | 8 files |
 | Phase 20 P27 | 25min | 3 tasks | 4 files |
 | Phase 20 P28 | 20min | 2 tasks | 3 files |
+| Phase 20.1 P17 | ~3h | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -251,6 +252,7 @@ Recent decisions affecting current work:
 - [Phase 20-26]: Dialog shells (ControlConfirmDialog/CancelJobDialog/RetryJobDialog) are never keyed; openingRef lives in the persistent shell (WR-C-01), per-opening state in a body that mounts fresh
 - [Phase 20-27]: Alpaca list_fills/list_orders paginate by last-id cursor at documented limits (100/500) with typed cap/stall errors and no date bounding; callers unchanged. Live UAT test 3 re-run still pending.
 - [Phase 20-28]: D-11a: control audit timestamps from one clock_timestamp() read after the row lock; no CHECK migration (deferred)
+- [Phase 20.1-17]: TL-4 applied: legacy zero-attempt orders are UNESTABLISHED everywhere; one shared classify_submission_evidence feeds G2, takeover, predicate, A5, submit gate — Closes VERIFICATION SC4/REC-01 and REVIEW SAF-01; authorized deviation reseeded two test_paper_execution tests because the session-level D-15 gate runs before recover_inflight_paper_orders
 
 ### Pending Todos
 
@@ -292,6 +294,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-09-29T11:54:06.963Z
-Stopped at: Completed 20-28-PLAN.md
+Last session: 2026-10-05T12:05:40.172Z
+Stopped at: Completed 20.1-17-PLAN.md (gap closure; next 20.1-18)
 Resume file: None
