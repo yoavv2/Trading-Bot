@@ -359,6 +359,7 @@ def test_closed_enums_pinned() -> None:
     assert values(CandidateDisposition) == {
         "action_already_submitted",
         "duplicate_open_position",
+        "exit_quantity_mismatch",
         "no_open_position",
         "replay_of_earlier_decision",
     }

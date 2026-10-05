@@ -22,7 +22,9 @@ first failing check decides the candidate's closed disposition:
    REACHED OR MAY HAVE REACHED THE BROKER -> ``replay_of_earlier_decision`` (detection only: a
    different fingerprint never proves a new intent);
 5. ACTION JUSTIFIED against the verified basis: an entry needs the symbol flat, an exit needs a
-   held position -> ``duplicate_open_position`` / ``no_open_position``;
+   held position, and an exit is exactly the whole verified position (a smaller or larger
+   quantity leaves an untracked remainder or oversells) -> ``duplicate_open_position`` /
+   ``no_open_position`` / ``exit_quantity_mismatch``;
 6. SESSION ALLOWANCE (TL-10): at most ONE broker-reaching action per (strategy, evaluation
    session, symbol, side), consumed by any earlier order of the strategy that reached or may
    have reached the broker (legacy orders without proof included) ->
@@ -114,6 +116,8 @@ class CandidateDisposition(StrEnum):
     ACTION_ALREADY_SUBMITTED = "action_already_submitted"
     DUPLICATE_OPEN_POSITION = "duplicate_open_position"
     NO_OPEN_POSITION = "no_open_position"
+    # S3-R4(5) exit quantity must equal the whole verified position (SAF-08).
+    EXIT_QUANTITY_MISMATCH = "exit_quantity_mismatch"
 
 
 class EvaluationBasisUnverifiedError(RuntimeError):
@@ -787,6 +791,8 @@ def classify_candidate(
             return CandidateVerdict(CandidateDisposition.DUPLICATE_OPEN_POSITION)
         if key.side == "sell" and held <= 0:
             return CandidateVerdict(CandidateDisposition.NO_OPEN_POSITION)
+        if key.side == "sell" and Decimal(str(key.quantity)) != Decimal(str(held)):
+            return CandidateVerdict(CandidateDisposition.EXIT_QUANTITY_MISMATCH)
     # (6) TL-10 session allowance: one broker-reaching action per (session, symbol, side)
     same_key = [
         order
