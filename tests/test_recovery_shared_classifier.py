@@ -69,6 +69,7 @@ from trading_platform.services.execution import permission as permission_module
 from trading_platform.services.execution.attempts import (
     AttemptRecord,
     SubmissionEvidence,
+    SubmissionIntentState,
     attempt_log_registered,
     classify_submission_evidence,
     load_submission_attempts,
@@ -384,6 +385,17 @@ def test_every_consumer_agrees_with_the_shared_classifier(
         assert (order_id in {f.paper_order_id for f in unestablished_orders(facts)}) is (
             unestablished
         ), f"{shape}: G2 unestablished_orders"
+
+        # (iv-read) the operation read model / End result list exactly the UNESTABLISHED intents
+        # (WR-01); the lifecycle display value `fact.state` is untouched by the shared verdict.
+        if fact is not None:
+            assert fact.evidence is expected, f"{shape}: IntentFact.evidence"
+            listed = {u["intent_id"] for u in ops.operation_unresolved_intents([fact])}
+            assert (str(fact.row.id) in listed) is unestablished, (
+                f"{shape}: operation_unresolved_intents"
+            )
+            if shape == "S9":
+                assert fact.state is SubmissionIntentState.SUBMITTED
 
         # (vi) the takeover / authorize_send fact
         if fact is not None:

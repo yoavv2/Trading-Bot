@@ -631,6 +631,10 @@ class IntentFact:
     attempt_log_registered: bool
     state: SubmissionIntentState
     proven_not_sent: bool
+    # The shared verdict (``classify_submission_evidence``, WR-01); ``None`` for a planned intent
+    # (no order). ``state`` is the lifecycle display / loop-selection value; ``evidence`` decides
+    # what is unresolved.
+    evidence: SubmissionEvidence | None = None
 
 
 def intent_state(
@@ -711,6 +715,16 @@ def load_intent_facts(
                 attempt_log_registered=registered,
                 state=intent_state(row, order, attempts),
                 proven_not_sent=proven_not_sent(order, attempts, attempt_log_registered=registered),
+                evidence=(
+                    classify_submission_evidence(
+                        status=order.status,
+                        broker_order_id=order.broker_order_id,
+                        attempts=attempts,
+                        attempt_log_registered=registered,
+                    )
+                    if order is not None
+                    else None
+                ),
             )
         )
     return facts
@@ -811,7 +825,12 @@ def operation_working_orders(facts: Iterable[IntentFact]) -> list[dict[str, Any]
 
 
 def operation_unresolved_intents(facts: Iterable[IntentFact]) -> list[dict[str, Any]]:
-    """Intents whose outcome is not established (ambiguous), with their blocking effect."""
+    """Intents whose shared verdict is UNESTABLISHED, with their blocking effect.
+
+    Reads ``IntentFact.evidence`` (``classify_submission_evidence``, the verdict the strategy gate
+    uses); ``IntentFact.state`` (``derive_intent_state``) stays the display / loop-selection value.
+    ``state`` is always ``ambiguous`` here: the closed value for "outcome not established".
+    """
 
     return [
         {
@@ -819,11 +838,11 @@ def operation_unresolved_intents(facts: Iterable[IntentFact]) -> list[dict[str, 
             "paper_order_id": str(fact.order.id) if fact.order is not None else None,
             "client_order_id": fact.row.client_order_id,
             "symbol": fact.ticker,
-            "state": fact.state.value,
+            "state": SubmissionIntentState.AMBIGUOUS.value,
             "blocking_effect": BLOCKING_OUTCOME_UNRESOLVED,
         }
         for fact in facts
-        if fact.state is SubmissionIntentState.AMBIGUOUS
+        if fact.evidence is SubmissionEvidence.UNESTABLISHED
     ]
 
 
