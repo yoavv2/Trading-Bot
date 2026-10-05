@@ -91,6 +91,7 @@ from trading_platform.services.execution.attempts import (
     attempt_log_registered,
     classify_submission_evidence,
 )
+from trading_platform.services.execution.broker_identity import broker_record_mismatch
 
 # ---------------------------------------------------------------------------
 # Closed vocabularies
@@ -1438,29 +1439,12 @@ def _lookup_failure_reason(exc: BaseException) -> UnresolvedReason:
 
 
 def _lookup_mismatch(order: PaperOrder, ticker: str, snapshot: Any) -> str | None:
-    """Why a looked-up broker record is NOT evidence for the local intent (D-07), or ``None``."""
+    """Why a looked-up broker record is NOT evidence for the local intent (D-07), or ``None``.
 
-    raw = snapshot.raw_payload
-    if snapshot.client_order_id != order.client_order_id:
-        return "client_order_id"
-    if snapshot.symbol != ticker:
-        return "symbol"
-    if snapshot.side.value != order.side:
-        return "side"
-    if raw.get("qty") is None or Decimal(str(snapshot.quantity)) != Decimal(str(order.quantity)):
-        return "quantity"
-    if str(raw.get("type") or "") != order.order_type:
-        return "type"
-    created = _parse_dt(raw.get("created_at")) if raw.get("created_at") else None
-    registered = order.created_at
-    if registered is not None:
-        if created is None:
-            return "created_at"
-        if registered.tzinfo is None:
-            registered = registered.replace(tzinfo=created.tzinfo)
-        if created < registered:
-            return "created_at"
-    return None
+    Delegates to the one shared check (SAF-07) also used by the bulk sync and pre-lock recovery.
+    """
+
+    return broker_record_mismatch(order, ticker, snapshot)
 
 
 def assess_unestablished_intents(

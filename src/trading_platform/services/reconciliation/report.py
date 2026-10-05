@@ -49,6 +49,11 @@ from trading_platform.services.attribution_inputs import (
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.config.tolerances import MONEY_TOLERANCE, QUANTITY_TOLERANCE
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
+from trading_platform.services.execution.broker_identity import (
+    broker_record_mismatch,
+    local_ticker,
+    record_identity_mismatch,
+)
 from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
     apply_order_transition,
@@ -199,6 +204,15 @@ def recover_inflight_paper_orders(
                 broker_order = broker_by_broker_id.get(local_order.broker_order_id)
             if broker_order is None:
                 continue
+
+            if not local_order.broker_order_id:
+                # SAF-07 / D-07: the first binding of a broker id needs the full identity check.
+                mismatch = broker_record_mismatch(
+                    local_order, local_ticker(local_order), broker_order
+                )
+                if mismatch is not None:
+                    record_identity_mismatch(session, local_order, broker_order, mismatch)
+                    continue
 
             if _apply_broker_order_snapshot(
                 session, local_order, broker_order, synced_at=synced_at

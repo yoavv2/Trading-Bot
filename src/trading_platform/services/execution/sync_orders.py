@@ -47,6 +47,11 @@ from trading_platform.services.execution._paper_common import (
     PaperStateSyncReport,
     _broker_transition_event,
 )
+from trading_platform.services.execution.broker_identity import (
+    broker_record_mismatch,
+    local_ticker,
+    record_identity_mismatch,
+)
 from trading_platform.services.execution.positions import DerivationFill, derive_net_position
 from trading_platform.services.execution.transition import (
     OrderTransitionRequest,
@@ -326,6 +331,11 @@ def _sync_paper_orders(
             continue
 
         if not local_order.broker_order_id:
+            # SAF-07 / D-07: the first binding of a broker id needs the full identity check.
+            mismatch = broker_record_mismatch(local_order, local_ticker(local_order), broker_order)
+            if mismatch is not None:
+                record_identity_mismatch(session, local_order, broker_order, mismatch)
+                continue
             local_order.broker_order_id = broker_order.broker_order_id
         transition_event = _broker_transition_event(broker_order.status)
         transition_target = resolve_transition_target(
