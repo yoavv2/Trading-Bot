@@ -19,6 +19,7 @@ boundary -- do not "deduplicate" this into a boundary violation.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -39,7 +40,12 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.session import session_scope
 from trading_platform.services import recovery as recovery_service
-from trading_platform.services.batch_outcomes import derive_job_outcome
+from trading_platform.services.batch_outcomes import (
+    BATCH_OUTCOME_JOB_TYPES,
+    INGEST_BARS_JOB_TYPE,
+    derive_job_outcome,
+)
+from trading_platform.services.operation_reads import OperationReadService
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -59,6 +65,33 @@ class JobResourceKind(StrEnum):
     MARKET_DATA_INGESTION_RUN = "market_data_ingestion_run"
     # 20.1-08 (ACCT-01, D-09 generalization): the owner-less account-level result.
     ACCOUNT_RECONCILIATION_RUN = "account_reconciliation_run"
+
+
+class JobOutcome(StrEnum):
+    """Closed Job-read outcome (20.1-14, D-31): the superset of ``BatchOutcome`` plus the
+    paper-session operation outcomes. Derived at read time, never stored (the Job lifecycle
+    status stays the closed five-state set)."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    PAUSED = "paused"
+    REQUIRES_REEVALUATION = "requires_reevaluation"
+    TERMINATED = "terminated"
+    BLOCKED = "blocked"
+    NO_ACTION = "no_action"
+
+
+#: The only session-type literal here: ``services`` may not import ``jobs`` (JOB-04).
+_PAPER_SESSION_JOB_TYPE = "paper-session"
+
+#: Operation state RECORDED BY THE JOB at its end -> outcome (``running`` has none).
+_OPERATION_STATE_TO_OUTCOME: dict[str, JobOutcome] = {
+    "completed": JobOutcome.COMPLETE,
+    "paused": JobOutcome.PAUSED,
+    "requires_reevaluation": JobOutcome.REQUIRES_REEVALUATION,
+    "terminated": JobOutcome.TERMINATED,
+}
 
 
 @dataclass(frozen=True)
@@ -90,8 +123,13 @@ class JobReadService:
             if resolved_filters.job_type is not None:
                 stmt = stmt.where(Job.job_type == resolved_filters.job_type)
             rows = session.execute(stmt.limit(capped_limit)).scalars().all()
+            job_ids = [job.id for job in rows]
             items = [_serialize_job_summary(job) for job in rows]
 
+        # 20.1-14: the CURRENT operation of every listed Job in ONE statement for the page.
+        operations = OperationReadService(self._settings).operation_for_jobs(job_ids)
+        for item, job_id in zip(items, job_ids, strict=True):
+            item["operation"] = operations.get(job_id)
         return items
 
     def get_job_recovery(self, job_id: str) -> dict[str, Any]:
@@ -216,7 +254,7 @@ class JobReadService:
                 "id": str(job.id),
                 "job_type": job.job_type,
                 "status": job.status.value,
-                "outcome": _job_outcome(job),
+                **_outcome_fields(job),
                 "queued_at": _dt(job.queued_at),
                 "started_at": _dt(job.started_at),
                 "completed_at": _dt(job.completed_at),
@@ -241,6 +279,9 @@ class JobReadService:
                 "resources": resources,
             }
 
+        detail["operation"] = (
+            OperationReadService(self._settings).operation_for_jobs([job_uuid]).get(job_uuid)
+        )
         return detail
 
     def get_job_progress(self, job_id: str) -> dict[str, Any]:
@@ -373,7 +414,7 @@ def _serialize_job_summary(job: Job) -> dict[str, Any]:
         "id": str(job.id),
         "job_type": job.job_type,
         "status": job.status.value,
-        "outcome": _job_outcome(job),
+        **_outcome_fields(job),
         "queued_at": _dt(job.queued_at),
         "started_at": _dt(job.started_at),
         "completed_at": _dt(job.completed_at),
@@ -389,6 +430,65 @@ def _job_outcome(job: Job) -> str | None:
 
     outcome = derive_job_outcome(job.job_type, job.status, job.result_summary)
     return outcome.value if outcome is not None else None
+
+
+def derive_session_outcome(
+    job_status: Any, result_summary: Mapping[str, Any] | None
+) -> tuple[JobOutcome | None, str | None]:
+    """Outcome and reason of a paper-session Job from what THAT Job recorded at its end.
+
+    Only a SUCCEEDED Job has one (FAILED / CANCELLED / QUEUED / RUNNING read ``None``). The
+    operation state in ``result_summary.operation`` is the state at the end of this Job, so
+    an older paused Job stays ``paused`` after a later Continue completes the operation (the
+    CURRENT state is the separate ``operation`` field). Without a recorded operation, a
+    ``blocked_*`` action reads ``blocked`` (reason = the action without its prefix) and a
+    ``noop_*`` action ``no_action``.
+    """
+
+    status = getattr(job_status, "value", job_status)
+    if status != "succeeded" or not isinstance(result_summary, Mapping):
+        return None, None
+    operation = result_summary.get("operation")
+    if isinstance(operation, Mapping):
+        mapped = _OPERATION_STATE_TO_OUTCOME.get(str(operation.get("state")))
+        if mapped is not None:
+            reason = operation.get("reason")
+            return mapped, str(reason) if isinstance(reason, str) and reason else None
+    action = result_summary.get("action")
+    if isinstance(action, str):
+        if action.startswith("blocked_"):
+            return JobOutcome.BLOCKED, action[len("blocked_") :]
+        if action.startswith("noop_"):
+            return JobOutcome.NO_ACTION, action[len("noop_") :]
+    return None, None
+
+
+def _failed_count(job: Job) -> int | None:
+    """Failed-symbol count of a PARTIAL batch Job (``None`` when it carries no list)."""
+
+    summary = job.result_summary if isinstance(job.result_summary, Mapping) else {}
+    key = "symbols_failed" if job.job_type == INGEST_BARS_JOB_TYPE else "failed"
+    failed = summary.get(key)
+    return len(failed) if isinstance(failed, (list, tuple)) else None
+
+
+def _outcome_fields(job: Job) -> dict[str, Any]:
+    """``outcome``, ``outcome_reason`` and ``outcome_detail`` of one Job (all additive)."""
+
+    outcome: str | None = None
+    reason: str | None = None
+    detail: dict[str, Any] | None = None
+    if job.job_type in BATCH_OUTCOME_JOB_TYPES:
+        # One-to-one from the closed ``BatchOutcome`` (a FAILED batch Job still reads failed).
+        outcome = _job_outcome(job)
+        if outcome == JobOutcome.PARTIAL.value:
+            count = _failed_count(job)
+            if count is not None:
+                detail = {"failed_count": count}
+    elif job.job_type == _PAPER_SESSION_JOB_TYPE:
+        session_outcome, reason = derive_session_outcome(job.status, job.result_summary)
+        outcome = session_outcome.value if session_outcome is not None else None
+    return {"outcome": outcome, "outcome_reason": reason, "outcome_detail": detail}
 
 
 def _serialize_progress(job: Job) -> dict[str, Any]:

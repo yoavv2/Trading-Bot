@@ -113,6 +113,7 @@ from trading_platform.jobs.handlers.payload_fields import (
     require_trading_session_not_future,
 )
 from trading_platform.jobs.registry import (
+    ConsoleSubmission,
     InvalidJobPayloadError,
     JobCancellationMode,
     JobSubmissionConflictError,
@@ -255,6 +256,9 @@ class PaperSessionSubmissionSpec:
     # D-15: submission and retry are gated by the uncertain-outcome recovery predicate
     # inside ``validate_payload``; read by ``recovery_gated_for(spec)``.
     recovery_gated = True
+    # 20.1-14 (D-31): the existing console cannot explain the operation semantics, so it neither
+    # starts nor retries a paper session (the ``continue`` mode is a mode of this type).
+    console_submission = ConsoleSubmission.API_ONLY
 
     def __init__(self, settings: Settings, *, clock: Callable[[], datetime] | None = None) -> None:
         self._settings = settings

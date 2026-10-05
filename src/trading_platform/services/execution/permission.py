@@ -355,6 +355,86 @@ def _unrecognized_count(session: Session, reconciliation: StandaloneReconciliati
     return total
 
 
+def _strategy_enabled(gate: operator_controls.TradingGateState) -> bool:
+    """Shared predicate: the requested strategy has a control row and is ``active``."""
+
+    return gate.strategy is not None and gate.strategy.is_execution_enabled
+
+
+def _reconciliation_block(
+    session: Session, reconciliation: StandaloneReconciliation | None
+) -> PausedReason | None:
+    """Shared predicate: why a latest standalone reconciliation blocks trading, or ``None``
+    (no reconciliation or a clean one). Unrecognized broker activity wins over plain blocking."""
+
+    if reconciliation is None or reconciliation.is_clean:
+        return None
+    if _unrecognized_count(session, reconciliation) > 0:
+        return PausedReason.UNRECOGNIZED_BROKER_ACTIVITY
+    return PausedReason.RECONCILIATION_BLOCKING
+
+
+class TradingBlocker(StrEnum):
+    """Closed reasons trading is blocked right now (20.1-14; Phase 21 reuses the list).
+
+    The value order is the deterministic output order of ``current_trading_blockers``. Every
+    member is the per-intent pause reason of the same name, except ``no_active_paper_strategy``
+    and ``strategy_disabled`` (the ``owner`` and ``enabled`` steps).
+    """
+
+    NO_ACTIVE_PAPER_STRATEGY = "no_active_paper_strategy"
+    STRATEGY_DISABLED = "strategy_disabled"
+    KILL_SWITCH_TRIPPED = "kill_switch_tripped"
+    OUTCOME_UNRESOLVED = "outcome_unresolved"
+    RECONCILIATION_BLOCKING = "reconciliation_blocking"
+    UNRECOGNIZED_BROKER_ACTIVITY = "unrecognized_broker_activity"
+    WORKING_ORDER_COMMITMENTS_UNACCOUNTED = "working_order_commitments_unaccounted"
+
+
+def current_trading_blockers(
+    session: Session, *, now: datetime | None = None
+) -> list[TradingBlocker]:
+    """Why a paper session cannot trade right now, from the SAME predicates as
+    ``check_intent_permission`` (owner, enabled, kill switch, recovery, working orders,
+    latest standalone reconciliation). Read-only; a bounded number of statements independent
+    of history size. Empty list = nothing blocks.
+
+    The three recovery gate codes (``outcome_unresolved``, ``reconciliation_required``,
+    ``reconciliation_not_clean``) are all ``outcome_unresolved`` here: each refuses a session
+    at submit time. The per-intent check pauses on ``outcome_unresolved`` only and leaves the
+    other two to its reconciliation step (a running session reconciles in-session).
+    """
+
+    at = now or clock.now_utc()
+    gate = operator_controls.load_trading_gate_state(session)
+    owner_id = gate.owner.strategy_id
+    if owner_id is None:
+        # Nothing owns the account: nothing may trade. The kill switch is global, so it is
+        # still reported; strategy-scoped facts have no subject.
+        blockers = [TradingBlocker.NO_ACTIVE_PAPER_STRATEGY]
+        if gate.kill_switch.is_tripped:
+            blockers.append(TradingBlocker.KILL_SWITCH_TRIPPED)
+        return blockers
+
+    gate = operator_controls.load_trading_gate_state(session, strategy_id=owner_id)
+    blockers = []
+    if not _strategy_enabled(gate):
+        blockers.append(TradingBlocker.STRATEGY_DISABLED)
+    if gate.kill_switch.is_tripped:
+        blockers.append(TradingBlocker.KILL_SWITCH_TRIPPED)
+    if strategy_recovery_status(session, owner_id, now=at).gate_code is not None:
+        blockers.append(TradingBlocker.OUTCOME_UNRESOLVED)
+    effect_at = latest_broker_effect_at(session, owner_id)
+    reconciliation = latest_standalone_reconciliation(session, owner_id, completed_after=effect_at)
+    reconciliation_reason = _reconciliation_block(session, reconciliation)
+    if reconciliation_reason is not None:
+        blockers.append(TradingBlocker(reconciliation_reason.value))
+    if strategy_working_orders(session, owner_id):
+        blockers.append(TradingBlocker.WORKING_ORDER_COMMITMENTS_UNACCOUNTED)
+    order = list(TradingBlocker)
+    return sorted(blockers, key=order.index)
+
+
 def check_intent_permission(
     session: Session,
     *,
@@ -404,7 +484,7 @@ def check_intent_permission(
     block = gate.ownership_block_for(strategy_id)
     if block is not None:
         return _pause("owner", PausedReason.NOT_ACTIVE_PAPER_STRATEGY, block.value)
-    if gate.strategy is None or not gate.strategy.is_execution_enabled:
+    if not _strategy_enabled(gate):
         return _pause("enabled", PausedReason.STRATEGY_DISABLED)
     if gate.kill_switch.is_tripped:
         return _pause(
@@ -428,10 +508,9 @@ def check_intent_permission(
     )
     if continuation and reconciliation is None:
         return _pause("awaiting_reconciliation", PausedReason.AWAITING_RECONCILIATION)
-    if reconciliation is not None and not reconciliation.is_clean:
-        if _unrecognized_count(session, reconciliation) > 0:
-            return _pause("reconciliation_blocking", PausedReason.UNRECOGNIZED_BROKER_ACTIVITY)
-        return _pause("reconciliation_blocking", PausedReason.RECONCILIATION_BLOCKING)
+    reconciliation_reason = _reconciliation_block(session, reconciliation)
+    if reconciliation_reason is not None:
+        return _pause("reconciliation_blocking", reconciliation_reason)
 
     # (4) fresh price
     observation, price_outcome = price_step(
@@ -490,10 +569,12 @@ __all__ = [
     "PermissionOutcome",
     "PermissionVerdict",
     "PinnedIntent",
+    "TradingBlocker",
     "PriceSource",
     "WindowFacts",
     "WorkingOrder",
     "check_intent_permission",
+    "current_trading_blockers",
     "evaluation_window_facts",
     "price_step",
     "strategy_working_orders",

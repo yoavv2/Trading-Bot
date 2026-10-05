@@ -513,6 +513,31 @@ def test_default_registry_recovery_gated_map_is_pinned() -> None:
     }
 
 
+def test_default_registry_console_submission_map_is_pinned() -> None:
+    """20.1-14 (D-31): the existing console cannot start or retry a paper session nor record
+    external activity; every other registered type is interactive."""
+    from trading_platform.core.settings import load_settings
+    from trading_platform.jobs.registry import build_default_registry, console_submission_for
+
+    registry = build_default_registry(load_settings())
+
+    actual = {
+        job_type: console_submission_for(registry.resolve_submission_spec(job_type)).value
+        for job_type in registry.list_job_types()
+    }
+    assert actual == {
+        "backtest": "interactive",
+        "broker-order-sync": "interactive",
+        "ingest-bars": "interactive",
+        "paper-session": "api_only",
+        "reconciliation": "interactive",
+        "record-external-activity": "api_only",
+        "risk-evaluation": "interactive",
+        "sync-market-sessions": "interactive",
+        "sync-symbol-metadata": "interactive",
+    }
+
+
 def test_market_data_specs_have_no_mode_flags() -> None:
     """OPS-05: no market-data submission spec's payload model accepts a
     mode/behavior flag -- each spec's payload model field set is pinned."""

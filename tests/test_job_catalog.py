@@ -110,6 +110,7 @@ def test_catalog_shape_and_mutation_flag(mutations_enabled: bool) -> None:
                 "job_type": "catalog_probe",
                 "description": "Catalog probe submission spec.",
                 "cancellation_mode": "step_boundary",
+                "console_submission": "interactive",
                 "submission_defaults": {"from_date": "2024-01-02"},
             }
         ],
@@ -137,9 +138,13 @@ def test_catalog_item_keys_are_minimal() -> None:
         "cancellation_mode",
         "submission_defaults",
         "broker_effect",
+        # 20.1-14 (D-31): additive on EVERY item; the existing console submits only
+        # ``interactive`` types.
+        "console_submission",
     }
     for item in response.json()["items"]:
         assert set(item).issubset(allowed_keys)
+        assert item["console_submission"] == "interactive"  # the probe spec declares none
         assert "broker_effect" not in item  # the probe spec declares none
 
 
@@ -326,3 +331,24 @@ def test_job_types_route_imports_no_domain_layers() -> None:
         for module in imports
         for forbidden in forbidden_prefixes
     )
+
+
+def test_every_production_catalog_item_carries_console_submission() -> None:
+    """20.1-14: every item states it; only paper-session and record-external-activity are api_only."""
+
+    from trading_platform.jobs.registry import ConsoleSubmission, build_default_registry
+
+    client = _build_client(build_default_registry(), mutations_enabled=True)
+    items = client.get("/api/v1/job-types").json()["items"]
+    by_type = {item["job_type"]: item["console_submission"] for item in items}
+    assert by_type, "empty production catalog"
+    api_only = {t for t, v in by_type.items() if v == "api_only"}
+    assert api_only == {"paper-session", "record-external-activity"}
+    assert set(by_type.values()) <= {m.value for m in ConsoleSubmission}
+    assert {t for t, v in by_type.items() if v == "interactive"} == set(by_type) - api_only
+
+
+def test_console_submission_value_set_is_closed() -> None:
+    from trading_platform.jobs.registry import ConsoleSubmission
+
+    assert {m.value for m in ConsoleSubmission} == {"interactive", "api_only"}

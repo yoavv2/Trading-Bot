@@ -17,7 +17,11 @@ from fastapi import APIRouter, Depends
 from trading_platform.api.dependencies import get_job_registry, get_settings
 from trading_platform.core.logging import get_logger
 from trading_platform.core.settings import Settings
-from trading_platform.jobs.registry import JobRegistry, UnknownJobTypeError
+from trading_platform.jobs.registry import (
+    JobRegistry,
+    UnknownJobTypeError,
+    console_submission_for,
+)
 
 router = APIRouter(prefix="/api/v1/job-types", tags=["job-types"])
 
@@ -44,6 +48,8 @@ def list_job_types(
             "job_type": job_type,
             "description": spec.description,
             "cancellation_mode": spec.cancellation_mode.value,
+            # 20.1-14 (D-31): additive; the existing console submits only ``interactive`` types.
+            "console_submission": console_submission_for(spec).value,
         }
         # ACCT-01: additive, only when the spec declares what it does at the broker.
         # The declared value is a closed StrEnum; read through ``getattr`` so this

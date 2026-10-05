@@ -27,7 +27,11 @@ from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError
 
 from trading_platform.core.settings import Settings
 from trading_platform.jobs.handlers.payload_fields import map_validation_error
-from trading_platform.jobs.registry import InvalidJobPayloadError, JobCancellationMode
+from trading_platform.jobs.registry import (
+    ConsoleSubmission,
+    InvalidJobPayloadError,
+    JobCancellationMode,
+)
 from trading_platform.services.active_paper_strategy import lock_active_paper_strategy_shared
 from trading_platform.services.broker_jobs import (
     RECORD_EXTERNAL_ACTIVITY_JOB_TYPE,
@@ -78,6 +82,8 @@ class RecordExternalActivitySubmissionSpec:
     )
     cancellation_mode = JobCancellationMode.QUEUED_ONLY
     broker_effect = BrokerEffect.READS_BROKER
+    # 20.1-14 (D-31): recording external activity is operated through the API in this version.
+    console_submission = ConsoleSubmission.API_ONLY
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings

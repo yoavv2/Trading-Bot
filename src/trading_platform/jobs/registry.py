@@ -30,6 +30,24 @@ class JobCancellationMode(StrEnum):
     QUEUED_ONLY = "queued_only"
 
 
+class ConsoleSubmission(StrEnum):
+    """Closed catalog vocabulary (20.1-14, D-31, 05 sec.4): whether the EXISTING console may
+    submit a Job type. ``api_only`` types are operated through the API in this version."""
+
+    INTERACTIVE = "interactive"
+    API_ONLY = "api_only"
+
+
+def console_submission_for(spec: JobSubmissionSpec) -> ConsoleSubmission:
+    """The console submission mode a spec declares (optional attribute ``console_submission``,
+    default ``interactive``; deliberately not a Protocol member)."""
+
+    declared = getattr(spec, "console_submission", None)
+    if declared is None:
+        return ConsoleSubmission.INTERACTIVE
+    return ConsoleSubmission(getattr(declared, "value", declared))
+
+
 @dataclass(frozen=True)
 class UnknownJobTypeError(KeyError):
     """Raised by ``JobRegistry.resolve()`` when the job type is unregistered."""

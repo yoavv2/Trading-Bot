@@ -204,10 +204,13 @@ class ActivePaperStrategyView:
     seeding_available: bool
     handover_available: bool
     as_of: datetime
+    #: 20.1-14: closed ``TradingBlocker`` values, deterministic order; empty = nothing blocks.
+    trading_blocked_reasons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **self.state.to_dict(),
+            "trading_blocked_reasons": list(self.trading_blocked_reasons),
             "checks": list(self.checks),
             "seeding_available": self.seeding_available,
             "handover_available": self.handover_available,
@@ -574,12 +577,17 @@ class OperatorControlService:
             checks = evaluate_account_checks(
                 session, include_handover=has_owner, settings=self.settings
             )
+            # Local import: services.execution.permission imports this module.
+            from trading_platform.services.execution.permission import current_trading_blockers
+
+            blockers = current_trading_blockers(session)
             return ActivePaperStrategyView(
                 state=state,
                 checks=checks.to_list(),
                 seeding_available=(not has_owner) and checks.all_passed,
                 handover_available=has_owner and checks.all_passed,
                 as_of=checks.as_of,
+                trading_blocked_reasons=tuple(b.value for b in blockers),
             )
 
     @_translate_db_errors(ControlWriteError)
@@ -1360,7 +1368,9 @@ class OperatorControlService:
                 changed=changed,
                 trigger_source=strategy_run.trigger_source,
                 started_at=strategy_run.started_at.isoformat(),
-                completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
+                completed_at=strategy_run.completed_at.isoformat()
+                if strategy_run.completed_at
+                else None,
                 reason=reason,
                 actor=actor,
                 state_snapshot=state_snapshot,

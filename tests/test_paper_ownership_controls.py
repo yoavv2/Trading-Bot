@@ -691,6 +691,19 @@ def test_view_reports_owner_checks_and_availability_without_writes(owner_db: str
     assert view.seeding_available is True and view.handover_available is False
     body = view.to_dict()
     assert {"checks", "seeding_available", "handover_available", "as_of"} <= set(body)
+    # 20.1-14 (additive): the closed trading-blocked list rides on the same GET; with no owner
+    # nothing may trade, and every earlier key (golden subset) is still present.
+    assert {
+        "strategy_id",
+        "since",
+        "display_name",
+        "checks",
+        "seeding_available",
+        "handover_available",
+        "as_of",
+        "trading_blocked_reasons",
+    } <= set(body)
+    assert body["trading_blocked_reasons"] == ["no_active_paper_strategy"]
     assert _fingerprint() == before
 
     _own(OWNER, enabled=True)
