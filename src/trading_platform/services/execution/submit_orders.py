@@ -68,9 +68,11 @@ from trading_platform.services.execution._paper_common import (
 )
 from trading_platform.services.execution.attempts import (
     SubmissionClass,
+    SubmissionEvidence,
     SubmissionIntentState,
     bind_attempt_log,
     classify_submission,
+    classify_submission_evidence,
     load_submission_attempts,
     summarize_attempts,
 )
@@ -2386,25 +2388,103 @@ def _execute_pinned_intent(
             if guarded_order is None:
                 raise LookupError(f"Missing retryable paper_order '{decision.existing_order_id}'.")
             prior_attempts = load_submission_attempts(session, guarded_order.id)
-            prior_class = classify_submission(prior_attempts)
-            if prior_class is not None and prior_class != SubmissionClass.NOT_SENT:
-                guard_error = AmbiguousOrderSubmissionError(
-                    "Order submission history is not clean "
-                    f"(submission_class={prior_class.value}); the intent was not re-sent.",
-                    submission_class=prior_class,
-                    attempts=summarize_attempts(prior_attempts),
-                    reason="history_not_clean",
+            if prior_attempts:
+                # WR-08 / V-3: the SHARED verdict over the COMPLETE attempt history (the same
+                # function the strategy gate and the recovery predicate read). Zero attempt rows
+                # never reach this guard's verdict (a registered, never-attempted order is
+                # retryable as before).
+                evidence = classify_submission_evidence(
+                    status=guarded_order.status,
+                    broker_order_id=guarded_order.broker_order_id,
+                    attempts=prior_attempts,
+                    attempt_log_registered=True,
                 )
-                _park_intent_unknown(
-                    session,
-                    ctx.settings,
-                    order=guarded_order,
-                    run_id=run_id,
-                    error=guard_error,
-                    trigger_source=ctx.trigger_source,
-                )
-                registration["guard_error"] = guard_error
-                return
+                if evidence is SubmissionEvidence.REJECTED:
+                    # A conclusively recorded 4xx whose reject() persist was lost: apply it as the
+                    # broker rejection. No POST, no UNKNOWN parking, no uncertainty Job; the
+                    # broker-reaching rejection keeps consuming the TL-10 key (never resent).
+                    rejected_attempts = [
+                        a for a in prior_attempts if a.outcome_class is AttemptOutcomeClass.REJECTED
+                    ]
+                    http_status = rejected_attempts[-1].http_status if rejected_attempts else None
+                    summarized = summarize_attempts(prior_attempts)
+                    guarded_order.last_submission_error = (
+                        f"Recorded broker rejection (http_status={http_status}); not re-sent."
+                    )
+                    guarded_order.broker_payload = {
+                        "error": guarded_order.last_submission_error,
+                        "submission_class": SubmissionClass.REJECTED.value,
+                        "http_status": http_status,
+                        "reason": "recorded_rejection",
+                    }
+                    apply_order_transition(
+                        guarded_order.id,
+                        OrderTransitionRequest(
+                            strategy_run_id=run_id,
+                            event_type=OrderTransitionEventType.BROKER_REJECTED,
+                            details={
+                                "reason": "recorded_rejection",
+                                "submission_class": SubmissionClass.REJECTED.value,
+                                "attempt_numbers": [number for number, _ in summarized],
+                                "attempt_outcomes": [outcome for _, outcome in summarized],
+                                "http_status": http_status,
+                                "trigger_source": ctx.trigger_source,
+                            },
+                        ),
+                        session=session,
+                        settings=ctx.settings,
+                    )
+                    session.add(
+                        ExecutionEvent(
+                            strategy_run_id=run_id,
+                            paper_order_id=guarded_order.id,
+                            event_type="submission_rejection_recorded",
+                            severity="warning",
+                            blocks_execution=False,
+                            event_at=datetime.now(UTC),
+                            message=(
+                                f"Intent '{guarded_order.client_order_id}' already has a recorded "
+                                f"broker rejection (http_status={http_status}); it was applied "
+                                "and nothing was re-sent."
+                            ),
+                            details={
+                                "attempt_numbers": [number for number, _ in summarized],
+                                "attempt_outcomes": [outcome for _, outcome in summarized],
+                                "http_status": http_status,
+                                "trigger_source": ctx.trigger_source,
+                            },
+                        )
+                    )
+                    _link_intent(session, view.intent_id, guarded_order.id)
+                    session.flush()
+                    session.refresh(guarded_order)
+                    registration["recorded_rejection"] = _paper_order_payload(
+                        guarded_order,
+                        intent_decision=decision.summary,
+                        supersedes_client_order_id=decision.supersedes_client_order_id,
+                    )
+                    return
+                if evidence is not SubmissionEvidence.PROVEN_NOT_SENT:
+                    # UNESTABLISHED (and, fail-closed, BROKER_EVIDENCE, unreachable for a
+                    # retry_existing order): park UNKNOWN exactly as before.
+                    history_class = classify_submission(prior_attempts) or SubmissionClass.AMBIGUOUS
+                    guard_error = AmbiguousOrderSubmissionError(
+                        "Order submission history is not clean "
+                        f"(submission_class={history_class.value}); the intent was not re-sent.",
+                        submission_class=history_class,
+                        attempts=summarize_attempts(prior_attempts),
+                        reason="history_not_clean",
+                    )
+                    _park_intent_unknown(
+                        session,
+                        ctx.settings,
+                        order=guarded_order,
+                        run_id=run_id,
+                        error=guard_error,
+                        trigger_source=ctx.trigger_source,
+                    )
+                    registration["guard_error"] = guard_error
+                    return
 
         if decision.existing_order_id is None:
             paper_order = PaperOrder(
@@ -2504,6 +2584,12 @@ def _execute_pinned_intent(
         state.final_state = OperationState.PAUSED
         state.final_reason = PausedReason.OUTCOME_UNRESOLVED.value
         raise guard_error
+    recorded_rejection = registration.get("recorded_rejection")
+    if recorded_rejection is not None:
+        # WR-08: a recorded 4xx applied at registration; same contract as the send-path rejection
+        # (the intent ends REJECTED, nothing is sent, the loop continues with the next intent).
+        state.rejected_orders.append(recorded_rejection)
+        return True
     if registration.get("reused_not_sent"):
         # Identical material intent already exists and may not be re-sent (retry threshold):
         # nothing is sent and the operation pauses; End is available.
