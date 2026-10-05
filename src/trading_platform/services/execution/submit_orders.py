@@ -74,6 +74,7 @@ from trading_platform.services.execution.attempts import (
     load_submission_attempts,
     summarize_attempts,
 )
+from trading_platform.services.execution.continuation import settled_blocker
 from trading_platform.services.execution.contracts import (
     ExecutionService,
     OrderIntent,
@@ -104,13 +105,18 @@ from trading_platform.services.execution.intent_identity import (
 from trading_platform.services.execution.operations import (
     Fence,
     OperationConflictError,
+    OperationExecutorActiveError,
+    OperationNotFoundError,
     OperationOpenError,
     PausedReason,
     PlannedIntent,
     RiskRunAlreadyOperatedError,
     SendRefusal,
     SendRefusedError,
+    acquire_execution,
+    adopt_running_operation,
     authorize_send,
+    begin_continuation,
     cas_update_operation,
     create_operation,
     load_intent_facts,
@@ -731,7 +737,11 @@ def run_paper_session(
     job_id: uuid.UUID | None = None,
     price_source: PriceSource | None = None,
 ) -> PaperSessionRunReport:
-    """``job_id`` (D-08/D-09) is threaded to BOTH runs this function may
+    """The START mode of a paper session. Continue (20.1-16, D-19) is ``run_paper_continuation``:
+    a strategy and a session are explicit here (20.1-01 pins that signature), while a continuation
+    takes both from the paused operation.
+
+    ``job_id`` (D-08/D-09) is threaded to BOTH runs this function may
     create: the internal reconciliation ``StrategyRun`` (via
     ``reconcile_paper_execution``) and the paper_execution ``StrategyRun``
     (via ``run_paper_order_submission``, including the
@@ -1120,6 +1130,289 @@ def run_paper_session(
 
 
 # ---------------------------------------------------------------------------
+# Continue session (REC-02, D-19, S1-R3 takeover)
+# ---------------------------------------------------------------------------
+
+#: Domain action of a continuation that found an in-doubt intent while taking authority.
+CONTINUE_ACTION = "continued_session"
+CONTINUE_ACTION_TERMINATED = "continue_operation_terminated"
+
+
+def run_paper_continuation(
+    operation_id: uuid.UUID,
+    *,
+    trigger_source: str | None = None,
+    settings: Settings | None = None,
+    registry: StrategyRegistry | None = None,
+    execution_service: ExecutionService | None = None,
+    job_id: uuid.UUID | None = None,
+    price_source: PriceSource | None = None,
+) -> PaperSessionRunReport:
+    """Continue a paused execution operation (D-19): its own mode, never an OPS-07 retry.
+
+    The (strategy, evaluation session) advisory lock is taken FIRST and non-blocking: a lock
+    that cannot be acquired ends the Job as ``operation_executor_active`` with zero writes and
+    zero broker calls. Inside the lock: lazy expiry (``touch_operation``), the paused ->
+    running compare-and-set (or adoption of a crash-left ``running`` operation), the S1
+    takeover (``acquire_execution``: epoch CAS, then in-doubt intents parked UNKNOWN) and the
+    SAME permission-checked, guarded loop as a start, with ``continuation=True``. Only unsent
+    intents are ever sent, under their original identity. No reconciliation, no correction and
+    no recovery pass runs here: broker calls are the guarded POSTs and the read-only price GET.
+    """
+
+    resolved_settings = settings or load_settings()
+    logger = get_logger("trading_platform.paper_execution")
+    executor_job_id, lease_owner = _executor_identity(resolved_settings, job_id)
+    with session_scope(resolved_settings) as session:
+        operation = session.get(ExecutionOperation, operation_id)
+        if operation is None:
+            raise OperationNotFoundError(operation_id)
+        strategy_row_id = operation.strategy_id
+        as_of_session = operation.as_of_session
+        risk_run_id = operation.risk_run_id
+        strategy_id = session.execute(
+            select(Strategy.strategy_id).where(Strategy.id == strategy_row_id)
+        ).scalar_one()
+    resolved_registry = registry or build_default_registry(resolved_settings)
+    metadata = resolved_registry.resolve(strategy_id).metadata
+    source = trigger_source or "continue"
+    try:
+        with session_run_lock(
+            strategy_id=strategy_id, session_date=as_of_session, settings=resolved_settings
+        ) as lock:
+            run_id = _create_paper_execution_run(
+                resolved_settings,
+                metadata,
+                trigger_source=source,
+                as_of_session=as_of_session,
+                requested_risk_run_id=str(risk_run_id),
+                job_id=executor_job_id,
+            )
+            fence: Fence | None = None
+            context: _ExecutionContext | None = None
+            owns_service = execution_service is None
+            owns_price = price_source is None
+            broker_execution: ExecutionService | None = execution_service
+            resolved_price: PriceSource | None = price_source
+            try:
+                with session_scope(resolved_settings) as session:
+                    reclaim_stale_runs(
+                        session,
+                        strategy_public_id=strategy_id,
+                        session_date=as_of_session,
+                        timeout_minutes=resolved_settings.execution.safety.stale_run_timeout_minutes,
+                        reclaiming_run_id=run_id,
+                    )
+                with session_scope(resolved_settings) as session:
+                    touched = touch_operation(
+                        session,
+                        operation_id,
+                        now=clock.now_utc(),
+                        settings=resolved_settings,
+                        exclude_job_id=executor_job_id,
+                    )
+                if touched.state is OperationState.TERMINATED:
+                    return _continuation_report(
+                        resolved_settings,
+                        run_id=run_id,
+                        strategy_id=strategy_id,
+                        as_of_session=as_of_session,
+                        risk_run_id=risk_run_id,
+                        operation_id=operation_id,
+                        trigger_source=source,
+                        action=CONTINUE_ACTION_TERMINATED,
+                        loop=None,
+                    )
+                with session_scope(resolved_settings) as session:
+                    persisted = OperationState(
+                        session.execute(
+                            select(ExecutionOperation.state).where(
+                                ExecutionOperation.id == operation_id
+                            )
+                        ).scalar_one()
+                    )
+                    if persisted is OperationState.PAUSED:
+                        begin_continuation(session, operation_id, executor_job_id)
+                    elif persisted is OperationState.RUNNING:
+                        adopt_running_operation(session, operation_id, executor_job_id)
+                    else:
+                        raise OperationConflictError(
+                            operation_id, f"operation is {persisted.value}, not paused"
+                        )
+                acquisition = acquire_execution(
+                    operation_id, executor_job_id, lock, settings=resolved_settings
+                )
+                fence = Fence(operation_id, acquisition.epoch, executor_job_id)
+                if acquisition.paused:
+                    # In-doubt intents were parked UNKNOWN; the recovery gate refuses Continue
+                    # until recovery resolves them. Nothing is sent.
+                    return _continuation_report(
+                        resolved_settings,
+                        run_id=run_id,
+                        strategy_id=strategy_id,
+                        as_of_session=as_of_session,
+                        risk_run_id=risk_run_id,
+                        operation_id=operation_id,
+                        trigger_source=source,
+                        action=BLOCKED_ACTION_OUTCOME_UNRESOLVED,
+                        loop=None,
+                    )
+                broker_execution = broker_execution or AlpacaExecutionService(
+                    resolved_settings.broker.alpaca
+                )
+                resolved_price = resolved_price or _default_price_source(resolved_settings)
+                context = _ExecutionContext(
+                    settings=resolved_settings,
+                    logger=logger,
+                    strategy_id=strategy_id,
+                    strategy_row_id=strategy_row_id,
+                    as_of_session=as_of_session,
+                    risk_run_id=risk_run_id,
+                    run_id=run_id,
+                    trigger_source=source,
+                    fence=fence,
+                    lease_owner=lease_owner,
+                    broker_execution=broker_execution,
+                    price_source=resolved_price,
+                    failure_threshold=resolved_settings.execution.safety.repeated_failure_threshold,
+                )
+                loop = _run_operation_loop(context, continuation=True)
+                return _continuation_report(
+                    resolved_settings,
+                    run_id=run_id,
+                    strategy_id=strategy_id,
+                    as_of_session=as_of_session,
+                    risk_run_id=risk_run_id,
+                    operation_id=operation_id,
+                    trigger_source=source,
+                    action=CONTINUE_ACTION,
+                    loop=loop,
+                )
+            except Exception as exc:
+                if context is not None:
+                    _best_effort_pause(context)
+                _update_paper_execution_run(
+                    resolved_settings,
+                    run_id,
+                    status=StrategyRunStatus.FAILED,
+                    completed_at=datetime.now(UTC),
+                    error_message=str(exc),
+                    result_summary={
+                        "stage": "failed",
+                        "mode": "continue",
+                        "operation_id": str(operation_id),
+                        "strategy_id": strategy_id,
+                        "as_of_session": as_of_session.isoformat(),
+                        "source_risk_run_id": str(risk_run_id),
+                    },
+                )
+                logger.warning(
+                    "paper_continuation_failed",
+                    extra={
+                        "context": build_log_context(
+                            strategy_id=strategy_id,
+                            run_id=str(run_id),
+                            session_date=as_of_session.isoformat(),
+                            trigger_source=source,
+                        )
+                    },
+                    exc_info=True,
+                )
+                raise
+            finally:
+                if (
+                    owns_service
+                    and broker_execution is not None
+                    and hasattr(broker_execution, "close")
+                ):
+                    broker_execution.close()
+                if owns_price and resolved_price is not None and hasattr(resolved_price, "close"):
+                    resolved_price.close()
+    except ConcurrentRunLockedError as exc:
+        emit_structured_log(
+            logger,
+            logging.WARNING,
+            "paper_continuation_lock_denied",
+            strategy_id=strategy_id,
+            session_date=as_of_session.isoformat(),
+            operation_id=str(operation_id),
+        )
+        raise OperationExecutorActiveError(operation_id, "session advisory lock is held") from exc
+
+
+def _continuation_report(
+    settings: Settings,
+    *,
+    run_id: uuid.UUID,
+    strategy_id: str,
+    as_of_session: date,
+    risk_run_id: uuid.UUID,
+    operation_id: uuid.UUID,
+    trigger_source: str,
+    action: str,
+    loop: _LoopState | None,
+) -> PaperSessionRunReport:
+    """Persist the continuation's run summary and build the session report."""
+
+    operation_summary = _operation_summary(settings, operation_id)
+    state = loop or _LoopState()
+    summary: dict[str, Any] = {
+        "stage": "blocked_mid_run" if state.halt else "completed",
+        "mode": "continue",
+        "action": action,
+        "operation_id": str(operation_id),
+        "strategy_id": strategy_id,
+        "as_of_session": as_of_session.isoformat(),
+        "requested_risk_run_id": str(risk_run_id),
+        "source_risk_run_id": str(risk_run_id),
+        "submitted_count": len(state.submitted_orders),
+        "existing_count": len(state.existing_orders),
+        "reused_count": len(state.reused_orders),
+        "versioned_count": 0,
+        "skipped_by_kill_switch_count": len(state.skipped_by_kill_switch),
+        "skipped_by_ownership_count": len(state.skipped_by_ownership),
+        "submitted_orders": state.submitted_orders,
+        "existing_orders": state.existing_orders,
+        "reused_orders": state.reused_orders,
+        "versioned_orders": [],
+        "skipped_by_kill_switch": state.skipped_by_kill_switch,
+        "skipped_by_ownership": state.skipped_by_ownership,
+        "rejected_orders": state.rejected_orders,
+        "operation": operation_summary,
+        "broker_provider": settings.broker.provider,
+    }
+    if state.halt == "kill_switch" and state.kill_switch is not None:
+        summary["blocked_reason"] = BLOCKED_REASON_GLOBAL_KILL_SWITCH
+        summary["kill_switch"] = state.kill_switch
+    elif state.halt == "ownership":
+        summary["blocked_reason"] = BLOCKED_REASON_NOT_ACTIVE_PAPER_STRATEGY
+        summary["ownership_block"] = state.ownership_block
+    if action == BLOCKED_ACTION_OUTCOME_UNRESOLVED:
+        summary["blocked_reason"] = PausedReason.OUTCOME_UNRESOLVED.value
+    report = _update_paper_execution_run(
+        settings,
+        run_id,
+        status=StrategyRunStatus.SUCCEEDED,
+        completed_at=datetime.now(UTC),
+        result_summary=summary,
+    )
+    return PaperSessionRunReport(
+        strategy_id=strategy_id,
+        session_date=as_of_session.isoformat(),
+        trigger_source=trigger_source,
+        source_risk_run_id=str(risk_run_id),
+        action=action,
+        execution_run_id=report.run_id,
+        execution_status=report.status,
+        result_summary=report.result_summary,
+        reconciliation_run_id=None,
+        operation_id=operation_summary["id"],
+        operation_state=operation_summary["state"],
+        operation_reason=operation_summary["reason"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Execution operation: start, sequential loop, guarded single send path (REC-02, D-17, S1-R3)
 # ---------------------------------------------------------------------------
 
@@ -1134,6 +1427,23 @@ class ExecutionAuthorityLostAfterSendError(RuntimeError):
     """The executor lost its authority after the broker answered; its outcome could not be
     recorded locally. Never mapped to a domain conflict: the POST WAS sent, so the Job fails
     with an uncertain outcome and recovery (broker-order-sync) establishes the order."""
+
+
+#: The only intent decisions a continuation may bind (``create_new`` is the never-registered
+#: planned intent; ``create_new_version`` is unreachable on this path).
+_CONTINUATION_ACTIONS = frozenset({"reuse_existing", "retry_existing", "create_new"})
+
+
+class ContinuationIdentityChangedError(RuntimeError):
+    """The intent resolver returned an action a continuation may never take (a new version).
+    Nothing was registered or sent; the Job fails and the operation is paused best-effort."""
+
+    def __init__(self, action: str) -> None:
+        super().__init__(
+            f"continuation_identity_changed: the intent resolver returned '{action}'; a "
+            "continuation sends the pinned intent under its original identity only."
+        )
+        self.action = action
 
 
 def _executor_identity(settings: Settings, job_id: uuid.UUID | None) -> tuple[uuid.UUID, str]:
@@ -1706,6 +2016,16 @@ def _run_operation_loop(ctx: _ExecutionContext, *, continuation: bool = False) -
     state = _LoopState()
     with session_scope(ctx.settings) as session:
         pending = _load_open_intents(session, ctx.fence.operation_id)
+    if continuation and not pending:
+        # Nothing left to send: complete only when every submitted order is terminal and
+        # synced, nothing is unresolved and a clean reconciliation followed (20.1-16).
+        with session_scope(ctx.settings) as session:
+            blocker = settled_blocker(session, ctx.strategy_id)
+        if blocker is not None:
+            _move_running(ctx, OperationState.PAUSED, blocker.value)
+            state.final_state = OperationState.PAUSED
+            state.final_reason = blocker.value
+            return state
     for index, view in enumerate(pending):
         with session_scope(ctx.settings) as session:
             outcome = check_intent_permission(
@@ -1729,7 +2049,7 @@ def _run_operation_loop(ctx: _ExecutionContext, *, continuation: bool = False) -
         if not outcome.ok:
             _apply_permission_outcome(ctx, state, outcome, pending[index:])
             return state
-        if not _execute_pinned_intent(ctx, state, view, outcome):
+        if not _execute_pinned_intent(ctx, state, view, outcome, continuation=continuation):
             return state
     # Every intent ended REJECTED (an accepted order would have paused the operation).
     with session_scope(ctx.settings) as session:
@@ -1871,6 +2191,8 @@ def _execute_pinned_intent(
     state: _LoopState,
     view: _IntentView,
     permission: PermissionOutcome,
+    *,
+    continuation: bool = False,
 ) -> bool:
     """Register one pinned intent, send it through the guarded single send path and classify the
     result. Returns True to continue with the next intent, False when the loop must stop."""
@@ -1895,6 +2217,10 @@ def _execute_pinned_intent(
         )
         registration["candidate"] = candidate
         registration["decision"] = decision
+        if continuation and decision.action not in _CONTINUATION_ACTIONS:
+            # D-19 / R-6: Continue only ever sends the pinned intent under its ORIGINAL identity;
+            # a new version is never a way to send "the same" action again.
+            raise ContinuationIdentityChangedError(decision.action)
         if decision.action == "create_new_version":
             create_new_version(
                 session,

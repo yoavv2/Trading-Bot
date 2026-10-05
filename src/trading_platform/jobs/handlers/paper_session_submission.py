@@ -52,6 +52,16 @@ COMPLETED one is accepted and becomes the ``noop_existing_orders`` run) and
 against the strategy's executions). ``risk_run_id: null`` is resolved read-only through
 ``latest_eligible_risk_run_id``, the same function the manifest check and the run-time pin use.
 
+Continue mode (20.1-16, D-19): the optional payload ``mode`` is ``start`` (absent means start; the
+normalized start payload never contains it) or ``continue`` with exactly ``{mode, operation_id}``.
+A Continue is its own paper-session mode with its own Idempotency-Key, not an OPS-07 retry (a retry
+of a continue-mode Job re-runs this gate). It is refused, read-only and in this order: ownership,
+the recovery gate, ``operation_not_paused``, ``working_order_commitments_unaccounted`` and
+``awaiting_reconciliation`` (``services/execution/continuation.py``, the same predicate the run
+re-verifies inside the advisory lock). Eligibility, the start gates and the manifest check do not
+apply: an elapsed window is accepted so the run can terminate the operation, and provenance is
+re-verified per intent at run time.
+
 Provenance (D-25, PROV-01): as the LAST validation step the risk run that will be
 used (the pinned ``risk_run_id``, else the latest eligible one) has its stored
 evaluation input manifest verified against the current source data and signal
@@ -113,6 +123,7 @@ from trading_platform.services.calendar_facts import (
     paper_execution_eligibility,
 )
 from trading_platform.services.evaluation_manifest import ManifestVerificationStatus
+from trading_platform.services.execution.continuation import continue_precheck
 from trading_platform.services.execution.intent_identity import (
     load_basis_verification_rows,
     verify_evaluation_basis,
@@ -127,6 +138,11 @@ from trading_platform.services.risk import (
 )
 
 PAPER_SESSION_JOB_TYPE = "paper-session"
+
+#: The two values of the optional payload ``mode`` (absent means ``start``).
+MODE_START = "start"
+MODE_CONTINUE = "continue"
+_START_FIELDS = frozenset({"strategy_id", "as_of_session", "risk_run_id"})
 
 
 class PaperSessionPayloadRejection(StrEnum):
@@ -146,6 +162,13 @@ class PaperSessionPayloadRejection(StrEnum):
     AS_OF_SESSION_OUT_OF_CALENDAR_RANGE = "as_of_session_out_of_calendar_range"
     INVALID_RISK_RUN_ID = "invalid_risk_run_id"
     RISK_RUN_NOT_ELIGIBLE = "risk_run_not_eligible"
+    # 20.1-16 (D-19): the Continue mode payload (``{mode: 'continue', operation_id}``).
+    INVALID_MODE = "invalid_mode"
+    OPERATION_ID_REQUIRED = "operation_id_required"
+    INVALID_OPERATION_ID = "invalid_operation_id"
+    OPERATION_ID_FORBIDDEN_IN_START_MODE = "operation_id_forbidden_in_start_mode"
+    CONTINUE_FORBIDS_START_FIELDS = "continue_forbids_start_fields"
+    OPERATION_NOT_FOUND = "operation_not_found"
 
 
 class PaperSessionSubmitConflict(StrEnum):
@@ -172,6 +195,9 @@ class PaperSessionSubmitConflict(StrEnum):
     WORKING_ORDER_COMMITMENTS_UNACCOUNTED = "working_order_commitments_unaccounted"
     RISK_RUN_ALREADY_OPERATED = "risk_run_already_operated"
     EVALUATION_BASIS_UNVERIFIED = "evaluation_basis_unverified"
+    # D-19 (20.1-16): the Continue-mode gates (after the recovery gate, in this order).
+    OPERATION_NOT_PAUSED = "operation_not_paused"
+    AWAITING_RECONCILIATION = "awaiting_reconciliation"
 
 
 def _default_clock() -> datetime:
@@ -235,8 +261,23 @@ class PaperSessionSubmissionSpec:
         self._clock = clock or _default_clock
 
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        raw = dict(payload)
+        if "mode" in raw:
+            mode = raw.pop("mode")
+            if mode == MODE_CONTINUE:
+                return self._validate_continue(raw)
+            if mode != MODE_START:
+                raise InvalidJobPayloadError(
+                    job_type=PAPER_SESSION_JOB_TYPE,
+                    reason=PaperSessionPayloadRejection.INVALID_MODE.value,
+                )
+        if "operation_id" in raw:
+            raise InvalidJobPayloadError(
+                job_type=PAPER_SESSION_JOB_TYPE,
+                reason=PaperSessionPayloadRejection.OPERATION_ID_FORBIDDEN_IN_START_MODE.value,
+            )
         try:
-            parsed = _PaperSessionPayload.model_validate(dict(payload))
+            parsed = _PaperSessionPayload.model_validate(raw)
         except ValidationError as exc:
             reason = PaperSessionPayloadRejection(map_validation_error(exc).value)
             raise InvalidJobPayloadError(
@@ -332,6 +373,73 @@ class PaperSessionSubmissionSpec:
             "as_of_session": as_of_session.isoformat(),
             "risk_run_id": canonical_risk_run_id,
         }
+
+    def _reject(self, reason: PaperSessionPayloadRejection) -> InvalidJobPayloadError:
+        return InvalidJobPayloadError(job_type=PAPER_SESSION_JOB_TYPE, reason=reason.value)
+
+    def _validate_continue(self, raw: dict[str, Any]) -> Mapping[str, Any]:
+        """Continue mode (D-19): exactly ``{mode: 'continue', operation_id}``; the strategy,
+        session and risk run are the operation's. Gates, in order: ownership -> the recovery
+        gate -> ``operation_not_paused`` -> ``working_order_commitments_unaccounted`` ->
+        ``awaiting_reconciliation``. Eligibility, the start gates and the manifest check do NOT
+        apply: the window verdict comes from the effective state (an elapsed window is accepted
+        so the run can terminate the operation, 05 E11) and provenance is re-verified per
+        intent at run time (a change becomes ``requires_reevaluation``, never a 409 here).
+        Read-only: nothing is written."""
+
+        unknown = set(raw) - {"operation_id"} - _START_FIELDS
+        if unknown:
+            raise self._reject(PaperSessionPayloadRejection.UNKNOWN_PAYLOAD_KEYS)
+        if set(raw) & _START_FIELDS:
+            raise self._reject(PaperSessionPayloadRejection.CONTINUE_FORBIDS_START_FIELDS)
+        value = raw.get("operation_id")
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise self._reject(PaperSessionPayloadRejection.OPERATION_ID_REQUIRED)
+        if not isinstance(value, str):
+            raise self._reject(PaperSessionPayloadRejection.INVALID_OPERATION_ID)
+        try:
+            operation_id = uuid.UUID(value.strip())
+        except ValueError as exc:
+            raise self._reject(PaperSessionPayloadRejection.INVALID_OPERATION_ID) from exc
+
+        found: tuple[str, date] | None = None
+        with session_scope(self._settings) as session:
+            operation = session.get(ExecutionOperation, operation_id)
+            if operation is not None:
+                found = (
+                    session.execute(
+                        select(Strategy.strategy_id).where(Strategy.id == operation.strategy_id)
+                    ).scalar_one(),
+                    operation.as_of_session,
+                )
+        if found is None:
+            raise self._reject(PaperSessionPayloadRejection.OPERATION_NOT_FOUND)
+        strategy_id, as_of_session = found
+
+        require_active_paper_strategy(
+            self._settings,
+            strategy_id,
+            job_type=PAPER_SESSION_JOB_TYPE,
+            conflict_enum=PaperSessionSubmitConflict,
+        )
+        self._require_recovery_resolved(strategy_id=strategy_id, as_of_session=as_of_session)
+        with session_scope(self._settings) as session:
+            operation = session.get(ExecutionOperation, operation_id)
+            assert operation is not None
+            refusal = continue_precheck(
+                session, operation, strategy_id, now=self._clock(), settings=self._settings
+            )
+        if refusal is not None:
+            raise JobSubmissionConflictError(
+                job_type=PAPER_SESSION_JOB_TYPE,
+                code=PaperSessionSubmitConflict(refusal.code).value,
+                detail={
+                    "strategy_id": strategy_id,
+                    "as_of_session": as_of_session.isoformat(),
+                    **refusal.detail,
+                },
+            )
+        return {"mode": MODE_CONTINUE, "operation_id": str(operation_id)}
 
     def _require_recovery_resolved(self, *, strategy_id: str, as_of_session: date) -> None:
         """D-15 gate: the domain predicate (read-only, two statements) decides."""
@@ -498,9 +606,18 @@ class PaperSessionSubmissionSpec:
         check against the transaction's own view."""
 
         self.lock_admission(session=session)
+        strategy_id: str = payload.get("strategy_id")  # type: ignore[assignment]
+        if payload.get("mode") == MODE_CONTINUE:
+            # Continue payloads carry no strategy: it is the operation's (read in this
+            # transaction, so the ownership check sees the same view).
+            strategy_id = session.execute(
+                select(Strategy.strategy_id)
+                .join(ExecutionOperation, ExecutionOperation.strategy_id == Strategy.id)
+                .where(ExecutionOperation.id == uuid.UUID(str(payload["operation_id"])))
+            ).scalar_one()
         require_active_paper_strategy(
             self._settings,
-            payload["strategy_id"],
+            strategy_id,
             job_type=PAPER_SESSION_JOB_TYPE,
             conflict_enum=PaperSessionSubmitConflict,
             session=session,

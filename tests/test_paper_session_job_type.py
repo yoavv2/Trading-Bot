@@ -271,6 +271,13 @@ def test_paper_session_rejection_enum_is_closed() -> None:
         "as_of_session_out_of_calendar_range",
         "invalid_risk_run_id",
         "risk_run_not_eligible",
+        # D-19 / 20.1-16: the Continue mode payload.
+        "invalid_mode",
+        "operation_id_required",
+        "invalid_operation_id",
+        "operation_id_forbidden_in_start_mode",
+        "continue_forbids_start_fields",
+        "operation_not_found",
     }
 
 
@@ -332,6 +339,53 @@ def test_paper_session_rejection_enum_is_closed() -> None:
             PaperSessionPayloadRejection.INVALID_RISK_RUN_ID,
             id="invalid_risk_run_id",
         ),
+        # D-19 / 20.1-16: one case per Continue-mode rejection value (mode dispatch precedes the
+        # start-field validation, so the ten start rejections above are unchanged).
+        pytest.param(
+            {**_VALID_PAYLOAD, "mode": "resume"},
+            PaperSessionPayloadRejection.INVALID_MODE,
+            id="invalid_mode",
+        ),
+        pytest.param(
+            {"mode": "continue"},
+            PaperSessionPayloadRejection.OPERATION_ID_REQUIRED,
+            id="operation_id_required",
+        ),
+        pytest.param(
+            {"mode": "continue", "operation_id": "not-a-uuid"},
+            PaperSessionPayloadRejection.INVALID_OPERATION_ID,
+            id="invalid_operation_id",
+        ),
+        pytest.param(
+            {**_VALID_PAYLOAD, "operation_id": str(uuid.uuid4())},
+            PaperSessionPayloadRejection.OPERATION_ID_FORBIDDEN_IN_START_MODE,
+            id="operation_id_forbidden_in_start_mode",
+        ),
+        pytest.param(
+            {"mode": "start", **_VALID_PAYLOAD, "operation_id": str(uuid.uuid4())},
+            PaperSessionPayloadRejection.OPERATION_ID_FORBIDDEN_IN_START_MODE,
+            id="operation_id_forbidden_in_explicit_start_mode",
+        ),
+        pytest.param(
+            {"mode": "continue", "operation_id": str(uuid.uuid4()), "strategy_id": "trend_following_daily"},
+            PaperSessionPayloadRejection.CONTINUE_FORBIDS_START_FIELDS,
+            id="continue_forbids_strategy_id",
+        ),
+        pytest.param(
+            {"mode": "continue", "operation_id": str(uuid.uuid4()), "as_of_session": "2024-01-10"},
+            PaperSessionPayloadRejection.CONTINUE_FORBIDS_START_FIELDS,
+            id="continue_forbids_as_of_session",
+        ),
+        pytest.param(
+            {"mode": "continue", "operation_id": str(uuid.uuid4()), "risk_run_id": None},
+            PaperSessionPayloadRejection.CONTINUE_FORBIDS_START_FIELDS,
+            id="continue_forbids_risk_run_id",
+        ),
+        pytest.param(
+            {"mode": "continue", "operation_id": str(uuid.uuid4()), "extra": 1},
+            PaperSessionPayloadRejection.UNKNOWN_PAYLOAD_KEYS,
+            id="continue_unknown_payload_keys",
+        ),
     ],
 )
 def test_paper_session_validate_payload_rejects(
@@ -372,6 +426,10 @@ def test_paper_session_submit_conflict_is_a_closed_set() -> None:
         "working_order_commitments_unaccounted",
         "risk_run_already_operated",
         "evaluation_basis_unverified",
+        # D-19 / 20.1-16: the Continue-mode gates (working_order_commitments_unaccounted is shared
+        # with the start-mode gate above).
+        "operation_not_paused",
+        "awaiting_reconciliation",
     }
 
 
@@ -1015,3 +1073,138 @@ def _direct_paper_execution(monkeypatch: pytest.MonkeyPatch) -> None:
     tests/support/paper_execution_seams.py."""
 
     allow_direct_paper_execution(monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# Continue mode (D-19, 20.1-16)
+# ---------------------------------------------------------------------------
+
+
+def test_start_normalization_is_byte_identical_and_never_contains_mode(migrated_paper_db: str) -> None:
+    """A payload without ``mode`` and one with ``mode: 'start'`` normalize to exactly the three
+    start keys (golden dict); ``mode`` is never written into the normalized start payload."""
+
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)
+    spec = PaperSessionSubmissionSpec(load_settings())
+    golden = {"strategy_id": "trend_following_daily", "as_of_session": "2024-01-10", "risk_run_id": None}
+
+    assert spec.validate_payload(dict(_VALID_PAYLOAD)) == golden
+    assert spec.validate_payload({**_VALID_PAYLOAD, "mode": "start"}) == golden
+    assert list(spec.validate_payload({**_VALID_PAYLOAD, "mode": "start"})) == list(golden)
+
+
+def test_continue_for_an_unknown_operation_is_a_422_payload_rejection(migrated_paper_db: str) -> None:
+    seed_registered_strategy(load_settings(), "trend_following_daily", owner=True)
+    spec = PaperSessionSubmissionSpec(load_settings())
+
+    with pytest.raises(InvalidJobPayloadError) as exc_info:
+        spec.validate_payload({"mode": "continue", "operation_id": str(uuid.uuid4())})
+
+    assert exc_info.value.reason == PaperSessionPayloadRejection.OPERATION_NOT_FOUND.value
+
+
+def _seed_continue_operation(session: Any, *, state: str, reason: str | None) -> uuid.UUID:
+    from tests.support.operation_fixtures import seed_operation
+
+    return seed_operation(session, state=state, reason=reason).id
+
+
+@pytest.mark.parametrize(
+    "gate_code",
+    ["operation_not_paused", "working_order_commitments_unaccounted", "awaiting_reconciliation"],
+)
+def test_paper_session_raises_each_continue_mode_gate_as_a_typed_conflict(
+    migrated_paper_db: str, gate_code: str
+) -> None:
+    """D-19: one case per Continue-mode gate code (the precedence and the run-time re-check are
+    tested in tests/test_paper_session_operations.py)."""
+    from tests.support.recovery_fixtures import seed_intent, seed_paper_run
+
+    from trading_platform.db.models import AttemptOutcomeClass, OrderLifecycleState
+
+    settings = load_settings()
+    seed_registered_strategy(settings, "trend_following_daily", owner=True)
+    with session_scope(settings) as session:
+        if gate_code == "operation_not_paused":
+            operation_id = _seed_continue_operation(
+                session, state="requires_reevaluation", reason="evaluation_data_changed"
+            )
+        else:
+            operation_id = _seed_continue_operation(
+                session, state="paused", reason="awaiting_reconciliation"
+            )
+            if gate_code == "working_order_commitments_unaccounted":
+                run = seed_paper_run(session, None)
+                seed_intent(
+                    session,
+                    run,
+                    status=OrderLifecycleState.SUBMITTED,
+                    attempts=(AttemptOutcomeClass.ACCEPTED,),
+                    broker_order_id="working-1",
+                    broker_status="new",
+                )
+    spec = PaperSessionSubmissionSpec(settings)
+
+    with pytest.raises(JobSubmissionConflictError) as exc_info:
+        spec.validate_payload({"mode": "continue", "operation_id": str(operation_id)})
+
+    assert exc_info.value.code == gate_code
+    assert exc_info.value.job_type == "paper-session"
+    assert exc_info.value.detail["strategy_id"] == "trend_following_daily"
+    assert all(isinstance(value, str) for value in exc_info.value.detail.values())
+    if gate_code == "operation_not_paused":
+        assert exc_info.value.detail["operation_state"] == "requires_reevaluation"
+
+
+def test_continue_normalization_is_the_mode_and_the_canonical_operation_id(
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.support.operation_fixtures import seed_operation
+
+    from trading_platform.jobs.handlers import paper_session_submission as submission_module
+
+    settings = load_settings()
+    seed_registered_strategy(settings, "trend_following_daily", owner=True)
+    with session_scope(settings) as session:
+        operation_id = seed_operation(session, state="paused", reason="awaiting_reconciliation").id
+    # The reconciliation gate has its own case above; here the precondition holds.
+    monkeypatch.setattr(submission_module, "continue_precheck", lambda *a, **k: None)
+    spec = PaperSessionSubmissionSpec(settings)
+
+    normalized = spec.validate_payload(
+        {"mode": "continue", "operation_id": f"  {str(operation_id).upper()}  "}
+    )
+
+    assert normalized == {"mode": "continue", "operation_id": str(operation_id)}
+
+
+def test_paper_session_handler_runs_continue_mode_through_run_paper_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-19 (20.1-16): a continue-mode Job reads no strategy or session from its payload; the run
+    reports them back and the result keeps the additive ``operation`` object."""
+    captured: dict[str, Any] = {}
+    operation_id = uuid.uuid4()
+
+    def _fake_continuation(operation: uuid.UUID, **kwargs: Any) -> PaperSessionRunReport:
+        captured["operation_id"] = operation
+        captured.update(kwargs)
+        return _fake_report(
+            action="continued_session",
+            result_summary={"operation": {"id": str(operation), "state": "paused", "reason": "price_unavailable"}},
+        )
+
+    import trading_platform.jobs.handlers.paper_session as paper_session_module
+
+    monkeypatch.setattr(paper_session_module, "run_paper_continuation", _fake_continuation)
+    context = _FakeContext(payload={"mode": "continue", "operation_id": str(operation_id)})
+
+    result = PaperSessionJobHandler().run(context)
+
+    assert captured["operation_id"] == operation_id
+    assert captured["job_id"] == context.job_id and captured["trigger_source"] == "job"
+    assert result["action"] == "continued_session"
+    assert result["as_of_session"] == "2024-01-10"
+    assert result["operation"]["state"] == "paused"
+    started = next(c for c in context.log_calls if c["event_code"] == "external_broker_session_started")
+    assert started["context"]["mode"] == "continue"

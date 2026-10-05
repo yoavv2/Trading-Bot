@@ -31,6 +31,7 @@ lifecycle.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from typing import Any
 
@@ -38,7 +39,7 @@ from trading_platform.core.settings import Settings
 from trading_platform.jobs.contracts import JobContext
 from trading_platform.jobs.handlers.domain_conflicts import translate_domain_conflicts
 from trading_platform.services.config.validation import ExecutionMode
-from trading_platform.services.execution import run_paper_session
+from trading_platform.services.execution import run_paper_continuation, run_paper_session
 
 STEP_RESOLVING = "resolving strategy"
 STEP_RUNNING = "running paper session"
@@ -57,30 +58,46 @@ class PaperSessionJobHandler:
 
     def run(self, context: JobContext) -> dict[str, Any]:
         context.report_progress(step=STEP_RESOLVING)
-        strategy_id = context.payload["strategy_id"]
-        as_of_session = date.fromisoformat(context.payload["as_of_session"])
-        risk_run_id = context.payload.get("risk_run_id")
+        continue_mode = context.payload.get("mode") == "continue"
+        if continue_mode:
+            # D-19 (20.1-16): ``{mode: 'continue', operation_id}``; strategy and session are
+            # the operation's, reported back by the run.
+            operation_id = uuid.UUID(str(context.payload["operation_id"]))
+            log_context: dict[str, Any] = {"operation_id": str(operation_id), "mode": "continue"}
+        else:
+            strategy_id = context.payload["strategy_id"]
+            as_of_session = date.fromisoformat(context.payload["as_of_session"])
+            risk_run_id = context.payload.get("risk_run_id")
+            log_context = {
+                "strategy_id": strategy_id,
+                "as_of_session": context.payload["as_of_session"],
+            }
 
         context.report_progress(step=STEP_RUNNING)
         context.log(
             level="info",
             event_code="external_broker_session_started",
             message="Paper session started; broker submission may occur.",
-            context={
-                "strategy_id": strategy_id,
-                "as_of_session": context.payload["as_of_session"],
-            },
+            context=log_context,
         )
 
         with translate_domain_conflicts():
-            report = run_paper_session(
-                strategy_id,
-                as_of_session=as_of_session,
-                risk_run_id=risk_run_id,
-                trigger_source="job",
-                job_id=context.job_id,
-                settings=self._settings,
-            )
+            if continue_mode:
+                report = run_paper_continuation(
+                    operation_id,
+                    trigger_source="job",
+                    job_id=context.job_id,
+                    settings=self._settings,
+                )
+            else:
+                report = run_paper_session(
+                    strategy_id,
+                    as_of_session=as_of_session,
+                    risk_run_id=risk_run_id,
+                    trigger_source="job",
+                    job_id=context.job_id,
+                    settings=self._settings,
+                )
 
         context.report_progress(step=STEP_RECORDING)
         context.log(
@@ -102,7 +119,7 @@ class PaperSessionJobHandler:
         result: dict[str, Any] = {
             "action": report.action,
             "strategy_id": report.strategy_id,
-            "as_of_session": context.payload["as_of_session"],
+            "as_of_session": report.session_date,
             "source_risk_run_id": report.source_risk_run_id,
             "execution_run_id": report.execution_run_id,
             "execution_status": report.execution_status,

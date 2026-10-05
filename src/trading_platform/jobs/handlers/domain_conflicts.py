@@ -19,6 +19,7 @@ from trading_platform.jobs.contracts import JobDomainConflictError
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
 from trading_platform.services.execution.operations import (
     OperationConflictError,
+    OperationExecutorActiveError,
     OperationOpenError,
     RiskRunAlreadyOperatedError,
 )
@@ -41,12 +42,15 @@ from trading_platform.services.external_activity import ExternalActivityRejected
 # constraint) and ``RiskRunAlreadyOperatedError`` (the pinned risk run already has an
 # operation) are raised BEFORE the request they refuse (the refused send authorization sends
 # nothing; the other two are raised at operation creation, before any intent is registered),
-# so the outcome is certain. An executor that loses authority AFTER a POST raises a different
+# so the outcome is certain. 20.1-16: ``OperationExecutorActiveError`` (``operation_executor_active``:
+# the Continue run could not take the session advisory lock, or the operation is running under
+# another live Job) is raised before any write and any broker call; the outcome is certain. An executor that loses authority AFTER a POST raises a different
 # error (``ExecutionAuthorityLostAfterSendError``) that is deliberately NOT translated.
 DOMAIN_CONFLICT_OUTCOME_UNCERTAIN: dict[type[Exception], bool] = {
     ConcurrentRunLockedError: False,
     ExternalActivityRejectedError: False,
     OperationConflictError: False,
+    OperationExecutorActiveError: False,
     OperationOpenError: False,
     RiskRunAlreadyOperatedError: False,
 }

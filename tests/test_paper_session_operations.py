@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -38,6 +38,7 @@ from trading_platform.db.models import (
     ExecutionOperationIntent,
     Job,
     JobStatus,
+    OperationState,
     OrderLifecycleState,
     OrderSubmissionAttempt,
     PaperOrder,
@@ -67,6 +68,7 @@ from trading_platform.services.execution import (
     ExecutionService,
     OrderIntent,
     OrderSubmissionResult,
+    run_paper_continuation,
     run_paper_order_submission,
     run_paper_session,
 )
@@ -1844,65 +1846,65 @@ def seed_clean_reconciliation_after_now() -> None:
         )
 
 
-def continue_operation(service: ExecutionService, *, price_source: Any = None) -> Any:
-    """What 20.1-16's Continue does around the shared loop: take the paused operation back
-    (paused -> running), take execution authority under the session lock (S1 takeover) and run the
-    SAME permission-checked, guarded loop with ``continuation=True``."""
+@dataclass
+class ContinueOutcome:
+    """The result of the PRODUCT Continue run (``run_paper_session(mode='continue')``) in the shape
+    the loop-level tests of 20.1-15 read: the final state and reason of the operation."""
+
+    report: Any
+
+    @property
+    def final_state(self) -> OperationState:
+        return OperationState(self.report.operation_state)
+
+    @property
+    def final_reason(self) -> str | None:
+        return self.report.operation_reason
+
+
+def continue_job(operation_id: uuid.UUID, *, lease_owner: str = "continue-worker") -> uuid.UUID:
+    """A RUNNING Continue Job holding a lease (what the worker hands the handler)."""
 
     from datetime import timedelta
 
-    from trading_platform.services.concurrency_guard import session_run_lock
-    from trading_platform.services.execution.operations import (
-        Fence,
-        acquire_execution,
-        begin_continuation,
-    )
-    from trading_platform.strategies.registry import build_default_registry
-
-    settings = load_settings()
-    operation = operation_row()
-    with session_scope(settings) as session:
+    with session_scope(load_settings()) as session:
         job = Job(
             job_type="paper-session",
-            payload={"mode": "continue", "operation_id": str(operation.id)},
+            payload={"mode": "continue", "operation_id": str(operation_id)},
             status=JobStatus.RUNNING,
-            lease_owner="continue-worker",
+            lease_owner=lease_owner,
             lease_expires_at=datetime.now(UTC) + timedelta(days=1),
         )
         session.add(job)
         session.flush()
-        job_id = job.id
-        begin_continuation(session, operation.id, job_id)
-    metadata = build_default_registry(settings).resolve(STRATEGY).metadata
-    run_id = submit_orders_module._create_paper_execution_run(
-        settings,
-        metadata,
+        return job.id
+
+
+def run_continue(
+    service: ExecutionService,
+    *,
+    price_source: Any = None,
+    operation_id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
+) -> Any:
+    """Continue mode through the product entrypoint (``run_paper_continuation``): advisory lock, lazy expiry, paused ->
+    running, S1 takeover, then the shared permission-checked, guarded loop."""
+
+    target = operation_id or operation_row().id
+    return run_paper_continuation(
+        target,
         trigger_source="continue",
-        as_of_session=operation.as_of_session,
-        requested_risk_run_id=str(operation.risk_run_id),
-        job_id=job_id,
+        settings=load_settings(),
+        execution_service=service,
+        price_source=price_source or FreshPriceSource(),
+        job_id=job_id or continue_job(target),
     )
-    with session_run_lock(strategy_id=STRATEGY, session_date=operation.as_of_session, settings=settings) as lock:
-        acquisition = acquire_execution(operation.id, job_id, lock, settings=settings)
-        assert not acquisition.paused
-        with session_scope(settings) as session:
-            strategy_row = session.get(ExecutionOperation, operation.id).strategy_id
-        context = submit_orders_module._ExecutionContext(
-            settings=settings,
-            logger=submit_orders_module.get_logger("tests.continue"),
-            strategy_id=STRATEGY,
-            strategy_row_id=strategy_row,
-            as_of_session=operation.as_of_session,
-            risk_run_id=operation.risk_run_id,
-            run_id=run_id,
-            trigger_source="continue",
-            fence=Fence(operation.id, acquisition.epoch, job_id),
-            lease_owner="continue-worker",
-            broker_execution=service,
-            price_source=price_source or FreshPriceSource(),
-            failure_threshold=settings.execution.safety.repeated_failure_threshold,
-        )
-        return submit_orders_module._run_operation_loop(context, continuation=True)
+
+
+def continue_operation(service: ExecutionService, *, price_source: Any = None) -> ContinueOutcome:
+    """Continue the latest operation (see ``run_continue``) and read its outcome."""
+
+    return ContinueOutcome(run_continue(service, price_source=price_source))
 
 
 def test_earlier_fill_does_not_request_reevaluation_and_intent_two_sent_unchanged(migrated_paper_db: str) -> None:  # noqa: F811
@@ -2294,3 +2296,619 @@ def test_a_registered_never_sent_order_is_retried_by_a_later_operations_intent( 
     assert [i.client_order_id for i in service.submitted_intents] == [original_client_order_id]
     assert report.result_summary["operation"]["reason"] == "working_order_commitments_unaccounted"
     assert count(PaperOrder) == 1
+
+
+# ---------------------------------------------------------------------------
+# 20.1-16: Continue mode (D-19) through the product entrypoint and the real submit gate
+# ---------------------------------------------------------------------------
+
+
+def _continue_payload(operation_id: uuid.UUID) -> dict[str, Any]:
+    return {"mode": "continue", "operation_id": str(operation_id)}
+
+
+def _continue_validate(operation_id: uuid.UUID, *, now: datetime | None = None) -> Any:
+    spec = PaperSessionSubmissionSpec(
+        load_settings(), clock=(lambda: now) if now is not None else (lambda: datetime.now(UTC))
+    )
+    return spec.validate_payload(_continue_payload(operation_id))
+
+
+def _continue_conflict(operation_id: uuid.UUID, **kwargs: Any) -> JobSubmissionConflictError:
+    with pytest.raises(JobSubmissionConflictError) as excinfo:
+        _continue_validate(operation_id, **kwargs)
+    return excinfo.value
+
+
+def _attempt_counts() -> dict[str, int]:
+    """Attempt rows per client_order_id (the attempt log's submission sequence per intent)."""
+
+    with session_scope(load_settings()) as session:
+        rows = session.execute(
+            select(PaperOrder.client_order_id, func.count(OrderSubmissionAttempt.id))
+            .join(OrderSubmissionAttempt, OrderSubmissionAttempt.paper_order_id == PaperOrder.id)
+            .group_by(PaperOrder.client_order_id)
+        ).all()
+    return {client_order_id: int(total) for client_order_id, total in rows}
+
+
+def _paused_two_intent_operation() -> tuple[uuid.UUID, ScriptedExecutionService, str]:
+    """Intent 1 (AAPL) accepted and working, intent 2 (MSFT) planned and unsent."""
+
+    run, _ = seed_batch(DEFAULT_BATCH[:2], manifest=manifest())
+    first = ScriptedExecutionService(["accept", "accept"])
+    report = _start(first, risk_run_id=run)
+    operation_id = uuid.UUID(report.result_summary["operation"]["id"])
+    with session_scope(load_settings()) as session:
+        planned = session.execute(
+            select(ExecutionOperationIntent).where(ExecutionOperationIntent.paper_order_id.is_(None))
+        ).scalar_one()
+        planned_client_order_id = planned.client_order_id
+    return operation_id, first, planned_client_order_id
+
+
+def _fill_first_intent_and_reconcile() -> None:
+    from trading_platform.db.models import AccountSnapshot
+
+    settle("AAPL", OrderLifecycleState.FILLED, fills="10")
+    put_position("AAPL", "10")
+    with session_scope(load_settings()) as session:
+        session.add(
+            AccountSnapshot(
+                snapshot_source="broker_sync",
+                snapshot_at=datetime.now(UTC),
+                cash=Decimal("98800"),
+                gross_exposure=Decimal("1200"),
+                total_equity=Decimal("100000"),
+                buying_power=Decimal("98800"),
+                open_positions=1,
+            )
+        )
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+
+
+def test_continue_sends_intent_two_with_original_client_order_id_and_never_resubmits_intent_one(  # noqa: F811
+    migrated_paper_db: str,
+) -> None:
+    operation_id, first, planned_client_order_id = _paused_two_intent_operation()
+    with session_scope(load_settings()) as session:
+        first_client_order_id = session.execute(
+            select(PaperOrder.client_order_id).join(Symbol, Symbol.id == PaperOrder.symbol_id)
+        ).scalar_one()
+    _fill_first_intent_and_reconcile()
+    # the real submit-time gate accepts the Job and normalizes it
+    assert _continue_validate(operation_id) == _continue_payload(operation_id)
+    resumed = ScriptedExecutionService(["accept"])
+
+    report = run_continue(resumed, operation_id=operation_id)
+
+    assert [i.client_order_id for i in resumed.submitted_intents] == [planned_client_order_id]
+    assert first.post_attempts == 1 and resumed.post_attempts == 1  # intent 1 POSTed exactly once
+    assert report.action == "continued_session"
+    assert report.operation_state == "paused"
+    assert report.operation_reason == "working_order_commitments_unaccounted"
+    # one submission sequence per intent: one attempt row each, none re-opened
+    assert _attempt_counts() == {first_client_order_id: 1, planned_client_order_id: 1}
+    with session_scope(load_settings()) as session:
+        job_modes = session.execute(select(ExecutionOperation.execution_epoch)).scalar_one()
+    assert job_modes >= 1
+
+
+def test_continue_refused_before_order_terminal(migrated_paper_db: str) -> None:  # noqa: F811
+    operation_id, _first, _planned = _paused_two_intent_operation()
+
+    error = _continue_conflict(operation_id)
+
+    assert error.code == PaperSessionSubmitConflict.WORKING_ORDER_COMMITMENTS_UNACCOUNTED.value
+    assert "tp-20240105-aapl-" in error.detail["working_orders"]
+
+
+def test_continue_without_sync_refused_awaiting_reconciliation(migrated_paper_db: str) -> None:  # noqa: F811
+    operation_id, _first, _planned = _paused_two_intent_operation()
+    settle("AAPL", OrderLifecycleState.FILLED, fills="10")  # terminal and synced
+    finish_jobs()  # the session's Job completed AFTER; no reconciliation followed
+
+    error = _continue_conflict(operation_id)
+
+    assert error.code == PaperSessionSubmitConflict.AWAITING_RECONCILIATION.value
+    seed_clean_reconciliation_after_now()
+    assert _continue_validate(operation_id)["mode"] == "continue"
+
+
+def test_continue_on_non_paused_operation_refused(migrated_paper_db: str) -> None:  # noqa: F811
+    operation_id, _first, _planned = _paused_two_intent_operation()
+    _end_open_operation()
+
+    error = _continue_conflict(operation_id)
+
+    assert error.code == PaperSessionSubmitConflict.OPERATION_NOT_PAUSED.value
+    assert error.detail["operation_state"] == "terminated"
+    # run time: a terminated operation returns the terminated outcome, nothing is sent
+    service = ScriptedExecutionService(["accept"])
+    report = run_continue(service, operation_id=operation_id)
+    assert report.action == "continue_operation_terminated"
+    assert (report.operation_state, report.operation_reason) == ("terminated", "cancelled_by_operator")
+    assert service.post_attempts == 0
+    # any other non-paused state is a lost compare-and-set: the typed domain conflict
+    with session_scope(load_settings()) as session:
+        session.execute(
+            update(ExecutionOperation)
+            .where(ExecutionOperation.id == operation_id)
+            .values(state="requires_reevaluation", reason="evaluation_data_changed", ended_by=None)
+        )
+    with pytest.raises(OperationConflictError):
+        run_continue(service, operation_id=operation_id)
+    assert service.post_attempts == 0
+
+
+def test_continue_refuses_a_running_operation_with_a_live_job(migrated_paper_db: str) -> None:  # noqa: F811
+    from tests.support.operation_fixtures import seed_operation, seed_operation_job
+
+    seed_batch(DEFAULT_BATCH[:1])
+    with session_scope(load_settings()) as session:
+        job = seed_operation_job(session, status=JobStatus.RUNNING, strategy_id=STRATEGY)
+        operation = seed_operation(session, state="running", reason=None, strategy_id=STRATEGY, jobs=[(job, "start")])
+        operation_id = operation.id
+
+    error = _continue_conflict(operation_id)
+
+    assert error.code == "operation_not_paused" and error.detail["operation_state"] == "running"
+
+
+def test_continue_manifest_change_requires_reevaluation_sends_nothing_then_end_cancels_unsent(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-25 through the Continue mode: provenance is re-verified per intent at run time (never a
+    submit-time 409): the continuation moves to requires_reevaluation, sends nothing, and End
+    cancels the unsent intent."""
+    from trading_platform.services.evaluation_manifest import (
+        ManifestVerification,
+        ManifestVerificationStatus,
+    )
+
+    operation_id, first, _planned = _paused_two_intent_operation()
+    _fill_first_intent_and_reconcile()
+    monkeypatch.setattr(
+        permission_module,
+        "verify_risk_run_manifest",
+        lambda **kw: ManifestVerification(ManifestVerificationStatus.EVALUATION_DATA_CHANGED),
+    )
+    assert _continue_validate(operation_id)["mode"] == "continue"  # accepted at submit time
+    resumed = ScriptedExecutionService(["accept"])
+
+    report = run_continue(resumed, operation_id=operation_id)
+
+    assert resumed.post_attempts == 0
+    assert (report.operation_state, report.operation_reason) == (
+        "requires_reevaluation",
+        "evaluation_data_changed",
+    )
+    finish_jobs()
+    with session_scope(load_settings()) as session:
+        end_operation(session, operation_id, operator_reason="stale evaluation", actor="pytest")
+    with session_scope(load_settings()) as session:
+        dispositions_after = session.execute(
+            select(ExecutionOperationIntent.disposition).order_by(ExecutionOperationIntent.sequence)
+        ).scalars().all()
+    assert list(dispositions_after) == ["open", "cancelled_unsent"]
+
+
+def test_continue_risk_limit_failure_requires_reevaluation_without_replan(migrated_paper_db: str) -> None:  # noqa: F811
+    from trading_platform.db.models import AccountSnapshot
+
+    operation_id, _first, _planned = _paused_two_intent_operation()
+    settle("AAPL", OrderLifecycleState.FILLED, fills="10")
+    put_position("AAPL", "10")
+    with session_scope(load_settings()) as session:
+        session.add(
+            AccountSnapshot(
+                snapshot_source="broker_sync",
+                snapshot_at=datetime.now(UTC),
+                cash=Decimal("100"),
+                gross_exposure=Decimal("1200"),
+                total_equity=Decimal("1300"),
+                buying_power=Decimal("100"),
+                open_positions=1,
+            )
+        )
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    resumed = ScriptedExecutionService(["accept"])
+
+    report = run_continue(resumed, operation_id=operation_id)
+
+    assert resumed.post_attempts == 0
+    assert report.operation_reason == "risk_limit_failed:insufficient_cash"
+    with session_scope(load_settings()) as session:
+        quantities = session.execute(select(ExecutionOperationIntent.quantity)).scalars().all()
+    assert sorted(quantities) == [Decimal("5"), Decimal("10")]  # no re-plan, no resize
+
+
+def test_continue_never_reaches_create_new_version(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-19 / R-6: the continuation binds only reuse_existing | retry_existing | create_new; a
+    resolver that returns create_new_version raises, with nothing registered or sent."""
+    import dataclasses
+
+    operation_id, _first, _planned = _paused_two_intent_operation()
+    _fill_first_intent_and_reconcile()
+    real = submit_orders_module._resolve_paper_intent_decision
+
+    def bad_resolver(*args: Any, **kwargs: Any) -> Any:
+        return dataclasses.replace(real(*args, **kwargs), action="create_new_version")
+
+    monkeypatch.setattr(submit_orders_module, "_resolve_paper_intent_decision", bad_resolver)
+    service = ScriptedExecutionService(["accept"])
+    orders_before = count(PaperOrder)
+
+    with pytest.raises(submit_orders_module.ContinuationIdentityChangedError):
+        run_continue(service, operation_id=operation_id)
+
+    assert service.post_attempts == 0 and count(PaperOrder) == orders_before
+    assert "create_new_version" not in submit_orders_module._CONTINUATION_ACTIONS
+    # the failed continuation paused the operation best-effort; identities are untouched
+    assert operation_row(operation_id).state == "paused"
+    with session_scope(load_settings()) as session:
+        identities = session.execute(
+            select(ExecutionOperationIntent.client_order_id, ExecutionOperationIntent.quantity)
+        ).all()
+    assert len(identities) == 2
+
+
+def test_continuation_function_makes_no_reconciliation_or_recovery_calls() -> None:
+    """Continue never reconciles, corrects or recovers in-session (R-5): its function names none of
+    the in-session reconciliation entrypoints."""
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(submit_orders_module.run_paper_continuation)))
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+
+    assert not names & {
+        "apply_reconciliation_corrections",
+        "recover_inflight_paper_orders",
+        "reconcile_paper_execution",
+        "load_broker_state",
+    }
+    assert "acquire_execution" in names and "begin_continuation" in names
+
+
+def test_continue_after_window_elapsed_terminates_expired_unsent_only(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """05 E11: past the window the real gate accepts the Job even though a working order exists, and
+    the run-time touch terminates the operation: unsent -> expired_unsent only, zero POST."""
+    seed_calendar(date(2025, 11, 24), date(2026, 1, 9))
+    session_date = date(2025, 12, 2)
+    monkeypatch.setattr(clock, "now_utc", lambda: et(2025, 12, 3, 9, 40))
+    run, _ = seed_batch(DEFAULT_BATCH[:2], session_date=session_date, manifest=manifest(as_of="2025-12-02"))
+    first = run_paper_order_submission(
+        STRATEGY,
+        as_of_session=session_date,
+        risk_run_id=str(run),
+        settings=load_settings(),
+        execution_service=ScriptedExecutionService(["accept"]),
+        trigger_source="pytest",
+    )
+    operation_id = uuid.UUID(first.result_summary["operation"]["id"])
+    finish_jobs()
+    late = et(2025, 12, 3, 15, 55)
+    monkeypatch.setattr(clock, "now_utc", lambda: late)
+    # NOT through the autouse eligibility stub: the real gate, at the late clock
+    assert _continue_validate(operation_id, now=late)["operation_id"] == str(operation_id)
+    service = ScriptedExecutionService(["accept"])
+
+    report = run_continue(service, operation_id=operation_id)
+
+    assert service.post_attempts == 0
+    assert report.action == "continue_operation_terminated"
+    assert (report.operation_state, report.operation_reason) == ("terminated", "execution_window_elapsed")
+    with session_scope(load_settings()) as session:
+        rows = session.execute(
+            select(ExecutionOperationIntent.sequence, ExecutionOperationIntent.disposition).order_by(
+                ExecutionOperationIntent.sequence
+            )
+        ).all()
+    # the submitted intent keeps its disposition; only the unsent one expired
+    assert [(sequence, disposition) for sequence, disposition in rows] == [(1, "open"), (2, "expired_unsent")]
+
+
+def test_two_concurrent_continues_at_most_one_proceeds_and_no_intent_submitted_twice(  # noqa: F811
+    migrated_paper_db: str,
+) -> None:
+    import threading
+
+    from trading_platform.services.execution.operations import OperationExecutorActiveError
+
+    operation_id, first, planned_client_order_id = _paused_two_intent_operation()
+    _fill_first_intent_and_reconcile()
+    start_gate = threading.Barrier(2)
+    results: list[Any] = []
+    services = [ScriptedExecutionService(["accept"]), ScriptedExecutionService(["accept"])]
+    job_ids = [continue_job(operation_id, lease_owner="worker-a"), continue_job(operation_id, lease_owner="worker-b")]
+
+    def worker(index: int) -> None:
+        start_gate.wait()
+        try:
+            results.append(
+                ("ok", run_continue(services[index], operation_id=operation_id, job_id=job_ids[index]))
+            )
+        except Exception as exc:  # the loser: lock denial or a lost compare-and-set
+            results.append(("error", exc))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert len(results) == 2
+    for kind, value in results:
+        if kind == "error":
+            assert isinstance(value, (OperationExecutorActiveError, OperationConflictError)), value
+    # whichever order they ran, the intent was POSTed once: the second finds the order working
+    assert sum(service.post_attempts for service in services) == 1
+    assert sum(1 for i in services[0].submitted_intents + services[1].submitted_intents) == 1
+    assert first.post_attempts == 1
+    attempts = _attempt_counts()
+    assert attempts[planned_client_order_id] == 1 and all(total == 1 for total in attempts.values())
+
+
+def test_continue_while_the_session_lock_is_held_is_operation_executor_active(  # noqa: F811
+    migrated_paper_db: str,
+) -> None:
+    from trading_platform.services.concurrency_guard import session_run_lock
+    from trading_platform.services.execution.operations import OperationExecutorActiveError
+
+    operation_id, _first, _planned = _paused_two_intent_operation()
+    _fill_first_intent_and_reconcile()
+    service = ScriptedExecutionService(["accept"])
+    runs_before = count(StrategyRun)
+
+    with session_run_lock(strategy_id=STRATEGY, session_date=SESSION, settings=load_settings()):
+        with pytest.raises(OperationExecutorActiveError) as excinfo:
+            run_continue(service, operation_id=operation_id)
+
+    assert "operation_executor_active" in str(excinfo.value)
+    assert service.post_attempts == 0
+    assert count(StrategyRun) == runs_before  # zero writes
+    assert operation_row(operation_id).state == "paused"  # the operation was not touched
+
+
+def test_domain_conflict_translation_of_operation_executor_active_is_certain() -> None:
+    from trading_platform.jobs.contracts import JobDomainConflictError
+    from trading_platform.jobs.handlers.domain_conflicts import translate_domain_conflicts
+    from trading_platform.services.execution.operations import OperationExecutorActiveError
+
+    with pytest.raises(JobDomainConflictError) as excinfo:
+        with translate_domain_conflicts():
+            raise OperationExecutorActiveError(uuid.uuid4(), "session advisory lock is held")
+
+    assert excinfo.value.outcome_uncertain is False
+    assert "operation_executor_active" in excinfo.value.message
+
+
+def test_retried_continue_mode_job_reruns_the_continue_gate(migrated_paper_db: str) -> None:  # noqa: F811
+    """OPS-07 retry rule, continue half: retry() calls validate_payload on the Job's payload, so a
+    retried continue-mode Job meets the Continue gate again (here the operation was ended since)."""
+    operation_id, _first, _planned = _paused_two_intent_operation()
+    _fill_first_intent_and_reconcile()
+    payload = _continue_payload(operation_id)
+    spec = PaperSessionSubmissionSpec(load_settings())
+    assert spec.validate_payload(payload) == payload  # the original submission passed
+
+    _end_open_operation()  # the operation moved on before the retry
+
+    with pytest.raises(JobSubmissionConflictError) as excinfo:
+        spec.validate_payload(dict(payload))  # what retry() does with the failed Job's payload
+    assert excinfo.value.code == "operation_not_paused"
+
+
+def test_not_received_statement_never_makes_an_in_doubt_intent_sendable(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 5 (2026-10-04): an in-doubt intent stays unresolved whatever evidence is recorded:
+    a not_received statement with complete absence evidence neither makes Continue possible nor
+    survives End or expiry as a way to send."""
+    from tests.test_recovery_predicate import LookupBroker
+
+    from trading_platform.services.execution.sync_orders import sync_account_state
+    from trading_platform.services.recovery import record_broker_statement
+
+    run, _ = seed_batch(DEFAULT_BATCH[:2], manifest=manifest())
+    first = ScriptedExecutionService(["ambiguous"])
+    with pytest.raises(AmbiguousOrderSubmissionError):
+        _start(first, risk_run_id=run)
+    assert first.post_attempts == 1
+    operation = operation_row()
+    assert (operation.state, operation.reason) == ("paused", "outcome_unresolved")
+    with session_scope(load_settings()) as session:
+        order_id = session.execute(select(PaperOrder.id)).scalar_one()
+    finish_jobs()
+    now = {"value": datetime.now(UTC)}
+    monkeypatch.setattr(clock, "now_utc", lambda: now["value"])
+    broker = LookupBroker()
+    sync_account_state(settings=load_settings(), broker_client=broker)
+    now["value"] += timedelta(seconds=load_settings().execution.recovery_absence_grace_seconds + 1)
+    sync_account_state(settings=load_settings(), broker_client=broker)
+    with session_scope(load_settings()) as session:
+        record_broker_statement(session, order_id, "not_received", "ticket-1", "support: not received", "op")
+    seed_clean_reconciliation_after_now()
+
+    for _ in range(2):  # before and after End
+        error = _continue_conflict(operation.id)
+        assert error.code == "outcome_unresolved"
+        stuck = ScriptedExecutionService(["accept"])
+        assert stuck.post_attempts == 0
+        if _ == 0:
+            with session_scope(load_settings()) as session:
+                end_operation(session, operation.id, operator_reason="cancel", actor="pytest")
+    assert first.post_attempts == 1 and broker.post_count == 0
+    # the intent is still unresolved: End changed only the unsent intent
+    assert count(PaperOrder) == 1
+
+
+def test_end_or_expiry_with_working_order_and_ambiguous_intent_keeps_both_blocking(  # noqa: F811
+    migrated_paper_db: str,
+) -> None:
+    """End changes only unsent intents: a working order of the strategy still blocks starts
+    (working_order_commitments_unaccounted) and an ambiguous earlier intent still blocks
+    (outcome_unresolved), after End as before it."""
+    run, _ = seed_batch(DEFAULT_BATCH[:3], manifest=manifest())
+    service = ScriptedExecutionService(["accept"])
+    _start(service, risk_run_id=run)  # AAPL accepted and working; MSFT, NVDA planned
+    _end_open_operation()
+    assert _conflict(run).code == "working_order_commitments_unaccounted"
+
+    # an ambiguous earlier submission of the same strategy
+    from tests.support.recovery_fixtures import seed_intent, seed_paper_run
+
+    with session_scope(load_settings()) as session:
+        paper_run = seed_paper_run(session, None)
+        seed_intent(session, paper_run, status=OrderLifecycleState.UNKNOWN, attempts=(AttemptOutcomeClass.AMBIGUOUS,))
+    assert _conflict(run).code == "outcome_unresolved"  # the recovery gate wins over the working-order gate
+    with session_scope(load_settings()) as session:
+        dispositions = session.execute(select(ExecutionOperationIntent.disposition)).scalars().all()
+    assert sorted(dispositions) == ["cancelled_unsent", "cancelled_unsent", "open"]
+
+
+# ---------------------------------------------------------------------------
+# PD-1 (approved 2026-10-04): a price pause continues the SAME pinned intent, after every check
+# ---------------------------------------------------------------------------
+
+
+def _price_paused_operation(price: str = "127.2") -> tuple[uuid.UUID, str, uuid.UUID]:
+    """One AAPL intent paused price_moved_beyond_tolerance (+6%): nothing registered, nothing sent."""
+
+    run, _ = seed_batch(DEFAULT_BATCH[:1], manifest=manifest())
+    paused = _start(
+        ScriptedExecutionService(["accept"]),
+        risk_run_id=run,
+        price_source=ScriptedPriceSource([observation("AAPL", price)]),
+    )
+    assert paused.result_summary["operation"]["reason"] == "price_moved_beyond_tolerance"
+    assert count(PaperOrder) == 0
+    with session_scope(load_settings()) as session:
+        intent = session.execute(select(ExecutionOperationIntent)).scalar_one()
+        identity = (intent.id, intent.client_order_id, intent.symbol_id, intent.side, intent.quantity)
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    return uuid.UUID(paused.result_summary["operation"]["id"]), identity[1], identity[0]
+
+
+def test_price_pause_continue_sends_same_pinned_intent_after_all_checks(migrated_paper_db: str) -> None:  # noqa: F811
+    operation_id, client_order_id, intent_id = _price_paused_operation()
+    with session_scope(load_settings()) as session:
+        before = session.get(ExecutionOperationIntent, intent_id)
+        identity_before = (before.client_order_id, before.symbol_id, before.side, before.quantity)
+    assert _continue_validate(operation_id)["mode"] == "continue"
+    # +6% still: the continuation reruns the price check and pauses again, sending nothing
+    still_high = ScriptedExecutionService(["accept"])
+    report = run_continue(
+        still_high,
+        operation_id=operation_id,
+        price_source=ScriptedPriceSource([observation("AAPL", "127.2")]),
+    )
+    assert still_high.post_attempts == 0
+    assert report.operation_reason == "price_moved_beyond_tolerance"
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    back = ScriptedExecutionService(["accept"])
+
+    report = run_continue(
+        back, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+    )
+
+    assert [i.client_order_id for i in back.submitted_intents] == [client_order_id]
+    assert report.operation_reason == "working_order_commitments_unaccounted"
+    with session_scope(load_settings()) as session:
+        after = session.get(ExecutionOperationIntent, intent_id)
+        assert (after.client_order_id, after.symbol_id, after.side, after.quantity) == identity_before
+        assert session.execute(select(func.count()).select_from(ExecutionOperationIntent)).scalar_one() == 1
+        order = session.execute(select(PaperOrder)).scalar_one()
+        assert (order.client_order_id, order.intent_version) == (client_order_id, 1)  # no new version
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [("evaluation_data_changed", "evaluation_data_changed"), ("strategy_settings_changed", "strategy_settings_changed")],
+)
+def test_price_pause_then_data_change_requires_reevaluation(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch, status: str, reason: str
+) -> None:
+    from trading_platform.services.evaluation_manifest import (
+        ManifestVerification,
+        ManifestVerificationStatus,
+    )
+
+    operation_id, _client_order_id, _intent_id = _price_paused_operation()
+    monkeypatch.setattr(
+        permission_module,
+        "verify_risk_run_manifest",
+        lambda **kw: ManifestVerification(ManifestVerificationStatus(status)),
+    )
+    service = ScriptedExecutionService(["accept"])
+
+    report = run_continue(
+        service, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+    )
+
+    assert service.post_attempts == 0
+    assert (report.operation_state, report.operation_reason) == ("requires_reevaluation", reason)
+
+
+def test_price_pause_window_expiry_terminates_despite_price_recovery(  # noqa: F811
+    migrated_paper_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_calendar(date(2025, 11, 24), date(2026, 1, 9))
+    session_date = date(2025, 12, 2)
+    monkeypatch.setattr(clock, "now_utc", lambda: et(2025, 12, 3, 9, 40))
+    run, _ = seed_batch(DEFAULT_BATCH[:1], session_date=session_date, manifest=manifest(as_of="2025-12-02"))
+    paused = run_paper_order_submission(
+        STRATEGY,
+        as_of_session=session_date,
+        risk_run_id=str(run),
+        settings=load_settings(),
+        execution_service=ScriptedExecutionService(["accept"]),
+        price_source=ScriptedPriceSource([observation("AAPL", "127.2")]),
+        trigger_source="pytest",
+    )
+    operation_id = uuid.UUID(paused.result_summary["operation"]["id"])
+    assert paused.result_summary["operation"]["reason"] == "price_moved_beyond_tolerance"
+    finish_jobs()
+    seed_clean_reconciliation_after_now()
+    monkeypatch.setattr(clock, "now_utc", lambda: et(2025, 12, 3, 15, 55))
+    service = ScriptedExecutionService(["accept"])
+
+    report = run_continue(
+        service, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+    )
+
+    assert service.post_attempts == 0
+    assert (report.operation_state, report.operation_reason) == ("terminated", "execution_window_elapsed")
+    with session_scope(load_settings()) as session:
+        assert session.execute(select(ExecutionOperationIntent.disposition)).scalar_one() == "expired_unsent"
+
+
+def test_price_pause_continue_blocked_by_unresolved_earlier_submission(migrated_paper_db: str) -> None:  # noqa: F811
+    from tests.support.recovery_fixtures import seed_intent, seed_paper_run
+
+    operation_id, _client_order_id, _intent_id = _price_paused_operation()
+    with session_scope(load_settings()) as session:
+        paper_run = seed_paper_run(session, None)
+        seed_intent(session, paper_run, status=OrderLifecycleState.UNKNOWN, attempts=(AttemptOutcomeClass.AMBIGUOUS,))
+    assert _continue_conflict(operation_id).code == "outcome_unresolved"
+    service = ScriptedExecutionService(["accept"])
+
+    # a Job queued before the earlier outcome appeared: the run-time gate pauses, zero POST
+    report = run_continue(
+        service, operation_id=operation_id, price_source=ScriptedPriceSource([observation("AAPL", "122.4")])
+    )
+
+    assert service.post_attempts == 0
+    assert (report.operation_state, report.operation_reason) == ("paused", "outcome_unresolved")

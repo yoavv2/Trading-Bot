@@ -56,6 +56,7 @@ _LAZY_PAPER_EXPORTS: dict[str, tuple[str, str]] = {
     "resolve_submission_session": ("submit_orders", "resolve_submission_session"),
     "run_paper_order_submission": ("submit_orders", "run_paper_order_submission"),
     "run_paper_session": ("submit_orders", "run_paper_session"),
+    "run_paper_continuation": ("submit_orders", "run_paper_continuation"),
     "schedule_reconciliation_after_partial_failure": (
         "submit_orders",
         "schedule_reconciliation_after_partial_failure",
@@ -100,6 +101,7 @@ __all__ = [
     "resolve_submission_session",
     "run_paper_order_submission",
     "run_paper_session",
+    "run_paper_continuation",
     "sync_paper_state",
     "sync_account_state",
     "AccountStateSyncReport",

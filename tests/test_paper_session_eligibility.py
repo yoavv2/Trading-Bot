@@ -135,8 +135,9 @@ def _eligibility(settings: Settings, now: datetime, as_of: date, strategy: FakeS
 # ---------------------------------------------------------------------------
 
 
-def test_conflict_set_is_exactly_the_fifteen_values() -> None:
-    """Renamed from ``..._eleven_values`` (REC-02 / 20.1-15: the four start-mode operation gates
+def test_conflict_set_is_exactly_the_seventeen_values() -> None:
+    """Renamed from ``..._fifteen_values`` (D-19 / 20.1-16: the two Continue-mode gates) and
+    before that ``..._eleven_values`` (REC-02 / 20.1-15: the four start-mode operation gates
     extend the set; the eleven earlier values are unchanged; before that ``..._eight_values``,
     D-15 / 20.1-10)."""
 
@@ -156,6 +157,9 @@ def test_conflict_set_is_exactly_the_fifteen_values() -> None:
         "working_order_commitments_unaccounted",
         "risk_run_already_operated",
         "evaluation_basis_unverified",
+        # D-19 / 20.1-16: the Continue-mode gates.
+        "operation_not_paused",
+        "awaiting_reconciliation",
     }
 
 

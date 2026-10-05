@@ -34,6 +34,7 @@ from trading_platform.jobs.registry import (
 from trading_platform.services.concurrency_guard import ConcurrentRunLockedError
 from trading_platform.services.execution.operations import (
     OperationConflictError,
+    OperationExecutorActiveError,
     OperationOpenError,
     RiskRunAlreadyOperatedError,
 )
@@ -245,11 +246,14 @@ def test_domain_conflict_exceptions_is_the_closed_tuple() -> None:
         ConcurrentRunLockedError,
         ExternalActivityRejectedError,
         OperationConflictError,
+        OperationExecutorActiveError,
         OperationOpenError,
         RiskRunAlreadyOperatedError,
     )
     assert DOMAIN_CONFLICT_OUTCOME_UNCERTAIN[ExternalActivityRejectedError] is False
     assert DOMAIN_CONFLICT_OUTCOME_UNCERTAIN[OperationConflictError] is False
+    # 20.1-16: the Continue run could not take the advisory lock (zero writes, zero POST).
+    assert DOMAIN_CONFLICT_OUTCOME_UNCERTAIN[OperationExecutorActiveError] is False
     assert DOMAIN_CONFLICT_OUTCOME_UNCERTAIN[OperationOpenError] is False
     assert DOMAIN_CONFLICT_OUTCOME_UNCERTAIN[RiskRunAlreadyOperatedError] is False
     # Every translated exception carries an explicit certainty decision.

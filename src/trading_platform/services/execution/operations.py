@@ -317,6 +317,25 @@ class OperationConflictError(OperationError):
         self.detail = detail
 
 
+class OperationExecutorActiveError(OperationError):
+    """Another executor holds (or may hold) the operation's exclusive execution (S1-R3).
+
+    Raised by the Continue run when the session advisory lock cannot be acquired, or when the
+    operation is ``running`` under another live Job. Nothing was written and nothing was sent
+    (``operation_executor_active``, ``outcome_uncertain`` False)."""
+
+    code = "operation_executor_active"
+
+    def __init__(self, operation_id: uuid.UUID, detail: str | None = None) -> None:
+        suffix = f" ({detail})" if detail else ""
+        super().__init__(
+            f"operation_executor_active: execution operation '{operation_id}' is held by "
+            f"another executor{suffix}."
+        )
+        self.operation_id = operation_id
+        self.detail = detail
+
+
 class IllegalOperationTransition(OperationError):
     def __init__(
         self, operation_id: uuid.UUID, from_state: OperationState, to_state: OperationState
@@ -520,6 +539,7 @@ def effective_state(
     settings: Settings | None = None,
     window: CalendarWindow | None = None,
     has_live_job: bool | None = None,
+    exclude_job_id: uuid.UUID | None = None,
 ) -> EffectiveState:
     """Effective state of one operation. Read-only: zero writes."""
 
@@ -532,7 +552,9 @@ def effective_state(
         calendar = window or load_calendar_window(session, now=as_of, settings=resolved)
         verdict = window_verdict(calendar, resolved, operation.as_of_session)
     if has_live_job is None:
-        has_live_job = bool(live_job_ids(session, [operation.id]).get(operation.id))
+        has_live_job = bool(
+            live_job_ids(session, [operation.id], exclude_job_id=exclude_job_id).get(operation.id)
+        )
     return compute_effective_state(
         state=state,
         reason=operation.reason,
@@ -548,11 +570,15 @@ def effective_state(
 
 
 def live_job_ids(
-    session: Session, operation_ids: Sequence[uuid.UUID]
+    session: Session,
+    operation_ids: Sequence[uuid.UUID],
+    *,
+    exclude_job_id: uuid.UUID | None = None,
 ) -> dict[uuid.UUID, list[uuid.UUID]]:
     """Queued or running Jobs of each operation: linked Jobs PLUS paper-session Jobs whose
     payload ``operation_id`` matches (a Continue Job is linked only at ``begin_continuation``).
-    Two statements whatever the number of operations."""
+    Two statements whatever the number of operations. ``exclude_job_id`` leaves one Job out (the
+    Continue Job asking about its OWN operation must not count itself as live)."""
 
     live: dict[uuid.UUID, list[uuid.UUID]] = {op_id: [] for op_id in operation_ids}
     if not operation_ids:
@@ -578,6 +604,10 @@ def live_job_ids(
         job_uuid = uuid.UUID(str(pending_job_id))
         if job_uuid not in live[pending_operation_id]:
             live[pending_operation_id].append(job_uuid)
+    if exclude_job_id is not None:
+        for job_ids in live.values():
+            if exclude_job_id in job_ids:
+                job_ids.remove(exclude_job_id)
     return live
 
 
@@ -1049,6 +1079,41 @@ def begin_continuation(
     return operation
 
 
+def adopt_running_operation(
+    session: Session,
+    operation_id: uuid.UUID,
+    job_id: uuid.UUID,
+) -> ExecutionOperation:
+    """Link a Continue Job to a crash-left ``running`` operation (``takeover_pending``).
+
+    ``begin_continuation`` only moves a PAUSED operation; a ``running`` operation whose
+    executor is gone stays ``running`` until ``acquire_execution`` takes authority under the
+    advisory lock. This links the Job and refuses (``OperationExecutorActiveError``) while
+    ANOTHER queued or running Job still belongs to the operation, and ``OperationConflictError``
+    when the operation is not ``running``."""
+
+    operation = _load_locked(session, operation_id)
+    if OperationState(operation.state) is not OperationState.RUNNING:
+        raise OperationConflictError(operation_id, f"operation is {operation.state}, not running")
+    others = live_job_ids(session, [operation_id], exclude_job_id=job_id)[operation_id]
+    if others:
+        raise OperationExecutorActiveError(operation_id, "another Job is live")
+    already = session.execute(
+        select(ExecutionOperationJob.id).where(
+            ExecutionOperationJob.operation_id == operation_id,
+            ExecutionOperationJob.job_id == job_id,
+        )
+    ).scalar_one_or_none()
+    if already is None:
+        session.add(
+            ExecutionOperationJob(
+                operation_id=operation_id, job_id=job_id, mode=OperationJobMode.CONTINUE.value
+            )
+        )
+    session.flush()
+    return operation
+
+
 # ---------------------------------------------------------------------------
 # Termination: lazy expiry (D-21) and End (D-20)
 # ---------------------------------------------------------------------------
@@ -1146,6 +1211,7 @@ def touch_operation(
     *,
     now: datetime | None = None,
     settings: Settings | None = None,
+    exclude_job_id: uuid.UUID | None = None,
 ) -> TouchResult:
     """Persist lazy window expiry (D-21): the ONLY place expiry is written.
 
@@ -1169,7 +1235,10 @@ def touch_operation(
     reason = _VERDICT_TERMINATED_REASON.get(verdict)
     if reason is None:
         return TouchResult(False, state, operation.reason)
-    if state is OperationState.RUNNING and live_job_ids(session, [operation_id])[operation_id]:
+    if (
+        state is OperationState.RUNNING
+        and live_job_ids(session, [operation_id], exclude_job_id=exclude_job_id)[operation_id]
+    ):
         return TouchResult(False, state, operation.reason)
     moved = terminate_operation(
         session,
@@ -1788,6 +1857,7 @@ __all__ = [
     "LateCompletion",
     "NextAction",
     "OperationConflictError",
+    "OperationExecutorActiveError",
     "OperationError",
     "OperationJobMode",
     "OperationNotFoundError",
@@ -1808,6 +1878,7 @@ __all__ = [
     "WindowVerdict",
     "acquire_execution",
     "authorize_send",
+    "adopt_running_operation",
     "begin_continuation",
     "cas_set_intent_disposition",
     "cas_update_operation",

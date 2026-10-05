@@ -919,6 +919,9 @@ def test_closed_conflict_enums_equal_the_ownership_block_members() -> None:
         "working_order_commitments_unaccounted",
         "risk_run_already_operated",
         "evaluation_basis_unverified",
+        # D-19 / 20.1-16: the Continue-mode gates
+        "operation_not_paused",
+        "awaiting_reconciliation",
     }
     assert {m.value for m in ReconciliationSubmitConflict} == expected
 
