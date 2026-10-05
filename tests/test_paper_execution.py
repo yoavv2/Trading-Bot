@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -888,7 +889,10 @@ def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_ca
         symbol="AAPL",
         session_date=date(2024, 1, 5),
         status="pending_submission",
-        broker_order_id=None,
+        # 20.1-17 (authorized deviation): a broker-bound order (a previously verified identity) is
+        # ESTABLISHED and passes the D-15 session gate; a legacy zero-attempt order with no broker
+        # id is now UNESTABLISHED and blocked before recovery (see the dedicated test below).
+        broker_order_id="recovered-aapl-001",
         broker_status=None,
     )
     execution_service = FakeExecutionService()
@@ -953,6 +957,97 @@ def test_run_paper_session_recovers_inflight_orders_before_submitting_missing_ca
     assert len(paper_orders) == 1
     assert aapl_order.broker_order_id == "recovered-aapl-001"
     assert aapl_order.status == "submitted"
+
+
+class _CountingBrokerClient(FakeBrokerClient):
+    """FakeBrokerClient that counts every broker read (list_*, get_account, lookups)."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.calls: list[str] = []
+
+    def list_orders(self) -> list[BrokerOrderSnapshot]:
+        self.calls.append("list_orders")
+        return super().list_orders()
+
+    def list_fills(self) -> list[BrokerFillSnapshot]:
+        self.calls.append("list_fills")
+        return super().list_fills()
+
+    def list_positions(self) -> list[BrokerPositionSnapshot]:
+        self.calls.append("list_positions")
+        return super().list_positions()
+
+    def get_account(self) -> BrokerAccountSnapshot:
+        self.calls.append("get_account")
+        return super().get_account()
+
+    def get_order_by_client_order_id(self, client_order_id: str) -> None:
+        self.calls.append("get_order_by_client_order_id")
+        return None
+
+
+class _CountingExecutionService(ExecutionService):
+    def __init__(self) -> None:
+        self.post_attempts = 0
+        self.submitted_intents: list[OrderIntent] = []
+
+    def describe(self) -> dict[str, object]:
+        return {"service": "execution", "status": "available", "provider": "counting"}
+
+    def submit_order(self, intent: OrderIntent) -> OrderSubmissionResult:
+        self.post_attempts += 1
+        raise AssertionError("a blocked session must never POST")
+
+
+def test_run_paper_session_is_blocked_by_a_legacy_zero_attempt_pending_order_with_zero_broker_calls(
+    migrated_paper_db: str,
+) -> None:
+    """20.1-17 (TL-4): a LEGACY order (no attempt row, no operation, no broker id) is never proven
+    not sent, so the D-15 session gate blocks the session BEFORE any broker read or POST. Recovery
+    of such an order happens only through the supported sync / reconciliation flow
+    (tests/test_recovery_shared_classifier.py), never by re-sending."""
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    settings = load_settings()
+    _seed_existing_paper_order(
+        risk_run_id=risk_run_id,
+        risk_event_id=approved_event_ids["AAPL"],
+        symbol="AAPL",
+        session_date=date(2024, 1, 5),
+        status="pending_submission",
+        broker_order_id=None,
+        broker_status=None,
+    )
+    execution_service = _CountingExecutionService()
+    broker_client = _CountingBrokerClient(
+        orders=[],
+        fills=[],
+        positions=[],
+        account=BrokerAccountSnapshot(
+            cash=Decimal("100000.000000"),
+            buying_power=Decimal("100000.000000"),
+            equity=Decimal("100000.000000"),
+            long_market_value=Decimal("0"),
+            short_market_value=Decimal("0"),
+            raw_payload={"equity": "100000.000000"},
+        ),
+    )
+
+    report = run_paper_session(
+        "trend_following_daily",
+        as_of_session=date(2024, 1, 5),
+        settings=settings,
+        execution_service=execution_service,
+        broker_client=broker_client,
+        trigger_source="pytest",
+    )
+
+    assert report.action == "blocked_outcome_unresolved"
+    assert broker_client.calls == []  # zero broker reads
+    assert execution_service.post_attempts == 0  # zero POSTs
+    with session_scope(settings) as session:
+        order = session.execute(select(PaperOrder)).scalar_one()
+        assert order.status == "pending_submission" and order.broker_order_id is None
 
 
 def test_run_paper_session_blocks_when_reconciliation_finds_unsafe_drift(
@@ -1694,7 +1789,8 @@ def test_run_paper_session_runs_reconciliation_before_blocking_on_tripped_kill_s
         symbol="AAPL",
         session_date=date(2024, 1, 5),
         status="pending_submission",
-        broker_order_id=None,
+        # 20.1-17 (authorized deviation): broker-bound, hence ESTABLISHED (see the recovery test).
+        broker_order_id="recovered-aapl-001",
         broker_status=None,
     )
     settings = load_settings()
