@@ -311,6 +311,37 @@ def _normalized_result(payload: dict[str, Any]) -> OrderSubmissionResult:
     )
 
 
+#: What normalizing a broker reply body can raise (InvalidOperation is an ArithmeticError; a JSON
+#: decode error is a ValueError; a non-string timestamp surfaces as AttributeError).
+_UNPARSEABLE_BODY_ERRORS = (ArithmeticError, ValueError, TypeError, KeyError, AttributeError)
+
+
+def _normalize_accepted_reply(
+    payload: dict[str, Any],
+    attempts: Any,
+    submission_class: SubmissionClass,
+    *,
+    http_status: int | None,
+) -> OrderSubmissionResult:
+    """Normalize an accepted (or duplicate-lookup) reply, or raise a typed ambiguity (SAF-06).
+
+    The attempt outcome was recorded BEFORE this runs, so a parse failure here means the broker
+    answered 2xx / reported the order but the body is unusable: the outcome is uncertain, the
+    order is parked UNKNOWN by the caller and the intent is never re-POSTed."""
+
+    try:
+        return _normalized_result(payload)
+    except _UNPARSEABLE_BODY_ERRORS as exc:
+        raise AmbiguousOrderSubmissionError(
+            "Order was accepted but the reply could not be parsed; the outcome is uncertain "
+            "and it will not be re-sent.",
+            submission_class=submission_class,
+            attempts=attempts,
+            http_status=http_status,
+            reason="invalid_response_body",
+        ) from exc
+
+
 @dataclass(frozen=True)
 class BrokerOrderSnapshot:
     broker_order_id: str
@@ -552,6 +583,10 @@ class AlpacaClient:
         while EVERY attempt so far (including attempts from earlier sessions) is
         established not sent (pre_connection or deadline_expired, complete). Any
         ambiguous outcome stops at once with ``AmbiguousOrderSubmissionError``.
+
+        SAF-06: a 2xx reply (or a duplicate-reply lookup record) whose body cannot be normalized
+        raises ``AmbiguousOrderSubmissionError(reason="invalid_response_body")`` AFTER the
+        attempt outcome is recorded; it is never a clean failure and the intent is never re-sent.
         """
 
         log = current_attempt_log()
@@ -673,7 +708,11 @@ class AlpacaClient:
             )
             if outcome == AttemptOutcomeClass.ACCEPTED:
                 assert body is not None
-                return _normalized_result(body)
+                # SAF-06: the 2xx outcome is already recorded; a body that cannot be normalized
+                # must never surface as a clean failure (the order may well be live).
+                return _normalize_accepted_reply(
+                    body, summarize_attempts(history), SubmissionClass.ACCEPTED, http_status=None
+                )
             if outcome == AttemptOutcomeClass.DUPLICATE_REPORTED:
                 return self._resolve_duplicate_reply(intent, log, history)
             if outcome == AttemptOutcomeClass.REJECTED:
@@ -747,13 +786,21 @@ class AlpacaClient:
         try:
             snapshot = self.get_order_by_client_order_id(intent.client_order_id)
         except Exception as exc:
+            # SAF-06: a reply that arrived but cannot be normalized is an invalid body, not a
+            # failed lookup; both are ambiguous and the intent is never re-POSTed.
+            invalid_body = isinstance(exc, _UNPARSEABLE_BODY_ERRORS)
             raise AmbiguousOrderSubmissionError(
-                "Duplicate client_order_id reported and the lookup failed; "
-                "the order state is unknown.",
+                (
+                    "Duplicate client_order_id reported and the lookup reply could not be "
+                    "parsed; the order state is unknown."
+                    if invalid_body
+                    else "Duplicate client_order_id reported and the lookup failed; "
+                    "the order state is unknown."
+                ),
                 submission_class=SubmissionClass.EXISTS_REPORTED,
                 attempts=summary,
                 http_status=422,
-                reason="lookup_failed",
+                reason="invalid_response_body" if invalid_body else "lookup_failed",
             ) from exc
         if snapshot is None:
             raise AmbiguousOrderSubmissionError(
@@ -773,7 +820,9 @@ class AlpacaClient:
                 http_status=422,
                 reason="id_mismatch",
             )
-        return _normalized_result(snapshot.raw_payload)
+        return _normalize_accepted_reply(
+            snapshot.raw_payload, summary, SubmissionClass.EXISTS_REPORTED, http_status=422
+        )
 
     def get_latest_trade(self, symbol: str) -> PriceObservation:
         """Read-only ``GET {alpaca_data_base_url}/v2/stocks/{symbol}/trades/latest?feed=...`` (S2-R3).

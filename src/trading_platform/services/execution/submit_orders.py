@@ -2690,11 +2690,13 @@ def _execute_pinned_intent(
         return False
     except Exception as exc:
         failure_error = exc
-        failure_error = exc
 
-        # Any other failure before a result: no broker side effect is known. SUBMISSION_FAILED
-        # (clean failure, no reconciliation scheduled); the caller pauses the operation
-        # best-effort (paused/awaiting_reconciliation) before the exception propagates.
+        # Any other failure before a result. The attempt history decides what is known: a failure
+        # before T1 committed leaves zero attempt rows (proven not sent, 20.1-17), and an
+        # accepted-but-unparseable reply no longer reaches this branch (it is an
+        # AmbiguousOrderSubmissionError, SAF-06). SUBMISSION_FAILED (no reconciliation scheduled);
+        # the caller pauses the operation best-effort (paused/awaiting_reconciliation) before the
+        # exception propagates.
         def failed(session: Session) -> None:
             failed_order = session.get(PaperOrder, pending_order_id)
             if failed_order is None:
