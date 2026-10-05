@@ -37,6 +37,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -57,8 +58,10 @@ from tests.test_paper_session_operations import (
     Worker,
     _continue_validate,
     _start,
+    _validate,
     attempt_outcomes,
     continue_job,
+    evaluation,
     intent_rows,
     manifest,
     operation_row,
@@ -82,13 +85,18 @@ from trading_platform.db.models import (
     OrderLifecycleState,
     OrderSubmissionAttempt,
     PaperOrder,
+    RiskEvent,
     StrategyRun,
     StrategyRunType,
 )
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.lifecycle import JobTransitionRequest, apply_job_transition
-from trading_platform.jobs.queue import reclaim_lost_jobs
+from trading_platform.jobs.queue import claim_next_job, reclaim_lost_jobs
+from trading_platform.jobs.registry import JobSubmissionConflictError, build_default_registry
+from trading_platform.orchestration.job_mutations import JobOrchestrationService
 from trading_platform.services.execution import submit_orders as submit_orders_module
+from trading_platform.services.execution.operations import end_operation
+from trading_platform.services.execution.submit_orders import build_client_order_id
 from trading_platform.services.execution.sync_orders import sync_account_state
 from trading_platform.services.paper_account_checks import _check_a5
 from trading_platform.services.recovery import (
@@ -416,14 +424,20 @@ def _saf01_shape(status: str, monkeypatch: pytest.MonkeyPatch, timeline: Timelin
     )
 
 
-def _agree(world: World, *, linked: list[uuid.UUID], flagged: list[uuid.UUID]) -> dict[str, Any]:
+def _agree(
+    world: World,
+    *,
+    linked: list[uuid.UUID],
+    flagged: list[uuid.UUID],
+    operation_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
     """The arguments of the shared consumer-agreement assertion at one checkpoint."""
 
     return {
         "strategy_id": STRATEGY,
         "linked_job_ids": linked,
         "registering_flagged_job_ids": flagged,
-        "operation_id": world.operation_id,
+        "operation_id": operation_id or world.operation_id,
     }
 
 
@@ -601,3 +615,288 @@ def test_a_saf01_release_survives_continue(
         GateCode.RECONCILIATION_REQUIRED,
         None,
     ]
+
+
+# ---------------------------------------------------------------------------
+# Task 2: regressions (b1), (b2), (b3)
+# ---------------------------------------------------------------------------
+
+
+def _orchestration() -> JobOrchestrationService:
+    settings = load_settings()
+    return JobOrchestrationService(settings, build_default_registry(settings))
+
+
+def _hold_before_t1(monkeypatch: pytest.MonkeyPatch) -> Gate:
+    """One-shot: the NEXT executor reaching ``_send_authorized`` is suspended before its T1."""
+
+    gate = Gate()
+    armed = {"on": True}
+    real_send = submit_orders_module._send_authorized
+
+    def held_send(ctx: Any, **kwargs: Any) -> Any:
+        if armed["on"]:
+            armed["on"] = False
+            gate.hold()
+        return real_send(ctx, **kwargs)
+
+    monkeypatch.setattr(submit_orders_module, "_send_authorized", held_send)
+    return gate
+
+
+def _job_row(job_id: uuid.UUID) -> Job:
+    with session_scope(load_settings()) as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        session.expunge(job)
+        return job
+
+
+def test_b1_retry_of_a_failed_continue_job_creates_no_new_uncertainty(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(b1) The Continue Job J2 re-registers the order and crashes before T1 (reclaimed
+    outcome_uncertain). Neither J1 nor J2 becomes execution_path_unproven; the M15 retry J3 of J2
+    re-registers once (``retry_existing``) and POSTs exactly once."""
+
+    timeline = Timeline()
+    world = _saf01_shape(PENDING, monkeypatch, timeline)
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    recon_a = timeline.next()
+    assert recon_a > world.j1_completed_at
+    _clean_reconciliation(recon_a)
+
+    # J2: a Continue Job whose registration commits, then crashes before its T1
+    assert _continue_validate(op)["mode"] == "continue"
+    j2 = continue_job(op)
+    gate = _hold_before_t1(monkeypatch)
+    worker = Worker(lambda: run_continue(broker.service(), operation_id=op, job_id=j2)).start()
+    gate.wait_arrived()
+    r2 = _run_of(j2)
+    with session_scope(load_settings()) as session:  # the registration committed, nothing sent
+        assert _accepted_registrations(session, order_id) == {
+            ("intent_registered", world.r1),
+            ("retry_requested", r2),
+        }
+    assert attempt_outcomes(cid1) == [] and broker.received == {}
+    terminate_lock_holder()
+    crashed_j2 = timeline.next()
+    assert crashed_j2 > recon_a
+    _crash_job(j2, crashed_j2)
+    gate.release.set()
+    worker.join()
+    assert worker.error is not None  # T1 refused (lease lost)
+    assert attempt_outcomes(cid1) == [] and broker.received == {}
+    assert _order(order_id).strategy_run_id == world.r1
+
+    # no new uncertainty: both registering Jobs list the order (not_sent) and are never unproven
+    gate_after_crash = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j2], flagged=[j1, j2])
+    )
+    _record(
+        http, world, gate_after_crash, flagged=[j1, j2], expect=GateCode.RECONCILIATION_REQUIRED
+    )
+    for job_id in (j1, j2):
+        assert not _unproven(job_id)
+        assert _r3_entries(http, job_id) == [(str(order_id), "not_sent", False)]
+    # a clean M5 after J2 releases it again
+    recon_b = timeline.next()
+    assert recon_b > crashed_j2
+    _clean_reconciliation(recon_b)
+    gate_released = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j2], flagged=[j1, j2])
+    )
+    _record(http, world, gate_released, flagged=[j1, j2], expect=None)
+
+    # M15 (OPS-07): retry the failed Continue Job
+    result = _orchestration().retry(job_id=j2, idempotency_key="cr01-b1-retry-j2")
+    j3 = uuid.UUID(result.reference.job_id)
+    retried = _job_row(j3)
+    assert retried.retry_of_job_id == j2 and retried.status is JobStatus.QUEUED
+    assert retried.payload == {"mode": "continue", "operation_id": str(op)}
+    assert not _unproven(j1) and not _unproven(j2)  # the retry alone adds no uncertainty
+    with session_scope(load_settings()) as session:  # the worker's product claim
+        claimed = claim_next_job(session, worker_id="retry-worker", lease_seconds=86400)
+    assert claimed == j3
+    report = run_continue(broker.service(), operation_id=op, job_id=j3)
+    r3 = _run_of(j3)
+    submitted = report.result_summary["submitted_orders"]
+    assert [o["client_order_id"] for o in submitted] == [cid1]
+    assert submitted[0]["intent_decision"]["action"] == "retry_existing"
+    assert broker.received == {cid1: 1}  # exactly one POST
+    assert attempt_outcomes(cid1) == [(1, "accepted")]
+    with session_scope(load_settings()) as session:
+        attempt = session.execute(
+            select(OrderSubmissionAttempt).where(OrderSubmissionAttempt.paper_order_id == order_id)
+        ).scalar_one()
+        assert attempt.executor_job_id == j3 and attempt.strategy_run_id == r3
+        assert _accepted_registrations(session, order_id) == {
+            ("intent_registered", world.r1),
+            ("retry_requested", r2),
+            ("retry_requested", r3),
+        }
+    assert _order(order_id).strategy_run_id == world.r1
+
+    # settle exactly as C5 of regression (a)
+    finished_j3 = timeline.next()
+    assert finished_j3 > recon_b
+    _finish_job(j3, finished_j3)
+    gate_after_retry = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j2, j3], flagged=[j1, j2])
+    )
+    _record(
+        http, world, gate_after_retry, flagged=[j1, j2], expect=GateCode.RECONCILIATION_REQUIRED
+    )
+    _filled_sync(order_id)
+    recon_c = timeline.next()
+    assert recon_c > _completed_at(j3)
+    _clean_reconciliation(recon_c)
+    assert _completed_at(j1) == world.j1_completed_at and _completed_at(j2) == crashed_j2
+    gate_settled = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j2, j3], flagged=[j1, j2])
+    )
+    _record(http, world, gate_settled, flagged=[j1, j2], expect=None)
+    assert GateCode.OUTCOME_UNRESOLVED not in world.history, world.history
+
+
+def test_b2_retry_of_the_failed_start_job_never_reaches_registration(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(b2) M15 retry of the failed START Job J1 resolves per the 20.1-15 rule: ``operation_open``
+    while the operation is open, ``risk_run_already_operated`` once it was ended. It never reaches
+    registration: no order_events row, no attempt row, no run, no POST is added."""
+
+    timeline = Timeline()
+    world = _saf01_shape(PENDING, monkeypatch, timeline)
+    j1, order_id, op, broker = world.j1, world.order_id, world.operation_id, world.broker
+    _clean_reconciliation(timeline.next())
+    before = _evidence(order_id)
+    assert before["attempts"] == [] and broker.received == {}
+
+    with pytest.raises(JobSubmissionConflictError) as open_error:
+        _orchestration().retry(job_id=j1, idempotency_key="cr01-b2-open")
+    assert open_error.value.code == "operation_open"
+    assert open_error.value.detail["operation_id"] == str(op)
+    assert _evidence(order_id) == before and broker.received == {}
+
+    with session_scope(load_settings()) as session:  # End through the product service (M12)
+        end_operation(session, op, operator_reason="cr01 b2 end", actor="pytest")
+    with pytest.raises(JobSubmissionConflictError) as ended_error:
+        _orchestration().retry(job_id=j1, idempotency_key="cr01-b2-ended")
+    assert ended_error.value.code == "risk_run_already_operated"
+    assert _evidence(order_id) == before and broker.received == {}
+    with session_scope(load_settings()) as session:  # no retry Job was ever created
+        retries = session.execute(
+            select(func.count()).select_from(Job).where(Job.retry_of_job_id == j1)
+        ).scalar_one()
+    assert retries == 0
+    assert _order(order_id).status.value == PENDING
+
+
+@pytest.mark.parametrize(
+    "status", [PENDING, FAILED], ids=["pending_submission", "submission_failed"]
+)
+def test_b3_new_start_after_end_reuses_the_proven_not_sent_order_once(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    """(b3) After End, a clean M5, a fresh evaluation of the SAME session with the SAME quantity
+    and a new start, the new operation re-registers the earlier proven-not-sent order
+    (``retry_existing``, same client_order_id) and POSTs it once. This is the evidence that a new
+    session is not a CR-01 path once the fix lands; the runbook prohibition is NOT lifted here."""
+
+    timeline = Timeline()
+    world = _saf01_shape(status, monkeypatch, timeline)
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    with session_scope(load_settings()) as session:  # End (M12): the unsent intents are cancelled
+        end_operation(session, op, operator_reason="cr01 b3 end", actor="pytest")
+        dispositions = (
+            session.execute(
+                select(ExecutionOperationIntent.disposition).order_by(
+                    ExecutionOperationIntent.sequence
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert dispositions == ["cancelled_unsent", "cancelled_unsent"]
+    assert _order(order_id).status.value == status and attempt_outcomes(cid1) == []
+
+    recon_a = timeline.next()
+    assert recon_a > world.j1_completed_at
+    _clean_reconciliation(recon_a)
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+    _record(http, world, gate, flagged=[j1], expect=None)
+
+    # M8: a fresh evaluation of the same session whose AAPL candidate has the same quantity
+    new_run = evaluation(DEFAULT_BATCH[:1], as_of="2024-01-08", base=timeline.next())
+    assert new_run != world.risk_run
+    with session_scope(load_settings()) as session:
+        quantity = session.execute(
+            select(RiskEvent.proposed_quantity).where(RiskEvent.strategy_run_id == new_run)
+        ).scalar_one()
+    assert quantity == _order(order_id).quantity
+    derived = build_client_order_id(
+        prefix=load_settings().execution.client_order_id_prefix,
+        strategy_id=STRATEGY,
+        session_date=SESSION,
+        symbol="AAPL",
+        side="buy",
+        quantity=Decimal(quantity),
+    )
+    assert derived == cid1  # otherwise this would silently exercise create_new_version
+    assert _validate(new_run)["risk_run_id"] == str(new_run)  # the submit-time start gate passes
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+    _record(http, world, gate, flagged=[j1], expect=None)
+
+    # M10: the new start, Job J4, through the start domain call
+    j4 = _start_job(new_run)
+    report = _start(broker.service(), risk_run_id=new_run, job_id=j4)
+    r4 = _run_of(j4)
+    new_operation = uuid.UUID(report.result_summary["operation"]["id"])
+    assert new_operation != op
+    submitted = report.result_summary["submitted_orders"]
+    assert [o["client_order_id"] for o in submitted] == [cid1]
+    assert submitted[0]["intent_decision"]["action"] == "retry_existing"
+    assert broker.received == {cid1: 1}  # POST once
+    assert attempt_outcomes(cid1) == [(1, "accepted")]
+    with session_scope(load_settings()) as session:
+        attempt = session.execute(
+            select(OrderSubmissionAttempt).where(OrderSubmissionAttempt.paper_order_id == order_id)
+        ).scalar_one()
+        assert attempt.executor_job_id == j4 and attempt.strategy_run_id == r4
+        assert _accepted_registrations(session, order_id) == {
+            ("intent_registered", world.r1),
+            ("retry_requested", r4),
+        }
+    assert _order(order_id).strategy_run_id == world.r1  # the origin run is kept
+    assert not _unproven(j1)
+
+    finished_j4 = timeline.next()
+    _finish_job(j4, finished_j4)
+    gate = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j4], flagged=[j1, j4], operation_id=new_operation)
+    )
+    _record(http, world, gate, flagged=[j1, j4], expect=GateCode.RECONCILIATION_REQUIRED)
+
+    # settle exactly as C5 of regression (a)
+    _filled_sync(order_id)
+    recon_b = timeline.next()
+    assert recon_b > finished_j4
+    _clean_reconciliation(recon_b)
+    gate = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j4], flagged=[j1, j4], operation_id=new_operation)
+    )
+    _record(http, world, gate, flagged=[j1, j4], expect=None)
+    assert GateCode.OUTCOME_UNRESOLVED not in world.history, world.history
