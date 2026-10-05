@@ -319,7 +319,7 @@ def test_unlock_failure_invalidates_and_preserves_the_body_exception(
 
 
 def test_unlock_failure_after_normal_exit_releases_the_lock(
-    advisory_lock_db: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    advisory_lock_db: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = load_settings()
     strategy_id = "trend_following_daily"
@@ -327,16 +327,30 @@ def test_unlock_failure_after_normal_exit_releases_the_lock(
     key = advisory_lock_key(strategy_id, session_date)
     calls = _install_failing_unlock(monkeypatch)
 
-    with caplog.at_level(logging.ERROR):
+    # A handler on the guard's own logger: other tests call configure_logging(), which clears
+    # the root handlers caplog relies on, so caplog is order-dependent in the full suite.
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    capture = _Capture(level=logging.ERROR)
+    guard_logger = concurrency_guard.logger
+    previous_level = guard_logger.level
+    guard_logger.addHandler(capture)
+    guard_logger.setLevel(logging.ERROR)
+    try:
         with session_run_lock(
             strategy_id=strategy_id, session_date=session_date, settings=settings
         ):
             pass  # no exception escapes the failed unlock
+    finally:
+        guard_logger.removeHandler(capture)
+        guard_logger.setLevel(previous_level)
 
     assert calls == ["unlock_failed", "invalidate", "close"]
-    assert any(
-        "concurrent_run_lock_unlock_failed" in record.getMessage() for record in caplog.records
-    )
+    assert any("concurrent_run_lock_unlock_failed" in r.getMessage() for r in records)
     monkeypatch.setattr(concurrency_guard, "get_engine", get_engine)
     assert _lock_is_free_for_other_sessions(advisory_lock_db, key)
     with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
