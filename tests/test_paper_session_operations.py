@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 import pytest
 from sqlalchemy import func, select, update
-from tests.support.basis_fixtures import seed_verified_basis  # noqa: F401
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.calendar_facts import et, seed_calendar
 from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_execution_seams import allow_direct_paper_execution
@@ -26,6 +26,7 @@ from tests.support.paper_ownership import seed_strategy, set_active_paper_strate
 from tests.support.price_source import FreshPriceSource, ScriptedPriceSource, observation
 from tests.test_paper_execution import (
     _begin_attempt_through_bound_log,
+    _seed_fresh_verified_basis,
     migrated_paper_db,  # noqa: F401  (database fixture)
 )
 
@@ -122,8 +123,12 @@ def seed_batch(
     manifest: dict[str, Any] | None = None,
     started_at: datetime | None = None,
     signal_reason: str = "trend_entry",
+    broker_snapshot: bool = True,
 ) -> tuple[uuid.UUID, dict[str, uuid.UUID]]:
-    """A succeeded risk evaluation with one approved event per ``(ticker, quantity, price)``."""
+    """A succeeded risk evaluation with one approved event per ``(ticker, quantity, price)``.
+
+    ``broker_snapshot=False`` is for a test that arranges its own broker-observed snapshot.
+    """
 
     settings = load_settings()
     metadata = (
@@ -152,6 +157,9 @@ def seed_batch(
             run.started_at = started_at
         session.add(run)
         session.flush()
+        if broker_snapshot:
+            # SAF-09 (20.1-24): execution sizes only on a fresh broker-observed account snapshot.
+            seed_fresh_broker_snapshot(session)
         events: dict[str, uuid.UUID] = {}
         for ticker, quantity, price in batch:
             symbol = session.execute(
@@ -909,22 +917,11 @@ def test_risk_limit_failure_for_the_first_intent_requires_reevaluation_without_r
     """Cash is shorter than the first pinned intent at the fresh price: nothing is sent, the
     operation is requires_reevaluation/risk_limit_failed:insufficient_cash and the pinned
     identities are unchanged (no re-plan)."""
-    seed_batch(DEFAULT_BATCH[:2])
+    seed_batch(DEFAULT_BATCH[:2], broker_snapshot=False)
     settings = load_settings()
-    from trading_platform.db.models import AccountSnapshot
-
     with session_scope(settings) as session:
-        session.add(
-            AccountSnapshot(
-                snapshot_source="broker_sync",
-                snapshot_at=datetime(2024, 1, 5, 21, 0, tzinfo=UTC),
-                cash=Decimal("100"),
-                gross_exposure=Decimal("0"),
-                total_equity=Decimal("100"),
-                buying_power=Decimal("100"),
-                open_positions=0,
-            )
-        )
+        # SAF-09 (20.1-24): the short-cash account is observed fresh (a 2024 snapshot is stale).
+        seed_fresh_broker_snapshot(session, cash=Decimal("100"))
     service = ScriptedExecutionService(["accept"])
 
     report = _start(service)
@@ -1070,7 +1067,7 @@ def test_risk_run_already_operated_only_when_the_pinned_run_is_terminated_and_a_
     # terminated: a second pinned run (another symbol, verified basis), ended with one order sent
     second, _ = seed_batch(DEFAULT_BATCH[2:3], session_date=SESSION)
     with session_scope(load_settings()) as session:
-        seed_verified_basis(session, risk_run_id=second)
+        _seed_fresh_verified_basis(session, risk_run_id=second)
     _start(
         ScriptedExecutionService(["accept"]),
         risk_run_id=second,
@@ -1239,7 +1236,7 @@ def test_paused_operation_left_past_its_window_does_not_fail_the_next_days_start
     # leave an open (paused) operation behind: a never-sent one on a second evaluation of day 1
     second_run, _ = seed_batch(DEFAULT_BATCH[1:2], session_date=s1)
     with session_scope(load_settings()) as session:
-        seed_verified_basis(session, risk_run_id=second_run)
+        _seed_fresh_verified_basis(session, risk_run_id=second_run)
     run_paper_order_submission(
         STRATEGY,
         as_of_session=s1,
@@ -1255,7 +1252,7 @@ def test_paused_operation_left_past_its_window_does_not_fail_the_next_days_start
     monkeypatch.setattr(clock, "now_utc", lambda: et(2025, 12, 4, 10, 0))
     next_run, _ = seed_batch(DEFAULT_BATCH[2:3], session_date=s2)
     with session_scope(load_settings()) as session:
-        seed_verified_basis(session, risk_run_id=next_run)
+        _seed_fresh_verified_basis(session, risk_run_id=next_run)
     service = ScriptedExecutionService(["reject"])
     report = run_paper_order_submission(
         STRATEGY,
@@ -1381,7 +1378,7 @@ def evaluation(
     )
     if verified:
         with session_scope(load_settings()) as session:
-            seed_verified_basis(session, risk_run_id=run_id, positions=positions, **basis_kwargs)
+            _seed_fresh_verified_basis(session, risk_run_id=run_id, positions=positions, **basis_kwargs)
     return run_id
 
 

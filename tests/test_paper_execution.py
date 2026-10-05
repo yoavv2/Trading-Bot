@@ -19,7 +19,7 @@ from sqlalchemy import event, func, select
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.migrate import build_alembic_config
-from tests.support.basis_fixtures import seed_verified_basis
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot, seed_verified_basis
 from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
 from tests.support.submission_attempts import seed_attempt_row
@@ -396,8 +396,24 @@ def _seed_market_data(session_date: date) -> None:
         )
 
 
+def _seed_fresh_verified_basis(session, **kwargs):
+    """``seed_verified_basis`` plus the age of the broker snapshot it records (SAF-09, 20.1-24).
+
+    The shared helper records ``source: broker_sync`` without an observation age, which
+    ``verify_evaluation_basis`` fails closed on (``basis_stale``); a freshly observed basis is
+    age 0.
+    """
+    seeded = seed_verified_basis(session, **kwargs)
+    risk_run = session.get(StrategyRun, kwargs["risk_run_id"])
+    summary = dict(risk_run.result_summary)
+    summary["portfolio_basis"] = {**summary["portfolio_basis"], "age_seconds": 0.0}
+    risk_run.result_summary = summary
+    session.flush()
+    return seeded
+
+
 def _seed_approved_risk_batch(
-    *, session_date: date = date(2024, 1, 5), owner: bool = True
+    *, session_date: date = date(2024, 1, 5), owner: bool = True, broker_snapshot: bool = True
 ) -> tuple[uuid.UUID, dict[str, uuid.UUID]]:
     """Seed an approved risk batch for trend_following_daily.
 
@@ -417,6 +433,9 @@ def _seed_approved_risk_batch(
         msft = Symbol(ticker="MSFT", active=True)
         session.add_all([aapl, msft])
         session.flush()
+        if broker_snapshot:
+            # SAF-09 (20.1-24): execution sizes only on a fresh broker-observed account snapshot.
+            seed_fresh_broker_snapshot(session)
 
         risk_run = StrategyRun(
             strategy_id=strategy_record.id,
@@ -772,7 +791,7 @@ def test_run_paper_order_submission_retries_same_intent_across_followup_risk_run
         existing_client_order_id = existing_order.client_order_id
     seed_attempt_row(settings, existing_order_id, number=1, outcome=AttemptOutcomeClass.PRE_CONNECTION)
     with session_scope(settings) as session:
-        seed_verified_basis(session, risk_run_id=followup_risk_run_id)
+        _seed_fresh_verified_basis(session, risk_run_id=followup_risk_run_id)
 
     report = run_paper_order_submission(
         "trend_following_daily",
@@ -826,7 +845,7 @@ def test_run_paper_order_submission_never_versions_a_broker_touched_identity(
     )
     settings = load_settings()
     with session_scope(settings) as session:
-        seed_verified_basis(session, risk_run_id=followup_risk_run_id)
+        _seed_fresh_verified_basis(session, risk_run_id=followup_risk_run_id)
     execution_service = FakeExecutionService()
 
     report = run_paper_order_submission(
@@ -1170,7 +1189,7 @@ def test_run_paper_session_blocks_before_broker_reads_when_strategy_disabled(
 def test_sync_paper_state_persists_fills_positions_and_account_snapshot(
     migrated_paper_db: str,
 ) -> None:
-    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch(broker_snapshot=False)
     _seed_existing_paper_order(
         risk_run_id=risk_run_id,
         risk_event_id=approved_event_ids["AAPL"],
@@ -1868,7 +1887,7 @@ def test_run_paper_session_runs_reconciliation_before_blocking_on_tripped_kill_s
 def test_sync_paper_state_continues_reading_broker_state_while_kill_switch_is_tripped(
     migrated_paper_db: str,
 ) -> None:
-    risk_run_id, approved_event_ids = _seed_approved_risk_batch()
+    risk_run_id, approved_event_ids = _seed_approved_risk_batch(broker_snapshot=False)
     _seed_existing_paper_order(
         risk_run_id=risk_run_id,
         risk_event_id=approved_event_ids["AAPL"],

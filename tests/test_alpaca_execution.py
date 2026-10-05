@@ -14,6 +14,7 @@ import psycopg
 import pytest
 from alembic import command
 from sqlalchemy import select
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.paper_execution_seams import allow_direct_paper_execution
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -275,6 +276,8 @@ def _seed_approved_risk_batch() -> tuple[uuid.UUID, uuid.UUID]:
         msft = Symbol(ticker="MSFT", active=True)
         session.add_all([aapl, msft])
         session.flush()
+        # SAF-09 (20.1-24): execution sizes only on a fresh broker-observed account snapshot.
+        seed_fresh_broker_snapshot(session)
 
         risk_run = StrategyRun(
             strategy_id=strategy_record.id,
