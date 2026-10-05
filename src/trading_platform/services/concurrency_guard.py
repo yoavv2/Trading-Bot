@@ -91,6 +91,12 @@ def session_run_lock(
     connections, not this one. Raises ``ConcurrentRunLockedError`` and exits
     immediately (no retry, no hang) if another session already holds the
     lock for this tuple.
+
+    Cleanup (SAF-12): the dedicated connection is ALWAYS closed. If
+    ``pg_advisory_unlock`` itself raises, the connection is invalidated (the DBAPI
+    connection is closed, so PostgreSQL releases the session-level lock), a
+    ``concurrent_run_lock_unlock_failed`` event is logged and the unlock error is
+    swallowed so an exception raised by the guarded body is never replaced.
     """
     resolved_settings = settings if settings is not None else load_settings()
     key = advisory_lock_key(strategy_id, session_date)
@@ -115,6 +121,21 @@ def session_run_lock(
             strategy_id=strategy_id, session_date=session_date, key=key, backend_pid=backend_pid
         )
     finally:
-        if acquired:
-            connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
-        connection.close()
+        try:
+            if acquired:
+                try:
+                    connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+                except Exception as exc:
+                    # The server releases a session-level advisory lock when the holding
+                    # connection drops: invalidate() closes the DBAPI connection.
+                    emit_structured_log(
+                        logger,
+                        logging.ERROR,
+                        "concurrent_run_lock_unlock_failed",
+                        strategy_id=strategy_id,
+                        session_date=session_date.isoformat(),
+                        error_type=type(exc).__name__,
+                    )
+                    connection.invalidate()
+        finally:
+            connection.close()

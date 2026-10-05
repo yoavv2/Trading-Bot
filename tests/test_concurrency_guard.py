@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import logging
 import sys
 import uuid
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
+from sqlalchemy.exc import OperationalError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from trading_platform.core.settings import clear_settings_cache, load_settings
-from trading_platform.db.session import clear_engine_cache
+from trading_platform.db.session import clear_engine_cache, get_engine
+from trading_platform.services import concurrency_guard
 from trading_platform.services.concurrency_guard import (
     CONCURRENT_RUN_LOCK_EXIT_CODE,
     ConcurrentRunLockedError,
@@ -221,3 +225,137 @@ def test_session_run_lock_acquires_cleanly_after_holder_connection_drops(
 
     with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
         pass  # PostgreSQL must have auto-released the lock on connection drop
+
+
+# ---------------------------------------------------------------------------
+# SAF-12: a failing unlock never leaks the lock and never masks the body's error
+# ---------------------------------------------------------------------------
+
+
+class _UnlockFailingConnection:
+    """Delegates everything to the real connection but fails ``pg_advisory_unlock``."""
+
+    def __init__(self, real: Any, calls: list[str]) -> None:
+        self._real = real
+        self._calls = calls
+
+    def execution_options(self, *args: Any, **kwargs: Any) -> _UnlockFailingConnection:
+        self._real = self._real.execution_options(*args, **kwargs)
+        return self
+
+    def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        if "pg_advisory_unlock" in str(statement):
+            self._calls.append("unlock_failed")
+            raise OperationalError("SELECT pg_advisory_unlock", {}, Exception("driver down"))
+        return self._real.execute(statement, *args, **kwargs)
+
+    def invalidate(self, *args: Any, **kwargs: Any) -> Any:
+        self._calls.append("invalidate")
+        return self._real.invalidate(*args, **kwargs)
+
+    def close(self) -> Any:
+        self._calls.append("close")
+        return self._real.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class _FailingUnlockEngine:
+    def __init__(self, real: Any, calls: list[str]) -> None:
+        self._real = real
+        self._calls = calls
+
+    def connect(self) -> _UnlockFailingConnection:
+        return _UnlockFailingConnection(self._real.connect(), self._calls)
+
+
+def _install_failing_unlock(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+    real_engine = get_engine(load_settings())
+    monkeypatch.setattr(
+        concurrency_guard, "get_engine", lambda _settings: _FailingUnlockEngine(real_engine, calls)
+    )
+    return calls
+
+
+def _lock_is_free_for_other_sessions(database_name: str, key: int) -> bool:
+    """Probe from a separate raw session: only a released lock can be taken."""
+
+    probe = _connect_raw(database_name)
+    try:
+        with probe.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+            (free,) = cursor.fetchone()
+            if free:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (key,))
+        return bool(free)
+    finally:
+        probe.close()
+
+
+def test_unlock_failure_invalidates_and_preserves_the_body_exception(
+    advisory_lock_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = load_settings()
+    strategy_id = "trend_following_daily"
+    session_date = date(2024, 1, 5)
+    key = advisory_lock_key(strategy_id, session_date)
+    calls = _install_failing_unlock(monkeypatch)
+
+    with pytest.raises(ValueError, match="body"):
+        with session_run_lock(
+            strategy_id=strategy_id, session_date=session_date, settings=settings
+        ):
+            raise ValueError("body")
+
+    # The unlock error did not replace the body's error; the connection was invalidated
+    # and still closed (in that order).
+    assert calls == ["unlock_failed", "invalidate", "close"]
+    monkeypatch.setattr(concurrency_guard, "get_engine", get_engine)
+    assert _lock_is_free_for_other_sessions(advisory_lock_db, key)
+    with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
+        pass  # a fresh acquisition succeeds immediately
+
+
+def test_unlock_failure_after_normal_exit_releases_the_lock(
+    advisory_lock_db: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = load_settings()
+    strategy_id = "trend_following_daily"
+    session_date = date(2024, 1, 5)
+    key = advisory_lock_key(strategy_id, session_date)
+    calls = _install_failing_unlock(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        with session_run_lock(
+            strategy_id=strategy_id, session_date=session_date, settings=settings
+        ):
+            pass  # no exception escapes the failed unlock
+
+    assert calls == ["unlock_failed", "invalidate", "close"]
+    assert any(
+        "concurrent_run_lock_unlock_failed" in record.getMessage() for record in caplog.records
+    )
+    monkeypatch.setattr(concurrency_guard, "get_engine", get_engine)
+    assert _lock_is_free_for_other_sessions(advisory_lock_db, key)
+    with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
+        pass
+
+
+def test_lock_denied_closes_without_unlock(
+    advisory_lock_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = load_settings()
+    strategy_id = "trend_following_daily"
+    session_date = date(2024, 1, 5)
+    with session_run_lock(strategy_id=strategy_id, session_date=session_date, settings=settings):
+        calls = _install_failing_unlock(monkeypatch)
+        with pytest.raises(ConcurrentRunLockedError):
+            with session_run_lock(
+                strategy_id=strategy_id, session_date=session_date, settings=settings
+            ):
+                pytest.fail("denied acquisition must not yield")
+        # No unlock was attempted (so no failure/invalidate), the connection was closed.
+        assert calls == ["close"]
+        monkeypatch.setattr(concurrency_guard, "get_engine", get_engine)
