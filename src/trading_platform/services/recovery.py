@@ -45,7 +45,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
-from sqlalchemy import literal_column, select, text
+from sqlalchemy import String, literal_column, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1225,7 +1225,7 @@ def get_job_recovery(
         select(
             Job.id,
             Job.job_type,
-            literal_column(job_strategy_public_id_sql("jobs")).label("job_strategy"),
+            literal_column(job_strategy_public_id_sql("jobs"), String).label("job_strategy"),
         ).where(Job.id == job_id)
     ).one_or_none()
     if job is None:
