@@ -119,7 +119,10 @@ def test_run_paper_session_threads_job_id_to_both_created_runs(
         symbol="AAPL",
         session_date=date(2024, 1, 5),
         status="pending_submission",
-        broker_order_id=None,
+        # 20.1-24 (authorized deviation, same as the 20.1-17 reseed in tests/test_paper_execution.py):
+        # a broker-bound order (a previously verified identity) is ESTABLISHED and passes the D-15
+        # session gate; a legacy zero-attempt order with no broker id is UNESTABLISHED and blocked.
+        broker_order_id="recovered-aapl-001",
         broker_status=None,
     )
     execution_service = FakeExecutionService()

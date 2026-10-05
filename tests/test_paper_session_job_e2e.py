@@ -29,6 +29,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import seed_strategy, set_active_paper_strategy
@@ -136,6 +137,8 @@ def _seed_approved_risk_run(session_date: date = SESSION_DATE) -> None:
         set_active_paper_strategy(session, strategy.metadata.strategy_id)  # explicit owner (20.1-01)
         aapl = session.execute(select(Symbol).where(Symbol.ticker == "AAPL")).scalar_one()
         msft = session.execute(select(Symbol).where(Symbol.ticker == "MSFT")).scalar_one()
+        # SAF-09 (20.1-24): execution sizes only on a fresh broker-observed account snapshot.
+        seed_fresh_broker_snapshot(session)
 
         risk_run = StrategyRun(
             strategy_id=strategy_record.id,
