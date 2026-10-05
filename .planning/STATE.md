@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: All 16 plans of 20.1 executed (20.1-13 phase gate E1-E15 pass); awaiting code review + verification
+stopped_at: Phase 20.1 executed (16/16); verification gaps_found (SC4 ownership-change gating, REVIEW SAF-01..12); awaiting gap decision
 last_updated: "2026-10-04T06:28:53.267Z"
 last_activity: 2026-10-04 -- Phase 20.1 execution started
 progress:
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-09-30)
 ## Current Position
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
-Plan: 16 of 16 executed — awaiting phase verification
+Plan: 16 of 16 executed — verification: gaps_found (see 20.1-VERIFICATION.md, 20.1-REVIEW.md)
 Status: Executing Phase 20.1
 Last activity: 2026-10-04 -- Phase 20.1 execution started
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
