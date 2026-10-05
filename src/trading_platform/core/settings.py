@@ -371,6 +371,9 @@ class ExecutionSettings(BaseModel):
     # by at most ``pre_send_max_price_deviation`` (a fraction) before the operation pauses.
     pre_send_price_max_age_seconds: int = Field(default=120, ge=1)
     pre_send_max_price_deviation: float = Field(default=0.05, gt=0, le=1)
+    # 20.1-20 (SAF-02): allowed broker-vs-local clock skew for a trade timestamp. A trade dated
+    # later than the fetch time plus this many seconds is price_invalid, never "fresh".
+    pre_send_price_future_skew_seconds: int = Field(default=5, ge=0, le=60)
     # S1-R3: how long a committed T1 authorization stays valid for handing the request to the
     # HTTP client (a wall-clock deadline; it narrows the late-POST window, it bounds nothing).
     send_authorization_ttl_seconds: int = Field(default=5, ge=1)

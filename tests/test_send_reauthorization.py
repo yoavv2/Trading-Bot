@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -24,6 +24,7 @@ from tests.support.calendar_facts import et, seed_calendar
 from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_execution_seams import allow_direct_paper_execution
 from tests.support.paper_ownership import set_active_paper_strategy
+from tests.support.price_source import ScriptedPriceSource, observation
 from tests.test_execution_operations import (  # noqa: F401  (fixture + helper reuse)
     IN_WINDOW,
     PAST_CUTOFF,
@@ -424,4 +425,115 @@ def test_t1_window_not_yet_open_is_a_window_refusal(
 def test_healthy_t1_still_authorizes(ops_db: str, real_window: None) -> None:  # noqa: F811
     operation_id, intent_id, job_id = _t1_setup()
     auth = ops.authorize_send(operation_id, intent_id, 3, job_id, lease_owner="worker-1")
+    assert auth.attempt_number == 1
+
+
+# ---------------------------------------------------------------------------
+# Price age re-measured in T1 (the observation the permission check used)
+# ---------------------------------------------------------------------------
+
+
+def test_t1_refuses_a_stale_price_before_the_post(
+    migrated_paper_db: str,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    """The permission check accepts a 100 s old trade (limit 120 s); 30 s later, at the first T1,
+    it is 130 s old: refused, ZERO POST, no attempt row, paused price_unavailable / price_stale."""
+
+    seed_batch(ONE_INTENT)
+    transport = _Transport()
+    base = datetime.now(UTC)
+    now = [base]
+    monkeypatch.setattr(clock, "now_utc", lambda: now[0])
+    monkeypatch.setattr(
+        submit_orders_module,
+        "_default_price_source",
+        lambda settings: ScriptedPriceSource(
+            [
+                observation(
+                    "AAPL",
+                    "120",
+                    observed_at=base - timedelta(seconds=100),
+                    fetched_at=base,
+                )
+            ]
+        ),
+    )
+    real_authorize = submit_orders_module.authorize_send
+
+    def later_authorize(*args: Any, **kwargs: Any) -> Any:
+        now[0] = base + timedelta(seconds=30)
+        return real_authorize(*args, **kwargs)
+
+    monkeypatch.setattr(submit_orders_module, "authorize_send", later_authorize)
+
+    _start(_service(transport))
+
+    assert transport.posts == []
+    operation = operation_row()
+    assert (operation.state, operation.reason) == ("paused", "price_unavailable")
+    assert operation.reason_detail == "price_stale"
+    (_intent, client_order_id), *_ = intent_rows()
+    assert attempt_outcomes(client_order_id) == []
+
+
+def test_retry_t1_remeasures_price_age(
+    migrated_paper_db: str,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    """The retry's T1 judges the SAME observation again: once the application clock passes
+    observed_at + max age the retry is refused and the POST count stays at the attempts made."""
+
+    seed_batch(ONE_INTENT)
+    transport = _Transport()
+    base = datetime.now(UTC)
+    now = [base]
+    monkeypatch.setattr(clock, "now_utc", lambda: now[0])
+    monkeypatch.setattr(
+        submit_orders_module,
+        "_default_price_source",
+        lambda settings: ScriptedPriceSource(
+            [observation("AAPL", "120", observed_at=base - timedelta(seconds=10), fetched_at=base)]
+        ),
+    )
+    _between_attempts(monkeypatch, lambda: now.__setitem__(0, base + timedelta(seconds=300)))
+
+    _start(_service(transport))
+
+    _one_attempt_then_paused(transport, PausedReason.PRICE_UNAVAILABLE, detail="price_stale")
+
+
+def test_direct_t1_price_observation_bounds(
+    ops_db: str,
+    real_window: None,  # noqa: F811
+) -> None:
+    """Direct T1: a fresh observation authorizes; stale and future-dated ones are refused; a call
+    without ``price_observed_at`` behaves exactly as before."""
+
+    operation_id, intent_id, job_id = _t1_setup()
+    settings = load_settings()
+    skew = settings.execution.pre_send_price_future_skew_seconds
+    max_age = settings.execution.pre_send_price_max_age_seconds
+    for observed_at in (
+        IN_WINDOW - timedelta(seconds=max_age + 1),
+        IN_WINDOW + timedelta(seconds=skew + 1),
+    ):
+        with pytest.raises(SendRefusedError) as excinfo:
+            ops.authorize_send(
+                operation_id,
+                intent_id,
+                3,
+                job_id,
+                lease_owner="worker-1",
+                price_observed_at=observed_at,
+            )
+        assert excinfo.value.refusal is SendRefusal.PRICE_STALE
+    auth = ops.authorize_send(
+        operation_id,
+        intent_id,
+        3,
+        job_id,
+        lease_owner="worker-1",
+        price_observed_at=IN_WINDOW - timedelta(seconds=max_age),
+    )
     assert auth.attempt_number == 1

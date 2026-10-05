@@ -1617,8 +1617,10 @@ def _require_sendable_gate(
     operation: ExecutionOperation,
     strategy_public_id: str,
     settings: Settings,
+    *,
+    price_observed_at: datetime | None = None,
 ) -> None:
-    """T1's per-attempt re-check (SAF-02): owner, kill switch, enabled, window.
+    """T1's per-attempt re-check (SAF-02): owner, kill switch, enabled, window, price age.
 
     Reads only (no locking clause on any gate row). Function-level imports: the operator
     controls and the permission module both import this module."""
@@ -1640,6 +1642,12 @@ def _require_sendable_gate(
     )
     if facts.verdict is not WindowVerdict.OPEN:
         raise SendRefusedError(SendRefusal.EXECUTION_WINDOW_CLOSED, facts.verdict.value)
+    if price_observed_at is not None:
+        # The age the permission check judged, measured again against the application clock.
+        skew = timedelta(seconds=settings.execution.pre_send_price_future_skew_seconds)
+        max_age = timedelta(seconds=settings.execution.pre_send_price_max_age_seconds)
+        if now - price_observed_at > max_age or price_observed_at > now + skew:
+            raise SendRefusedError(SendRefusal.PRICE_STALE)
 
 
 def authorize_send(
@@ -1651,6 +1659,7 @@ def authorize_send(
     lease_owner: str,
     ttl_seconds: int | None = None,
     settings: Settings | None = None,
+    price_observed_at: datetime | None = None,
 ) -> SendAuthorization:
     """Transaction T1 (S1-R3): authority and the attempt record, durably, BEFORE the POST.
 
@@ -1669,7 +1678,9 @@ def authorize_send(
 
     20.1-20 (SAF-02): T1 also re-reads owner, enabled, kill switch (one non-locking statement,
     the R-Q1 loader) and the window verdict of the operation's evaluation session against the
-    application clock. Lock order unchanged: operation row, then order row; the gate rows
+    application clock; with ``price_observed_at`` (the trade time of the observation the
+    permission check used) it re-measures that observation's age and refuses a stale or
+    future-dated one. Lock order unchanged: operation row, then order row; the gate rows
     are never locked (``set_active_paper_strategy`` and ``_prepare_start`` lock the singleton
     first, so a lock here could invert them).
     """
@@ -1705,7 +1716,9 @@ def authorize_send(
         public_id = session.execute(
             select(Strategy.strategy_id).where(Strategy.id == operation.strategy_id)
         ).scalar_one()
-        _require_sendable_gate(session, operation, public_id, resolved)
+        _require_sendable_gate(
+            session, operation, public_id, resolved, price_observed_at=price_observed_at
+        )
         intent = session.execute(
             select(ExecutionOperationIntent).where(
                 ExecutionOperationIntent.id == intent_id,

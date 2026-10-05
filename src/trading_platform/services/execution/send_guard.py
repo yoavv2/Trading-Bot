@@ -80,8 +80,10 @@ class GuardedAttemptLog:
         paper_order_id: uuid.UUID,
         strategy_run_id: uuid.UUID | None,
         authorization: SendAuthorization,
+        price_observed_at: datetime | None = None,
     ) -> None:
         self._settings = settings
+        self._price_observed_at = price_observed_at
         self._fence = fence
         self._lease_owner = lease_owner
         self._intent_id = intent_id
@@ -136,6 +138,7 @@ class GuardedAttemptLog:
             self._fence.job_id,
             lease_owner=self._lease_owner,
             settings=self._settings,
+            price_observed_at=self._price_observed_at,
         )
         self._authorizations[authorization.attempt_number] = authorization
         return authorization.attempt_number

@@ -2420,6 +2420,9 @@ def _execute_pinned_intent(
             intent_id=view.intent_id,
             paper_order_id=pending_order_id,
             order_intent=order_intent,
+            price_observed_at=(
+                permission.observation.observed_at if permission.observation is not None else None
+            ),
         )
     except SendRefusedError as exc:
         # T1 refused: ZERO POST. An intent that is not provably unsent (or an unresolved outcome
@@ -2682,6 +2685,7 @@ def _send_authorized(
     intent_id: uuid.UUID,
     paper_order_id: uuid.UUID,
     order_intent: OrderIntent,
+    price_observed_at: datetime | None = None,
 ) -> OrderSubmissionResult:
     """The SINGLE send path: transaction T1 (``authorize_send``) commits the attempt row and the
     executor's authority BEFORE the POST; with no committed attempt (a refused T1) nothing is
@@ -2699,6 +2703,7 @@ def _send_authorized(
         ctx.fence.job_id,
         lease_owner=ctx.lease_owner,
         settings=ctx.settings,
+        price_observed_at=price_observed_at,
     )
     log = GuardedAttemptLog(
         ctx.settings,
@@ -2708,6 +2713,7 @@ def _send_authorized(
         paper_order_id=paper_order_id,
         strategy_run_id=ctx.run_id,
         authorization=authorization,
+        price_observed_at=price_observed_at,
     )
     number = authorization.attempt_number
     with bind_attempt_log(log):

@@ -639,6 +639,60 @@ def test_unusable_observations_pause_price_unavailable_with_the_matching_detail(
     assert outcome.detail == detail
 
 
+def test_price_age_is_judged_from_the_fetch_time(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``now`` is captured BEFORE the GET: a slow fetch must not make a 150 s old trade look
+    100 s old (20.1-20, SAF-02 / S2-R3)."""
+
+    risk_run = seed_risk_run(db)
+    world = World()
+    world.price = observation(
+        "AAPL",
+        "100",
+        observed_at=world.now - timedelta(seconds=100),
+        fetched_at=world.now + timedelta(seconds=50),
+    )
+
+    outcome, _ = _run_check(db, world, risk_run, monkeypatch)
+
+    assert outcome.verdict is PermissionVerdict.PAUSE
+    assert outcome.reason == PausedReason.PRICE_UNAVAILABLE.value
+    assert outcome.detail == "price_stale"
+
+
+def test_future_dated_trade_is_price_invalid(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    risk_run = seed_risk_run(db)
+    world = World()
+    skew = world.settings.execution.pre_send_price_future_skew_seconds
+    assert skew == 5
+    world.price = observation(
+        "AAPL",
+        "100",
+        observed_at=world.now + timedelta(seconds=skew + 1),
+        fetched_at=world.now,
+    )
+
+    outcome, _ = _run_check(db, world, risk_run, monkeypatch)
+
+    assert outcome.verdict is PermissionVerdict.PAUSE
+    assert outcome.reason == PausedReason.PRICE_UNAVAILABLE.value
+    assert outcome.detail == "price_invalid"
+
+
+def test_trade_within_future_skew_is_accepted(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    risk_run = seed_risk_run(db)
+    world = World()
+    skew = world.settings.execution.pre_send_price_future_skew_seconds
+    world.price = observation(
+        "AAPL", "100", observed_at=world.now + timedelta(seconds=skew), fetched_at=world.now
+    )
+
+    outcome, _ = _run_check(db, world, risk_run, monkeypatch)
+
+    assert outcome.ok
+
+
 def test_cash_shortfall_at_the_fresh_price_requires_reevaluation(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

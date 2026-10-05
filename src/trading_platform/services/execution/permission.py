@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Protocol
@@ -290,8 +290,10 @@ def price_step(
 ) -> tuple[PriceObservation | None, PermissionOutcome | None]:
     """Obtain and judge the fresh observation: ``(observation, None)`` on success, else
     ``(maybe observation, pause outcome)``. Freshness (all required): positive finite price,
-    observed at or after today's regular-session open (never a previous day's trade) and not
-    older than ``pre_send_price_max_age_seconds``; tolerance: |price - reference| / reference
+    observed at or after today's regular-session open (never a previous day's trade), not dated
+    later than the fetch time plus ``pre_send_price_future_skew_seconds`` (price_invalid) and not
+    older than ``pre_send_price_max_age_seconds`` MEASURED FROM THE FETCH TIME
+    (``max(now, fetched_at)``, because ``now`` was captured before the GET); tolerance: |price - reference| / reference
     <= ``pre_send_max_price_deviation``."""
 
     step = "price"
@@ -315,7 +317,13 @@ def price_step(
         return observation, _pause(
             step, PausedReason.PRICE_UNAVAILABLE, PriceFailure.NO_TRADE_TODAY.value
         )
-    age = (now - observation.observed_at).total_seconds()
+    judged_at = max(now, observation.fetched_at)
+    skew = timedelta(seconds=settings.execution.pre_send_price_future_skew_seconds)
+    if observation.observed_at > judged_at + skew:
+        return observation, _pause(
+            step, PausedReason.PRICE_UNAVAILABLE, PriceFailure.PRICE_INVALID.value
+        )
+    age = (judged_at - observation.observed_at).total_seconds()
     if age > settings.execution.pre_send_price_max_age_seconds:
         return observation, _pause(
             step, PausedReason.PRICE_UNAVAILABLE, PriceFailure.PRICE_STALE.value
