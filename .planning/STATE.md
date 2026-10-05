@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "Gap closure 17-25 executed; re-verification gaps_found (CR-01: Continue/retry re-parents released order -> execution_path_unproven; SAF-01/REC-02). Next: /gsd-plan-phase 20.1 --gaps"
+stopped_at: "Gap closure r2 planned: 20.1-26..31 (CR-01 durable order linkage, 0029, WR-01/08, required E2E regressions); checker 3 iterations, 0 blockers. Pending user decisions V-1 (plan 27 Task 2), V-2 (order_events as history), V-3 (plan 28 Task 2). CR-01 interim runbook prohibition in force. Next: /gsd-execute-phase 20.1 --gaps-only"
 last_updated: "2026-10-05T15:50:05.508Z"
 last_activity: 2026-10-05 -- 20.1-25 complete (runbook and UAT docs)
 progress:
