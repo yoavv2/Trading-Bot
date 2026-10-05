@@ -33,7 +33,7 @@ from sqlalchemy import func, select, update
 from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_execution_seams import TEST_LEASE_OWNER, allow_direct_paper_execution
 from tests.support.recovery_agreement import assert_recovery_consumers_agree
-from tests.support.recovery_fixtures import seed_account_run
+from tests.support.recovery_fixtures import seed_account_run, seed_job, seed_paper_run
 from tests.test_attribution_reconciliation import _broker_fill, _broker_order
 from tests.test_paper_execution import migrated_paper_db  # noqa: F401  (database fixture)
 from tests.test_paper_session_operations import (
@@ -47,6 +47,7 @@ from tests.test_paper_session_operations import (
     _continue_conflict,
     _continue_validate,
     _start,
+    _validate,
     attempt_outcomes,
     continue_job,
     evaluation,
@@ -55,6 +56,7 @@ from tests.test_paper_session_operations import (
     operation_row,
     run_continue,
     seed_batch,
+    takeover,
     terminate_lock_holder,
 )
 from tests.test_recovery_order_linkage import _accepted_registrations
@@ -76,7 +78,7 @@ from trading_platform.db.models import (
 )
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.lifecycle import JobTransitionRequest, apply_job_transition
-from trading_platform.jobs.queue import reclaim_lost_jobs
+from trading_platform.jobs.queue import claim_next_job, reclaim_lost_jobs
 from trading_platform.jobs.registry import build_default_registry
 from trading_platform.orchestration.job_mutations import (
     JobOrchestrationService,
@@ -760,3 +762,471 @@ def test_c_genuine_ambiguity_stays_blocked(
         assert _r3_blocking_ids(http, linked[0]) == expected_blocking
     else:
         assert broker.received == p0 and _all_attempts() == a0
+
+
+# ---------------------------------------------------------------------------
+# Task 2: regression (d) - one consumer-agreement matrix before and after reuse
+# ---------------------------------------------------------------------------
+
+REUSE_KINDS = ["continue", "retry_of_continue", "start_after_end", "ambiguous_retry_by_continue"]
+
+
+def _attempt_of(order_id: uuid.UUID) -> OrderSubmissionAttempt:
+    with session_scope(load_settings()) as session:
+        attempt = session.execute(
+            select(OrderSubmissionAttempt).where(OrderSubmissionAttempt.paper_order_id == order_id)
+        ).scalar_one()
+        session.expunge(attempt)
+        return attempt
+
+
+@pytest.mark.parametrize("kind", REUSE_KINDS)
+def test_d_consumers_agree_before_and_after_reuse(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """(d) At every checkpoint (K1 after the crash, K2 after the clean M5, K3 after the reuse
+    registration committed and BEFORE its T1, K3b right after the reuse POST while the reusing Job
+    is still RUNNING, K4 after the reusing Job finished or was reclaimed, K5 after settling) the
+    shared agreement assertion holds and the explicit assertions of ``_explicit`` hold, for every
+    reuse kind. The genuinely ambiguous kind ends blocked at every later checkpoint."""
+
+    timeline = Timeline()
+    world = _saf01_shape(monkeypatch, timeline)
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    history = world.history
+    ambiguous = kind == "ambiguous_retry_by_continue"
+    if ambiguous:
+        broker.script = ["read_timeout"]
+    operation_ids = [op]
+    resolved = GateCode.RECONCILIATION_REQUIRED
+
+    # K1: right after the crash (J1 reclaimed, no reconciliation yet)
+    gate = assert_recovery_consumers_agree(http, **_agree([j1], op))
+    _explicit(
+        http,
+        gate=gate,
+        expect=resolved,
+        linked=[j1],
+        operation_ids=operation_ids,
+        order_id=order_id,
+        history=history,
+    )
+    assert [i.classification.value for i in _status().intents] == ["not_sent"]
+
+    if kind == "start_after_end":  # End (M12): the unsent intents are cancelled, O keeps its status
+        with session_scope(load_settings()) as session:
+            end_operation(session, op, operator_reason="cr01 d end", actor="pytest")
+
+    # K2: a clean standalone reconciliation after J1 (before any reuse)
+    recon_a = timeline.next()
+    assert recon_a > world.j1_completed_at
+    _clean_reconciliation(recon_a)
+    gate = assert_recovery_consumers_agree(http, **_agree([j1], op))
+    _explicit(
+        http,
+        gate=gate,
+        expect=None,
+        linked=[j1],
+        operation_ids=operation_ids,
+        order_id=order_id,
+        history=history,
+    )
+
+    # the reusing Job
+    prior = [j1]
+    new_run: uuid.UUID | None = None
+    if kind == "retry_of_continue":
+        # J2 registers (retry_requested) and crashes before T1, then M15 retries it as J3
+        j2 = continue_job(op)
+        hold = _hold_before_t1(monkeypatch)
+        worker = Worker(lambda: run_continue(broker.service(), operation_id=op, job_id=j2)).start()
+        hold.wait_arrived()
+        terminate_lock_holder()
+        crashed_j2 = timeline.next()
+        assert crashed_j2 > recon_a
+        _crash_job(j2, crashed_j2)
+        hold.release.set()
+        worker.join()
+        assert worker.error is not None  # T1 refused (lease lost)
+        assert attempt_outcomes(cid1) == [] and broker.received == {}
+        recon_b = timeline.next()
+        assert recon_b > crashed_j2
+        _clean_reconciliation(recon_b)
+        gate = assert_recovery_consumers_agree(http, **_agree([j1, j2], op))
+        _explicit(
+            http,
+            gate=gate,
+            expect=None,
+            linked=[j1, j2],
+            operation_ids=operation_ids,
+            order_id=order_id,
+            history=history,
+        )
+        result = _orchestration().retry(job_id=j2, idempotency_key="cr01-d-retry-j2")
+        reuse = uuid.UUID(result.reference.job_id)
+        assert _job_row(reuse).retry_of_job_id == j2
+        with session_scope(load_settings()) as session:  # the worker's product claim
+            assert claim_next_job(session, worker_id="retry-worker", lease_seconds=86400) == reuse
+        prior = [j1, j2]
+    elif kind == "start_after_end":
+        new_run = evaluation(DEFAULT_BATCH[:1], as_of="2024-01-08", base=timeline.next())
+        assert _validate(new_run)["risk_run_id"] == str(new_run)  # the start gate passes
+        reuse = _start_job(new_run)
+    else:
+        assert _continue_validate(op)["mode"] == "continue"  # the Continue gate passes
+        reuse = continue_job(op)
+
+    # K3: the reuse registration committed, the reusing executor held BEFORE its T1
+    if new_run is not None:
+        start_run = new_run
+        fn: Callable[[], Any] = lambda: _start(  # noqa: E731
+            broker.service(), risk_run_id=start_run, job_id=reuse
+        )
+    else:
+        fn = lambda: run_continue(broker.service(), operation_id=op, job_id=reuse)  # noqa: E731
+    hold = _hold_before_t1(monkeypatch)
+    worker = Worker(fn).start()
+    hold.wait_arrived()
+    reuse_run = _run_of(reuse)
+    current_op = op
+    if new_run is not None:
+        current_op = operation_row().id
+        assert current_op != op
+        operation_ids = [op, current_op]
+    with session_scope(load_settings()) as session:
+        assert _accepted_registrations(session, order_id) >= {
+            ("intent_registered", world.r1),
+            ("retry_requested", reuse_run),
+        }
+    assert attempt_outcomes(cid1) == [] and broker.received == {}
+    linked = [*prior, reuse]
+    gate = assert_recovery_consumers_agree(http, **_agree(linked, current_op))
+    _explicit(
+        http,
+        gate=gate,
+        expect=None,
+        linked=linked,
+        operation_ids=operation_ids,
+        order_id=order_id,
+        history=history,
+    )
+
+    # K3b: the reusing executor POSTs once; its Job is still RUNNING (not yet a broker effect)
+    hold.release.set()
+    worker.join()
+    outcome = "ambiguous" if ambiguous else "accepted"
+    assert broker.received == {cid1: 1}  # exactly one POST
+    assert attempt_outcomes(cid1) == [(1, outcome)]
+    attempt = _attempt_of(order_id)
+    assert attempt.executor_job_id == reuse and attempt.strategy_run_id == reuse_run
+    assert _order(order_id).strategy_run_id == world.r1  # the origin run is kept
+    running = _job_row(reuse)
+    assert running.status is JobStatus.RUNNING and running.completed_at is None
+    if ambiguous:
+        assert isinstance(worker.error, AmbiguousOrderSubmissionError)
+    else:
+        assert worker.error is None
+        decision = worker.result.result_summary["submitted_orders"][0]["intent_decision"]
+        assert decision["action"] == "retry_existing"
+    after_post = OUTCOME_UNRESOLVED if ambiguous else None
+    gate = assert_recovery_consumers_agree(http, **_agree(linked, current_op))
+    _explicit(
+        http,
+        gate=gate,
+        expect=after_post,
+        linked=linked,
+        operation_ids=operation_ids,
+        order_id=order_id,
+        history=history,
+    )
+
+    if ambiguous:
+        # K4: J2 is reclaimed (flagged); O is attributed to BOTH Jobs and blocks
+        crashed = timeline.next()
+        _crash_job(reuse, crashed)
+        gate = assert_recovery_consumers_agree(http, **_agree(linked, current_op))
+        _explicit(
+            http,
+            gate=gate,
+            expect=OUTCOME_UNRESOLVED,
+            linked=linked,
+            operation_ids=operation_ids,
+            order_id=order_id,
+            history=history,
+        )
+        for job_id in linked:
+            assert _r3_blocking_ids(http, job_id) == {str(order_id)}
+        # K5: a fresh clean M5 after every Job does NOT settle a genuinely ambiguous order
+        recon_c = timeline.next()
+        assert recon_c > crashed
+        _clean_reconciliation(recon_c)
+        gate = assert_recovery_consumers_agree(http, **_agree(linked, current_op))
+        _explicit(
+            http,
+            gate=gate,
+            expect=OUTCOME_UNRESOLVED,
+            linked=linked,
+            operation_ids=operation_ids,
+            order_id=order_id,
+            history=history,
+        )
+        assert history == [
+            resolved,
+            None,
+            None,
+            OUTCOME_UNRESOLVED,
+            OUTCOME_UNRESOLVED,
+            OUTCOME_UNRESOLVED,
+        ]
+        return
+
+    # K4: the reusing Job finished at an explicit instant later than the K2 reconciliation
+    finished = timeline.next()
+    assert finished > recon_a
+    _finish_job(reuse, finished)
+    gate = assert_recovery_consumers_agree(http, **_agree(linked, current_op))
+    _explicit(
+        http,
+        gate=gate,
+        expect=resolved,
+        linked=linked,
+        operation_ids=operation_ids,
+        order_id=order_id,
+        history=history,
+    )
+    # K5: the order fills, M4 sync, a fresh clean M5 after the reusing Job
+    _filled_sync(order_id)
+    recon_c = timeline.next()
+    assert recon_c > finished
+    _clean_reconciliation(recon_c)
+    gate = assert_recovery_consumers_agree(http, **_agree(linked, current_op))
+    _explicit(
+        http,
+        gate=gate,
+        expect=None,
+        linked=linked,
+        operation_ids=operation_ids,
+        order_id=order_id,
+        history=history,
+    )
+    assert OUTCOME_UNRESOLVED not in history, history
+    expected_history = [resolved, None, None, None, resolved, None]
+    if kind == "retry_of_continue":  # one extra checkpoint: after J2's crash and the second M5
+        expected_history.insert(2, None)
+    assert history == expected_history, history
+    assert _job_row(j1).completed_at == world.j1_completed_at  # J1 keeps its reclaimed timestamp
+
+
+# ---------------------------------------------------------------------------
+# S14: an UNKNOWN order with a complete pre_connection history
+# ---------------------------------------------------------------------------
+
+
+def _op_read(http: TestClient, operation_id: uuid.UUID) -> dict[str, Any]:
+    response = http.get(f"/api/v1/execution-operations/{operation_id}")
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+@pytest.mark.parametrize("path", ["continue", "end"])
+def test_d_s14_unknown_order_with_a_complete_pre_connection_history(
+    http: TestClient, path: str
+) -> None:
+    """S14 on a product path (the S1 takeover of ``test_s1_v2``): worker A is held before its
+    request leaves the process, A's Job is reclaimed, the takeover executor B parks the intent
+    UNKNOWN (in doubt) and A's request then fails ``pre_connection`` (never sent, attempt log
+    complete). The shared verdict is PROVEN_NOT_SENT: every recovery consumer agrees (gate
+    ``reconciliation_required``, A5 fails, R3 lists it NON-blocking) while the operation read
+    model's ``unresolved_intents`` does NOT list it, the intent still DISPLAYS ``ambiguous`` and the
+    operation still reads ``paused / outcome_unresolved``. This test pins CURRENT behaviour; the
+    display / gate mismatch it exposes is an OPEN DECISION (20.1-28 deviation 4, reported in the
+    20.1-30 SUMMARY), not something this test approves. The one safety property pinned
+    unconditionally: the UNKNOWN order is never POSTed."""
+
+    timeline = Timeline()
+    risk_run, _events = seed_batch(DEFAULT_BATCH[:2], manifest=manifest())
+    j1 = _start_job(risk_run)
+    broker = S1Broker(script=["connect_error", "accept"], before_request=Gate())
+    gate = broker.before_request
+    assert gate is not None
+    worker = Worker(lambda: _start(broker.service(), risk_run_id=risk_run, job_id=j1)).start()
+    gate.wait_arrived()
+    op = operation_row().id
+    (_intent1, cid1), (_intent2, cid2) = intent_rows()
+    terminate_lock_holder()
+    crashed_a = timeline.next()
+    _crash_job(j1, crashed_a)
+    acquisition, job_b = takeover(op)
+    assert acquisition.paused is True  # the takeover parked the in-doubt intent
+    gate.release.set()
+    worker.join()
+    assert worker.error is not None  # A lost authority
+    assert attempt_outcomes(cid1) == [(1, "pre_connection")]  # no attempt #2
+    assert broker.received == {}  # the request never left the process
+    with session_scope(load_settings()) as session:
+        order_id = session.execute(
+            select(PaperOrder.id).where(PaperOrder.client_order_id == cid1)
+        ).scalar_one()
+    assert _order(order_id).status == OrderLifecycleState.UNKNOWN
+    finished_b = timeline.next()
+    assert finished_b > crashed_a
+    _finish_job(job_b, finished_b)  # the takeover executor is a normal Job that ended
+    linked = [j1, job_b]
+    attempts_before = _all_attempts()
+
+    def display() -> tuple[list[str], list[Any]]:
+        body = _op_read(http, op)
+        return [i["state"] for i in body["intents"]], body["unresolved_intents"]
+
+    # before the clean M5: all consumers agree on reconciliation_required ...
+    gate_code = assert_recovery_consumers_agree(http, **_agree(linked, op))
+    assert gate_code is GateCode.RECONCILIATION_REQUIRED
+    assert [(i.job_id, i.classification.value, i.blocking) for i in _status().intents] == [
+        (j1, "not_sent", False)
+    ]
+    assert not _a5().passed
+    (item,) = _r3_items(http, j1)
+    assert (item["intent_id"], item["classification"], item["blocking"]) == (
+        str(order_id),
+        "not_sent",
+        False,
+    )
+    assert _r3_items(http, job_b) == []
+    assert _continue_conflict(op).code == "reconciliation_required"
+    # ... while the operation read model does not list the order and still shows it as ambiguous
+    states, unresolved = display()
+    assert states == ["ambiguous", "planned"] and unresolved == []
+    operation = _op_read(http, op)
+    assert (operation["state"], operation["reason"]) == ("paused", "outcome_unresolved")
+
+    # a clean standalone reconciliation after every Job resolves the gate (the order is proven
+    # not sent) although the order is still UNKNOWN and still displayed as ambiguous
+    recon = timeline.next()
+    assert recon > finished_b
+    _clean_reconciliation(recon)
+    gate_code = assert_recovery_consumers_agree(http, **_agree(linked, op))
+    assert gate_code is None and _a5().passed
+    assert _order(order_id).status == OrderLifecycleState.UNKNOWN
+    states, unresolved = display()
+    assert states == ["ambiguous", "planned"] and unresolved == []
+
+    if path == "continue":
+        assert _continue_validate(op)["mode"] == "continue"  # the Continue gate admits it
+        run_continue(broker.service(), operation_id=op, job_id=continue_job(op))
+    else:
+        with session_scope(load_settings()) as session:
+            result = end_operation(session, op, operator_reason="cr01 s14 end", actor="pytest")
+        assert result.unresolved_intents == ()  # End lists nothing for the UNKNOWN order
+        assert len(result.unsent_cancelled) == 1  # only the planned intent 2 is cancelled
+        states, unresolved = display()
+        assert states == ["ambiguous", "cancelled_unsent"] and unresolved == []
+    # the safety property: the UNKNOWN order is never POSTed and gets no new attempt row
+    assert cid1 not in broker.received
+    assert [row for row in _all_attempts() if row[0] == cid1] == [
+        row for row in attempts_before if row[0] == cid1
+    ]
+    assert _order(order_id).status == OrderLifecycleState.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# The order-less flagged Job control (OD-1 open)
+# ---------------------------------------------------------------------------
+
+
+def test_d_order_less_flagged_job_stays_blocked_while_od1_is_open(
+    http: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # OD-1 open decision (user, 2026-10-05): this asserts CURRENT blocking behaviour; it is not an approved terminal state. If OD-1 is approved, this control changes per 20.1-OD-1-DRAFT.md.
+    """A flagged paper-session Job whose run registered no order stays ``execution_path_unproven``
+    in every consumer: the absence of an order alone is not proof that nothing could be sent. ORDER
+    MATTERS (a blocking control seeded first would refuse every Continue / T1 / start): a full
+    Continue-reuse scenario is settled FIRST (gate None, A5 passes), THEN the control Job is added.
+    The control is fixture-seeded: it asserts current blocking behaviour, it is not a reuse path."""
+
+    timeline = Timeline()
+    world = _saf01_shape(monkeypatch, timeline)
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    recon_a = timeline.next()
+    assert recon_a > world.j1_completed_at
+    _clean_reconciliation(recon_a)
+    j2 = continue_job(op)
+    report = run_continue(broker.service(), operation_id=op, job_id=j2)
+    assert report.result_summary["submitted_orders"][0]["intent_decision"]["action"] == (
+        "retry_existing"
+    )
+    assert broker.received == {cid1: 1}
+    finished_j2 = timeline.next()
+    _finish_job(j2, finished_j2)
+    _filled_sync(order_id)
+    settled = timeline.next()
+    assert settled > finished_j2
+    _clean_reconciliation(settled)
+    linked = [j1, j2]
+    gate = assert_recovery_consumers_agree(http, **_agree(linked, op))
+    assert gate is None and _a5().passed  # the reuse scenario is settled
+    reuse_reads = {job_id: _r3_items(http, job_id) for job_id in linked}
+
+    # the control: a flagged paper-session Job with a linked paper_execution run and NO order,
+    # completed explicitly later than the settled reconciliation
+    control_at = timeline.next()
+    assert control_at > settled
+    with session_scope(load_settings()) as session:
+        control_job = seed_job(session, strategy_id=STRATEGY, completed_at=control_at)
+        seed_paper_run(session, control_job)
+        control = control_job.id
+    assert _job_row(control).outcome_uncertain is True
+
+    def assert_blocked() -> None:
+        assert _gate() is OUTCOME_UNRESOLVED
+        assert _unproven(control)
+        status = _status()
+        (entry,) = [i for i in status.intents if i.job_id == control]
+        assert entry.intent_id is None and not entry.established and entry.blocking
+        with session_scope(load_settings()) as session:  # the account read shows the same entry
+            account = account_recovery_status(session, now=clock.now_utc())
+        subject = next(s for s in account.subjects if s.strategy_id == STRATEGY)
+        assert any(
+            i.job_id == control
+            and i.intent_id is None
+            and i.unresolved_reason is UnresolvedReason.EXECUTION_PATH_UNPROVEN
+            for i in subject.intents
+        )
+        (item,) = _r3_items(http, control)  # R3 of the control Job
+        assert item["intent_id"] is None and item["blocking"] is True
+        assert item["unresolved_reason"] == "execution_path_unproven"
+        assert _r3(http, control)["gate_code"] == "outcome_unresolved"
+        a5 = _a5()  # A5 fails with the control Job among its refs
+        assert not a5.passed
+        assert any(
+            ref.kind is EvidenceKind.JOB and ref.id == str(control) for ref in a5.evidence_refs
+        ), a5.evidence_refs
+        # the reused order stays attributed to its own Jobs: their R3 reads are unchanged
+        assert {job_id: _r3_items(http, job_id) for job_id in linked} == reuse_reads
+        assert _continue_conflict(op).code == "outcome_unresolved"  # and it blocks everything
+
+    # the control Job registered no order, so it is not passed as a registering Job
+    with_control = {**_agree(linked, op), "linked_job_ids": [*linked, control]}
+    assert_blocked()
+    gate = assert_recovery_consumers_agree(http, **with_control)
+    assert gate is OUTCOME_UNRESOLVED
+
+    # a further fresh clean reconciliation (completed after the control Job) does NOT release it
+    fresh = timeline.next()
+    assert fresh > control_at
+    _clean_reconciliation(fresh)
+    assert_blocked()
+    gate = assert_recovery_consumers_agree(http, **with_control)
+    assert gate is OUTCOME_UNRESOLVED
