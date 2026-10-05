@@ -38,6 +38,8 @@ from trading_platform.db.models import (
     ExecutionOperation,
     ExecutionOperationIntent,
     ExecutionOperationJob,
+    Job,
+    JobStatus,
     OrderSubmissionAttempt,
 )
 from trading_platform.db.models.execution_operation import (
@@ -301,15 +303,34 @@ def test_intent_sequence_is_unique_per_operation_and_disposition_is_closed(
 
 
 def test_job_link_is_nulled_when_the_job_is_deleted(migrated_db: str) -> None:
+    # 0029 retention policy (user decision 2026-10-05): evidence rows are not deletable.
+    # A 'paper-session' Job (what seed_operation_job creates) can no longer be deleted, so the
+    # operation-Job link keeps its job; a Job of a non-protected type still SET NULLs the link.
     with session_scope(load_settings()) as session:
         job = seed_operation_job(session)
         operation = seed_operation(session, state="completed", reason=None, jobs=[(job, "start")])
         job_id, operation_id = job.id, operation.id
-    with session_scope(load_settings()) as session:
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
     with session_scope(load_settings()) as session:
         link = session.execute(
             select(ExecutionOperationJob).where(ExecutionOperationJob.operation_id == operation_id)
+        ).scalar_one()
+        assert link.job_id == job_id
+        assert link.mode == "start"
+    # Sibling: a non-protected job type keeps the pre-0029 SET NULL behaviour.
+    with session_scope(load_settings()) as session:
+        probe = Job(job_type="phase-probe", payload={}, status=JobStatus.SUCCEEDED)
+        session.add(probe)
+        session.flush()
+        other = seed_operation(session, state="completed", reason=None)
+        session.add(ExecutionOperationJob(operation_id=other.id, job_id=probe.id, mode="start"))
+        probe_id, other_id = probe.id, other.id
+    with session_scope(load_settings()) as session:
+        session.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": probe_id})
+    with session_scope(load_settings()) as session:
+        link = session.execute(
+            select(ExecutionOperationJob).where(ExecutionOperationJob.operation_id == other_id)
         ).scalar_one()
         assert link.job_id is None
         assert link.mode == "start"
@@ -319,18 +340,19 @@ def test_job_link_is_nulled_when_the_job_is_deleted(migrated_db: str) -> None:
         session.flush()
 
 
-def test_paper_order_delete_nulls_the_intent_link(migrated_db: str) -> None:
+def test_paper_order_delete_is_rejected_and_the_intent_link_stays(migrated_db: str) -> None:
+    # 0029 retention policy (user decision 2026-10-05): evidence rows are not deletable
     with session_scope(load_settings()) as session:
         operation = seed_operation(session, state="running", reason=None)
         seeded = seed_operation_intent(session, operation, with_order=True)
         intent_id = seeded.row.id
         order_id = seeded.order.id  # type: ignore[union-attr]
-    with session_scope(load_settings()) as session:
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM paper_orders WHERE id = :id"), {"id": order_id})
     with session_scope(load_settings()) as session:
         stored = session.get(ExecutionOperationIntent, intent_id)
         assert stored is not None
-        assert stored.paper_order_id is None
+        assert stored.paper_order_id == order_id
 
 
 def test_operation_with_intents_cannot_be_deleted(migrated_db: str) -> None:

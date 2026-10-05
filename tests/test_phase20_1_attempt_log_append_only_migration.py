@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alembic import command
+from alembic.script import ScriptDirectory
 from scripts.migrate import build_alembic_config
 from tests.support.migrated_db import migrated_database
 from tests.support.operation_fixtures import (
@@ -41,7 +42,6 @@ from trading_platform.services.execution import operations as ops
 TRIGGER = "trg_order_submission_attempts_append_only"
 FK = "fk_order_submission_attempts_paper_order_id_paper_orders"
 PREVIOUS_REVISION = "0027_phase20_1_execution_operations"
-HEAD_REVISION = "0028_phase20_1_attempt_log_append_only"
 
 
 @pytest.fixture()
@@ -233,26 +233,37 @@ def test_paper_order_with_attempts_cannot_be_deleted(migrated_db: str) -> None:
     assert link == order_id
 
 
-def test_paper_order_without_attempts_can_be_deleted(migrated_db: str) -> None:
-    order_id, _ = _create_order()
+def test_paper_order_without_attempts_cannot_be_deleted(migrated_db: str) -> None:
+    # 0029 retention policy (user decision 2026-10-05): evidence rows are not deletable
     with session_scope(load_settings()) as session:
+        operation = seed_operation(session, state="running", reason=None)
+        seeded = seed_operation_intent(session, operation, with_order=True)
+        order_id = seeded.order.id  # type: ignore[union-attr]
+        intent_id = seeded.row.id
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM paper_orders WHERE id = :id"), {"id": order_id})
     with session_scope(load_settings()) as session:
         assert (
             session.execute(
                 text("SELECT count(*) FROM paper_orders WHERE id = :id"), {"id": order_id}
             ).scalar_one()
-            == 0
+            == 1
         )
+        link = session.execute(
+            text("SELECT paper_order_id FROM execution_operation_intents WHERE id = :id"),
+            {"id": intent_id},
+        ).scalar_one()
+    assert link == order_id
 
 
-def test_run_delete_nulls_attempt_run(migrated_db: str) -> None:
+def test_attempt_run_reference_survives_because_the_run_is_undeletable(
+    migrated_db: str,
+) -> None:
+    # 0029 retention policy (user decision 2026-10-05): evidence rows are not deletable
     order_id, _order_run = _create_order()
-    other_order_id, separate_run = _create_order()
+    _other_order_id, separate_run = _create_order()
     attempt_id = _insert_attempt(order_id, outcome="rejected", run_id=separate_run)
-    with session_scope(load_settings()) as session:
-        # The separate run owns only a bare order without attempts: drop it, then the run.
-        session.execute(text("DELETE FROM paper_orders WHERE id = :id"), {"id": other_order_id})
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM strategy_runs WHERE id = :id"), {"id": separate_run})
     with session_scope(load_settings()) as session:
         row = session.execute(
@@ -262,7 +273,7 @@ def test_run_delete_nulls_attempt_run(migrated_db: str) -> None:
             ),
             {"id": attempt_id},
         ).one()
-    assert row.strategy_run_id is None
+    assert row.strategy_run_id == separate_run
     assert row.outcome_class == "rejected"
 
 
@@ -326,7 +337,8 @@ def test_downgrade_restores_cascade_and_drops_trigger(migrated_db: str) -> None:
     assert _paper_order_fk_ondelete() == "RESTRICT"
     with session_scope(load_settings()) as session:
         version = session.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == HEAD_REVISION
+    # 0029 head: head-agnostic (a later phase chains on 0029)
+    assert version == ScriptDirectory.from_config(build_alembic_config()).get_current_head()
 
 
 def test_orm_fk_matches_migration(migrated_db: str) -> None:

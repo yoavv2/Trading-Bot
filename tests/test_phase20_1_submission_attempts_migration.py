@@ -198,15 +198,18 @@ def test_paper_order_delete_is_restricted_and_run_delete_nulls_the_run(migrated_
         session.execute(text("DELETE FROM paper_orders WHERE id = :oid"), {"oid": order_id})
     with session_scope(load_settings()) as session:
         assert session.execute(text("SELECT count(*) FROM order_submission_attempts")).scalar_one() == 1
-    # The separate run owns a paper order (from _create_order), so drop that order first.
-    with session_scope(load_settings()) as session:
+    # 0029 retention policy (user decision 2026-10-05): evidence rows are not deletable. Neither
+    # the order nor the separate run (a paper_execution run that owns an order and is referenced
+    # by an attempt) can be deleted, so the attempt keeps its run reference.
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM paper_orders WHERE id = :oid"), {"oid": _other_order_id})
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM strategy_runs WHERE id = :rid"), {"rid": separate_run_id})
     with session_scope(load_settings()) as session:
         run_ref = session.execute(
             text("SELECT strategy_run_id FROM order_submission_attempts")
         ).scalar_one()
-        assert run_ref is None
+        assert run_ref == separate_run_id
 
 
 def test_downgrade_drops_table_and_reupgrade_restores_it(migrated_db: str) -> None:

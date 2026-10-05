@@ -347,7 +347,10 @@ def test_delete_is_rejected(migrated_db: str) -> None:
         assert session.get(RecoveryRecord, row_id) is not None
 
 
-def test_parent_job_and_order_delete_null_the_fks_and_nothing_else(migrated_db: str) -> None:
+def test_parent_job_and_order_cannot_be_deleted_so_the_record_keeps_its_links(
+    migrated_db: str,
+) -> None:
+    # 0029 retention policy (user decision 2026-10-05): evidence rows are not deletable
     job_id = _create_job()
     order_id = _create_order()
     row_id = _insert(_statement(job_id=job_id, paper_order_id=order_id))
@@ -355,21 +358,16 @@ def test_parent_job_and_order_delete_null_the_fks_and_nothing_else(migrated_db: 
         before = session.get(RecoveryRecord, row_id)
         assert before is not None
         snapshot = (before.reason, before.reference, before.statement, before.created_at)
-    # Deleting the Job nulls only job_id.
-    with session_scope(load_settings()) as session:
+    # The 'paper-session' Job and the order are evidence: both deletes are refused.
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
-    with session_scope(load_settings()) as session:
-        row = session.get(RecoveryRecord, row_id)
-        assert row is not None
-        assert row.job_id is None
-        assert row.paper_order_id == order_id
-    # Deleting the order nulls paper_order_id; the statement row survives intact.
-    with session_scope(load_settings()) as session:
+    with pytest.raises(IntegrityError), session_scope(load_settings()) as session:
         session.execute(text("DELETE FROM paper_orders WHERE id = :id"), {"id": order_id})
     with session_scope(load_settings()) as session:
         row = session.get(RecoveryRecord, row_id)
         assert row is not None
-        assert row.paper_order_id is None
+        assert row.job_id == job_id
+        assert row.paper_order_id == order_id
         assert (row.reason, row.reference, row.statement, row.created_at) == snapshot
 
 

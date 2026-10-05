@@ -154,15 +154,20 @@ def test_alembic_chain_is_linear_from_0021() -> None:
 
     assert chain[0] == "0021_phase20_operations_safety"
     assert chain[1].startswith("0022_")  # the 20.1-01 revision (matched by prefix)
-    assert chain[2:] == [
+    # 0029 head: head-AGNOSTIC (a later phase chains on 0029), so only the PREFIX is pinned.
+    expected = [
         "0023_phase20_1_order_submission_attempts",
         "0024_phase20_1_account_reconciliation_runs",
         "0025_phase20_1_external_broker_activity",
         "0026_phase20_1_recovery_records",
         "0027_phase20_1_execution_operations",
         "0028_phase20_1_attempt_log_append_only",
+        "0029_phase20_1_order_origin_immutable",
     ]
-    assert heads[0] == "0028_phase20_1_attempt_log_append_only"
+    assert chain[2 : 2 + len(expected)] == expected
+    revision_0029 = script.get_revision("0029_phase20_1_order_origin_immutable")
+    assert revision_0029 is not None
+    assert revision_0029.down_revision == "0028_phase20_1_attempt_log_append_only"
     # each revision descends from the previous one (linear).
     for previous, current in zip(chain, chain[1:], strict=False):
         assert script.get_revision(current).down_revision == previous
