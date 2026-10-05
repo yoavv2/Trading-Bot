@@ -2434,7 +2434,11 @@ def _execute_pinned_intent(
             pending_order = retrieved_order
             transition_event_type = OrderTransitionEventType.RETRY_REQUESTED
 
-        pending_order.strategy_run_id = run_id
+        # CR-01 (user decision 2026-10-05, durable historical linkage): the order's run is its
+        # ORIGIN and is never reassigned. A retry registers on THIS run through the accepted
+        # ``retry_requested`` order_events row written by the transition below (the origin's
+        # ``intent_registered`` row likewise); recovery attributes the order to every Job that
+        # registered or retried it from those rows, and each attempt row names the run that sent it.
         apply_order_transition(
             pending_order.id,
             OrderTransitionRequest(
@@ -2830,6 +2834,7 @@ def _send_authorized(
         lease_owner=ctx.lease_owner,
         settings=ctx.settings,
         price_observed_at=price_observed_at,
+        strategy_run_id=ctx.run_id,
     )
     log = GuardedAttemptLog(
         ctx.settings,

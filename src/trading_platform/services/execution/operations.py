@@ -1610,6 +1610,7 @@ def authorize_send(
     ttl_seconds: int | None = None,
     settings: Settings | None = None,
     price_observed_at: datetime | None = None,
+    strategy_run_id: uuid.UUID | None = None,
 ) -> SendAuthorization:
     """Transaction T1 (S1-R3): authority and the attempt record, durably, BEFORE the POST.
 
@@ -1633,6 +1634,10 @@ def authorize_send(
     future-dated one. Lock order unchanged: operation row, then order row; the gate rows
     are never locked (``set_active_paper_strategy`` and ``_prepare_start`` lock the singleton
     first, so a lock here could invert them).
+
+    20.1-26 (CR-01): ``strategy_run_id`` is the run under which this attempt is SENT (the start,
+    Continue or retry run of the executor); the attempt row records it. It defaults to the
+    order's origin run for callers outside the execution loop.
     """
 
     resolved = settings or load_settings()
@@ -1722,7 +1727,11 @@ def authorize_send(
         # fails closed everywhere else.
         with send_authorization_scope():
             number = DbSubmissionAttemptLog(
-                resolved, paper_order_id=order.id, strategy_run_id=order.strategy_run_id
+                resolved,
+                paper_order_id=order.id,
+                strategy_run_id=(
+                    strategy_run_id if strategy_run_id is not None else order.strategy_run_id
+                ),
             ).begin_attempt(
                 session,
                 started_at=now_db,

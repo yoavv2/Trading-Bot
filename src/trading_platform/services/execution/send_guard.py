@@ -139,6 +139,7 @@ class GuardedAttemptLog:
             lease_owner=self._lease_owner,
             settings=self._settings,
             price_observed_at=self._price_observed_at,
+            strategy_run_id=self._strategy_run_id,
         )
         self._authorizations[authorization.attempt_number] = authorization
         return authorization.attempt_number
