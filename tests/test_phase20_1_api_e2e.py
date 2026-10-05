@@ -282,9 +282,11 @@ class Phase201Env:
         return evaluation_session
 
     def own(self, strategy_id: str = STRATEGY, *, enabled: bool = True) -> None:
-        """Explicit direct seeding of an enabled owner (E3-E12; E1 and E13 use the real PUT)."""
+        """Explicit direct seeding of an enabled owner, then M4 so the first evaluation has a
+        broker-observed cash basis (COR-01 / SAF-09, 20.1-23). E3-E12; E1 and E13 use the real PUT."""
 
         seed_registered_strategy(load_settings(), strategy_id, enabled=enabled, owner=True)
+        self.sync()
 
     def set_strategy_status(self, strategy_id: str, status: str, reason: str = "e2e") -> httpx.Response:
         return self.put(
