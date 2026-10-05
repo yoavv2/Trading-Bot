@@ -332,7 +332,7 @@ Plans:
 **Temporary limitations (accepted)**: TL-1 repeated Continue within a session; TL-2 a working order blocks further orders; TL-3 single regular-hours execution policy; TL-4 a never-found ambiguous order blocks the strategy and ownership changes until the broker shows it or it is proven not sent (no product-level release; a broker statement is evidence only; amended 2026-10-04); TL-5 external activity only when terminal and net-zero; TL-6 handover only when flat; TL-7 full broker-history re-read; TL-8 lazy window expiry; TL-9 API-only operation until v1.4; TL-10 one broker-reaching action per strategy, evaluation session, symbol and side (initial product limitation; a partially filled exit leaves no second sell that session); TL-11 partial-fill remainders are not pursued automatically (remaining position preserved, exposed and risk-checked; per-strategy follow-up behaviour in 20.1-15 S3-R4).
 **Schema changes**: migrations 0022–0027 — active-paper-strategy singleton, order-submission attempt log, dedicated `account_reconciliation_runs` (architectural recommendation R-31), `external_broker_activity`, recovery records, execution-operation state + one-open-operation partial unique index. `RiskDecisionCode.symbol_not_ready` is code-only. Inventory: `research/operator-console-ia/03-PLANNING-CHANGES.md` §3.11.
 **Out of scope**: new console screens or controls (v1.4); open-order-aware risk accounting; flatten / exits-only; adopting external positions; concurrent multi-strategy paper trading; scheduling; auth.
-**Plans**: 24 plans (16 executed + 8 gap closure, 2026-10-05)
+**Plans**: 25 plans (16 executed + 9 gap closure, 2026-10-05)
 
 Plans (execution waves follow true dependency depth: the Alembic chain 0021→0027 is serialized, and plans that edit the same files never share a wave):
 
@@ -404,11 +404,12 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 **Gap wave 4**
 
-- [ ] 20.1-23-PLAN.md — Broker-observed, fresh cash basis enforced for execution; snapshot stamped after the account read (SAF-09) (COR-01, REC-02)
+- [ ] 20.1-23-PLAN.md — Broker-observed, fresh cash basis enforced for execution; snapshot stamped after the account read; E2E harness sync step (SAF-09) (COR-01, REC-02)
 
 **Gap wave 5**
 
-- [ ] 20.1-24-PLAN.md — Runbook 05 + HUMAN-UAT amended: W-1 owner-scope sync, W-2 run-time refusal, TL-4 terminal states, SAF-02/03/09 operator consequences (docs only) (ACCT-01, EXT-01, REC-01, COR-01, COMPAT-01)
+- [ ] 20.1-24-PLAN.md — SAF-09 test rollout: `seed_fresh_broker_snapshot` arranged in the 14 session-running test modules, arrangement only (COR-01, REC-02)
+- [ ] 20.1-25-PLAN.md — Runbook 05 + HUMAN-UAT amended: W-1 owner-scope sync, W-2 run-time refusal, TL-4 terminal states, SAF-02/03/09 operator consequences (docs only) (ACCT-01, EXT-01, REC-01, COR-01, COMPAT-01)
 
 **UI hint**: yes (legacy-console compatibility only)
 
@@ -480,7 +481,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 16/24 | Gap closure planned (gaps_found) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 16/25 | Gap closure planned (gaps_found) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
