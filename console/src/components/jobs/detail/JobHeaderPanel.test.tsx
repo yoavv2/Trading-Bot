@@ -435,3 +435,81 @@ describe("JobProgressPanel — D-16", () => {
     expect(screen.getByText("10 / 10")).toBeTruthy();
   });
 });
+
+// 20.1-14 (COMPAT-01): api_only gating and the Outcome next to the lifecycle status.
+const CATALOG_WITH_API_ONLY: JobTypesCatalog = {
+  mutations_enabled: true,
+  items: [
+    {
+      job_type: "session_like",
+      description: "d",
+      cancellation_mode: "queued_only",
+      console_submission: "api_only",
+    },
+    {
+      job_type: "probe_type",
+      description: "d",
+      cancellation_mode: "step_boundary",
+      console_submission: "interactive",
+    },
+  ],
+};
+
+describe("JobHeaderPanel — api_only and Outcome (20.1-14)", () => {
+  it("no Retry control for an api_only job: the notice is shown instead", async () => {
+    stubJobTypesFetch({ status: 200, body: CATALOG_WITH_API_ONLY });
+    const job = jobDetail({ job_type: "session_like", status: "failed" });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    expect(await screen.findByText("Operated through the API in this version")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("an interactive failed job keeps its Retry control and shows no api_only notice", async () => {
+    stubJobTypesFetch({ status: 200, body: CATALOG_WITH_API_ONLY });
+    const job = jobDetail({ job_type: "probe_type", status: "failed" });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    const button = await screen.findByRole("button", { name: "Retry" });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText("Operated through the API in this version")).toBeNull();
+  });
+
+  it("a paused operation job never renders as plain success", async () => {
+    stubJobTypesFetch({ status: 200, body: CATALOG_WITH_API_ONLY });
+    const job = jobDetail({
+      job_type: "session_like",
+      status: "succeeded",
+      outcome: "paused",
+      outcome_reason: "working_order_commitments_unaccounted",
+    });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    const badge = await screen.findByText("Succeeded · Paused: working order");
+    expect(badge.className).not.toContain("emerald");
+  });
+
+  it("api_only job with no outcome shows Outcome via API only and never a success badge", async () => {
+    stubJobTypesFetch({ status: 200, body: CATALOG_WITH_API_ONLY });
+    const job = jobDetail({ job_type: "session_like", status: "succeeded", outcome: null });
+    render(<JobHeaderPanel job={job} onChanged={vi.fn()} onNavigate={vi.fn()} />);
+
+    const badge = await screen.findByText("Outcome via API only");
+    expect(badge.className).not.toContain("emerald");
+    expect(screen.queryByText("Succeeded")).toBeNull();
+  });
+
+  it("a succeeded interactive job without an outcome keeps plain success styling", async () => {
+    stubJobTypesFetch({ status: 200, body: CATALOG_WITH_API_ONLY });
+    render(
+      <JobHeaderPanel
+        job={jobDetail({ status: "succeeded" })}
+        onChanged={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const badge = await screen.findByText("Succeeded");
+    expect(badge.className).toContain("emerald");
+  });
+});

@@ -7,6 +7,13 @@ import { RetryJobDialog } from "../RetryJobDialog";
 import { useMutationCapability } from "@/lib/useMutationCapability";
 import { cancellationOutcomeLabel } from "@/lib/cancellationLabel";
 import { jobStatusColor, JOB_STATUS_BADGE_CLASS } from "@/lib/jobStatus";
+import {
+  API_ONLY_NOTICE,
+  catalogEntryFor,
+  isApiOnly,
+  outcomeToneClass,
+  outcomeView,
+} from "@/lib/jobOutcome";
 import type { JobDetail } from "../types";
 import type { MutationCapability } from "@/lib/useMutationCapability";
 
@@ -98,8 +105,15 @@ export function JobHeaderPanel({ job, onChanged, onNavigate }: JobHeaderPanelPro
       ? capability.reason
       : null;
 
-  // D-20: the Retry trigger renders only for a terminal, non-succeeded Job.
-  const showRetryTrigger = job.status === "failed" || job.status === "cancelled";
+  // 20.1-14 (D-31): the catalog lookup and the api_only test live in lib/jobOutcome.ts (D-17).
+  const catalogEntry = catalogEntryFor(capability.catalog, job.job_type);
+  const apiOnly = isApiOnly(catalogEntry);
+  const outcome = outcomeView(job, catalogEntry);
+
+  // D-20: the Retry trigger renders only for a terminal, non-succeeded Job -- and never for an
+  // api_only type (its notice is shown instead).
+  const terminalNotSucceeded = job.status === "failed" || job.status === "cancelled";
+  const showRetryTrigger = terminalNotSucceeded && !apiOnly;
   const retryGate = computeRetryGate(job, capability);
   const retryDisabled = retryGate.kind !== "open";
   const retryReason =
@@ -127,9 +141,11 @@ export function JobHeaderPanel({ job, onChanged, onNavigate }: JobHeaderPanelPro
             {`${job.job_type} · ${job.id.slice(0, 8)}`}
           </h1>
           <span
-            className={`${JOB_STATUS_BADGE_CLASS} ${jobStatusColor(job.status)}`}
+            className={`${JOB_STATUS_BADGE_CLASS} ${
+              outcome ? outcomeToneClass(outcome.tone) : jobStatusColor(job.status)
+            }`}
           >
-            {job.status}
+            {outcome ? outcome.label : job.status}
           </span>
         </div>
 
@@ -147,6 +163,10 @@ export function JobHeaderPanel({ job, onChanged, onNavigate }: JobHeaderPanelPro
               <span className="text-xs text-zinc-500">{cancelReason}</span>
             ) : null}
           </div>
+        ) : null}
+
+        {terminalNotSucceeded && apiOnly ? (
+          <span className="text-xs text-zinc-500">{API_ONLY_NOTICE}</span>
         ) : null}
 
         {showRetryTrigger ? (

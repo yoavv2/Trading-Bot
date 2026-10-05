@@ -9,6 +9,11 @@ import {
   jobStatusColor,
   JOB_STATUS_BADGE_CLASS,
 } from "@/lib/jobStatus";
+import {
+  catalogEntryFor,
+  outcomeToneClass,
+  outcomeView,
+} from "@/lib/jobOutcome";
 import { ErrorState } from "@/components/ErrorState";
 import { FetchMeta } from "@/components/FetchMeta";
 import { AutoRefreshIndicator } from "./AutoRefreshIndicator";
@@ -131,14 +136,22 @@ export function JobsTable() {
               </tr>
             </thead>
             <tbody>
-              {result.data.items.map((job) => (
+              {result.data.items.map((job) => {
+                // 20.1-14: Outcome next to the lifecycle status; lookups live in lib/jobOutcome.ts.
+                const outcome = outcomeView(
+                  job,
+                  catalogEntryFor(capability.catalog, job.job_type),
+                );
+                return (
                 <tr key={job.id} className="border-b border-zinc-900 text-zinc-300">
                   <td className="py-2 pr-4">{job.job_type}</td>
                   <td className="py-2 pr-4">
                     <span
-                      className={`${JOB_STATUS_BADGE_CLASS} ${jobStatusColor(job.status)}`}
+                      className={`${JOB_STATUS_BADGE_CLASS} ${
+                        outcome ? outcomeToneClass(outcome.tone) : jobStatusColor(job.status)
+                      }`}
                     >
-                      {job.status}
+                      {outcome ? outcome.label : job.status}
                     </span>
                   </td>
                   <td className="py-2 pr-4">{job.queued_at ?? "—"}</td>
@@ -160,7 +173,8 @@ export function JobsTable() {
                     </Link>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}

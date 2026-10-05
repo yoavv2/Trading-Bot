@@ -279,3 +279,88 @@ describe("JobsTable New Job control (D-17/D-21)", () => {
     expect(link.getAttribute("href")).toBe("/jobs/new");
   });
 });
+
+// 20.1-14 (COMPAT-01): the Outcome next to the lifecycle status.
+const CATALOG_WITH_API_ONLY = {
+  mutations_enabled: true,
+  items: [
+    { job_type: "probe_type", description: "d", cancellation_mode: "step_boundary" },
+    {
+      job_type: "session_like",
+      description: "d",
+      cancellation_mode: "queued_only",
+      console_submission: "api_only",
+    },
+  ],
+};
+
+async function renderRows(items: JobSummary[]) {
+  const { fn } = makeFetchRouter({
+    jobTypes: { status: 200, body: CATALOG_WITH_API_ONLY },
+    jobsBodies: [jobsResponse(items)],
+  });
+  vi.stubGlobal("fetch", fn);
+  render(<JobsTable />);
+  await advance(0);
+}
+
+describe("JobsTable Outcome (20.1-14)", () => {
+  it("a paused operation job never renders as plain success", async () => {
+    await renderRows([
+      job({
+        job_type: "session_like",
+        status: "succeeded",
+        outcome: "paused",
+        outcome_reason: "working_order_commitments_unaccounted",
+      }),
+    ]);
+
+    const badge = screen.getByText("Succeeded · Paused: working order");
+    expect(badge.className).not.toContain("emerald");
+  });
+
+  it("partial and blocked outcomes get warning styling, complete keeps success styling", async () => {
+    await renderRows([
+      job({
+        id: "j-partial",
+        status: "succeeded",
+        outcome: "partial",
+        outcome_detail: { failed_count: 2 },
+      }),
+      job({
+        id: "j-blocked",
+        job_type: "session_like",
+        status: "succeeded",
+        outcome: "blocked",
+        outcome_reason: "kill_switch_tripped",
+      }),
+      job({ id: "j-complete", status: "succeeded", outcome: "complete" }),
+    ]);
+
+    expect(screen.getByText("Succeeded · Partial (2 symbols failed)").className).not.toContain(
+      "emerald",
+    );
+    expect(
+      screen.getByText("Succeeded · Blocked: kill switch tripped").className,
+    ).not.toContain("emerald");
+    expect(screen.getByText("Succeeded · Complete").className).toContain("emerald");
+  });
+
+  it("api_only job with no outcome shows Outcome via API only and never a success badge", async () => {
+    await renderRows([job({ job_type: "session_like", status: "succeeded" })]);
+
+    const badge = screen.getByText("Outcome via API only");
+    expect(badge.className).not.toContain("emerald");
+    expect(screen.queryByText("Succeeded")).toBeNull();
+  });
+
+  it("a non-api_only legacy succeeded job keeps its plain success badge; other statuses are unchanged", async () => {
+    await renderRows([
+      job({ id: "j-legacy", status: "succeeded" }),
+      job({ id: "j-failed", status: "failed" }),
+    ]);
+
+    expect(screen.getByText("Succeeded").className).toContain("emerald");
+    expect(screen.getAllByText("failed").some((el) => el.className.includes("red"))).toBe(true);
+  });
+});
