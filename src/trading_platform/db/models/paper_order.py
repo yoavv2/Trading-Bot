@@ -35,7 +35,14 @@ if TYPE_CHECKING:
 
 
 class PaperOrder(TimestampedModel, Base):
-    """Submitted paper order anchored to one execution batch and one approved risk event."""
+    """Submitted paper order anchored to one execution batch and one approved risk event.
+
+    ``strategy_run_id`` is the ORIGIN run and is immutable since migration 0029 (any UPDATE that
+    changes it is rejected by the database). A later run that registers, retries or continues the
+    order is recorded as an accepted ``retry_requested`` ``order_events`` row on that run, never
+    by re-parenting the order. Rows are undeletable since 0029 (retention decision 2026-10-05):
+    the order is evidence for the replay key, D-07 attribution and the recovery gate.
+    """
 
     __tablename__ = "paper_orders"
     __table_args__ = (
@@ -92,13 +99,19 @@ class PaperOrder(TimestampedModel, Base):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     submission_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sync_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_submission_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_sync_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_submission_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_sync_failure_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_submission_error: Mapped[str | None] = mapped_column(Text(), nullable=True)
     last_sync_error: Mapped[str | None] = mapped_column(Text(), nullable=True)
     filled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_broker_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_broker_update_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     broker_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 

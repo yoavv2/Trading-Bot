@@ -52,7 +52,13 @@ def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
 
 
 class OrderEvent(TimestampedModel, Base):
-    """Durable append-only record of every accepted or rejected order transition."""
+    """Durable append-only record of every accepted or rejected order transition.
+
+    Append-only and undeletable since migration 0029 (every UPDATE and DELETE is rejected, and
+    TRUNCATE is guarded). The accepted ``intent_registered`` / ``retry_requested`` rows are the
+    registration history the recovery predicate reads to attribute an order to every run (and
+    Job) that registered it (20.1-26).
+    """
 
     __tablename__ = "order_events"
     __table_args__ = (
