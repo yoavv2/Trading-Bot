@@ -263,7 +263,9 @@ def test_prior_unclean_history_sends_zero_posts(history: list[AttemptOutcomeClas
         return httpx.Response(201, json=_order_payload())
 
     existing = [
-        AttemptRecord(attempt_number=i, outcome_class=o, completed_at=None if o is None else REGISTERED_AT)
+        AttemptRecord(
+            attempt_number=i, outcome_class=o, completed_at=None if o is None else REGISTERED_AT
+        )
         for i, o in enumerate(history, start=1)
     ]
     transport, log = Transport(script), RecordingLog(existing)
@@ -278,7 +280,9 @@ def test_prior_not_sent_history_may_be_retried_and_counts_toward_the_in_loop_rul
 
     existing = [
         AttemptRecord(attempt_number=1, outcome_class=A.PRE_CONNECTION, completed_at=REGISTERED_AT),
-        AttemptRecord(attempt_number=2, outcome_class=A.DEADLINE_EXPIRED, completed_at=REGISTERED_AT),
+        AttemptRecord(
+            attempt_number=2, outcome_class=A.DEADLINE_EXPIRED, completed_at=REGISTERED_AT
+        ),
     ]
     transport, log = Transport(script), RecordingLog(existing)
     _submit(_client(transport), log)
@@ -415,6 +419,49 @@ def test_2xx_with_a_non_json_body_is_ambiguous() -> None:
     assert log.records[0].error_type == "InvalidResponseBody"
 
 
+def test_accepted_reply_with_invalid_quantity_is_ambiguous() -> None:
+    """SAF-06: a 2xx JSON object that fails normalization is an uncertain outcome, not a failure."""
+
+    transport = Transport(lambda request, n: httpx.Response(201, json=_order_payload(qty="abc")))
+    log = RecordingLog()
+    with pytest.raises(AmbiguousOrderSubmissionError) as excinfo:
+        _submit(_client(transport), log)
+    assert excinfo.value.reason == "invalid_response_body"
+    assert excinfo.value.submission_class == SubmissionClass.ACCEPTED
+    assert transport.count("POST", "/v2/orders") == 1
+    # the outcome was recorded once, as accepted, before the parse failed
+    assert log.outcomes == [A.ACCEPTED]
+    assert [call for call in log.calls if call.startswith("complete")] == ["complete:1:accepted"]
+
+
+def test_accepted_reply_with_invalid_timestamp_is_ambiguous() -> None:
+    transport = Transport(
+        lambda request, n: httpx.Response(201, json=_order_payload(submitted_at="not-a-date"))
+    )
+    log = RecordingLog()
+    with pytest.raises(AmbiguousOrderSubmissionError) as excinfo:
+        _submit(_client(transport), log)
+    assert excinfo.value.reason == "invalid_response_body"
+    assert excinfo.value.submission_class == SubmissionClass.ACCEPTED
+    assert transport.count("POST", "/v2/orders") == 1
+    assert log.outcomes == [A.ACCEPTED]
+
+
+def test_duplicate_reply_with_unparseable_snapshot_is_ambiguous() -> None:
+    def script(request: httpx.Request, n: int) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(422, json={"message": "client_order_id must be unique"})
+        return httpx.Response(200, json=_order_payload(submitted_at="not-a-date"))
+
+    transport, log = Transport(script), RecordingLog()
+    with pytest.raises(AmbiguousOrderSubmissionError) as excinfo:
+        _submit(_client(transport), log)
+    assert excinfo.value.reason == "invalid_response_body"
+    assert excinfo.value.submission_class == SubmissionClass.EXISTS_REPORTED
+    assert transport.count("POST", "/v2/orders") == 1
+    assert log.outcomes == [A.DUPLICATE_REPORTED]
+
+
 def test_all_submission_errors_are_alpaca_client_errors() -> None:
     for exc_type in (AmbiguousOrderSubmissionError, OrderNotSentError, OrderRejectedError):
         assert issubclass(exc_type, AlpacaOrderSubmissionError)
@@ -464,8 +511,13 @@ def test_get_calls_still_retry_transient_failures() -> None:
     assert len(positions.requests) == 3
 
     account = make(
-        {"cash": "1", "buying_power": "2", "equity": "3", "long_market_value": "0",
-         "short_market_value": "0"}
+        {
+            "cash": "1",
+            "buying_power": "2",
+            "equity": "3",
+            "long_market_value": "0",
+            "short_market_value": "0",
+        }
     )
     assert _client(account).get_account().cash == Decimal("1")
     assert len(account.requests) == 3
@@ -475,7 +527,12 @@ def test_get_calls_still_retry_transient_failures() -> None:
 
 
 def test_lookup_treats_only_404_as_not_found() -> None:
-    assert _client(Transport(lambda r, n: httpx.Response(404, json={}))).get_order_by_client_order_id("x") is None
+    assert (
+        _client(Transport(lambda r, n: httpx.Response(404, json={}))).get_order_by_client_order_id(
+            "x"
+        )
+        is None
+    )
 
     five = Transport(lambda r, n: httpx.Response(500, json={"message": "boom"}))
     with pytest.raises(AlpacaClientError):
@@ -483,7 +540,9 @@ def test_lookup_treats_only_404_as_not_found() -> None:
     assert len(five.requests) == _settings().max_retries + 1  # GET retries preserved
 
     with pytest.raises(AlpacaClientError):
-        _client(Transport(lambda r, n: httpx.Response(422, json={"message": "bad"}))).get_order_by_client_order_id("x")
+        _client(
+            Transport(lambda r, n: httpx.Response(422, json={"message": "bad"}))
+        ).get_order_by_client_order_id("x")
 
     def timeout_then_ok(request: httpx.Request, n: int) -> httpx.Response:
         if n == 1:
@@ -494,7 +553,9 @@ def test_lookup_treats_only_404_as_not_found() -> None:
     assert snapshot is not None and snapshot.broker_order_id == "broker-order-123"
 
     with pytest.raises(AlpacaClientError):
-        _client(Transport(lambda r, n: (_ for _ in ()).throw(httpx.ConnectError("x", request=r)))).get_order_by_client_order_id("x")
+        _client(
+            Transport(lambda r, n: (_ for _ in ()).throw(httpx.ConnectError("x", request=r)))
+        ).get_order_by_client_order_id("x")
 
 
 def test_lookup_sends_the_client_order_id_as_a_query_parameter() -> None:
