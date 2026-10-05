@@ -58,7 +58,7 @@ describe("PaperReconciliationPanel", () => {
     expect(screen.getByText("TRADING BLOCKED: kill switch tripped")).toBeTruthy();
   });
 
-  it("reconciliation panel never says does not block execution while the blockers are unknown or loading", () => {
+  it("reconciliation panel never says does not block execution while trading is blocked: blockers unknown or loading", () => {
     // `null` is both the loading and the failed-fetch state of useActivePaperStrategy.
     const { container } = render(
       <PaperReconciliationPanel

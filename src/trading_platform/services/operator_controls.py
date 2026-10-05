@@ -1368,9 +1368,7 @@ class OperatorControlService:
                 changed=changed,
                 trigger_source=strategy_run.trigger_source,
                 started_at=strategy_run.started_at.isoformat(),
-                completed_at=strategy_run.completed_at.isoformat()
-                if strategy_run.completed_at
-                else None,
+                completed_at=strategy_run.completed_at.isoformat() if strategy_run.completed_at else None,
                 reason=reason,
                 actor=actor,
                 state_snapshot=state_snapshot,

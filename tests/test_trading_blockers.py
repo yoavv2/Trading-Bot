@@ -202,19 +202,22 @@ def test_each_blocker_is_reported_on_its_own(db: Session, blocker: TradingBlocke
     assert current_trading_blockers(db) == [blocker]
 
 
-def test_trading_blockers_parity_with_intent_permission(
+def test_no_blocker_means_the_per_intent_check_is_ok(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no blocker the per-intent check is ok; with a blocker it pauses with its reason."""
+    """No blocker -> the per-intent check does not pause (owner, enabled, kill switch, recovery,
+    working orders, reconciliation)."""
 
     assert current_trading_blockers(db) == []
     assert _permission(db, monkeypatch).ok
 
 
 @pytest.mark.parametrize("blocker", list(CASES), ids=lambda b: b.value)
-def test_trading_blockers_parity_per_reason(
+def test_trading_blockers_parity_with_intent_permission(
     db: Session, monkeypatch: pytest.MonkeyPatch, blocker: TradingBlocker
 ) -> None:
+    """One case per blocker: the list reports exactly it and the per-intent check pauses with the
+    corresponding reason (single source of predicates)."""
     arm, pause_reason = CASES[blocker]
     arm(db)
 
