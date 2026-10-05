@@ -419,7 +419,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 **Gap r2 wave 2**
 
-- [ ] 20.1-27-PLAN.md — Migration 0029: paper_orders origin run immutable, order_events append-only, TRUNCATE (incl. CASCADE) guards on the evidence tables, evidence-delete protection incl. reconciliation evidence (W4) (retention-policy change, user decision 2026-10-05; 0028 protections unchanged; account_snapshots deletion left OPEN); pin flips (REC-01, REC-02, COR-06)
+- [x] 20.1-27-PLAN.md — Migration 0029: paper_orders origin run immutable, order_events append-only, TRUNCATE (incl. CASCADE) guards on the evidence tables, evidence-delete protection incl. reconciliation evidence (W4) (retention-policy change, user decision 2026-10-05; 0028 protections unchanged; account_snapshots deletion left OPEN); pin flips (REC-01, REC-02, COR-06)
 - [ ] 20.1-28-PLAN.md — WR-01 operation read model / End result list by the shared verdict; WR-08 retry_existing guard on the shared verdict over the full attempt history (ambiguous/unfinished dominate a later rejection; TL-10 key consumed) (REC-01, REC-02, COR-06)
 
 **Gap r2 wave 3**
@@ -498,7 +498,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 26/31 | In Progress (gap closure r2 executing) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 27/31 | In Progress (gap closure r2 executing) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |

@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "Completed 20.1-26-PLAN.md (gap closure r2; next 20.1-27)"
+stopped_at: "Completed 20.1-27-PLAN.md (gap closure r2; next 20.1-28)"
 last_updated: "2026-10-05T15:50:05.508Z"
-last_activity: 2026-10-05 -- 20.1-26 complete (CR-01 durable order linkage)
+last_activity: 2026-10-05 -- 20.1-27 complete (migration 0029 origin immutable + evidence protection)
 progress:
   total_phases: 6
   completed_phases: 4
@@ -298,5 +298,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-10-05T15:50:05.497Z
-Stopped at: Completed 20.1-26-PLAN.md (gap closure r2; next 20.1-27)
+Stopped at: Completed 20.1-27-PLAN.md (gap closure r2; next 20.1-28)
 Resume file: None
