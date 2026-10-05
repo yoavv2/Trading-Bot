@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20.1-25-PLAN.md (gap closure 17-25 executed; verification pending)
+stopped_at: "Gap closure 17-25 executed; re-verification gaps_found (CR-01: Continue/retry re-parents released order -> execution_path_unproven; SAF-01/REC-02). Next: /gsd-plan-phase 20.1 --gaps"
 last_updated: "2026-10-05T15:50:05.508Z"
 last_activity: 2026-10-05 -- 20.1-25 complete (runbook and UAT docs)
 progress:
