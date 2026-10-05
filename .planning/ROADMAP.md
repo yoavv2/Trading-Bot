@@ -419,13 +419,13 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 **Gap r2 wave 2**
 
-- [ ] 20.1-27-PLAN.md — Migration 0029: paper_orders origin run immutable, order_events append-only, TRUNCATE guard on the evidence tables; pin flips (REC-01, REC-02, COR-06)
-- [ ] 20.1-28-PLAN.md — WR-01 operation read model / End result list by the shared verdict; WR-08 retry_existing guard on the shared verdict (REC-01, REC-02, COR-06)
+- [ ] 20.1-27-PLAN.md — Migration 0029: paper_orders origin run immutable, order_events append-only, TRUNCATE (incl. CASCADE) guards on the evidence tables, evidence-delete protection (retention-policy change, user decision 2026-10-05; 0028 protections unchanged); pin flips (REC-01, REC-02, COR-06)
+- [ ] 20.1-28-PLAN.md — WR-01 operation read model / End result list by the shared verdict; WR-08 retry_existing guard on the shared verdict over the full attempt history (ambiguous/unfinished dominate a later rejection; TL-10 key consumed) (REC-01, REC-02, COR-06)
 
 **Gap r2 wave 3**
 
 - [ ] 20.1-29-PLAN.md — Required E2E regressions (a) Continue after SAF-01 release and (b) M15 retry / Start-path reuse, product paths only (REC-01, REC-02, PAPER-02)
-- [ ] 20.1-30-PLAN.md — Required E2E regressions (c) genuine ambiguity stays blocked and (d) one consumer-agreement matrix incl. TL-4 control (REC-01, REC-02, PAPER-02, COR-06)
+- [ ] 20.1-30-PLAN.md — Required E2E regressions (c) genuine ambiguity stays blocked and (d) one consumer-agreement matrix incl. order-less flagged Job control (blocked; OD-1 open decision, see 20.1-OD-1-DRAFT.md) (REC-01, REC-02, PAPER-02, COR-06)
 - [ ] 20.1-31-PLAN.md — Runbook 05 + HUMAN-UAT: CR-01 fix note marked PENDING VERIFICATION; interim prohibition unchanged (docs only) (REC-01, REC-02)
 
 **UI hint**: yes (legacy-console compatibility only)
@@ -444,7 +444,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
   5. Coverage and reconciliation detail cover both owner and account scope with classification, origin tags and unexplained exposure (OPR-04, OPR-05).
   6. Worker health reports exactly `idle`, `busy`, `unavailable` or `unknown`; no active Job is never evidence of health; worker health is not part of `/ready` (WRK-01, WRK-02).
   7. Every read returns server `as_of`, writes nothing, and meets the 02 §10 total-request query bound (overview ≤ 15, issues ≤ 12, sessions ≤ 10, coverage ≤ 5, reconciliation list ≤ 1 / detail ≤ 3, activity ≤ 4, reused components included); the overview's verdict and next action come from one decision table and it carries the evaluation-session pipeline and recent activity; the catalog declares each job type's operator mapping (OPR-01, OPR-07, OPR-08).
-  8. A schema-delta test pins exactly one new table (`worker_heartbeats`, migration 0028); no files under `console/` change.
+  8. A schema-delta test pins exactly one new table (`worker_heartbeats`, migration 0030); no files under `console/` change.
 
 **Out of scope**: any console UI (AUD-02, NOTIF-02 → v1.4); issue persistence; auth; control-change storage separation; scheduling.
 **Plans**: 8 plans
@@ -453,7 +453,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 21-01-PLAN.md — Worker heartbeat table (migration 0028), throttled writer, worker-health read (WRK-01, WRK-02)
+- [ ] 21-01-PLAN.md — Worker heartbeat table (migration 0030), throttled writer, worker-health read (WRK-01, WRK-02)
 
 **Wave 2** *(after 21-01: the Operations-engine lane reads `services/worker_health.py`)*
 
