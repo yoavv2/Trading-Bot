@@ -792,6 +792,7 @@ def test_each_ownership_gate_issues_exactly_one_fresh_statement(
     # Happy path: run_paper_session pre-check (1) + guarded body (1) + the SER lock and the
     # owner re-check of operation creation (2, 20.1-15) + one fresh read per processed intent
     # (1: the first accepted order pauses the operation, so only one intent is processed).
+    # + the T1 gate re-check inside authorize_send before the POST (1, 20.1-20 SAF-02).
     with count_queries(engine) as counter:
         report = run_paper_session(
             STRATEGY_ID,
@@ -801,7 +802,7 @@ def test_each_ownership_gate_issues_exactly_one_fresh_statement(
             trigger_source="pytest",
         )
     assert report.action != "blocked_not_active_paper_strategy"
-    assert len(_ownership_statements(counter)) == 1 + 1 + 2 + 1
+    assert len(_ownership_statements(counter)) == 1 + 1 + 2 + 1 + 1
 
     # Blocked path: pre-check (1) + the guarded body's own re-read (1).
     clear_active_paper_strategy(settings)
@@ -842,8 +843,9 @@ def test_engine_reads_go_through_the_one_gate_loader(
         trigger_source="pytest",
     )
     # pre-check (1) + guarded body (1) + operation creation (1) + the first intent's permission
-    # check (1); the loop's second candidate is never reached (pause after the first accepted).
-    assert len(calls) == 1 + 1 + 1 + 1
+    # check (1) + the T1 gate re-check inside authorize_send before the POST (1, 20.1-20); the
+    # loop's second candidate is never reached (pause after the first accepted).
+    assert len(calls) == 1 + 1 + 1 + 1 + 1
 
     source = (_ROOT / "src/trading_platform/services/execution/submit_orders.py").read_text()
     assert "load_kill_switch_state" not in source

@@ -328,7 +328,9 @@ def test_unlock_failure_after_normal_exit_releases_the_lock(
     calls = _install_failing_unlock(monkeypatch)
 
     # A handler on the guard's own logger: other tests call configure_logging(), which clears
-    # the root handlers caplog relies on, so caplog is order-dependent in the full suite.
+    # the root handlers caplog relies on, so caplog is order-dependent in the full suite. Alembic's
+    # env.py fileConfig() (disable_existing_loggers=True) also disables already-imported loggers
+    # whenever a migration test runs first, so re-enable the guard logger for this capture.
     records: list[logging.LogRecord] = []
 
     class _Capture(logging.Handler):
@@ -338,6 +340,8 @@ def test_unlock_failure_after_normal_exit_releases_the_lock(
     capture = _Capture(level=logging.ERROR)
     guard_logger = concurrency_guard.logger
     previous_level = guard_logger.level
+    previous_disabled = guard_logger.disabled
+    guard_logger.disabled = False
     guard_logger.addHandler(capture)
     guard_logger.setLevel(logging.ERROR)
     try:
@@ -348,6 +352,7 @@ def test_unlock_failure_after_normal_exit_releases_the_lock(
     finally:
         guard_logger.removeHandler(capture)
         guard_logger.setLevel(previous_level)
+        guard_logger.disabled = previous_disabled
 
     assert calls == ["unlock_failed", "invalidate", "close"]
     assert any("concurrent_run_lock_unlock_failed" in r.getMessage() for r in records)
