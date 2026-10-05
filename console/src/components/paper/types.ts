@@ -15,6 +15,7 @@ export type AccountSnapshot = {
 };
 
 export type Reconciliation = {
+  scope?: "account" | "strategy"; // 20.1-08: either scope may be the newest
   run_id: string;
   status: string;
   as_of_session: string | null;

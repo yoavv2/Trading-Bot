@@ -1,8 +1,15 @@
+import type { ReactNode } from "react";
+import { tradingBlockerLabel } from "@/lib/useActivePaperStrategy";
 import type { ExecutionFinding, Reconciliation } from "./types";
 
 type PaperReconciliationPanelProps = {
   reconciliation: Reconciliation | null;
   findings: ExecutionFinding[];
+  /**
+   * 20.1-14: the closed trading-blocked reasons; `null` while they are unknown (loading or a
+   * failed fetch) -- then the panel never shows the reassuring "does not block execution".
+   */
+  tradingBlockedReasons: string[] | null;
 };
 
 /**
@@ -20,32 +27,65 @@ type PaperReconciliationPanelProps = {
 export function PaperReconciliationPanel({
   reconciliation,
   findings,
+  tradingBlockedReasons,
 }: PaperReconciliationPanelProps) {
+  const blockedReasons = tradingBlockedReasons ?? [];
   if (reconciliation === null) {
     return (
-      <p className="text-sm text-zinc-500">
-        No reconciliation has been recorded yet.
-      </p>
+      <div>
+        <p className="text-sm text-zinc-500">
+          No reconciliation has been recorded yet.
+        </p>
+        {blockedReasons.map((reason) => (
+          <p key={reason} className="mt-1 text-sm text-red-300">
+            {`Trading blocked: ${tradingBlockerLabel(reason)}`}
+          </p>
+        ))}
+      </div>
+    );
+  }
+
+  const BADGE_BASE = "rounded border px-2 py-0.5 text-xs font-bold tracking-wide";
+  // Exactly one badge group: the run blocks; else trading is blocked for another reason; else
+  // the blockers are unknown; else (known and empty) the run does not block execution.
+  let badges: ReactNode;
+  if (reconciliation.blocks_execution) {
+    badges = (
+      <span className={`${BADGE_BASE} border-red-700 bg-red-950/60 text-red-300`}>
+        BLOCKS EXECUTION
+      </span>
+    );
+  } else if (tradingBlockedReasons === null) {
+    badges = (
+      <span className={`${BADGE_BASE} border-amber-700 bg-amber-950/40 text-amber-300`}>
+        Trading permission unknown
+      </span>
+    );
+  } else if (blockedReasons.length > 0) {
+    badges = blockedReasons.map((reason) => (
+      <span
+        key={reason}
+        className={`${BADGE_BASE} border-red-700 bg-red-950/60 text-red-300`}
+      >
+        {`TRADING BLOCKED: ${tradingBlockerLabel(reason)}`}
+      </span>
+    ));
+  } else {
+    badges = (
+      <span className={`${BADGE_BASE} border-zinc-700 bg-zinc-800/60 text-zinc-400`}>
+        does not block execution
+      </span>
     );
   }
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-3">
-        <span
-          className={
-            reconciliation.blocks_execution
-              ? "rounded border border-red-700 bg-red-950/60 px-2 py-0.5 text-xs font-bold tracking-wide text-red-300"
-              : "rounded border border-zinc-700 bg-zinc-800/60 px-2 py-0.5 text-xs font-bold tracking-wide text-zinc-400"
-          }
-        >
-          {reconciliation.blocks_execution
-            ? "BLOCKS EXECUTION"
-            : "does not block execution"}
-        </span>
-      </div>
+      <div className="flex flex-wrap items-center gap-3">{badges}</div>
 
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+        <dt className="text-zinc-500">Scope</dt>
+        <dd className="text-zinc-300">{reconciliation.scope ?? "—"}</dd>
+
         <dt className="text-zinc-500">Status</dt>
         <dd className="text-zinc-100">{reconciliation.status}</dd>
 

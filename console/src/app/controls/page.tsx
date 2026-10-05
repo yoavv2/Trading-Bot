@@ -1,6 +1,7 @@
 "use client";
 
 import { KillSwitchControlTrigger } from "@/components/controls/KillSwitchControlTrigger";
+import { ActivePaperStrategyLine } from "@/components/controls/ActivePaperStrategyLine";
 import { StrategyControlSection } from "@/components/controls/StrategyControlSection";
 import { KillSwitchPanel } from "@/components/status/KillSwitchPanel";
 
@@ -12,7 +13,10 @@ import { KillSwitchPanel } from "@/components/status/KillSwitchPanel";
 export default function ControlsPage() {
   return (
     <main className="flex-1 p-6">
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Controls</h1>
+      <h1 className="mb-2 text-xl font-semibold text-zinc-100">Controls</h1>
+      <div className="mb-4">
+        <ActivePaperStrategyLine />
+      </div>
       <div className="space-y-6">
         <KillSwitchPanel
           renderAction={(data, meta) => (

@@ -79,6 +79,15 @@ const STRATEGIES = [
 function stubFetch(current: Stub) {
   const fn = vi.fn().mockImplementation((input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/api/v1/controls/active-paper-strategy")) {
+      return Promise.resolve(
+        jsonResponse(200, {
+          strategy_id: "trend_following_daily",
+          display_name: "Trend Following Daily",
+          trading_blocked_reasons: [],
+        }),
+      );
+    }
     if (url.includes("/api/v1/controls/strategies/")) {
       if (current.control === "error") {
         return Promise.resolve(jsonResponse(500, { detail: "boom" }));
@@ -224,6 +233,20 @@ describe("StrategyOverviewPanel catalog", () => {
     await flush();
     expect(screen.getByText("No strategies registered")).toBeTruthy();
     expect(screen.queryByLabelText("Selected strategy")).toBeNull();
+  });
+});
+
+describe("StrategyOverviewPanel active paper strategy line (20.1-14)", () => {
+  it("renders the read-only Active paper strategy line from the same GET", async () => {
+    stubFetch({ control: "enabled", mutationsEnabled: true });
+    render(<StrategyOverviewPanel />);
+    await flush();
+
+    expect(
+      screen.getByText(
+        "Active paper strategy: Trend Following Daily (managed through the API)",
+      ),
+    ).toBeTruthy();
   });
 });
 

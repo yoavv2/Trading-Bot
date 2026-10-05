@@ -34,6 +34,15 @@ describe("/controls page", () => {
             }),
           );
         }
+        if (url.includes("/api/v1/controls/active-paper-strategy")) {
+          return Promise.resolve(
+            jsonResponse({
+              strategy_id: null,
+              display_name: null,
+              trading_blocked_reasons: ["no_active_paper_strategy"],
+            }),
+          );
+        }
         if (url.includes("/api/v1/controls/strategies/")) {
           return Promise.resolve(
             jsonResponse({
@@ -57,5 +66,8 @@ describe("/controls page", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Controls" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Trip Kill Switch" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Disable Strategy" })).toBeTruthy();
+    expect(
+      screen.getByText("Active paper strategy: none (managed through the API)"),
+    ).toBeTruthy();
   });
 });

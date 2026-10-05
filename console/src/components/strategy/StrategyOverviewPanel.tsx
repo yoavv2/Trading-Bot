@@ -8,6 +8,7 @@ import { StrategyStatusBadge } from "@/components/strategy/StrategyStatusBadge";
 import { StrategyControlTrigger } from "@/components/controls/StrategyControlTrigger";
 import { useStrategyControlState } from "@/components/controls/useStrategyControlState";
 import { useLastKnownData } from "@/lib/useLastKnownData";
+import { ActivePaperStrategyLine } from "@/components/controls/ActivePaperStrategyLine";
 import { JobShortcutLink } from "@/components/shortcuts/JobShortcutLink";
 
 const DEFAULT_STRATEGY_ID = "trend_following_daily";
@@ -178,6 +179,9 @@ export function StrategyOverviewPanel() {
           <p className="mt-0.5 text-xs text-zinc-500">
             Inspect configuration and operate a registered strategy.
           </p>
+          <div className="mt-1">
+            <ActivePaperStrategyLine />
+          </div>
         </div>
         <FetchMeta
           asOf={result?.asOf ?? null}

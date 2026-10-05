@@ -1,6 +1,7 @@
 "use client";
 
 import { useApiQuery } from "@/lib/useApiQuery";
+import { useActivePaperStrategy } from "@/lib/useActivePaperStrategy";
 import { ErrorState } from "@/components/ErrorState";
 import { FetchMeta } from "@/components/FetchMeta";
 import { PaperAccountPanel } from "./PaperAccountPanel";
@@ -17,6 +18,9 @@ import type { AnalyticsResponse } from "./types";
  */
 export function PaperAnalyticsSection() {
   const { loading, result, refetch } = useApiQuery<AnalyticsResponse>("/api/v1/analytics/strategies/trend_following_daily");
+  // 20.1-14: the reconciliation panel must not claim "does not block execution" while trading
+  // is blocked for another reason; the blockers come from the read-only active-paper-strategy GET.
+  const { tradingBlockedReasons } = useActivePaperStrategy();
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
@@ -55,6 +59,7 @@ export function PaperAnalyticsSection() {
                   <PaperReconciliationPanel
                     reconciliation={paper?.latest_reconciliation ?? null}
                     findings={paper?.recent_execution_findings ?? []}
+                    tradingBlockedReasons={tradingBlockedReasons}
                   />
                 </section>
               </div>
