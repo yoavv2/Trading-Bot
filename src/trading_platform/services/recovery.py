@@ -45,7 +45,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
-from sqlalchemy import select, text
+from sqlalchemy import literal_column, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -73,6 +73,7 @@ from trading_platform.services.broker_jobs import (
     PAPER_SESSION_JOB_TYPE,
     RECORD_EXTERNAL_ACTIVITY_JOB_TYPE,
     STATE_CHANGING_BROKER_JOB_TYPES,
+    job_strategy_public_id_sql,
 )
 from trading_platform.services.broker_status import BrokerStatusClass, classify_broker_status
 from trading_platform.services.execution.attempts import (
@@ -577,13 +578,13 @@ _ORDER_COLUMNS = f"""
 _INTENTS_SQL = f"""
 WITH flagged AS (
     SELECT j.id, j.job_type, j.status::text AS job_status, j.completed_at,
-           j.payload ->> 'strategy_id' AS job_strategy
+           {job_strategy_public_id_sql("j")} AS job_strategy
       FROM jobs j
      WHERE j.job_type IN ({", ".join(f"'{t}'" for t in _UNCERTAIN_JOB_TYPES)})
        AND j.outcome_uncertain
        AND (CAST(:sid AS text) IS NULL
-            OR j.payload ->> 'strategy_id' IS NULL
-            OR j.payload ->> 'strategy_id' = CAST(:sid AS text))
+            OR {job_strategy_public_id_sql("j")} IS NULL
+            OR {job_strategy_public_id_sql("j")} = CAST(:sid AS text))
 )
 SELECT f.id AS job_id, f.job_type AS job_type, f.job_status AS job_status,
        f.completed_at AS job_completed_at, f.job_strategy AS job_strategy,
@@ -627,15 +628,16 @@ SELECT NULL::uuid, NULL::text, NULL::text, NULL::timestamptz, NULL::text,
 #: account-level Jobs), the newest recording time, the newest completed account run and the
 #: newest completed standalone strategy run per strategy.
 _RECONCILIATION_SQL = f"""
-SELECT 'effect' AS k, j.payload ->> 'strategy_id' AS sid, max(j.completed_at) AS at,
+SELECT 'effect' AS k, e.sid AS sid, max(e.completed_at) AS at,
        NULL::uuid AS run_id, NULL::text AS status, NULL::text AS blocks, NULL::text AS reasons
-  FROM jobs j
- WHERE j.job_type IN ({", ".join(f"'{t}'" for t in _EFFECT_JOB_TYPES)})
-   AND j.completed_at IS NOT NULL
-   AND (CAST(:sid AS text) IS NULL
-        OR j.payload ->> 'strategy_id' IS NULL
-        OR j.payload ->> 'strategy_id' = CAST(:sid AS text))
- GROUP BY j.payload ->> 'strategy_id'
+  FROM (
+    SELECT j.completed_at AS completed_at, {job_strategy_public_id_sql("j")} AS sid
+      FROM jobs j
+     WHERE j.job_type IN ({", ".join(f"'{t}'" for t in _EFFECT_JOB_TYPES)})
+       AND j.completed_at IS NOT NULL
+  ) e
+ WHERE (CAST(:sid AS text) IS NULL OR e.sid IS NULL OR e.sid = CAST(:sid AS text))
+ GROUP BY e.sid
 UNION ALL
 SELECT 'record', NULL::text, max(e.created_at), NULL::uuid, NULL::text, NULL::text, NULL::text
   FROM external_broker_activity e
@@ -1217,15 +1219,18 @@ def get_job_recovery(
 
     view = operation_view or DbOperationView()
     grace = _grace_seconds(grace_seconds)
+    # SAF-05: the Job's strategy is resolved in this same statement (payload strategy_id, else
+    # the Continue payload's operation, else the run-time operation link).
     job = session.execute(
-        select(Job.id, Job.job_type, Job.payload).where(Job.id == job_id)
+        select(
+            Job.id,
+            Job.job_type,
+            literal_column(job_strategy_public_id_sql("jobs")).label("job_strategy"),
+        ).where(Job.id == job_id)
     ).one_or_none()
     if job is None:
         raise LookupError(f"Job '{job_id}' was not found.")
-    payload = job.payload if isinstance(job.payload, Mapping) else {}
-    strategy_id = (
-        payload.get("strategy_id") if isinstance(payload.get("strategy_id"), str) else None
-    )
+    strategy_id = job.job_strategy if isinstance(job.job_strategy, str) else None
 
     if strategy_id is not None:
         status = strategy_recovery_status(

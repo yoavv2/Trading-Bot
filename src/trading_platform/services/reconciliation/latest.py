@@ -23,11 +23,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from trading_platform.db.models import (
     AccountReconciliationRun,
+    ExecutionOperation,
+    ExecutionOperationJob,
     ExternalBrokerActivity,
     Job,
     Strategy,
@@ -95,6 +97,12 @@ def latest_broker_effect_at(
     ``strategy_public_id`` (20.1-10) narrows the Job side to that strategy's Jobs PLUS
     every account-level Job (no ``strategy_id`` in the payload); recordings always count
     (they are account-wide). ``None`` keeps the all-Jobs behaviour.
+
+    SAF-05: a Continue Job carries only ``operation_id``; its strategy is its operation's
+    strategy (payload ``strategy_id``, else the payload operation, else the newest
+    ``execution_operation_jobs`` link: the same precedence as
+    ``broker_jobs.job_strategy_public_id_sql``), so a completed Continue Job of A never
+    moves B's effect boundary.
     """
 
     job_types = STATE_CHANGING_BROKER_JOB_TYPES - {RECORD_EXTERNAL_ACTIVITY_JOB_TYPE}
@@ -102,7 +110,26 @@ def latest_broker_effect_at(
         Job.job_type.in_(sorted(job_types)), Job.completed_at.is_not(None)
     )
     if strategy_public_id is not None:
-        job_strategy = Job.payload["strategy_id"].as_string()
+        via_payload_operation = (
+            select(Strategy.strategy_id)
+            .select_from(ExecutionOperation)
+            .join(Strategy, Strategy.id == ExecutionOperation.strategy_id)
+            .where(cast(ExecutionOperation.id, String) == Job.payload["operation_id"].as_string())
+            .scalar_subquery()
+        )
+        via_link = (
+            select(Strategy.strategy_id)
+            .select_from(ExecutionOperationJob)
+            .join(ExecutionOperation, ExecutionOperation.id == ExecutionOperationJob.operation_id)
+            .join(Strategy, Strategy.id == ExecutionOperation.strategy_id)
+            .where(ExecutionOperationJob.job_id == Job.id)
+            .order_by(ExecutionOperationJob.created_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        job_strategy = func.coalesce(
+            Job.payload["strategy_id"].as_string(), via_payload_operation, via_link
+        )
         job_stmt = job_stmt.where(or_(job_strategy == strategy_public_id, job_strategy.is_(None)))
     job_time = session.execute(job_stmt).scalar_one_or_none()
     record_time = session.execute(
