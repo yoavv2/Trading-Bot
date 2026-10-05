@@ -1,0 +1,60 @@
+"""Scratch (review only): SAF-01 A after the Continue Job re-parents the order to its own run."""
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from sqlalchemy import select
+
+from tests.support.operation_fixtures import seed_operation, seed_operation_job
+from tests.support.recovery_fixtures import (
+    at, seed_account_run, seed_job, seed_operation_bound_intent, seed_paper_run,
+)
+from tests.test_recovery_shared_classifier import _arrange, _gate, shared_db  # noqa: F401
+from trading_platform.core.settings import load_settings
+from trading_platform.db.models import JobStatus, OrderLifecycleState, PaperOrder
+from trading_platform.db.session import session_scope
+from trading_platform.services.recovery import strategy_recovery_status
+from datetime import UTC, datetime
+
+
+@pytest.mark.parametrize("status", [OrderLifecycleState.PENDING_SUBMISSION, OrderLifecycleState.SUBMISSION_FAILED])
+def test_reparent(shared_db: str, status: Any) -> None:
+    ids: dict[str, Any] = {}
+
+    def build(session: Any) -> None:
+        flagged = seed_job(session, completed_at=at(0))
+        run = seed_paper_run(session, flagged)
+        executor = seed_operation_job(
+            session, status=JobStatus.RUNNING, lease_owner="worker-1",
+            lease_expires_at=datetime(2100, 1, 1, tzinfo=UTC),
+        )
+        operation = seed_operation(
+            session, state="running", reason=None, epoch=3,
+            executor_job=executor, jobs=[(executor, "start")],
+        )
+        order = seed_operation_bound_intent(session, run, status=status, attempts=(), operation=operation)
+        ids["order"] = order.id
+        ids["executor"] = executor
+
+    _arrange(build)
+    _arrange(lambda s: seed_account_run(s, completed_at=at(30)))
+    print("gate before reparent:", _gate())
+    assert _gate() is None
+
+    # What register() does for retry_existing in the Continue Job: pending_order.strategy_run_id = run_id
+    def reparent(session: Any) -> None:
+        from trading_platform.db.models import Job
+        executor = session.get(Job, ids["executor"].id)
+        run2 = seed_paper_run(session, executor)
+        order = session.get(PaperOrder, ids["order"])
+        order.strategy_run_id = run2.id
+        session.flush()
+
+    _arrange(reparent)
+    with session_scope(load_settings()) as session:
+        st = strategy_recovery_status(session, "%s" % __import__("tests.support.recovery_fixtures", fromlist=["OWNER"]).OWNER)
+        print("gate after reparent:", st.gate_code)
+        for i in st.intents:
+            print("  ", i.job_id, i.intent_id, i.classification, i.unresolved_reason, i.blocking)
+    assert _gate() is None, "re-parenting the order to the Continue run re-blocks the strategy"
