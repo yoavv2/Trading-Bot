@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "20.1-17 complete; paused before wave 2 (weekly usage 96%). Open: tests/test_paper_session_job_type.py::test_run_paper_session_threads_job_id_to_both_created_runs red (legacy zero-attempt pending seed now blocked by D-15 gate, same class as 20.1-17 authorized deviation; needs user approval to reseed). Next: /gsd-execute-phase 20.1 --gaps-only (wave 2: 18,19,20)"
-last_updated: "2026-10-05T12:05:40.181Z"
+stopped_at: "Completed 20.1-18-PLAN.md (gap closure; next 20.1-19)"
+last_updated: "2026-10-05T12:57:15.031Z"
 last_activity: 2026-10-05
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 88
-  completed_plans: 72
+  completed_plans: 73
   percent: 67
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-30)
 ## Current Position
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
-Plan: 18 of 25 (gap closure 17-25 executing; 1-16 complete)
-Status: Executing Phase 20.1
-Last activity: 2026-10-05 -- 20.1-17 complete
+Plan: 19 of 25 (gap closure 17-25 executing; 1-16 complete)
+Status: Ready to execute
+Last activity: 2026-10-05 -- 20.1-18 complete
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
 
 v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
@@ -295,5 +295,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-10-05T12:05:40.172Z
-Stopped at: Completed 20.1-17-PLAN.md (gap closure; next 20.1-18)
+Stopped at: Completed 20.1-18-PLAN.md (gap closure; next 20.1-19)
 Resume file: None
