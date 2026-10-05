@@ -332,7 +332,7 @@ Plans:
 **Temporary limitations (accepted)**: TL-1 repeated Continue within a session; TL-2 a working order blocks further orders; TL-3 single regular-hours execution policy; TL-4 a never-found ambiguous order blocks the strategy and ownership changes until the broker shows it or it is proven not sent (no product-level release; a broker statement is evidence only; amended 2026-10-04); TL-5 external activity only when terminal and net-zero; TL-6 handover only when flat; TL-7 full broker-history re-read; TL-8 lazy window expiry; TL-9 API-only operation until v1.4; TL-10 one broker-reaching action per strategy, evaluation session, symbol and side (initial product limitation; a partially filled exit leaves no second sell that session); TL-11 partial-fill remainders are not pursued automatically (remaining position preserved, exposed and risk-checked; per-strategy follow-up behaviour in 20.1-15 S3-R4).
 **Schema changes**: migrations 0022–0027 — active-paper-strategy singleton, order-submission attempt log, dedicated `account_reconciliation_runs` (architectural recommendation R-31), `external_broker_activity`, recovery records, execution-operation state + one-open-operation partial unique index. `RiskDecisionCode.symbol_not_ready` is code-only. Inventory: `research/operator-console-ia/03-PLANNING-CHANGES.md` §3.11.
 **Out of scope**: new console screens or controls (v1.4); open-order-aware risk accounting; flatten / exits-only; adopting external positions; concurrent multi-strategy paper trading; scheduling; auth.
-**Plans**: 25 plans (16 executed + 9 gap closure, 2026-10-05)
+**Plans**: 31 plans (16 executed + 9 gap closure executed + 6 gap closure round 2 for CR-01 planned, 2026-10-05)
 
 Plans (execution waves follow true dependency depth: the Alembic chain 0021→0027 is serialized, and plans that edit the same files never share a wave):
 
@@ -410,6 +410,23 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 - [x] 20.1-24-PLAN.md — SAF-09 test rollout: `seed_fresh_broker_snapshot` arranged in the 14 session-running test modules, arrangement only (COR-01, REC-02)
 - [x] 20.1-25-PLAN.md — Runbook 05 + HUMAN-UAT amended: W-1 owner-scope sync, W-2 run-time refusal, TL-4 terminal states, SAF-02/03/09 operator consequences (docs only) (ACCT-01, EXT-01, REC-01, COR-01, COMPAT-01)
+
+**Gap closure round 2 (2026-10-05; VERIFICATION gap CR-01 / SC5 / REC-02 + REVIEW WR-01, WR-08; user decisions 2026-10-05: durable order linkage, required E2E regressions, interim prohibition stays; waves are relative to this set)**
+
+**Gap r2 wave 1**
+
+- [ ] 20.1-26-PLAN.md — CR-01 fix: no re-parent on retry_existing (origin run immutable), attempts record the sending run, recovery predicate attributes by origin + order_events registration history + attempts (one fragment, both branches); permanent CR-01 repro; agreement helper (REC-01, REC-02, PAPER-02, COR-06)
+
+**Gap r2 wave 2**
+
+- [ ] 20.1-27-PLAN.md — Migration 0029: paper_orders origin run immutable, order_events append-only, TRUNCATE guard on the evidence tables; pin flips (REC-01, REC-02, COR-06)
+- [ ] 20.1-28-PLAN.md — WR-01 operation read model / End result list by the shared verdict; WR-08 retry_existing guard on the shared verdict (REC-01, REC-02, COR-06)
+
+**Gap r2 wave 3**
+
+- [ ] 20.1-29-PLAN.md — Required E2E regressions (a) Continue after SAF-01 release and (b) M15 retry / Start-path reuse, product paths only (REC-01, REC-02, PAPER-02)
+- [ ] 20.1-30-PLAN.md — Required E2E regressions (c) genuine ambiguity stays blocked and (d) one consumer-agreement matrix incl. TL-4 control (REC-01, REC-02, PAPER-02, COR-06)
+- [ ] 20.1-31-PLAN.md — Runbook 05 + HUMAN-UAT: CR-01 fix note marked PENDING VERIFICATION; interim prohibition unchanged (docs only) (REC-01, REC-02)
 
 **UI hint**: yes (legacy-console compatibility only)
 
