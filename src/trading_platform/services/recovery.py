@@ -22,6 +22,15 @@ Resolution rules (03 sec.3.7 B, amended round 5, 2026-10-04):
 * a never-found order stays unresolved whatever the elapsed time, the absence evidence,
   a broker statement or a terminated executor; there is no resend path
   (``resubmission_permitted`` is False for every intent);
+* TERMINAL states (TL-4, SAF-04; no new route, no new job type, 20.1-19): (a) a FLAGGED
+  paper-session Job (a start Job or a Continue Job) whose linked ``paper_execution`` run left
+  zero order rows stays ``unresolved(execution_path_unproven)``; (b) a legacy order the broker
+  never had (no attempt rows, no operation intent) stays ``not_found``/unresolved. Neither is
+  released by a broker sync, absence evidence, a ``not_received`` statement, a clean
+  reconciliation, End/expiry or elapsed time. The only exit is the broker showing the order
+  (``found_verified``, then the fresh clean reconciliation of the next bullet); nothing
+  releases a Job-level ``execution_path_unproven`` entry in this version. Both stay visible
+  through ``GET /api/v1/jobs/{id}/recovery`` and keep check A5 failing;
 * resolution also needs a fresh CLEAN standalone reconciliation (account or owner level,
   never the in-session check) completed after the latest broker-touching effect;
 * a strategy with no uncertain Job and no unestablished intent is resolved outright.
@@ -809,6 +818,10 @@ def _load_intents(
         )
 
     # Job-level entries: nothing_submitted / execution_path_unproven for Jobs without orders.
+    # SAF-04 / spec E-5 / TL-4: a flagged paper-session Job whose run left zero order rows stays
+    # unresolved(execution_path_unproven): zero rows prove nothing; there is no product-level
+    # release in this version. The Job-level classification record appended by the sync pass
+    # (``assess_unestablished_intents``) is audit only and deliberately NOT an input here.
     for job in jobs.values():
         if job.order_ids:
             continue
