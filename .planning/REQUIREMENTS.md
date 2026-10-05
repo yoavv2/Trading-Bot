@@ -90,7 +90,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Legacy Console Compatibility (Phase 20.1)
 
-- [ ] **COMPAT-01**: During the API-only interim the existing console stays truthful with the smallest changes: no paper-session start or paper-session Retry; Outcome shown distinct from Job status (a paused operation is never a plain success); reconciliation/sync shortcuts and forms default to account scope; the reconciliation panel never states "does not block execution" while trading is blocked; a read-only active-strategy line; no new pages, routes or controls; API changes additive; console contract tests green
+- [x] **COMPAT-01**: During the API-only interim the existing console stays truthful with the smallest changes: no paper-session start or paper-session Retry; Outcome shown distinct from Job status (a paused operation is never a plain success); reconciliation/sync shortcuts and forms default to account scope; the reconciliation panel never states "does not block execution" while trading is blocked; a read-only active-strategy line; no new pages, routes or controls; API changes additive; console contract tests green
 
 ### Operator Read Models (Phase 21)
 
@@ -219,7 +219,7 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | COR-03 | Phase 20.1 | Complete |
 | COR-04 | Phase 20.1 | Complete |
 | PROV-01 | Phase 20.1 | Complete |
-| COMPAT-01 | Phase 20.1 | Pending |
+| COMPAT-01 | Phase 20.1 | Complete |
 | AUD-01 | Phase 21 | Pending |
 | OPR-01 | Phase 21 | Pending |
 | OPR-02 | Phase 21 | Pending |
