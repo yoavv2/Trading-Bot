@@ -5,7 +5,10 @@ import { useMutationCapability } from "@/lib/useMutationCapability";
 
 type JobShortcutLinkProps = {
   jobType: string;
-  strategyId: string;
+  /** Omitted for account-scope shortcuts (no strategy_id is appended). */
+  strategyId?: string;
+  /** 20.1-14: `account` appends `scope=account` and never a strategy_id. */
+  scope?: "account";
   label: string;
 };
 
@@ -22,14 +25,19 @@ type JobShortcutLinkProps = {
 export function JobShortcutLink({
   jobType,
   strategyId,
+  scope,
   label,
 }: JobShortcutLinkProps) {
   const capability = useMutationCapability();
+  const href =
+    scope === "account"
+      ? `/jobs/new?type=${encodeURIComponent(jobType)}&scope=account`
+      : `/jobs/new?type=${encodeURIComponent(jobType)}&strategy_id=${encodeURIComponent(strategyId ?? "")}`;
 
   if (capability.state === "enabled") {
     return (
       <Link
-        href={`/jobs/new?type=${encodeURIComponent(jobType)}&strategy_id=${encodeURIComponent(strategyId)}`}
+        href={href}
         className="rounded bg-sky-400 px-3 py-1 text-xs font-semibold text-zinc-950 hover:bg-sky-300"
       >
         {label}

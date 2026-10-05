@@ -65,6 +65,24 @@ export type JobProgress = {
   progress_updated_at: string | null;
 };
 
+// 20.1-14 (additive, all optional so an older API still renders): the closed Job-read
+// outcome superset and the CURRENT operation of a paper-session Job.
+export type JobOutcomeValue =
+  | "complete"
+  | "partial"
+  | "failed"
+  | "paused"
+  | "requires_reevaluation"
+  | "terminated"
+  | "blocked"
+  | "no_action";
+
+export type JobOperationRef = {
+  id: string;
+  state: string;
+  reason: string | null;
+};
+
 export type JobSummary = {
   id: string;
   job_type: string;
@@ -76,6 +94,10 @@ export type JobSummary = {
   outcome_uncertain: boolean;
   cancellation_requested_at: string | null;
   progress: JobProgress;
+  outcome?: JobOutcomeValue | null;
+  outcome_reason?: string | null;
+  outcome_detail?: { failed_count?: number } | null;
+  operation?: JobOperationRef | null;
 };
 
 export type JobsResponse = {
@@ -168,6 +190,9 @@ export type JobTypeCatalogItem = {
   description: string;
   cancellation_mode: JobCancellationMode;
   submission_defaults?: Record<string, string>;
+  // 20.1-14 (D-31): additive; "api_only" types are operated through the API in this version.
+  console_submission?: "interactive" | "api_only";
+  broker_effect?: string;
 };
 
 export type JobTypesCatalog = {

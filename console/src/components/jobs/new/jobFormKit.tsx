@@ -7,8 +7,8 @@ import { newIdempotencyKey } from "@/lib/idempotencyKey";
 import type { MutationCapability } from "@/lib/useMutationCapability";
 
 /**
- * Shared submission mechanics for the seven new-since-Phase-20 Job forms
- * (RiskEvaluationJobForm, PaperSessionJobForm, ReconciliationJobForm,
+ * Shared submission mechanics for the new-since-Phase-20 Job forms
+ * (RiskEvaluationJobForm, ReconciliationJobForm,
  * IngestBarsJobForm, SyncSymbolMetadataJobForm, SyncMarketSessionsJobForm,
  * BrokerOrderSyncJobForm), generalizing BacktestJobForm.tsx's existing
  * idempotency-key/submit/outcome logic verbatim so each new form is a thin

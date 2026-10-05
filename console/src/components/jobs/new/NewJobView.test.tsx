@@ -166,6 +166,82 @@ describe("NewJobView", () => {
   });
 });
 
+const CATALOG_WITH_API_ONLY: JobTypesCatalog = {
+  mutations_enabled: true,
+  items: [
+    ...CATALOG_ENABLED.items,
+    {
+      job_type: "paper-session",
+      description: "Run the daily paper-trading session.",
+      cancellation_mode: "queued_only",
+      console_submission: "api_only",
+    },
+    {
+      job_type: "record-external-activity",
+      description: "Record external activity.",
+      cancellation_mode: "queued_only",
+      console_submission: "api_only",
+    },
+  ],
+};
+
+describe("NewJobView api_only gating (20.1-14)", () => {
+  it("no paper-session start control is reachable: the notice and a Back to Jobs link, no form", async () => {
+    const { fn } = makeFetchRouter({ catalog: CATALOG_WITH_API_ONLY });
+    vi.stubGlobal("fetch", fn);
+
+    render(
+      <NewJobView jobType="paper-session" initialParams={{ strategy_id: "x" }} onNavigate={vi.fn()} />,
+    );
+    await flush();
+
+    expect(screen.getByText("Operated through the API in this version")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Back to Jobs" }).getAttribute("href")).toBe("/jobs");
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/Submit/)).toBeNull();
+  });
+
+  it("any api_only catalog type renders the notice, not a form", async () => {
+    const { fn } = makeFetchRouter({ catalog: CATALOG_WITH_API_ONLY });
+    vi.stubGlobal("fetch", fn);
+
+    render(
+      <NewJobView jobType="record-external-activity" initialParams={{}} onNavigate={vi.fn()} />,
+    );
+    await flush();
+
+    expect(screen.getByText("Operated through the API in this version")).toBeTruthy();
+  });
+
+  it("paper-session is unreachable without the catalog too: the unmapped fallback, no form", async () => {
+    const { fn } = makeFetchRouter({ jobTypesStatus: 500 });
+    vi.stubGlobal("fetch", fn);
+
+    render(
+      <NewJobView jobType="paper-session" initialParams={{}} onNavigate={vi.fn()} />,
+    );
+    await flush();
+
+    expect(
+      screen.getByText('No submission form is available for "paper-session" yet.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("the picker marks api_only entries with 'API only' and leaves interactive ones unmarked", async () => {
+    const { fn } = makeFetchRouter({ catalog: CATALOG_WITH_API_ONLY });
+    vi.stubGlobal("fetch", fn);
+
+    render(<NewJobView jobType={null} initialParams={{}} onNavigate={vi.fn()} />);
+    await flush();
+
+    expect(screen.getAllByText("API only")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "backtest" }).parentElement?.textContent).not.toContain(
+      "API only",
+    );
+  });
+});
+
 describe("StrategyOverviewPanel Run backtest shortcut (D-18)", () => {
   it("links to /jobs/new?type=backtest&strategy_id=trend_following_daily when mutations are enabled", async () => {
     const { fn } = makeFetchRouter({ catalog: CATALOG_ENABLED });

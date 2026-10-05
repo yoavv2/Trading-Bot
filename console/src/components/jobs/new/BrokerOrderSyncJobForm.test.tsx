@@ -2,70 +2,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { BrokerOrderSyncJobForm } from "./BrokerOrderSyncJobForm";
-import type { JobTypeCatalogItem } from "../types";
 import type { MutationCapability } from "@/lib/useMutationCapability";
 
-function jsonResponse(
-  status: number,
-  body: unknown,
-  headers?: Record<string, string>,
-): Response {
+function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...(headers ?? {}) },
+    headers: { "content-type": "application/json" },
   });
 }
 
-const STRATEGIES_BODY = {
-  count: 1,
-  strategies: [
-    { strategy_id: "trend_following_daily", display_name: "Trend Following Daily" },
-  ],
-};
+type CapturedCall = { headers: Record<string, string>; body: unknown };
 
-type JobsFetchResponse =
-  | { networkError: true }
-  | { status: number; body: unknown; headers?: Record<string, string> };
-
-type CapturedCall = {
-  headers: Record<string, string>;
-  body: unknown;
-};
-
-/**
- * Routes the console's single global fetch() by URL: GET /api/v1/strategies
- * (queried by the shared StrategySelectField) and POST /api/v1/jobs
- * (submitJob) are both dispatched through this one stub, matching how the
- * two live calls actually share global fetch at runtime.
- */
-function makeFetchRouter(jobsResponses: JobsFetchResponse[]) {
+/** Routes the single global fetch(): only POST /api/v1/jobs is expected (no strategies GET). */
+function makeFetchRouter(responses: Array<{ status: number; body: unknown }>) {
   const calls: CapturedCall[] = [];
-  let jobsCallCount = 0;
-
-  const fn = vi.fn().mockImplementation(
-    (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/backend/api/v1/strategies")) {
-        return Promise.resolve(jsonResponse(200, STRATEGIES_BODY));
-      }
-      if (url.includes("/backend/api/v1/jobs")) {
-        const headers = (init?.headers ?? {}) as Record<string, string>;
-        const body = init?.body ? JSON.parse(init.body as string) : null;
-        calls.push({ headers, body });
-        const response =
-          jobsResponses[Math.min(jobsCallCount, jobsResponses.length - 1)];
-        jobsCallCount += 1;
-        if ("networkError" in response) {
-          return Promise.reject(new Error("network down"));
-        }
-        return Promise.resolve(
-          jsonResponse(response.status, response.body, response.headers),
-        );
-      }
-      throw new Error(`BrokerOrderSyncJobForm.test.tsx: unexpected fetch URL ${url}`);
-    },
-  );
-
+  let count = 0;
+  const fn = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/backend/api/v1/jobs")) {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      const body = init?.body ? JSON.parse(init.body as string) : null;
+      calls.push({ headers, body });
+      const response = responses[Math.min(count, responses.length - 1)];
+      count += 1;
+      return Promise.resolve(jsonResponse(response.status, response.body));
+    }
+    throw new Error(`BrokerOrderSyncJobForm.test.tsx: unexpected fetch URL ${url}`);
+  });
   return { fn, calls };
 }
 
@@ -89,21 +52,6 @@ async function flush() {
   });
 }
 
-const CATALOG_ENTRY_WITH_DEFAULTS: JobTypeCatalogItem = {
-  job_type: "broker-order-sync",
-  description:
-    "Sync paper order lifecycle, fills, positions and account state from the broker for one session. Cancellable only while queued.",
-  cancellation_mode: "queued_only",
-  submission_defaults: { as_of_session: "2026-01-05" },
-};
-
-const CATALOG_ENTRY_NO_DEFAULTS: JobTypeCatalogItem = {
-  job_type: "broker-order-sync",
-  description:
-    "Sync paper order lifecycle, fills, positions and account state from the broker for one session. Cancellable only while queued.",
-  cancellation_mode: "queued_only",
-};
-
 const CAPABILITY_ENABLED: MutationCapability = {
   state: "enabled",
   reason: null,
@@ -118,11 +66,35 @@ const CAPABILITY_DISABLED: MutationCapability = {
   loading: false,
 };
 
-const JOB_REFERENCE_BASE = {
+const JOB_REFERENCE = {
+  job_id: "job-abc-123",
   job_type: "broker-order-sync",
   status: "queued" as const,
   links: { self: "", progress: "", logs: "", events: "" },
 };
+
+const BUTTON = "Submit Broker Order Sync";
+
+function renderForm(
+  capability: MutationCapability = CAPABILITY_ENABLED,
+  initialParams: Record<string, string> = {},
+  onNavigate: (href: string) => void = vi.fn(),
+  submissionDefaults?: Record<string, string>,
+) {
+  return render(
+    <BrokerOrderSyncJobForm
+      catalogEntry={{
+        job_type: "broker-order-sync",
+        description: "d",
+        cancellation_mode: "queued_only",
+        submission_defaults: submissionDefaults,
+      }}
+      capability={capability}
+      initialParams={initialParams}
+      onNavigate={onNavigate}
+    />,
+  );
+}
 
 beforeEach(() => {
   stubRandomUUID();
@@ -134,128 +106,85 @@ afterEach(() => {
 });
 
 describe("BrokerOrderSyncJobForm", () => {
-  it("pre-fills as_of_session from catalog submission_defaults and strategy from initialParams", async () => {
-    const { fn } = makeFetchRouter([]);
-    vi.stubGlobal("fetch", fn);
-
-    render(
-      <BrokerOrderSyncJobForm
-        catalogEntry={CATALOG_ENTRY_WITH_DEFAULTS}
-        capability={CAPABILITY_ENABLED}
-        initialParams={{ strategy_id: "trend_following_daily" }}
-        onNavigate={vi.fn()}
-      />,
-    );
-    await flush();
-
-    expect(
-      (screen.getByLabelText("As of session") as HTMLInputElement).value,
-    ).toBe("2026-01-05");
-    expect(
-      (screen.getByLabelText("Strategy") as HTMLSelectElement).value,
-    ).toBe("trend_following_daily");
-  });
-
-  it("disables submit until strategy and as_of_session are set; as_of_session starts empty without submission_defaults", async () => {
-    const { fn } = makeFetchRouter([]);
-    vi.stubGlobal("fetch", fn);
-
-    render(
-      <BrokerOrderSyncJobForm
-        catalogEntry={CATALOG_ENTRY_NO_DEFAULTS}
-        capability={CAPABILITY_ENABLED}
-        initialParams={{}}
-        onNavigate={vi.fn()}
-      />,
-    );
-    await flush();
-
-    expect(
-      (screen.getByLabelText("As of session") as HTMLInputElement).value,
-    ).toBe("");
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Submit Broker Order Sync",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-
-    fireEvent.change(screen.getByLabelText("Strategy"), {
-      target: { value: "trend_following_daily" },
-    });
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Submit Broker Order Sync",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-
-    fireEvent.change(screen.getByLabelText("As of session"), {
-      target: { value: "2026-02-02" },
-    });
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Submit Broker Order Sync",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(false);
-  });
-
-  it("202 posts {job_type, payload: {strategy_id, as_of_session}} with an Idempotency-Key and navigates to /jobs/<id>", async () => {
-    const jobReference = { ...JOB_REFERENCE_BASE, job_id: "job-abc-123" };
-    const { fn, calls } = makeFetchRouter([{ status: 202, body: jobReference }]);
+  it("shortcuts and the two forms post scope account: payload is exactly {scope: account}", async () => {
+    const { fn, calls } = makeFetchRouter([{ status: 202, body: JOB_REFERENCE }]);
     vi.stubGlobal("fetch", fn);
     const onNavigate = vi.fn();
 
-    render(
-      <BrokerOrderSyncJobForm
-        catalogEntry={CATALOG_ENTRY_WITH_DEFAULTS}
-        capability={CAPABILITY_ENABLED}
-        initialParams={{ strategy_id: "trend_following_daily" }}
-        onNavigate={onNavigate}
-      />,
-    );
+    renderForm(CAPABILITY_ENABLED, {}, onNavigate);
     await flush();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Submit Broker Order Sync" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: BUTTON }));
     await flush();
 
     expect(onNavigate).toHaveBeenCalledWith("/jobs/job-abc-123");
+    expect(calls[0].body).toEqual({ job_type: "broker-order-sync", payload: { scope: "account" } });
+    expect(calls[0].headers["Idempotency-Key"]).toBeTruthy();
+  });
+
+  it("adds as_of_session only when the operator enters a date", async () => {
+    const { fn, calls } = makeFetchRouter([{ status: 202, body: JOB_REFERENCE }]);
+    vi.stubGlobal("fetch", fn);
+
+    renderForm();
+    await flush();
+    fireEvent.change(screen.getByLabelText("As of session (optional)"), {
+      target: { value: "2026-02-02" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: BUTTON }));
+    await flush();
+
     expect(calls[0].body).toEqual({
       job_type: "broker-order-sync",
-      payload: {
-        strategy_id: "trend_following_daily",
-        as_of_session: "2026-01-05",
-      },
+      payload: { scope: "account", as_of_session: "2026-02-02" },
     });
-    expect(calls[0].headers["Idempotency-Key"]).toBeTruthy();
+  });
+
+  it("renders no strategy field, ignores a strategy_id param and a submission default date", async () => {
+    const { fn, calls } = makeFetchRouter([{ status: 202, body: JOB_REFERENCE }]);
+    vi.stubGlobal("fetch", fn);
+
+    renderForm(CAPABILITY_ENABLED, { strategy_id: "trend_following_daily" }, vi.fn(), {
+      as_of_session: "2026-01-05",
+    });
+    await flush();
+
+    expect(screen.queryByLabelText("Strategy")).toBeNull();
+    expect(
+      (screen.getByLabelText("As of session (optional)") as HTMLInputElement).value,
+    ).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: BUTTON }));
+    await flush();
+    expect(calls[0].body).toEqual({ job_type: "broker-order-sync", payload: { scope: "account" } });
+    expect(JSON.stringify(calls[0].body)).not.toContain("strategy_id");
+  });
+
+  it("uses one Idempotency-Key per opening across a retried submit", async () => {
+    const { fn, calls } = makeFetchRouter([
+      { status: 503, body: { detail: "unavailable" } },
+      { status: 202, body: JOB_REFERENCE },
+    ]);
+    vi.stubGlobal("fetch", fn);
+
+    renderForm();
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: BUTTON }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: BUTTON }));
+    await flush();
+
+    expect(calls.length).toBe(2);
+    expect(calls[0].headers["Idempotency-Key"]).toBe(calls[1].headers["Idempotency-Key"]);
   });
 
   it("disables submit and shows the reason when mutations are disabled", async () => {
     const { fn } = makeFetchRouter([]);
     vi.stubGlobal("fetch", fn);
 
-    render(
-      <BrokerOrderSyncJobForm
-        catalogEntry={CATALOG_ENTRY_WITH_DEFAULTS}
-        capability={CAPABILITY_DISABLED}
-        initialParams={{ strategy_id: "trend_following_daily" }}
-        onNavigate={vi.fn()}
-      />,
-    );
+    renderForm(CAPABILITY_DISABLED);
     await flush();
 
     expect(
-      (
-        screen.getByRole("button", {
-          name: "Submit Broker Order Sync",
-        }) as HTMLButtonElement
-      ).disabled,
+      (screen.getByRole("button", { name: BUTTON }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(screen.getByText("Mutations disabled on this deployment")).toBeTruthy();
   });

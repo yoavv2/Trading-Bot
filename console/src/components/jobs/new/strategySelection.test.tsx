@@ -3,9 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
 import { RiskEvaluationJobForm } from "./RiskEvaluationJobForm";
-import { PaperSessionJobForm } from "./PaperSessionJobForm";
-import { ReconciliationJobForm } from "./ReconciliationJobForm";
-import { BrokerOrderSyncJobForm } from "./BrokerOrderSyncJobForm";
 import type { JobTypeCatalogItem } from "../types";
 import type { MutationCapability } from "@/lib/useMutationCapability";
 
@@ -24,11 +21,10 @@ type FormProps = {
   onNavigate: (href: string) => void;
 };
 
+// 20.1-14: the reconciliation and broker-order-sync forms submit account scope and have no
+// strategy field (their own tests pin the payload), so they are no longer rows here.
 const FORMS: Array<{ name: string; Form: ComponentType<FormProps>; submit: string; jobType: string }> = [
   { name: "RiskEvaluationJobForm", Form: RiskEvaluationJobForm, submit: "Submit Risk Evaluation", jobType: "risk-evaluation" },
-  { name: "PaperSessionJobForm", Form: PaperSessionJobForm, submit: "Submit Paper Session", jobType: "paper-session" },
-  { name: "ReconciliationJobForm", Form: ReconciliationJobForm, submit: "Submit Reconciliation", jobType: "reconciliation" },
-  { name: "BrokerOrderSyncJobForm", Form: BrokerOrderSyncJobForm, submit: "Submit Broker Order Sync", jobType: "broker-order-sync" },
 ];
 
 const CAPABILITY: MutationCapability = {

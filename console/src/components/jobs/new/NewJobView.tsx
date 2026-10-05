@@ -5,6 +5,7 @@ import { useApiQuery } from "@/lib/useApiQuery";
 import { mutationCapabilityFrom, type MutationCapability } from "@/lib/useMutationCapability";
 import { ErrorState } from "@/components/ErrorState";
 import { JOB_TYPE_FORMS } from "@/lib/jobTypeForms";
+import { API_ONLY_NOTICE, catalogEntryFor, isApiOnly } from "@/lib/jobOutcome";
 import type { JobTypesCatalog } from "@/components/jobs/types";
 
 const JOB_TYPES_ENDPOINT = "/api/v1/job-types";
@@ -39,6 +40,25 @@ export function NewJobView({ jobType, initialParams, onNavigate }: NewJobViewPro
   }
 
   if (jobType !== null) {
+    // 20.1-14 (D-31): an api_only catalog type is never submitted from this console, even
+    // when a form were registered -- check the catalog entry before the form lookup. Only a
+    // type the loaded catalog knows is api_only reaches the notice; the not-in-catalog case
+    // keeps the unmapped-type fallback below.
+    const apiOnlyEntry = result.ok ? catalogEntryFor(result.data, jobType) : undefined;
+    if (isApiOnly(apiOnlyEntry)) {
+      return (
+        <div>
+          <p className="text-sm text-zinc-300">{API_ONLY_NOTICE}</p>
+          <Link
+            href="/jobs"
+            className="mt-2 inline-block text-xs font-semibold text-sky-400 hover:underline"
+          >
+            Back to Jobs
+          </Link>
+        </div>
+      );
+    }
+
     // The unmapped-type fallback copy is static and does not depend on the
     // catalog having loaded successfully -- check it before branching on
     // result.ok so an unmapped type always renders the same way.
@@ -65,9 +85,7 @@ export function NewJobView({ jobType, initialParams, onNavigate }: NewJobViewPro
     // derives that copy from a confirmed failed fetch). Only the type
     // picker below (jobType === null) needs a successful catalog to render
     // at all.
-    const catalogEntry = result.ok
-      ? result.data.items.find((item) => item.job_type === jobType)
-      : undefined;
+    const catalogEntry = result.ok ? catalogEntryFor(result.data, jobType) : undefined;
 
     return (
       <FormComponent
@@ -95,6 +113,9 @@ export function NewJobView({ jobType, initialParams, onNavigate }: NewJobViewPro
             >
               {item.job_type}
             </Link>
+            {item.console_submission === "api_only" ? (
+              <span className="ml-2 text-xs text-zinc-500">API only</span>
+            ) : null}
             <p className="mt-1 text-sm text-zinc-400">{item.description}</p>
           </li>
         ))}

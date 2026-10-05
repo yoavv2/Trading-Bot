@@ -1,12 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import {
-  JobFormFooter,
-  StrategySelectField,
-  useJobFormSubmission,
-  useStrategySelection,
-} from "./jobFormKit";
+import { JobFormFooter, useJobFormSubmission } from "./jobFormKit";
 import type { JobTypeCatalogItem } from "../types";
 import type { MutationCapability } from "@/lib/useMutationCapability";
 
@@ -22,62 +17,46 @@ type BrokerOrderSyncJobFormProps = {
 };
 
 /**
- * D-01/D-19/D-21/D-22/D-25: the `broker-order-sync` Job type's submission
- * form. Both fields (strategy_id, as_of_session) are required -- the
- * backend never defaults them inside validate_payload, so the Job payload
- * records exactly what will run. as_of_session pre-fills from the
- * catalog's submission_defaults when present, else stays empty;
- * strategy_id pre-fills from initialParams (deep link), never computed
- * client-side. Composes the shared jobFormKit mechanics (Plan 06) rather
- * than duplicating BacktestJobForm's submission logic. `broker-order-sync`
- * is cancellable only while queued (D-01) and reconcile-first-blocked on
- * retry (D-19), but both are purely server-side concerns -- this
- * submission form is unaffected.
+ * D-01/D-21/D-22/D-25 (20.1-14, COMPAT-01): the `broker-order-sync` Job type's submission form.
+ * It submits ACCOUNT scope only: the payload is exactly `{scope: "account"}`, plus
+ * `as_of_session` only when the operator enters a date (blank by default, never pre-filled).
+ * Account scope forbids strategy_id on the server, so there is no strategy field and a
+ * `strategy_id` deep-link param is ignored; strategy-scope submission stays API-only.
+ * Composes the shared jobFormKit mechanics (Idempotency-Key per opening, error mapping,
+ * capability gating).
  */
 export function BrokerOrderSyncJobForm({
-  catalogEntry,
   capability,
-  initialParams,
   onNavigate,
 }: BrokerOrderSyncJobFormProps) {
-  const { strategyId, setStrategyId, strategies, validStrategyId } =
-    useStrategySelection(initialParams.strategy_id);
-  const [asOfSession, setAsOfSession] = useState(
-    catalogEntry?.submission_defaults?.as_of_session ?? "",
-  );
+  const [asOfSession, setAsOfSession] = useState("");
 
   const { submitting, outcome, submit } = useJobFormSubmission({
     jobType: "broker-order-sync",
     onNavigate,
   });
 
-  const canSubmit =
-    validStrategyId !== null &&
-    asOfSession.length > 0 &&
-    capability.state === "enabled";
+  const canSubmit = capability.state === "enabled";
 
   function handleSubmit() {
     if (!canSubmit) {
       return;
     }
-    void submit({ strategy_id: validStrategyId, as_of_session: asOfSession });
+    void submit(
+      asOfSession.length > 0
+        ? { scope: "account", as_of_session: asOfSession }
+        : { scope: "account" },
+    );
   }
 
   return (
     <div className="max-w-md space-y-4">
-      <StrategySelectField
-        id="broker-order-sync-strategy-id"
-        value={strategyId}
-        strategies={strategies}
-        onChange={setStrategyId}
-      />
-
       <div>
         <label
           htmlFor="broker-order-sync-as-of-session"
           className="block text-xs text-zinc-500"
         >
-          As of session
+          As of session (optional)
         </label>
         <input
           id="broker-order-sync-as-of-session"
