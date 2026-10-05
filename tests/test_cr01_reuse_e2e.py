@@ -560,6 +560,12 @@ def test_a_saf01_release_survives_continue(
         "paused",
         "working_order_commitments_unaccounted",
     )
+    # C3 checkpoint, J2 still RUNNING (no completed_at, so not yet a broker effect): the original
+    # Job keeps its order and the gate stays released
+    assert _job_row(j2).completed_at is None and _job_row(j2).status is JobStatus.RUNNING
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1, j2], flagged=[j1, j2]))
+    _record(http, world, gate, flagged=[j1, j2], expect=None)
+    assert _r3_entries(http, j1) == [(str(order_id), "found_verified", False)]
 
     # C4: right after J2 (finished at an explicit instant later than the C2 reconciliation)
     finished_j2 = timeline.next()
@@ -609,11 +615,12 @@ def test_a_saf01_release_survives_continue(
         )
     )
     assert GateCode.OUTCOME_UNRESOLVED not in world.history, world.history
-    assert world.history[:4] == [
-        GateCode.RECONCILIATION_REQUIRED,
-        None,
-        GateCode.RECONCILIATION_REQUIRED,
-        None,
+    assert world.history[:5] == [
+        GateCode.RECONCILIATION_REQUIRED,  # C1
+        None,  # C2
+        None,  # C3 (J2 still running)
+        GateCode.RECONCILIATION_REQUIRED,  # C4
+        None,  # C5
     ]
 
 
@@ -742,6 +749,12 @@ def test_b1_retry_of_a_failed_continue_job_creates_no_new_uncertainty(
             ("retry_requested", r3),
         }
     assert _order(order_id).strategy_run_id == world.r1
+    # checkpoint right after the retried Continue, J3 still RUNNING (not yet an effect)
+    assert _job_row(j3).completed_at is None and _job_row(j3).status is JobStatus.RUNNING
+    gate_reused = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j2, j3], flagged=[j1, j2])
+    )
+    _record(http, world, gate_reused, flagged=[j1, j2], expect=None)
 
     # settle exactly as C5 of regression (a)
     finished_j3 = timeline.next()
@@ -882,6 +895,12 @@ def test_b3_new_start_after_end_reuses_the_proven_not_sent_order_once(
         }
     assert _order(order_id).strategy_run_id == world.r1  # the origin run is kept
     assert not _unproven(j1)
+    # checkpoint right after the reuse, J4 still RUNNING (not yet an effect)
+    assert _job_row(j4).completed_at is None and _job_row(j4).status is JobStatus.RUNNING
+    gate = assert_recovery_consumers_agree(
+        http, **_agree(world, linked=[j1, j4], flagged=[j1, j4], operation_id=new_operation)
+    )
+    _record(http, world, gate, flagged=[j1, j4], expect=None)
 
     finished_j4 = timeline.next()
     _finish_job(j4, finished_j4)
