@@ -32,22 +32,35 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from tests.support import real_reconciliation
+from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.migrated_db import migrated_database
 from tests.support.operation_fixtures import seed_operation
 from tests.support.query_counter import count_queries
+from tests.support.real_reconciliation import (
+    WallClockTimeline,
+    reconciliation_completed_at,
+    run_real_account_reconciliation,
+    run_real_strategy_reconciliation,
+    scripted_read_broker,
+)
 from tests.support.recovery_fixtures import (
     OWNER,
     SESSION_DATE,
     seed_intent,
     seed_operation_bound_intent,
     seed_paper_run,
+    strategy_row,
 )
 from tests.test_paper_execution import FakeBrokerClient
 
 from trading_platform.core.settings import load_settings
 from trading_platform.db.models import (
+    AccountReconciliationRun,
     AttemptOutcomeClass,
     ExecutionOperationIntent,
+    Job,
+    JobStatus,
     OrderLifecycleState,
     PaperOrder,
     StrategyRun,
@@ -62,6 +75,7 @@ from trading_platform.services.execution.attempts import (
 from trading_platform.services.execution.intent_identity import load_strategy_order_facts
 from trading_platform.services.reconciliation import account as account_module
 from trading_platform.services.reconciliation import (
+    latest_standalone_reconciliation,
     reconcile_account,
     reconcile_paper_execution,
 )
@@ -762,3 +776,109 @@ def test_purity_walk_sees_runtime_imports_and_skips_type_checking_only_ones() ->
     }
     assert "trading_platform.services.execution" in snapshot_modules
     assert "trading_platform.services.alpaca" not in snapshot_modules
+
+
+# ---------------------------------------------------------------------------
+# The real-reconciliation helper (20.1-32, task 3)
+# ---------------------------------------------------------------------------
+
+
+def test_wall_clock_timeline_is_strictly_increasing_and_never_in_the_future() -> None:
+    timeline = WallClockTimeline()
+    before = datetime.now(UTC)
+    instants = [timeline.next() for _ in range(50)]
+    after = datetime.now(UTC)
+    assert all(earlier < later for earlier, later in zip(instants, instants[1:], strict=False))
+    assert before <= instants[0]
+    assert instants[-1] <= after
+
+
+def test_wall_clock_timeline_places_an_effect_before_a_real_reconciliation(recon_db: str) -> None:
+    """The point of wall-clock time: an effect boundary placed with the timeline can be FOLLOWED by
+    a real reconciliation (a future-dated Job never could, both services stamp the real clock)."""
+
+    timeline = WallClockTimeline()
+    effect_at = timeline.next()
+    report, _job_id = run_real_account_reconciliation(broker=scripted_read_broker())
+    completed_at = reconciliation_completed_at(report)
+    assert completed_at > effect_at
+    assert timeline.next() > completed_at
+
+
+def test_scripted_read_broker_mirrors_the_latest_broker_observed_snapshot(recon_db: str) -> None:
+    flat = scripted_read_broker().get_account()
+    assert (flat.cash, flat.buying_power, flat.equity) == (Decimal("100000"),) * 3
+
+    with session_scope(load_settings()) as session:
+        seed_fresh_broker_snapshot(session, cash=Decimal("12345.500000"))
+    mirrored = scripted_read_broker().get_account()
+    assert (mirrored.cash, mirrored.buying_power, mirrored.equity) == (Decimal("12345.5"),) * 3
+    assert mirrored.long_market_value == mirrored.short_market_value == Decimal("0")
+
+    # Account divergence is zero against the mirrored account: the real result is clean.
+    report, _job_id = run_real_account_reconciliation(broker=scripted_read_broker())
+    assert report.blocks_execution is False
+    assert report.finding_count == 0
+
+
+def test_real_reconciliation_helper_runs_both_services_and_qualifies(recon_db: str) -> None:
+    with session_scope(load_settings()) as session:
+        strategy_row(session, OWNER)
+
+    account_report, account_job = run_real_account_reconciliation(broker=scripted_read_broker())
+    strategy_report, strategy_job = run_real_strategy_reconciliation(
+        strategy_id=OWNER, as_of_session=SESSION_DATE, broker=scripted_read_broker()
+    )
+    for report in (account_report, strategy_report):
+        assert report.blocks_execution is False
+        assert report.finding_count == 0
+
+    account_run_id = uuid.UUID(account_report.run_id)
+    strategy_run_id = uuid.UUID(strategy_report.run_id)
+    with session_scope(load_settings()) as session:
+        strategy_run = session.get(StrategyRun, strategy_run_id)
+        account_run = session.get(AccountReconciliationRun, account_run_id)
+        strategy_job_row = session.get(Job, strategy_job)
+        account_job_row = session.get(Job, account_job)
+        assert strategy_run is not None and account_run is not None
+        assert strategy_job_row is not None and account_job_row is not None
+        # Exactly what the recovery gate requires of a standalone result.
+        assert strategy_run.trigger_source == "job"
+        assert strategy_run.job_id == strategy_job
+        assert strategy_job_row.job_type == "reconciliation"
+        assert strategy_job_row.status is JobStatus.SUCCEEDED
+        assert account_run.trigger_source == "job"
+        assert account_run.job_id == account_job
+        assert account_job_row.job_type == "reconciliation"
+        assert account_job_row.status is JobStatus.SUCCEEDED
+
+        by_scope = {
+            scope: latest_standalone_reconciliation(session, OWNER, scope=scope)
+            for scope in ("account", "strategy")
+        }
+        newest = latest_standalone_reconciliation(session, strategy_public_id=OWNER)
+
+    assert by_scope["account"] is not None and by_scope["account"].run_id == account_run_id
+    assert by_scope["strategy"] is not None and by_scope["strategy"].run_id == strategy_run_id
+    assert by_scope["account"].is_clean and by_scope["strategy"].is_clean
+    completed = {
+        account_run_id: reconciliation_completed_at(account_report),
+        strategy_run_id: reconciliation_completed_at(strategy_report),
+    }
+    assert newest is not None and newest.is_clean
+    assert newest.run_id == max(completed, key=completed.__getitem__)
+
+
+def test_helper_never_seeds_reconciliation_rows() -> None:
+    """Every stored result comes from the real services: the helper source must not contain a
+    seeding fixture or a direct insert of a reconciliation row."""
+
+    source = Path(real_reconciliation.__file__).read_text()
+    forbidden = (
+        "seed_account_run",
+        "seed_strategy_reconciliation",
+        "AccountReconciliationRun(",
+        "INSERT INTO account_reconciliation_runs",
+        "INSERT INTO strategy_runs",
+    )
+    assert [token for token in forbidden if token in source] == []
