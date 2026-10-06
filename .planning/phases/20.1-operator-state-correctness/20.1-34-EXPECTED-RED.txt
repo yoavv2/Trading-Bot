@@ -1,0 +1,54 @@
+20.1-34 EXPECTED-RED: real-path G-1 regressions run against the matcher count rule (before the fix)
+HEAD 589489e (matcher.py unchanged from the base 589489e)   date 2026-10-06
+Command: PYTHONPATH=src .venv/bin/pytest tests/test_g1_real_reconciliation_release_e2e.py -q -p no:cacheprovider -rf
+Result:  10 failed, 4 passed
+
+Matcher rule in force (before the fix): a local order is "active" (missing at the broker = MISSING_BROKER) when it is
+pending_submission with submission_attempt_count != 0, or submitted / partially_filled. submission_failed is NEVER active.
+register() raises submission_attempt_count to 1 BEFORE T1, so a registered pending_submission order that never left the
+process (SAF-01) and a pending_submission order whose 4xx rejection persist was lost both have count 1 and are reported.
+
+Every failure is at the RELEASE step (_release, tests/test_g1_real_reconciliation_release_e2e.py:312): the REAL standalone
+reconciliation (nothing seeded) of the stated scope against a scripted read broker that holds no order reports the released
+order. The assertion text is:
+  AssertionError: G-1: the REAL <scope> reconciliation reports the released order: [('MISSING_BROKER', <count>)]
+  shared_verdict=<verdict> local_status=['pending_submission']
+where each tuple is (finding event_type, finding details.submission_attempt_count) and shared_verdict is
+attempts.classify_submission_evidence over the order's complete attempt history (the verdict the recovery gate reads).
+
+FAILING NODES (10)
+
+SAF-01 release (no attempt row, nothing POSTed): shared verdict proven_not_sent
+1.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_continue_after_real_reconciliation[account-pending_submission]
+    AssertionError: G-1: the REAL account reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=proven_not_sent local_status=['pending_submission']
+2.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_continue_after_real_reconciliation[strategy-pending_submission]
+    AssertionError: G-1: the REAL strategy reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=proven_not_sent local_status=['pending_submission']
+3.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_start_via_run_paper_session_after_real_reconciliation[account-pending_submission]
+    AssertionError: G-1: the REAL account reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=proven_not_sent local_status=['pending_submission']
+4.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_start_via_run_paper_session_after_real_reconciliation[strategy-pending_submission]
+    AssertionError: G-1: the REAL strategy reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=proven_not_sent local_status=['pending_submission']
+
+Recorded rejection (the broker answered 403, attempt (1, rejected) committed, the rejection persist lost): shared verdict rejected
+5.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_recorded_rejection_m5_is_clean_and_continue_never_resends[account-recorded_rejection]
+    AssertionError: G-1: the REAL account reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=rejected local_status=['pending_submission']
+6.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_recorded_rejection_m5_is_clean_and_continue_never_resends[strategy-recorded_rejection]
+    AssertionError: G-1: the REAL strategy reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=rejected local_status=['pending_submission']
+7.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_recorded_rejection_new_start_consumes_the_session_allowance[account-recorded_rejection-same_fingerprint]
+    AssertionError: G-1: the REAL account reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=rejected local_status=['pending_submission']
+8.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_recorded_rejection_new_start_consumes_the_session_allowance[account-recorded_rejection-changed_quantity]
+    AssertionError: G-1: the REAL account reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=rejected local_status=['pending_submission']
+9.  tests/test_g1_real_reconciliation_release_e2e.py::test_g1_recorded_rejection_new_start_consumes_the_session_allowance[strategy-recorded_rejection-same_fingerprint]
+    AssertionError: G-1: the REAL strategy reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=rejected local_status=['pending_submission']
+10. tests/test_g1_real_reconciliation_release_e2e.py::test_g1_recorded_rejection_new_start_consumes_the_session_allowance[strategy-recorded_rejection-changed_quantity]
+    AssertionError: G-1: the REAL strategy reconciliation reports the released order: [('MISSING_BROKER', 1)] shared_verdict=rejected local_status=['pending_submission']
+
+PASSING NODES (4): the submission_failed shape is never active under the count rule, so the whole flow already passes
+(real reconciliation clean, Continue / new Start POST the pinned intent exactly once)
+11. tests/test_g1_real_reconciliation_release_e2e.py::test_g1_continue_after_real_reconciliation[account-submission_failed]
+12. tests/test_g1_real_reconciliation_release_e2e.py::test_g1_continue_after_real_reconciliation[strategy-submission_failed]
+13. tests/test_g1_real_reconciliation_release_e2e.py::test_g1_start_via_run_paper_session_after_real_reconciliation[account-submission_failed]
+14. tests/test_g1_real_reconciliation_release_e2e.py::test_g1_start_via_run_paper_session_after_real_reconciliation[strategy-submission_failed]
+
+Not observable in this run: the steps after the release step of the 10 failing nodes (they are reached only after the matcher
+rule changes). Before this commit the module was run once with the Task 2 matcher rule applied in the working tree (that edit is
+NOT part of this commit): 14 passed.
