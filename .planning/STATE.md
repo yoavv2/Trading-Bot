@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: "Gap closure r3 planned: 20.1-32..37 (G-1 shared-evidence reconciliation, WR-01 migration 0030, real-path regressions); checker passed. Awaiting user: D-G1-A (a/b/c) and go-ahead. Phase 21 heartbeat migration -> 0031. Interim prohibition in force. Phase NOT complete."
+stopped_at: "Gap closure r3 planned and corrected 2026-10-06: 20.1-32..37 (G-1 on decided rule D-G1-A: MISSING_BROKER unless shared verdict is PROVEN_NOT_SENT or definitive REJECTED; WR-01 migration 0030 incl. strategy_id + reconciliation Job type; real-path release/rejection regressions; mandatory read-only pre-UAT inventory); checker passed (rev 2). Awaiting user: execution approval. Phase 21 heartbeat migration -> 0031. Interim prohibition in force. Phase NOT complete."
 last_updated: "2026-10-05T15:50:05.508Z"
 last_activity: 2026-10-06 -- 20.1-31 complete (runbook 05 + HUMAN-UAT CR-01 fix note marked PENDING VERIFICATION; interim prohibition unchanged; Deferred (not resolved) list in SUMMARY); gap closure r2 executed, verification pending
 progress:
