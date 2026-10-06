@@ -587,18 +587,26 @@ def test_projection_carries_the_verdict_in_session_trigger(
 
 
 def _seed_pending_orders(count: int) -> None:
-    """``count`` pending_submission orders of ONE symbol (AAPL), each on its own run. The default
-    submission_attempt_count 0 is inactive in the current matcher: no finding, so no ExecutionEvent
-    insert can add statements to the measured call."""
+    """``count`` operation-bound pending_submission orders of ONE symbol (AAPL), each on its own run
+    and with zero attempt rows: their shared verdict is PROVEN_NOT_SENT (the G-1 shape), which
+    explains their absence at the broker, so the matcher reports NO finding. A finding would
+    persist an ExecutionEvent (against the made-up run id of the measured call) and add
+    statements, so the measured call measures only the evidence loader. (A LEGACY order, i.e.
+    ``seed_intent`` with no attempts, is UNESTABLISHED and is correctly reported since 20.1-34: that
+    fixture relied on the old count-0 exemption.)"""
 
     with session_scope(load_settings()) as session:
         for _ in range(count):
-            seed_intent(session, seed_paper_run(session, None), status=PENDING, attempts=())
+            seed_operation_bound_intent(
+                session, seed_paper_run(session, None), status=PENDING, attempts=()
+            )
 
 
 def _scope_statements(scope: str, monkeypatch: pytest.MonkeyPatch, *, without_loader: bool) -> int:
     """Statements of ONE ``_reconcile_against_broker_state`` / ``_evaluate_account`` call, with the
-    evidence loader real or replaced by ``{}`` (the pre-20.1-32 statement shape)."""
+    evidence loader real or replaced by a stub that returns the REAL verdicts, computed before the
+    counter is entered (the pre-20.1-32 statement shape): the finding set is identical in both
+    measurements, so the difference is exactly the loader's statements."""
 
     settings = load_settings()
     state = _flat_state()
@@ -606,9 +614,16 @@ def _scope_statements(scope: str, monkeypatch: pytest.MonkeyPatch, *, without_lo
     prefix = settings.execution.client_order_id_prefix
     threshold = settings.execution.safety.repeated_failure_threshold
     module = report_module if scope == "strategy" else account_module
+    real_loader = module._load_reconciliation_evidence
+    verdicts: dict[uuid.UUID, SubmissionEvidence] = {}
+    if without_loader:
+        with session_scope(settings) as before:
+            verdicts = real_loader(before, list(before.execute(select(PaperOrder)).scalars()))
     with monkeypatch.context() as patched:
         if without_loader:
-            patched.setattr(module, "_load_reconciliation_evidence", lambda _session, _orders: {})
+            patched.setattr(
+                module, "_load_reconciliation_evidence", lambda _session, _orders: verdicts
+            )
         with session_scope(settings) as session:
             with count_queries(session) as counter:
                 if scope == "strategy":
