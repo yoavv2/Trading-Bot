@@ -23,6 +23,14 @@ Orders are matched by ``client_order_id`` first, falling back to ``broker_order_
 this preserves the existing "prefer client_order_id when a version-chain successor has
 taken over an in-flight broker order" behavior. Fills are matched by ``broker_fill_id``.
 
+G-1 (20.1-34, user decision 2026-10-06): an unmatched pre-send order is reported missing at the
+broker unless the shared classifier, computed outside this module over the complete attempt history
+(``LocalOrderSnapshot.submission_evidence``), proved it never left the process (PROVEN_NOT_SENT) or
+recorded a definitive broker rejection (REJECTED; an unfinished or ambiguous attempt before or
+after the rejection is UNESTABLISHED and keeps the finding); the attempt counter proves nothing.
+The suppression applies only to the local-order-not-at-broker finding; broker-side matching is
+unchanged.
+
 This module has NO ``session_scope``, ``AlpacaClient``, or ``db.models`` (ORM) imports.
 The concrete broker snapshot types are imported only under ``TYPE_CHECKING`` so the
 ``services.alpaca`` (httpx) import never happens at runtime, mirroring the pattern
@@ -41,6 +49,7 @@ from trading_platform.services.reconciliation.snapshot import (
     LocalFillSnapshot,
     LocalOrderSnapshot,
     LocalPositionSnapshot,
+    LocalSubmissionEvidence,
     ReconciliationIdentity,
     identity_for_broker_position,
 )
@@ -54,10 +63,20 @@ if TYPE_CHECKING:
         BrokerPositionSnapshot,
     )
 
-# Local order lifecycle strings that count as "still active" from the broker's point of
-# view. Expressed as plain strings (not the ORM `OrderLifecycleState` enum) so this
-# module stays free of `db.models` imports.
-_ACTIVE_LOCAL_ORDER_STATUSES = {"pending_submission", "submitted", "partially_filled"}
+# Local order lifecycle strings, expressed as plain strings (not the ORM `OrderLifecycleState`
+# enum) so this module stays free of `db.models` imports.
+#
+# PRE-SEND: the order was registered locally but may never have reached the broker; whether the
+# broker must report it is decided by the shared submission verdict (see `_is_local_order_active`).
+_PRE_SEND_STATUSES = frozenset({"pending_submission", "submission_failed"})
+# BROKER-ACTIVE: the broker accepted the order, so it must still report it.
+_BROKER_ACTIVE_STATUSES = frozenset({"submitted", "partially_filled"})
+# The ONLY verdicts that explain why the broker does not report a pre-send order: nothing ever left
+# the process (PROVEN_NOT_SENT) or the broker answered with a definitive rejection (REJECTED).
+# UNESTABLISHED, BROKER_EVIDENCE and NOT_COMPUTED never explain the absence (fail closed).
+_ABSENCE_EXPLAINED_EVIDENCE = frozenset(
+    {LocalSubmissionEvidence.PROVEN_NOT_SENT, LocalSubmissionEvidence.REJECTED}
+)
 
 # Broker `ExecutionOrderStatus` -> the local lifecycle string it is expected to produce.
 # Mirrors the pre-rewrite `_local_state_from_broker_status` mapping, but expressed with
@@ -266,11 +285,10 @@ def _match_fills(
 
 
 def _is_local_order_active(order: LocalOrderSnapshot) -> bool:
-    if order.status == "submission_failed":
-        return False
-    if order.status == "pending_submission" and order.submission_attempt_count == 0:
-        return False
-    return order.status in _ACTIVE_LOCAL_ORDER_STATUSES
+    if order.status in _PRE_SEND_STATUSES:
+        # G-1 / D-G1-A (user decision 2026-10-06): only PROVEN_NOT_SENT or a definitive REJECTED explains the absence
+        return order.submission_evidence not in _ABSENCE_EXPLAINED_EVIDENCE
+    return order.status in _BROKER_ACTIVE_STATUSES
 
 
 def _decimal_differs(left: Decimal, right: Decimal, *, tolerance: Decimal) -> bool:
@@ -400,6 +418,7 @@ def _missing_broker_order_finding(local_order: LocalOrderSnapshot) -> Finding:
             "broker_order_id": local_order.broker_order_id,
             "local_status": local_order.status,
             "submission_attempt_count": local_order.submission_attempt_count,
+            "submission_evidence": local_order.submission_evidence.value,
         },
         paper_order_id=local_order.paper_order_id,
         broker_order_id=local_order.broker_order_id,
