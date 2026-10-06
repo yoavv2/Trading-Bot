@@ -941,7 +941,9 @@ def test_unrelated_job_types_stay_free_and_no_job_becomes_a_reconciliation_job(
         )
         free_id, backtest_id, in_session_job = free.id, backtest.id, in_session.job_id
     assert in_session_job is not None
-    # Neither side is 'reconciliation' and no standalone run references the Job: legal.
+    # Neither side is 'reconciliation' and no standalone run references the Job: outside guard 4.
+    # This pins the guard's scope, not an approval: the type of a flagged or effect Job (here a
+    # paper-session Job behind an in-session run) is an OPEN same-class item (0030 docstring).
     _exec("UPDATE jobs SET job_type = 'risk-evaluation' WHERE id = :j", j=free_id)
     _exec("UPDATE jobs SET job_type = 'phase-probe' WHERE id = :j", j=backtest_id)
     _exec("UPDATE jobs SET job_type = 'phase-probe' WHERE id = :j", j=in_session_job)
