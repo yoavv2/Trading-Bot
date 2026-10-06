@@ -40,7 +40,10 @@ Four guards (triggers and functions only; ERRCODE ``integrity_constraint_violati
    ``unresolved_reasons`` and ``result_summary`` never change. ``job_id`` is deliberately NOT
    frozen: no gate reads it and its ``ON DELETE SET NULL`` must keep working.
 4. ``trg_jobs_reconciliation_job_type_immutable`` (``BEFORE UPDATE OF job_type ... WHEN
-   OLD.job_type IS DISTINCT FROM NEW.job_type``). Every actual ``job_type`` change is refused when
+   OLD.job_type::text IS DISTINCT FROM NEW.job_type::text``; the explicit casts store exactly what a
+   clean database stores anyway, and keep the WHEN clause, which binds its operator when this
+   migration runs, from binding to an ``=`` planted in ``public`` beforehand). Every actual
+   ``job_type`` change is refused when
    OLD or NEW ``job_type`` is ``'reconciliation'`` (``services/broker_jobs.py``
    ``RECONCILIATION_JOB_TYPE``): a queued, running or completed reconciliation Job of either scope
    never changes type, and no Job becomes one. These column arms decide without reading any table,
@@ -59,7 +62,7 @@ was unpublished and had run only on throwaway databases): the round-3 review (WR
 round-4 re-verification (escalation E-1) showed guard 4 holding only for a COMMITTED run row found
 through the caller's search path: a retype before the run INSERT, during the uncommitted INSERT, or
 under a session TEMP table named ``strategy_runs`` passed. Hence the column arms of guard 4, and
-trusted lookups in every function of this revision and in the 0029 delete guard:
+trusted lookups in every function of this revision and in two 0029 guards:
 
 * every function here runs with ``SET search_path = pg_catalog, public, pg_temp`` (``public`` is the
   application schema; an omitted ``pg_temp`` is searched FIRST for relation names, so it is listed
@@ -70,10 +73,21 @@ trusted lookups in every function of this revision and in the 0029 delete guard:
   resolution against pg_catalog's (pg_catalog is searched first, but an exact argument-type match
   beats a coercion); ``text``, ``uuid``, ``timestamptz``, ``date``, ``boolean``, ``integer`` and
   ``jsonb`` comparisons resolve to pg_catalog's own exact operators;
-* ``phase20_1_evidence_no_delete`` (0029; the only 0028 / 0029 function that reads tables) gets the
-  same search path through ``ALTER FUNCTION``. Its body is 0029's, unchanged; the three other 0029
-  functions and the 0028 function read no table and keep their configuration. Downgrade RESETs
-  exactly that setting, which restores the 0029 function as 0029 created it.
+* two 0029 functions get the same search path through ``ALTER FUNCTION``, bodies unchanged:
+  ``phase20_1_evidence_no_delete`` (the only 0028 / 0029 function that reads tables) and
+  ``paper_orders_origin_run_immutable`` (CR-01's durable linkage: its uuid comparison would
+  otherwise follow a caller path that lists ``public`` before ``pg_catalog``, where an
+  identical-signature ``=`` could be planted; with ``pg_catalog`` first it cannot win). The two
+  other 0029 functions look no name up and keep their configuration, as does the 0028 function.
+  Downgrade RESETs exactly that setting, which restores each 0029 function as 0029 created it.
+
+What the trusted lookups do NOT close (pre-existing, recorded for the user's decision): the 0029
+delete guard's J arm compares a varchar (``OLD.job_type IN (...)``, body unchanged by decision),
+and the application's own reads (the recovery gate compares ``job_type`` and ``trigger_source`` as
+varchar) resolve operators through a path that contains ``public``; an exact-match
+``=(varchar, varchar)`` planted there decides those comparisons. The 0028 / 0025 / 0026 functions
+call ``to_jsonb`` and compare jsonb under the caller's path. The planted-operator class closes only
+with revoking PUBLIC's CREATE on ``public`` (role / privilege work, outside this phase).
 
 No function is SECURITY DEFINER. JSON columns have no equality operator in PostgreSQL, so every
 comparison casts both sides to jsonb; an explicit column list is compared (never the whole row), so
@@ -95,7 +109,8 @@ that are not reconciliation Jobs (they decide which Jobs are uncertain and where
 boundary lies), ``jobs.payload`` (a Job's strategy attribution) and a rename of
 ``strategies.strategy_id`` (the public id), a forged clean reconciliation INSERT by a database client
 (and, the same class, deleting a run-less reconciliation Job and re-inserting its id with another
-type), ``account_snapshots``.
+type, or swapping its id with another Job's before its run exists: ``jobs.id`` is not frozen),
+``account_snapshots``.
 
 IN-02 (kept separate and documented): the table-owning role, which is the role that runs
 migrations and today also the application role, can ``ALTER TABLE ... DISABLE TRIGGER``, drop a
@@ -104,7 +119,7 @@ separation (and revoking PUBLIC's CREATE on ``public``) is outside this phase.
 
 The 0028 and 0029 source files are unchanged. Triggers and functions only (no foreign key, column,
 table or data change). Downgrade drops exactly the 4 triggers and 4 functions created here and resets
-the search path set on the 0029 delete guard.
+the search path set on the two 0029 guards.
 """
 
 from __future__ import annotations
@@ -125,8 +140,9 @@ ACCOUNT_RUN_FUNCTION = "phase20_1_account_reconciliation_run_complete_once"
 ACCOUNT_RUN_TRIGGER = "trg_account_reconciliation_runs_complete_once"
 JOB_TYPE_FUNCTION = "phase20_1_reconciliation_job_type_immutable"
 JOB_TYPE_TRIGGER = "trg_jobs_reconciliation_job_type_immutable"
-#: The 0029 delete guard: the only earlier guard function that reads tables.
-DELETE_GUARD_0029_FUNCTION = "phase20_1_evidence_no_delete"
+#: The 0029 guards whose bodies look a name up: tables (the delete guard) or an operator the caller's
+#: path would otherwise choose (the origin guard). Their search path is pinned; bodies unchanged.
+PINNED_0029_FUNCTIONS = ("phase20_1_evidence_no_delete", "paper_orders_origin_run_immutable")
 
 #: The application schema, then pg_temp explicitly LAST (never searched first).
 TRUSTED_SEARCH_PATH = "pg_catalog, public, pg_temp"
@@ -298,7 +314,7 @@ def _job_type_guard() -> None:
         f"""
         CREATE TRIGGER {JOB_TYPE_TRIGGER}
         BEFORE UPDATE OF job_type ON jobs
-        FOR EACH ROW WHEN (OLD.job_type IS DISTINCT FROM NEW.job_type)
+        FOR EACH ROW WHEN (OLD.job_type::text IS DISTINCT FROM NEW.job_type::text)
         EXECUTE FUNCTION {JOB_TYPE_FUNCTION}()
         """
     )
@@ -309,14 +325,14 @@ def _drop_job_type_guard() -> None:
     op.execute(f"DROP FUNCTION IF EXISTS {JOB_TYPE_FUNCTION}()")
 
 
-def _pin_0029_delete_guard_search_path() -> None:
-    op.execute(
-        f"ALTER FUNCTION {DELETE_GUARD_0029_FUNCTION}() SET search_path = {TRUSTED_SEARCH_PATH}"
-    )
+def _pin_0029_search_paths() -> None:
+    for function in PINNED_0029_FUNCTIONS:
+        op.execute(f"ALTER FUNCTION {function}() SET search_path = {TRUSTED_SEARCH_PATH}")
 
 
-def _reset_0029_delete_guard_search_path() -> None:
-    op.execute(f"ALTER FUNCTION {DELETE_GUARD_0029_FUNCTION}() RESET search_path")
+def _reset_0029_search_paths() -> None:
+    for function in reversed(PINNED_0029_FUNCTIONS):
+        op.execute(f"ALTER FUNCTION {function}() RESET search_path")
 
 
 def upgrade() -> None:
@@ -324,11 +340,11 @@ def upgrade() -> None:
     _reconciliation_run_guard()
     _account_run_guard()
     _job_type_guard()
-    _pin_0029_delete_guard_search_path()
+    _pin_0029_search_paths()
 
 
 def downgrade() -> None:
-    _reset_0029_delete_guard_search_path()
+    _reset_0029_search_paths()
     _drop_job_type_guard()
     _drop_account_run_guard()
     _drop_reconciliation_run_guard()

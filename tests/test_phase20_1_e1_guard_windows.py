@@ -105,8 +105,9 @@ REVISION = "0030_phase20_1_evidence_update_guards"
 PREVIOUS_REVISION = "0029_phase20_1_order_origin_immutable"
 MIGRATION_0030 = Path(__file__).resolve().parents[1] / "alembic" / "versions" / f"{REVISION}.py"
 
-#: ``pg_proc.proconfig`` of every guard function that reads a table: the application schema, with
-#: ``pg_temp`` explicitly LAST (an omitted ``pg_temp`` is searched FIRST for relation names).
+#: ``pg_proc.proconfig`` of every guard function that looks a name up: the application schema, with
+#: ``pg_temp`` explicitly LAST (an omitted ``pg_temp`` is searched FIRST for relation names) and
+#: ``pg_catalog`` FIRST (its operators win against identical-signature ones planted in ``public``).
 TRUSTED_SEARCH_PATH = "search_path=pg_catalog, public, pg_temp"
 FUNCTIONS_0030 = (
     "phase20_1_strategy_run_link_immutable",
@@ -114,17 +115,19 @@ FUNCTIONS_0030 = (
     "phase20_1_account_reconciliation_run_complete_once",
     "phase20_1_reconciliation_job_type_immutable",
 )
-#: The only 0028 / 0029 function with relation lookups: 0030 pins its search path by ALTER FUNCTION.
+#: The 0029 functions whose bodies look names up (tables, or an operator the caller's path would
+#: otherwise choose): 0030 pins their search path by ALTER FUNCTION; bodies unchanged.
 DELETE_GUARD_0029 = "phase20_1_evidence_no_delete"
+ORIGIN_GUARD_0029 = "paper_orders_origin_run_immutable"
+PINNED_0029 = (DELETE_GUARD_0029, ORIGIN_GUARD_0029)
 FUNCTIONS_0029 = (
-    "paper_orders_origin_run_immutable",
+    ORIGIN_GUARD_0029,
     "order_events_append_only",
     DELETE_GUARD_0029,
     "phase20_1_evidence_no_truncate",
 )
-#: Outside this correction (no relation lookup, or not a 0029 / 0030 function): untouched.
+#: Outside this correction (no name lookup, or not a 0029 / 0030 function): untouched.
 UNTOUCHED_FUNCTIONS = (
-    "paper_orders_origin_run_immutable",
     "order_events_append_only",
     "phase20_1_evidence_no_truncate",
     "order_submission_attempts_append_only",
@@ -976,7 +979,7 @@ def _proc_rows(names: Sequence[str]) -> dict[str, dict[str, Any]]:
 
 
 def test_guard_functions_run_with_the_trusted_search_path(migrated_db: str) -> None:
-    pinned = _proc_rows((*FUNCTIONS_0030, DELETE_GUARD_0029))
+    pinned = _proc_rows((*FUNCTIONS_0030, *PINNED_0029))
     for name, row in pinned.items():
         assert row["proconfig"] == [TRUSTED_SEARCH_PATH], name
         assert row["prosecdef"] is False, name  # SECURITY INVOKER, never DEFINER
@@ -1020,9 +1023,9 @@ def test_job_type_guard_literals_match_the_application_constants() -> None:
 def test_downgrade_restores_every_0029_function_exactly_and_reupgrade_rearms(
     migrated_db: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """At head the ONLY difference to a database that never ran 0030 is the delete guard's search
-    path; a downgrade to 0029 restores every 0029 (and 0028) function row exactly; re-upgrading
-    restores the head state and re-arms the guard."""
+    """At head the ONLY difference to a database that never ran 0030 is the search path of the two
+    pinned 0029 guards; a downgrade to 0029 restores every 0029 (and 0028) function row exactly;
+    re-upgrading restores the head state and re-arms the guard."""
 
     compared = (*FUNCTIONS_0029, "order_submission_attempts_append_only")
     head = _proc_rows(compared)
@@ -1040,7 +1043,7 @@ def test_downgrade_restores_every_0029_function_exactly_and_reupgrade_rearms(
 
     for name, row in never_ran_0030.items():
         expected = dict(row)
-        if name == DELETE_GUARD_0029:
+        if name in PINNED_0029:
             expected["proconfig"] = [TRUSTED_SEARCH_PATH]
         assert head[name] == expected, name
 
@@ -1058,3 +1061,84 @@ def test_downgrade_restores_every_0029_function_exactly_and_reupgrade_rearms(
     assert _proc_rows(FUNCTIONS_0030) == head_0030
     job_id = _start_reconciliation()
     _refused(_retype(job_id, DISGUISE), JOB_TYPE_REFUSAL)
+
+
+def test_the_0029_origin_guard_ignores_a_reordered_caller_path_and_a_planted_operator(
+    migrated_db: str,
+) -> None:
+    """CR-01's durable linkage (0029 origin guard) compares uuids. A caller that lists ``public``
+    BEFORE ``pg_catalog`` and plants an identical-signature ``=(uuid, uuid)`` there would decide
+    that comparison; the pinned function path puts ``pg_catalog`` first (review r5 WR-03)."""
+
+    with session_scope(load_settings()) as session:
+        origin = seed_paper_run(session, _probe_job(session))
+        order_id = seed_intent(session, origin, status=PENDING, attempts=()).id
+        other_id = seed_paper_run(session, _probe_job(session)).id
+        origin_id = origin.id
+    always_equal = Plant(
+        "uuid",
+        True,
+        "SELECT '00000000-0000-0000-0000-000000000001'::uuid "
+        "= '00000000-0000-0000-0000-000000000002'::uuid",
+        True,
+    )
+    with _other_connection() as connection:
+        connection.execute("SET LOCAL search_path TO public, pg_catalog")
+        _plant(connection, always_equal)
+        attempt = _attempt(
+            connection,
+            "UPDATE public.paper_orders SET strategy_run_id = %s WHERE id = %s",
+            (other_id, order_id),
+            keep=False,
+        )
+    _refused(attempt, "paper_orders.strategy_run_id is the immutable origin run")
+    assert (
+        _scalar("SELECT strategy_run_id FROM paper_orders WHERE id = :o", o=order_id) == origin_id
+    )
+
+
+#: The 0030 triggers (a WHEN clause binds its operators when the migration runs).
+TRIGGERS_0030 = (
+    "trg_strategy_runs_link_immutable",
+    "trg_strategy_runs_reconciliation_complete_once",
+    "trg_account_reconciliation_runs_complete_once",
+    "trg_jobs_reconciliation_job_type_immutable",
+)
+
+
+def test_the_job_type_trigger_cannot_bind_to_an_operator_planted_before_the_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The persistent database still has to run 0030, and PUBLIC holds CREATE on ``public`` there.
+    An always-equal ``=(varchar, varchar)`` planted BEFORE the upgrade must neither capture guard
+    4's WHEN clause (the trigger would never fire, and dropping the plant would need CASCADE, which
+    drops the trigger) nor leave any 0030 trigger depending on an operator outside pg_catalog
+    (review r5 IN-02)."""
+
+    with monkeypatch.context() as patch:
+        with migrated_database(patch, "phase20_1_e1_preplant", revision=PREVIOUS_REVISION):
+            _exec(
+                "CREATE FUNCTION public.e1_preplanted_eq(varchar, varchar) RETURNS boolean "
+                "LANGUAGE sql IMMUTABLE AS 'SELECT true'"
+            )
+            _exec(
+                "CREATE OPERATOR public.= (LEFTARG = varchar, RIGHTARG = varchar, "
+                "FUNCTION = public.e1_preplanted_eq)"
+            )
+            _fresh_caches()
+            command.upgrade(build_alembic_config(), "head")
+            _fresh_caches()
+            foreign_dependencies = _scalar(
+                "SELECT count(*) FROM pg_depend d "
+                "JOIN pg_trigger t ON d.classid = 'pg_trigger'::regclass AND d.objid = t.oid "
+                "JOIN pg_operator o ON d.refclassid = 'pg_operator'::regclass "
+                "AND d.refobjid = o.oid "
+                "WHERE t.tgname = ANY(:triggers) "
+                "AND o.oprnamespace <> 'pg_catalog'::regnamespace",
+                triggers=list(TRIGGERS_0030),
+            )
+            assert foreign_dependencies == 0
+            job_id = _start_reconciliation()
+            _refused(_retype(job_id, DISGUISE), JOB_TYPE_REFUSAL)
+            assert _job_type(job_id) == RECONCILIATION_JOB_TYPE
+    _fresh_caches()

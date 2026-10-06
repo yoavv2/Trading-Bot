@@ -132,3 +132,15 @@ FAILED test_job_type_guard_literals_match_the_application_constants
     assert "OLD.job_type::text = 'reconciliation'" in '"""Phase 20.1 UPDATE guards for recovery and reconciliation evidence (review WR-01, gap G-2).\n\n0028 made the attemp... _drop_job_type_guard()\n _drop_account_run_guard()\n _drop_reconciliation_run_guard()\n _drop_link_guard()\n'
 FAILED test_downgrade_restores_every_0029_function_exactly_and_reupgrade_rearms
     AssertionError: phase20_1_evidence_no_delete assert {'proname': '...': False, ...} == {'proname': '...': False, ...} Omitting 14 identical items, use -vv to show Differing items: {'proconfig': None} != {'proconfig': ['search_path=pg_catalog, public, pg_temp']} Use -v to get more diff
+
+Addendum (after the focused review, findings r5 WR-03 and r5 IN-02): two nodes added and two pins
+extended, run against the migration as committed in 1c732d5 (before the follow-up change):
+4 failed, 48 passed.
+FAILED test_guard_functions_run_with_the_trusted_search_path 
+    AssertionError: paper_orders_origin_run_immutable assert None == ['search_path=pg_catalog, public, pg_temp']
+FAILED test_downgrade_restores_every_0029_function_exactly_and_reupgrade_rearms 
+    AssertionError: paper_orders_origin_run_immutable assert {'proname': '...': False, ...} == {'proname': '...': False, ...} Omitting 14 identical items, use -vv to show Differing items: {'proconfig': None} != {'proconfig': ['search_path=pg_catalog, public, pg_temp']} Use -v to get more diff
+FAILED test_the_0029_origin_guard_ignores_a_reordered_caller_path_and_a_planted_operator 
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_the_job_type_trigger_cannot_bind_to_an_operator_planted_before_the_migration 
+    assert 1 == 0
