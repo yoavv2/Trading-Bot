@@ -16,8 +16,10 @@ stayed green. These tests run the finished code (20.1-26 durable linkage, 20.1-2
 * (b3) the Start-path reuse decision: after End, a clean M5, a fresh evaluation and a new start,
   the earlier proven-not-sent order is re-registered (``retry_existing``) and POSTed once;
 * (b3-session) the same scenario with the new start entering through the SESSION entry point
-  ``run_paper_session`` (D-15 session recovery gate, pre-lock recovery and reconciliation), with
-  fake execution / broker clients.
+  ``run_paper_session`` (D-15 session recovery gate, pre-lock recovery and reconciliation), with a
+  scripted execution service and read-side broker; its release reconciliation (M5) is REAL
+  (20.1-34, G-1: the real account reconciliation service on wall-clock time) and the evaluation
+  basis of its new start seeds no reconciliation row.
 
 What is INJECTED (and nothing else): the simulated worker crash before T1 (a held worker whose lock
 connection is terminated, or a one-shot exception before T1) and the passage of time (a lease
@@ -31,6 +33,9 @@ The clean standalone reconciliation (M5) is seeded with an EXPLICIT ``completed_
 reconciliation itself is not under test and every gate value below depends on its ordering against
 Job completion times (``Timeline``); ``finish_jobs()`` and ``_recover_by_client_order_id`` are not
 used because they rewrite every Job's status / ``completed_at``.
+
+Regressions (a), (b1) and (b3) keep that seeded M5 for ordering and are NOT evidence for the real
+reconciliation path, which is ``tests/test_g1_real_reconciliation_release_e2e.py`` (20.1-34).
 
 The CR-01 interim runbook prohibition is NOT lifted by this module.
 """
@@ -49,13 +54,16 @@ from sqlalchemy import func, select, update
 from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.paper_eligibility import allow_paper_execution
 from tests.support.paper_execution_seams import TEST_LEASE_OWNER, allow_direct_paper_execution
+from tests.support.real_reconciliation import (
+    WallClockTimeline,
+    reconciliation_completed_at,
+    run_real_account_reconciliation,
+    scripted_read_broker,
+)
 from tests.support.recovery_agreement import assert_recovery_consumers_agree
 from tests.support.recovery_fixtures import seed_account_run
 from tests.test_attribution_reconciliation import _broker_fill, _broker_order
-from tests.test_paper_execution import (  # noqa: F401  (migrated_paper_db is the database fixture)
-    FakeBrokerClient,
-    migrated_paper_db,
-)
+from tests.test_paper_execution import migrated_paper_db  # noqa: F401  (database fixture)
 from tests.test_paper_session_operations import (
     DEFAULT_BATCH,
     SESSION,
@@ -101,7 +109,6 @@ from trading_platform.jobs.lifecycle import JobTransitionRequest, apply_job_tran
 from trading_platform.jobs.queue import claim_next_job, reclaim_lost_jobs
 from trading_platform.jobs.registry import JobSubmissionConflictError, build_default_registry
 from trading_platform.orchestration.job_mutations import JobOrchestrationService
-from trading_platform.services.alpaca import BrokerAccountSnapshot
 from trading_platform.services.execution import submit_orders as submit_orders_module
 from trading_platform.services.execution.operations import end_operation
 from trading_platform.services.execution.submit_orders import (
@@ -932,61 +939,19 @@ def test_b3_new_start_after_end_reuses_the_proven_not_sent_order_once(
     assert GateCode.OUTCOME_UNRESOLVED not in world.history, world.history
 
 
-def _clean_fake_broker() -> FakeBrokerClient:
-    """The read-side broker client of ``run_paper_session`` (recovery / reconciliation reads only;
-    nothing is ever POSTed through it)."""
-
-    return FakeBrokerClient(
-        orders=[],
-        fills=[],
-        positions=[],
-        account=BrokerAccountSnapshot(
-            cash=Decimal("100000.000000"),
-            buying_power=Decimal("100000.000000"),
-            equity=Decimal("100000.000000"),
-            long_market_value=Decimal("0"),
-            short_market_value=Decimal("0"),
-            raw_payload={"equity": "100000.000000"},
-        ),
-    )
-
-
-_SESSION_PENDING_FINDING = (
-    "PRODUCT FINDING (20.1-29 follow-up): the session entry point run_paper_session blocks the "
-    "Start of a SAF-01-released proven-not-sent pending_submission order. Its pre-lock "
-    "reconciliation (reconcile_paper_execution -> matcher._is_local_order_active) treats a "
-    "pending_submission order whose submission_attempt_count != 0 as active, and registration "
-    "(submit_orders, before T1) already incremented that counter to 1 although no "
-    "order_submission_attempts row exists and nothing was ever POSTed; the broker therefore (truly) "
-    "does not report the order and the finding MISSING_BROKER (blocks_execution) yields action "
-    "blocked_reconciliation: no re-POST, no execution run. The D-15 session gate itself is "
-    "evaluated and returns None. PaperSessionJobHandler calls run_paper_session, so a real worker "
-    "Start is blocked (fail-closed) while the direct start path (b3) reuses the order."
-)
-
-
 @pytest.mark.parametrize(
-    "status",
-    [
-        pytest.param(
-            PENDING,
-            id="pending_submission",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_SESSION_PENDING_FINDING
-            ),
-        ),
-        pytest.param(FAILED, id="submission_failed"),
-    ],
+    "status", [PENDING, FAILED], ids=["pending_submission", "submission_failed"]
 )
 def test_b3_new_start_after_end_through_run_paper_session(
     http: TestClient, monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
     """(b3, session entry point) The scenario of (b3), but the new start goes through
     ``run_paper_session``: its D-15 session-level recovery gate and its pre-lock recovery /
-    reconciliation (fake execution service and fake read-side broker client) must neither block a
-    SAF-01-released proven-not-sent order nor cause a second POST."""
+    reconciliation (scripted execution service and read-side broker client) must neither block a
+    SAF-01-released proven-not-sent order nor cause a second POST. The release (M5) is a REAL
+    account reconciliation on wall-clock time (20.1-34), never a seeded row."""
 
-    timeline = Timeline()
+    timeline = WallClockTimeline()
     world = _saf01_shape(status, monkeypatch, timeline)
     j1, order_id, cid1, op, broker = (
         world.j1,
@@ -999,16 +964,30 @@ def test_b3_new_start_after_end_through_run_paper_session(
         end_operation(session, op, operator_reason="cr01 b3 session end", actor="pytest")
     assert _order(order_id).status.value == status and attempt_outcomes(cid1) == []
 
-    recon_a = timeline.next()
+    # execution sizes only on a fresh broker-observed snapshot (no configured-cash fallback); it
+    # is seeded BEFORE the release so that the scripted read broker mirrors it
+    with session_scope(load_settings()) as session:
+        seed_fresh_broker_snapshot(session)
+    # M5 is REAL (G-1, 20.1-34): the account reconciliation service against a broker that holds no
+    # order must be clean and complete after J1's reclaim
+    release, _release_job = run_real_account_reconciliation(broker=scripted_read_broker())
+    assert release.blocks_execution is False and release.finding_count == 0
+    assert not release.unresolved_reasons and not release.findings
+    recon_a = reconciliation_completed_at(release)
     assert recon_a > world.j1_completed_at
-    _clean_reconciliation(recon_a)
     gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
     _record(http, world, gate, flagged=[j1], expect=None)
 
-    # execution sizes only on a fresh broker-observed snapshot (no configured-cash fallback)
-    with session_scope(load_settings()) as session:
-        seed_fresh_broker_snapshot(session)
-    new_run = evaluation(DEFAULT_BATCH[:1], as_of="2024-01-08", base=timeline.next())
+    # The new evaluation's basis seeds its sync Job strictly between J1's reclaim and the REAL
+    # release (no execution attempt exists, so the watermark is J1's reclaim) and NO reconciliation
+    # row: the release itself is the clean standalone reconciliation of the basis window.
+    sync_at = world.j1_completed_at + (recon_a - world.j1_completed_at) / 2
+    new_run = evaluation(
+        DEFAULT_BATCH[:1],
+        as_of="2024-01-08",
+        base=sync_at - timedelta(minutes=1),
+        with_reconciliation=False,
+    )
     assert new_run != world.risk_run
     with session_scope(load_settings()) as session:
         quantity = session.execute(
@@ -1047,7 +1026,7 @@ def test_b3_new_start_after_end_through_run_paper_session(
         trigger_source="pytest",
         settings=load_settings(),
         execution_service=broker.service(),
-        broker_client=_clean_fake_broker(),
+        broker_client=scripted_read_broker(),
         job_id=j4,
     )
     # the D-15 session gate was evaluated exactly once, answered None, and did not block
@@ -1102,7 +1081,8 @@ def test_b3_new_start_after_end_through_run_paper_session(
     )
     _record(http, world, gate, flagged=[j1, j4], expect=GateCode.RECONCILIATION_REQUIRED)
 
-    # settle exactly as C5 of regression (a): A5 passes after settling
+    # post-POST settlement only; not G-1 closure evidence (the release above is a real
+    # reconciliation). Settle as C5 of regression (a): A5 passes after settling.
     _filled_sync(order_id)
     recon_b = timeline.next()
     assert recon_b > finished_j4
