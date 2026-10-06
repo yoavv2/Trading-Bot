@@ -44,7 +44,20 @@ def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
 
 
 class StrategyRun(TimestampedModel, Base):
-    """Minimal persisted execution record for Phase 1 dry runs."""
+    """Minimal persisted execution record for Phase 1 dry runs.
+
+    Database guards (migration 0030, review WR-01 / G-2; triggers only, no schema change):
+
+    - ``job_id``, ``run_type`` and ``strategy_id`` of an EVIDENCE-BEARING run (``paper_execution``
+      or ``reconciliation``, or a run referenced by ``paper_orders`` / ``order_events`` /
+      ``order_submission_attempts``) are immutable, including the ``ON DELETE SET NULL`` of a Job
+      delete (that delete aborts as a whole); converting any run INTO ``paper_execution`` or
+      ``reconciliation`` is refused too. Non-evidence runs keep any change.
+    - A ``reconciliation`` run is complete-once: ``trigger_source`` never changes, and once the run
+      is completed ``status``, ``completed_at``, ``started_at``, ``error_message``,
+      ``result_summary`` and ``parameters_snapshot`` never change. The single pending -> completed
+      write of ``reconcile_paper_execution`` stays legal.
+    """
 
     __tablename__ = "strategy_runs"
     __table_args__ = (

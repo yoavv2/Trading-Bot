@@ -50,7 +50,17 @@ _STATUS_VALUES_SQL = ", ".join(f"'{member.value}'" for member in AccountReconcil
 
 
 class AccountReconciliationRun(TimestampedModel, Base):
-    """One stored account-level reconciliation result (no owner reference)."""
+    """One stored account-level reconciliation result (no owner reference).
+
+    Complete-once from migration 0030 (review WR-01 / G-2; a trigger, no schema change):
+    ``trigger_source`` and ``scope`` never change, and once the run is completed (``completed_at``
+    set, or status ``succeeded`` / ``failed``) ``status``, ``completed_at``, ``started_at``,
+    ``as_of_session``, ``blocks_execution``, ``finding_count``, ``blocking_count``,
+    ``error_message``, ``findings``, ``account_divergence``, ``unexplained_exposure``,
+    ``classification_summary``, ``unresolved_reasons`` and ``result_summary`` never change. The
+    single pending -> completed write of ``reconcile_account`` stays legal. ``job_id`` is excepted:
+    no gate reads it and its ``ON DELETE SET NULL`` keeps working.
+    """
 
     __tablename__ = "account_reconciliation_runs"
     __table_args__ = (

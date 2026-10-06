@@ -71,7 +71,14 @@ def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
 
 
 class Job(TimestampedModel, Base):
-    """Generic, operation-agnostic unit of orchestrated work."""
+    """Generic, operation-agnostic unit of orchestrated work.
+
+    From migration 0030 (review WR-01 / G-2; a trigger, no schema change) ``job_type`` of a Job
+    behind a standalone reconciliation run (a ``strategy_runs`` row with ``run_type``
+    ``reconciliation`` and ``trigger_source`` ``'job'``) is immutable, because the recovery gate
+    reads ``job_type == 'reconciliation'`` through that link. Every other column, and the
+    ``job_type`` of every other Job, is unchanged: all Job lifecycle writes stay legal.
+    """
 
     __tablename__ = "jobs"
     __table_args__ = (
