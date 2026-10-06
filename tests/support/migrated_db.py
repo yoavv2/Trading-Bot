@@ -40,7 +40,11 @@ def _connect_admin() -> psycopg.Connection:
 
 
 @contextmanager
-def migrated_database(monkeypatch: pytest.MonkeyPatch, prefix: str) -> Iterator[str]:
+def migrated_database(
+    monkeypatch: pytest.MonkeyPatch, prefix: str, *, revision: str = "head"
+) -> Iterator[str]:
+    """``revision`` stops the upgrade at that revision (default: the single head)."""
+
     database_name = f"{prefix}_{uuid.uuid4().hex[:8]}"
     params = _admin_params()
     try:
@@ -57,7 +61,7 @@ def migrated_database(monkeypatch: pytest.MonkeyPatch, prefix: str) -> Iterator[
     monkeypatch.setenv("TRADING_PLATFORM_DATABASE__NAME", database_name)
     clear_settings_cache()
     clear_engine_cache()
-    command.upgrade(build_alembic_config(), "head")
+    command.upgrade(build_alembic_config(), revision)
     try:
         yield database_name
     finally:

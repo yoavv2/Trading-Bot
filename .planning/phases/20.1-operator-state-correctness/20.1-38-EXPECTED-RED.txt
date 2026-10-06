@@ -1,0 +1,134 @@
+20.1-38 EXPECTED RED: tests/test_phase20_1_e1_guard_windows.py against the UNAMENDED migration 0030
+=====================================================================================================
+
+Run: 2026-10-06, HEAD 9e111e4 (0030 as committed in b35d98a; 0028 / 0029 unchanged), the new module plus
+the `revision=` parameter of tests/support/migrated_db.py (test infrastructure only), throwaway databases.
+Command: PYTHONPATH=src .venv/bin/pytest tests/test_phase20_1_e1_guard_windows.py -q -p no:cacheprovider
+Result: 50 failed, 0 passed.
+
+Why each group is red (the reason is the one the test exists for, not an arrangement error):
+
+* E1 (a) pre-run, (b) uncommitted run INSERT, (c) TEMP shadow x 3 caller search paths: the retype of the
+  reconciliation Job to 'backtest' is ACCEPTED, and afterwards the Job is 'backtest', the dirty run is no
+  longer the newest standalone strategy reconciliation and the recovery gate is None (released by the
+  older clean pair). This is the E1 effect, reproduced on the product path through the gate.
+* Table-reading arms x 4 shadows (TEMP under 3 caller search paths, a caller-owned schema first):
+  - guard 4 EXISTS arm, guard 1 EXISTS arms (order origin, order event, attempt), 0029 R arm (run
+    referenced only by an attempt): ACCEPTED (the shadow answered the unqualified lookup);
+  - 0029 R arm, run referenced only by an order event: refused by the order_events delete guard of the
+    cascade (wrong guard: the R arm was bypassed);
+  - 0029 J arm: refused by 0030's SET NULL link check of the cascade (wrong guard: the J arm was bypassed),
+    and under caller path 'pg_temp' alone with SQLSTATE 42P01 "relation paper_orders does not exist"
+    (the unpinned 0030 link function resolved its names through the caller's path).
+* Operators planted in public (PUBLIC holds CREATE on public on PostgreSQL 14): every case ACCEPTED -
+  guard 4 column arm (no column arm exists yet), guard 4 EXISTS arm (varchar '=' never equal), guard 1
+  run_type (enum '=' always equal), guard 2 status / trigger_source, guard 3 status / trigger_source.
+* Approved scope widening (queued, running, completed, account-scope reconciliation Jobs; no Job turned
+  INTO a reconciliation Job): the first retype that is now refused is ACCEPTED. The legitimate writes that
+  precede it in each test (claim, lease renewal, progress; unrelated retypes) succeed on the old code too.
+* Configuration pins: phase20_1_evidence_no_delete has proconfig None; the 0030 link function reads
+  unqualified paper_orders / order_events / order_submission_attempts; the 0030 source has no
+  "OLD.job_type::text = 'reconciliation'"; at head the delete guard's pg_proc row equals a database that
+  never ran 0030 (expected: only proconfig differs).
+
+Per-node reasons (junit failure messages, trimmed):
+FAILED test_e1a_retype_before_the_run_exists_is_refused_and_the_dirty_run_keeps_blocking
+    AssertionError: E1 window OPEN: the retype was accepted; afterwards {'job_type': 'backtest', 'newest_strategy_reconciliation_is_the_dirty_run': False, 'gate': None} assert not True
+FAILED test_e1b_retype_racing_the_uncommitted_run_insert_is_refused
+    AssertionError: E1 window OPEN: the retype was accepted; afterwards {'job_type': 'backtest', 'newest_strategy_reconciliation_is_the_dirty_run': False, 'gate': None} assert not True
+FAILED test_e1c_temp_shadow_cannot_retype_the_job_behind_a_committed_dirty_run[default_path]
+    AssertionError: E1 window OPEN: the retype was accepted; afterwards {'job_type': 'backtest', 'newest_strategy_reconciliation_is_the_dirty_run': False, 'gate': None} assert not True
+FAILED test_e1c_temp_shadow_cannot_retype_the_job_behind_a_committed_dirty_run[temp_first]
+    AssertionError: E1 window OPEN: the retype was accepted; afterwards {'job_type': 'backtest', 'newest_strategy_reconciliation_is_the_dirty_run': False, 'gate': None} assert not True
+FAILED test_e1c_temp_shadow_cannot_retype_the_job_behind_a_committed_dirty_run[temp_only]
+    AssertionError: E1 window OPEN: the retype was accepted; afterwards {'job_type': 'backtest', 'newest_strategy_reconciliation_is_the_dirty_run': False, 'gate': None} assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_type_exists_arm-temp_default_path]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_type_exists_arm-temp_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_type_exists_arm-temp_only]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_type_exists_arm-caller_schema_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_origin-temp_default_path]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_origin-temp_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_origin-temp_only]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_origin-caller_schema_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_event-temp_default_path]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_event-temp_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_event-temp_only]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_order_event-caller_schema_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_attempt-temp_default_path]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_attempt-temp_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_attempt-temp_only]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[link_attempt-caller_schema_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_attempt-temp_default_path]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_attempt-temp_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_attempt-temp_only]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_attempt-caller_schema_first]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_order_event-temp_default_path]
+    AssertionError: order_events rows are evidence and cannot be deleted (retention policy) assert ('order_events rows are evidence and cannot be deleted (retention policy)' is not None and False)
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_order_event-temp_first]
+    AssertionError: order_events rows are evidence and cannot be deleted (retention policy) assert ('order_events rows are evidence and cannot be deleted (retention policy)' is not None and False)
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_order_event-temp_only]
+    AssertionError: order_events rows are evidence and cannot be deleted (retention policy) assert ('order_events rows are evidence and cannot be deleted (retention policy)' is not None and False)
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[run_delete_order_event-caller_schema_first]
+    AssertionError: order_events rows are evidence and cannot be deleted (retention policy) assert ('order_events rows are evidence and cannot be deleted (retention policy)' is not None and False)
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_delete_reconciliation_evidence-temp_default_path]
+    AssertionError: strategy_runs evidence link is immutable (job_id / run_type / strategy_id UPDATE rejected) assert ('strategy_runs evidence link is immutable (job_id / run_type / strategy_id UPDATE rejected)' is not None and False)
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_delete_reconciliation_evidence-temp_first]
+    AssertionError: strategy_runs evidence link is immutable (job_id / run_type / strategy_id UPDATE rejected) assert ('strategy_runs evidence link is immutable (job_id / run_type / strategy_id UPDATE rejected)' is not None and False)
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_delete_reconciliation_evidence-temp_only]
+    AssertionError: refused with SQLSTATE 42P01 (relation "paper_orders" does not exist), not by a guard (23000); 55P03 would be a lock wait assert '42P01' == '23000' - 23000 + 42P01
+FAILED test_table_reading_guard_arms_ignore_shadows_and_the_caller_search_path[job_delete_reconciliation_evidence-caller_schema_first]
+    AssertionError: strategy_runs evidence link is immutable (job_id / run_type / strategy_id UPDATE rejected) assert ('strategy_runs evidence link is immutable (job_id / run_type / strategy_id UPDATE rejected)' is not None and False)
+FAILED test_an_operator_planted_in_public_cannot_change_a_0030_verdict[job_type_column_arm]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_an_operator_planted_in_public_cannot_change_a_0030_verdict[job_type_exists_arm]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_an_operator_planted_in_public_cannot_change_a_0030_verdict[link_run_type]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_an_operator_planted_in_public_cannot_change_a_0030_verdict[reconciliation_run_status]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_an_operator_planted_in_public_cannot_change_a_0030_verdict[reconciliation_run_trigger_source]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_an_operator_planted_in_public_cannot_change_a_0030_verdict[account_run_status]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_an_operator_planted_in_public_cannot_change_a_0030_verdict[account_run_trigger_source]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_a_queued_reconciliation_job_is_typed_for_good_and_still_cancellable
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_every_lifecycle_write_of_a_reconciliation_job_stays_legal[strategy_scope_succeeds]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_every_lifecycle_write_of_a_reconciliation_job_stays_legal[account_scope_fails]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_every_lifecycle_write_of_a_reconciliation_job_stays_legal[running_cancelled]
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_a_real_account_reconciliation_job_completes_and_keeps_its_type
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_unrelated_job_types_stay_free_and_no_job_becomes_a_reconciliation_job
+    AssertionError: ACCEPTED: the statement went through (the window is open) assert not True
+FAILED test_guard_functions_run_with_the_trusted_search_path
+    AssertionError: phase20_1_evidence_no_delete assert None == ['search_path=pg_catalog, public, pg_temp']
+FAILED test_0030_function_bodies_reference_only_schema_qualified_tables
+    AssertionError: ('phase20_1_strategy_run_link_immutable', ['paper_orders', 'order_events', 'order_submission_attempts']) assert False
+FAILED test_job_type_guard_literals_match_the_application_constants
+    assert "OLD.job_type::text = 'reconciliation'" in '"""Phase 20.1 UPDATE guards for recovery and reconciliation evidence (review WR-01, gap G-2).\n\n0028 made the attemp... _drop_job_type_guard()\n _drop_account_run_guard()\n _drop_reconciliation_run_guard()\n _drop_link_guard()\n'
+FAILED test_downgrade_restores_every_0029_function_exactly_and_reupgrade_rearms
+    AssertionError: phase20_1_evidence_no_delete assert {'proname': '...': False, ...} == {'proname': '...': False, ...} Omitting 14 identical items, use -vv to show Differing items: {'proconfig': None} != {'proconfig': ['search_path=pg_catalog, public, pg_temp']} Use -v to get more diff
