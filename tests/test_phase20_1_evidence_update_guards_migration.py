@@ -14,6 +14,9 @@ Fixtures are direct INSERTs (migration 0029 makes the evidence rows undeletable)
 this module is a Job delete: it is the foreign key ``ON DELETE SET NULL`` path under test. The pins
 are head-AGNOSTIC: Phase 21 chains its own migration on this revision, so nothing compares against
 a literal head.
+
+The E1 correction of the Job-type guard (every reconciliation Job keeps its type, trusted lookups)
+is pinned in ``tests/test_phase20_1_e1_guard_windows.py`` (plan 20.1-38).
 """
 
 from __future__ import annotations
@@ -157,7 +160,10 @@ FUNCTIONS_0029 = (
 LINK_REFUSAL = "strategy_runs evidence link is immutable"
 RECONCILIATION_RUN_REFUSAL = "reconciliation run is complete-once"
 ACCOUNT_RUN_REFUSAL = "account reconciliation run is complete-once"
-JOB_TYPE_REFUSAL = "job_type of a Job behind a standalone reconciliation run is immutable"
+JOB_TYPE_REFUSAL = (
+    "job_type of a reconciliation Job or of a Job behind a standalone reconciliation run is "
+    "immutable"
+)
 
 PENDING = OrderLifecycleState.PENDING_SUBMISSION
 LEASE_OWNER = "update-guards-test-worker"
@@ -461,7 +467,9 @@ def test_standalone_trigger_literal_matches_the_application_constant() -> None:
         / "0030_phase20_1_evidence_update_guards.py"
     ).read_text()
     assert STANDALONE_TRIGGER_SOURCE == "job"
-    assert f"sr.trigger_source = '{STANDALONE_TRIGGER_SOURCE}'" in source
+    # 20.1-38 (E1): every compared varchar is cast to text (pg_catalog's operator, never one planted
+    # in public); tests/test_phase20_1_e1_guard_windows.py pins the 'reconciliation' literal too.
+    assert f"sr.trigger_source::text = '{STANDALONE_TRIGGER_SOURCE}'" in source
 
 
 # ---------------------------------------------------------------------------

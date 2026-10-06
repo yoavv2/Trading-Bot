@@ -57,6 +57,10 @@ class StrategyRun(TimestampedModel, Base):
       is completed ``status``, ``completed_at``, ``started_at``, ``error_message``,
       ``result_summary`` and ``parameters_snapshot`` never change. The single pending -> completed
       write of ``reconcile_paper_execution`` stays legal.
+
+    The guard functions name every table ``public.<table>`` and run with ``search_path =
+    pg_catalog, public, pg_temp`` (as does the 0029 delete guard), so a caller's search path,
+    TEMP table or planted operator cannot change a verdict (E1 correction, 20.1-38).
     """
 
     __tablename__ = "strategy_runs"

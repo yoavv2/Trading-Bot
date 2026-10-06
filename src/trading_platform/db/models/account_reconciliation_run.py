@@ -59,7 +59,8 @@ class AccountReconciliationRun(TimestampedModel, Base):
     ``error_message``, ``findings``, ``account_divergence``, ``unexplained_exposure``,
     ``classification_summary``, ``unresolved_reasons`` and ``result_summary`` never change. The
     single pending -> completed write of ``reconcile_account`` stays legal. ``job_id`` is excepted:
-    no gate reads it and its ``ON DELETE SET NULL`` keeps working.
+    no gate reads it and its ``ON DELETE SET NULL`` keeps working. The guard runs with ``search_path
+    = pg_catalog, public, pg_temp`` and compares text-cast values (E1 correction, 20.1-38).
     """
 
     __tablename__ = "account_reconciliation_runs"
