@@ -655,20 +655,16 @@ def test_reconciliation_statement_budget_is_independent_of_order_count(
     assert fifty_patched == one_patched
 
 
-def test_findings_unchanged_by_the_input_plan(recon_db: str) -> None:
-    """CURRENT behaviour, pinned so this input-only plan is provably behaviour-neutral: the matcher
-    does not read the verdict yet. 20.1-34 changes the matcher rule and REVERSES the two
-    MISSING_BROKER expectations below (the G-1 shape and the recorded-rejection shape)."""
+def test_findings_follow_the_shared_verdict(recon_db: str) -> None:
+    """G-1 (20.1-34, user decision 2026-10-06): the matcher reads the shared verdict this module
+    loads. An unmatched pre-send order is reported MISSING_BROKER UNLESS the verdict is
+    PROVEN_NOT_SENT (the G-1 shape ``op_bound_pending_count1_no_attempts``) or REJECTED (the
+    recorded-rejection shape ``pending_rejected``); UNESTABLISHED (``legacy_failed``,
+    ``legacy_pending_count0``, ``failed_ambiguous_then_rejected``: ambiguity dominates a
+    rejection) and BROKER_EVIDENCE keep the finding. Every one of the 24 shapes, in BOTH scopes,
+    against a broker that holds no order, each with the verdict in the finding details."""
 
-    ids = {
-        shape_id: _build_shape(shape_id)
-        for shape_id in (
-            "op_bound_pending_count1_no_attempts",
-            "pending_rejected",
-            "legacy_failed",
-            "legacy_pending_count0",
-        )
-    }
+    ids = {shape_id: _build_shape(shape_id) for shape_id in sorted(SHAPES)}
     strategy_report = reconcile_paper_execution(
         OWNER,
         as_of_session=SESSION_DATE,
@@ -679,12 +675,31 @@ def test_findings_unchanged_by_the_input_plan(recon_db: str) -> None:
     account_report = reconcile_account(settings=load_settings(), broker_client=_flat_broker())
 
     missing_broker = ReconciliationFinding.MISSING_BROKER.name
-    expected = {
-        (missing_broker, str(ids["op_bound_pending_count1_no_attempts"])),
-        (missing_broker, str(ids["pending_rejected"])),
+    explained = {PROVEN_NOT_SENT, REJECTED_VERDICT}
+    reported = {
+        shape_id for shape_id, spec in SHAPES.items() if spec.expected not in explained
     }
+    assert reported == (
+        _EXPECTED_IDS_BY_VERDICT[UNESTABLISHED] | _EXPECTED_IDS_BY_VERDICT[BROKER_EVIDENCE]
+    )
+    # the shapes the plan names
+    assert "op_bound_pending_count1_no_attempts" not in reported
+    assert "pending_rejected" not in reported
+    assert {"legacy_failed", "legacy_pending_count0", "failed_ambiguous_then_rejected"} <= reported
+
+    expected = {(missing_broker, str(ids[shape_id])) for shape_id in reported}
     assert {(f.event_type, f.paper_order_id) for f in strategy_report.findings} == expected
     assert {(f["event_type"], f["paper_order_id"]) for f in account_report.findings} == expected
+    verdict_by_order = {
+        str(order_id): SHAPES[shape_id].expected.value for shape_id, order_id in ids.items()
+    }
+    for finding in strategy_report.findings:
+        assert finding.details["submission_evidence"] == verdict_by_order[finding.paper_order_id]
+    for account_finding in account_report.findings:
+        assert (
+            account_finding["details"]["submission_evidence"]
+            == verdict_by_order[account_finding["paper_order_id"]]
+        )
     assert strategy_report.blocks_execution is True
     assert account_report.blocks_execution is True
 

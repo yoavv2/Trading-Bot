@@ -7,8 +7,11 @@ values, exactly like ``test_reconciliation_types.py``.
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 from decimal import Decimal
+
+import pytest
 
 from trading_platform.services.alpaca import (
     BrokerFillSnapshot,
@@ -16,6 +19,7 @@ from trading_platform.services.alpaca import (
     BrokerPositionSnapshot,
 )
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
+from trading_platform.services.reconciliation import matcher
 from trading_platform.services.reconciliation.findings import (
     Finding,
     ReconciliationFinding,
@@ -31,6 +35,7 @@ from trading_platform.services.reconciliation.snapshot import (
     LocalFillSnapshot,
     LocalOrderSnapshot,
     LocalPositionSnapshot,
+    LocalSubmissionEvidence,
 )
 
 
@@ -75,6 +80,7 @@ def _local_order(
     status: str = "submitted",
     broker_status: str | None = "new",
     submission_attempt_count: int = 1,
+    submission_evidence: LocalSubmissionEvidence = LocalSubmissionEvidence.NOT_COMPUTED,
 ) -> LocalOrderSnapshot:
     return LocalOrderSnapshot(
         paper_order_id=paper_order_id,
@@ -88,6 +94,7 @@ def _local_order(
         broker_status=broker_status,
         submission_attempt_count=submission_attempt_count,
         sync_failure_count=0,
+        submission_evidence=submission_evidence,
     )
 
 
@@ -266,16 +273,120 @@ def test_local_active_order_with_no_broker_match_is_missing_broker():
     assert findings[0].paper_order_id == "order-1"
 
 
-def test_local_pending_submission_with_zero_attempts_and_no_broker_match_is_not_a_finding():
-    local = _local_order(status="pending_submission", submission_attempt_count=0)
+# --- G-1 (20.1-34, user decision 2026-10-06): the shared verdict decides ----------------------
+#
+# An unmatched local order in a PRE-SEND status (pending_submission / submission_failed) produces
+# MISSING_BROKER UNLESS ``submission_evidence`` is PROVEN_NOT_SENT or REJECTED (the shared
+# classifier over the complete attempt history, carried across the boundary by the loader). The
+# attempt counter proves nothing and is no longer read by the rule.
+
+_ALL_VERDICTS = list(LocalSubmissionEvidence)
+_EXPLAINED = (LocalSubmissionEvidence.PROVEN_NOT_SENT, LocalSubmissionEvidence.REJECTED)
+_NOT_EXPLAINED = (
+    LocalSubmissionEvidence.UNESTABLISHED,
+    LocalSubmissionEvidence.BROKER_EVIDENCE,
+    LocalSubmissionEvidence.NOT_COMPUTED,
+)
+_PRE_SEND = ("pending_submission", "submission_failed")
+
+
+@pytest.mark.parametrize("status", _PRE_SEND)
+@pytest.mark.parametrize("count", [0, 1])
+@pytest.mark.parametrize("evidence", _ALL_VERDICTS, ids=lambda v: v.value)
+def test_unmatched_pre_send_order_is_missing_broker_unless_explained(status, count, evidence):
+    local = _local_order(
+        status=status, submission_attempt_count=count, submission_evidence=evidence
+    )
+    findings, _ = _match_orders([local], [])
+    if evidence in _EXPLAINED:
+        assert findings == ()
+    else:
+        assert len(findings) == 1
+        assert findings[0].category is ReconciliationFinding.MISSING_BROKER
+        assert findings[0].paper_order_id == "order-1"
+        assert findings[0].blocks_execution is True
+
+
+@pytest.mark.parametrize("status", ["submitted", "partially_filled"])
+@pytest.mark.parametrize("evidence", _ALL_VERDICTS, ids=lambda v: v.value)
+def test_broker_active_statuses_ignore_the_verdict(status, evidence):
+    local = _local_order(status=status, submission_evidence=evidence)
+    findings, _ = _match_orders([local], [])
+    assert [f.category for f in findings] == [ReconciliationFinding.MISSING_BROKER]
+
+
+@pytest.mark.parametrize("status", ["unknown", "filled", "canceled", "rejected", "expired"])
+@pytest.mark.parametrize("evidence", _ALL_VERDICTS, ids=lambda v: v.value)
+def test_other_statuses_unchanged(status, evidence):
+    local = _local_order(status=status, submission_evidence=evidence)
     findings, _ = _match_orders([local], [])
     assert findings == ()
 
 
-def test_local_submission_failed_with_no_broker_match_is_not_a_finding():
-    local = _local_order(status="submission_failed", submission_attempt_count=3)
-    findings, _ = _match_orders([local], [])
-    assert findings == ()
+@pytest.mark.parametrize("status", _PRE_SEND)
+@pytest.mark.parametrize("evidence", _EXPLAINED, ids=lambda v: v.value)
+def test_explained_order_returned_by_the_broker_is_never_hidden(status, evidence):
+    # The suppression lives only in the unmatched-local loop: an order the broker DOES report is
+    # still matched by client_order_id (STATE_MISMATCH against its local pre-send status) ...
+    local = _local_order(status=status, broker_status=None, submission_evidence=evidence)
+    findings, _ = _match_orders([local], [_broker_order()])
+    assert [f.category for f in findings] == [ReconciliationFinding.STATE_MISMATCH]
+    assert findings[0].paper_order_id == "order-1"
+    assert findings[0].broker_order_id == "broker-1"
+
+    # ... and matched by broker_order_id when the client_order_id differs ...
+    by_broker_id = _local_order(
+        status=status,
+        client_order_id="client-other",
+        broker_order_id="broker-1",
+        broker_status=None,
+        submission_evidence=evidence,
+    )
+    findings, _ = _match_orders([by_broker_id], [_broker_order()])
+    assert [f.category for f in findings] == [ReconciliationFinding.STATE_MISMATCH]
+
+    # ... and unexpected broker activity (no local counterpart) still blocks, whatever the
+    # verdict of the explained local order beside it.
+    unrelated = _broker_order(broker_order_id="broker-9", client_order_id="client-9")
+    findings, _ = _match_orders([local], [unrelated])
+    assert [f.category for f in findings] == [ReconciliationFinding.MISSING_LOCAL]
+    assert findings[0].broker_order_id == "broker-9"
+
+
+def test_absence_is_explained_only_by_proven_not_sent_or_rejected():
+    assert matcher._ABSENCE_EXPLAINED_EVIDENCE == frozenset(
+        {LocalSubmissionEvidence.PROVEN_NOT_SENT, LocalSubmissionEvidence.REJECTED}
+    )
+    assert isinstance(matcher._ABSENCE_EXPLAINED_EVIDENCE, frozenset)
+    assert matcher._PRE_SEND_STATUSES == frozenset({"pending_submission", "submission_failed"})
+    assert matcher._BROKER_ACTIVE_STATUSES == frozenset({"submitted", "partially_filled"})
+    # fail closed: every other verdict (and the default of an order whose verdict was not loaded)
+    # never explains the absence
+    for verdict in LocalSubmissionEvidence:
+        assert (verdict in matcher._ABSENCE_EXPLAINED_EVIDENCE) is (verdict in _EXPLAINED)
+    default = _local_order(status="pending_submission", submission_attempt_count=1)
+    assert default.submission_evidence is LocalSubmissionEvidence.NOT_COMPUTED
+    assert matcher._is_local_order_active(default) is True
+
+
+@pytest.mark.parametrize("status", ["pending_submission", "submission_failed", "submitted"])
+@pytest.mark.parametrize("count", [0, 3])
+@pytest.mark.parametrize("evidence", _NOT_EXPLAINED, ids=lambda v: v.value)
+def test_missing_broker_details_carry_the_verdict(status, count, evidence):
+    local = _local_order(
+        status=status, submission_attempt_count=count, submission_evidence=evidence
+    )
+    (finding,) = _match_orders([local], [])[0]
+    assert finding.details["submission_evidence"] == evidence.value
+    # the counter is still reported for audit, it is just no longer the rule
+    assert finding.details["submission_attempt_count"] == count
+    assert finding.details["local_status"] == status
+
+
+def test_rule_does_not_read_the_attempt_counter():
+    source = inspect.getsource(matcher._is_local_order_active)
+    assert "submission_attempt_count" not in source
+    assert "submission_evidence" in source
 
 
 def test_matched_order_with_diverging_status_is_state_mismatch():
