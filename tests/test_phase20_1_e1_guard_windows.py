@@ -1125,6 +1125,8 @@ def test_the_job_type_trigger_cannot_bind_to_an_operator_planted_before_the_migr
                 "CREATE OPERATOR public.= (LEFTARG = varchar, RIGHTARG = varchar, "
                 "FUNCTION = public.e1_preplanted_eq)"
             )
+            # The plant decides a varchar comparison for an ordinary session (never vacuous).
+            assert _scalar("SELECT 'a'::varchar = 'b'::varchar") is True
             _fresh_caches()
             command.upgrade(build_alembic_config(), "head")
             _fresh_caches()

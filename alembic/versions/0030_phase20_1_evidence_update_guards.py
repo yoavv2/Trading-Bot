@@ -40,11 +40,11 @@ Four guards (triggers and functions only; ERRCODE ``integrity_constraint_violati
    ``unresolved_reasons`` and ``result_summary`` never change. ``job_id`` is deliberately NOT
    frozen: no gate reads it and its ``ON DELETE SET NULL`` must keep working.
 4. ``trg_jobs_reconciliation_job_type_immutable`` (``BEFORE UPDATE OF job_type ... WHEN
-   OLD.job_type::text IS DISTINCT FROM NEW.job_type::text``; the explicit casts store exactly what a
-   clean database stores anyway, and keep the WHEN clause, which binds its operator when this
-   migration runs, from binding to an ``=`` planted in ``public`` beforehand). Every actual
-   ``job_type`` change is refused when
-   OLD or NEW ``job_type`` is ``'reconciliation'`` (``services/broker_jobs.py``
+   OLD.job_type::text IS DISTINCT FROM NEW.job_type::text``; on a clean database the explicit
+   casts give the same definition text, operator and meaning as the uncast form, and they keep the
+   WHEN clause, which binds its operator when this migration runs, from binding to an ``=``
+   planted in ``public`` beforehand). Every actual ``job_type`` change is refused when OLD or NEW
+   ``job_type`` is ``'reconciliation'`` (``services/broker_jobs.py``
    ``RECONCILIATION_JOB_TYPE``): a queued, running or completed reconciliation Job of either scope
    never changes type, and no Job becomes one. These column arms decide without reading any table,
    so they hold before the Job's run exists and while its INSERT is uncommitted. In addition a Job
@@ -78,16 +78,20 @@ trusted lookups in every function of this revision and in two 0029 guards:
   ``paper_orders_origin_run_immutable`` (CR-01's durable linkage: its uuid comparison would
   otherwise follow a caller path that lists ``public`` before ``pg_catalog``, where an
   identical-signature ``=`` could be planted; with ``pg_catalog`` first it cannot win). The two
-  other 0029 functions look no name up and keep their configuration, as does the 0028 function.
-  Downgrade RESETs exactly that setting, which restores each 0029 function as 0029 created it.
+  other 0029 functions look no name up and keep their configuration. The 0028 function (it calls
+  ``to_jsonb`` and compares jsonb) is outside this revision's scope and keeps its configuration
+  too. Downgrade RESETs exactly that setting, which restores each 0029 function as 0029 created it.
 
 What the trusted lookups do NOT close (pre-existing, recorded for the user's decision): the 0029
 delete guard's J arm compares a varchar (``OLD.job_type IN (...)``, body unchanged by decision),
 and the application's own reads (the recovery gate compares ``job_type`` and ``trigger_source`` as
 varchar) resolve operators through a path that contains ``public``; an exact-match
 ``=(varchar, varchar)`` planted there decides those comparisons. The 0028 / 0025 / 0026 functions
-call ``to_jsonb`` and compare jsonb under the caller's path. The planted-operator class closes only
-with revoking PUBLIC's CREATE on ``public`` (role / privilege work, outside this phase).
+call ``to_jsonb`` and compare jsonb under the caller's path: a ``to_jsonb`` planted in ``public`` for
+the exact row type wins even on the default path (an exact argument type beats pg_catalog's
+polymorphic one), and so would an identical-signature ``=`` under a path listing ``public`` first.
+The planted-object class closes only with revoking PUBLIC's CREATE on ``public`` (role / privilege
+work, outside this phase).
 
 No function is SECURITY DEFINER. JSON columns have no equality operator in PostgreSQL, so every
 comparison casts both sides to jsonb; an explicit column list is compared (never the whole row), so
