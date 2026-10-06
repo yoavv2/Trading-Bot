@@ -43,7 +43,9 @@ by this module.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -60,15 +62,20 @@ from tests.test_cr01_ambiguity_and_agreement_e2e import _null_outcome, _read_tim
 from tests.test_cr01_reuse_e2e import (  # noqa: F401  (http and _seams are fixtures)
     PENDING,
     _a5_passed,
+    _agree,
     _order,
+    _saf01_shape,
     _seams,
     _start_job,
     http,
 )
 from tests.test_g1_real_reconciliation_release_e2e import (
+    REJECTION_SCOPES,
+    SAF01_MATRIX,
     SCOPES,
     _findings_of,
     _GateSpy,
+    _recorded_rejection_shape,
 )
 from tests.test_paper_execution import (  # noqa: F401  (migrated_paper_db is the database fixture)
     _CountingBrokerClient,
@@ -87,7 +94,11 @@ from tests.test_paper_session_operations import (
     count,
     evaluation,
 )
-from tests.test_reconciliation_shared_evidence import _broker_twin
+from tests.test_reconciliation_shared_evidence import (
+    _attribution,
+    _broker_twin,
+    _unrecognized_broker_order,
+)
 
 from trading_platform.core import clock
 from trading_platform.core.settings import load_settings
@@ -98,6 +109,8 @@ from trading_platform.db.models import (
     PaperOrder,
 )
 from trading_platform.db.session import session_scope
+from trading_platform.services.alpaca import BrokerOrderSnapshot
+from trading_platform.services.execution.operations import end_operation
 from trading_platform.services.execution.submit_orders import run_paper_session
 from trading_platform.services.recovery import GateCode, strategy_recovery_status
 
@@ -160,11 +173,11 @@ def _row_counts() -> tuple[int, int]:
     return count(PaperOrder), count(OrderSubmissionAttempt)
 
 
-def _counting_read_broker() -> _CountingBrokerClient:
+def _counting_read_broker(orders: Sequence[BrokerOrderSnapshot] = ()) -> _CountingBrokerClient:
     """A read-side broker that records every call: a D-15 refusal makes none."""
 
     return _CountingBrokerClient(
-        orders=[], fills=[], positions=[], account=scripted_read_broker().get_account()
+        orders=list(orders), fills=[], positions=[], account=scripted_read_broker().get_account()
     )
 
 
@@ -391,3 +404,244 @@ def test_ambiguous_submission_never_reconciles_clean(
     assert attempt_outcomes(cid1) == [(1, "ambiguous")]
     assert _order(order_id).broker_order_id is None
     assert _gate() is GateCode.OUTCOME_UNRESOLVED
+
+
+# ---------------------------------------------------------------------------
+# Tests 4 to 6: unexpected broker activity is never hidden by the G-1 suppression
+# ---------------------------------------------------------------------------
+
+MISMATCH_MATRIX = [
+    pytest.param(scope, mismatch, id=f"{scope}-{mismatch}")
+    for scope in SCOPES
+    for mismatch in ("quantity", "symbol")
+]
+
+
+def _end_operation(operation_id: uuid.UUID, reason: str) -> None:
+    """End (M12) the operation: the unsent intents are cancelled, nothing is released (D-20)."""
+
+    with session_scope(load_settings()) as session:
+        end_operation(session, operation_id, operator_reason=reason, actor="pytest")
+
+
+def _assert_start_refused_by_the_gate(
+    record_property: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    broker: S1Broker,
+    broker_orders: Sequence[BrokerOrderSnapshot],
+    gate: GateCode,
+) -> None:
+    """After End, a fresh evaluation of the same session is refused at BOTH Start entry points by
+    the recovery gate (``gate``), with zero broker reads, zero POST and no new order or attempt row.
+    The send side is ``broker`` itself, so any POST would show in its ``received``."""
+
+    assert _gate() is gate  # End never releases (D-20)
+    new_run = _fresh_evaluation_without_basis()
+    code = _conflict(new_run).code
+    record_property("start_validation_code", code)
+    assert code == gate.value, code
+    posts_before, rows_before = dict(broker.received), _row_counts()
+    read_broker = _counting_read_broker(broker_orders)
+    spy = _GateSpy(monkeypatch)
+    started = _start_session(new_run, broker=broker, read_broker=read_broker)
+    record_property("start_session_action", started.action)
+    assert spy.answers == [gate.value], spy.answers
+    assert started.action in {"blocked_outcome_unresolved", "blocked_reconciliation"}, (
+        started.action
+    )
+    assert read_broker.calls == []
+    assert broker.received == posts_before and _row_counts() == rows_before
+
+
+@pytest.mark.parametrize(("scope", "status"), SAF01_MATRIX)
+def test_unrecognized_broker_order_blocks_the_release(
+    http: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Any,
+    scope: str,
+    status: str,
+) -> None:
+    """A REAL reconciliation that would release the SAF-01 order is not clean when the broker also
+    holds an order nobody registered (non-platform client id, another symbol): the released order
+    is not reported, the unexpected activity IS, the report blocks and the gate reads
+    ``reconciliation_not_clean``; Continue and a Start stay refused with zero POST."""
+
+    world = _saf01_shape(status, monkeypatch, WallClockTimeline())
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    assert _order(order_id).status.value == status
+    assert attempt_outcomes(cid1) == [] and broker.received == {}
+    assert _gate() is GateCode.RECONCILIATION_REQUIRED  # it only awaits a clean reconciliation
+
+    unknown = _unrecognized_broker_order()
+    report, _job_id = _reconcile(scope, scripted_read_broker(orders=[unknown]))
+
+    # G-1 still explains the released order ...
+    assert _finding_types(report, order_id) == [], (scope, status)
+    # ... but the unexpected broker activity is reported, blocks, and is listed as unrecognized
+    missing_local = [
+        f
+        for f in _findings_of(report)
+        if f["event_type"] == "MISSING_LOCAL"
+        and f["details"].get("broker_order_id") == unknown.broker_order_id
+    ]
+    unrecognized = [item["broker_order_id"] for item in _attribution(report)["unrecognized_orders"]]
+    record_property("missing_local_findings", str(len(missing_local)))
+    record_property("unrecognized_orders", str(len(unrecognized)))
+    assert (missing_local and missing_local[0]["blocks_execution"] is True) or (
+        unknown.broker_order_id in unrecognized
+    )
+    assert report.blocks_execution is True
+
+    # the gate: the newest qualifying run after J1's effect is this dirty one
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+    assert gate is GateCode.RECONCILIATION_NOT_CLEAN
+    assert not _a5_passed()
+    assert _continue_conflict(op).code == "reconciliation_not_clean"
+
+    # after End a new Start is refused as well; nothing was ever POSTed
+    _end_operation(op, "g1 unrecognized broker order")
+    _assert_start_refused_by_the_gate(
+        record_property,
+        monkeypatch,
+        broker=broker,
+        broker_orders=[unknown],
+        gate=GateCode.RECONCILIATION_NOT_CLEAN,
+    )
+    assert broker.received == {} and attempt_outcomes(cid1) == []
+    assert _order(order_id).broker_order_id is None
+
+
+@pytest.mark.parametrize(("scope", "mismatch"), MISMATCH_MATRIX)
+def test_identity_mismatch_on_the_released_client_order_id_is_never_hidden(
+    http: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Any,
+    scope: str,
+    mismatch: str,
+) -> None:
+    """The broker holds an order with the released order's client_order_id but another quantity or
+    symbol. The order is MATCHED by its client_order_id (never MISSING_BROKER), the report blocks,
+    the gate reads ``reconciliation_not_clean`` and nothing is bound or POSTed.
+
+    What this proves, and what it does not: a standalone reconciliation never binds, and the Start
+    entry point is refused by the D-15 gate BEFORE its in-session recovery pass, so no binder runs
+    on this path and ``broker_order_id`` stays None because of that ordering. The D-07 identity
+    check of the binders is pinned at the service level (``tests/test_reconciliation_shared_evidence``,
+    20.1-35); it is not what is exercised here."""
+
+    world = _saf01_shape(PENDING, monkeypatch, WallClockTimeline())
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    overrides = {"quantity": "11"} if mismatch == "quantity" else {"symbol": "MSFT"}
+    twin = _broker_twin(order_id, **overrides)
+    assert twin.client_order_id == cid1
+    assert (twin.quantity, twin.symbol) != (_order(order_id).quantity, "AAPL")
+
+    report, _job_id = _reconcile(scope, scripted_read_broker(orders=[twin]))
+
+    # matched, not missing; the report blocks; record which mechanism blocks (either is enough)
+    types = _finding_types(report, order_id)
+    assert "MISSING_BROKER" not in types, (scope, mismatch, types)
+    state_mismatch = [
+        f for f in _findings_for(report, order_id) if f["event_type"] == "STATE_MISMATCH"
+    ]
+    anomalies = [
+        a["anomaly"]
+        for a in _attribution(report)["anomalies"]
+        if a["broker_order_id"] == twin.broker_order_id
+    ]
+    record_property("finding_types", ",".join(types))
+    record_property("attribution_anomalies", ",".join(anomalies))
+    assert (state_mismatch and state_mismatch[0]["blocks_execution"] is True) or anomalies
+    assert report.blocks_execution is True
+    assert _order(order_id).broker_order_id is None  # a reconciliation never binds
+
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+    assert gate is GateCode.RECONCILIATION_NOT_CLEAN
+    assert not _a5_passed()
+    assert _continue_conflict(op).code == "reconciliation_not_clean"
+
+    _end_operation(op, "g1 identity mismatch")
+    _assert_start_refused_by_the_gate(
+        record_property,
+        monkeypatch,
+        broker=broker,
+        broker_orders=[twin],
+        gate=GateCode.RECONCILIATION_NOT_CLEAN,
+    )
+    assert broker.received == {} and attempt_outcomes(cid1) == []  # zero POST, no new attempt
+    unbound = _order(order_id)
+    assert unbound.broker_order_id is None and unbound.broker_status is None
+    assert unbound.status.value == PENDING
+
+
+@pytest.mark.parametrize("scope", REJECTION_SCOPES)
+def test_broker_order_for_a_recorded_rejection_is_never_hidden(
+    http: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Any,
+    scope: str,
+) -> None:
+    """The broker answered 4xx and the rejection persist was lost (the recorded-rejection world of
+    20.1-34). A REAL reconciliation whose read broker nevertheless lists an order with that
+    client_order_id (the broker shows an order it had answered 4xx) MATCHES it: a blocking
+    STATE_MISMATCH, never MISSING_BROKER; the gate reads ``reconciliation_not_clean``, Continue is
+    refused, nothing is POSTed again and the local order is never bound."""
+
+    world = _recorded_rejection_shape(monkeypatch, WallClockTimeline())
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    assert broker.received == {cid1: 1}  # the one POST, answered 4xx
+    assert attempt_outcomes(cid1) == [(1, "rejected")]
+    assert _gate() is GateCode.RECONCILIATION_REQUIRED  # the REJECTED verdict is established
+
+    twin = dataclasses.replace(_broker_twin(order_id), broker_status="new")
+    assert twin.client_order_id == cid1
+    report, _job_id = _reconcile(scope, scripted_read_broker(orders=[twin]))
+
+    # matched as a STATE_MISMATCH, never explained away as a missing order
+    assert _finding_types(report, order_id) == ["STATE_MISMATCH"], scope
+    (finding,) = _findings_for(report, order_id)
+    assert finding["blocks_execution"] is True
+    assert finding["details"]["broker_order_id"] == twin.broker_order_id
+    assert report.blocks_execution is True
+
+    gate = assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+    assert gate is GateCode.RECONCILIATION_NOT_CLEAN
+    assert not _a5_passed()
+    assert _continue_conflict(op).code == "reconciliation_not_clean"
+
+    # zero additional POST, the attempt log is untouched, the order is never bound
+    assert broker.received == {cid1: 1}
+    assert attempt_outcomes(cid1) == [(1, "rejected")]
+    unbound = _order(order_id)
+    assert unbound.broker_order_id is None and unbound.broker_status is None
+    assert unbound.status.value == PENDING
+
+    _end_operation(op, "g1 recorded rejection broker order")
+    _assert_start_refused_by_the_gate(
+        record_property,
+        monkeypatch,
+        broker=broker,
+        broker_orders=[twin],
+        gate=GateCode.RECONCILIATION_NOT_CLEAN,
+    )
+    assert broker.received == {cid1: 1}
+    assert _order(order_id).broker_order_id is None
