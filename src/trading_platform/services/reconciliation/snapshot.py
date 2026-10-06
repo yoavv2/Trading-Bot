@@ -76,6 +76,21 @@ class ReconciliationIdentity:
 # ``raw_payload`` passthroughs — never a snapshot's business fields.
 
 
+class LocalSubmissionEvidence(enum.Enum):
+    """The shared verdict ``attempts.SubmissionEvidence`` carried across the reconciliation
+    boundary as a pure value (the attempts module imports the ORM), plus ``NOT_COMPUTED`` for an
+    order whose verdict was not loaded (fail closed: never treated as explained).
+
+    Value-for-value equal to ``SubmissionEvidence``, pinned by a test (20.1-32, G-1).
+    """
+
+    BROKER_EVIDENCE = "broker_evidence"
+    REJECTED = "rejected"
+    PROVEN_NOT_SENT = "proven_not_sent"
+    UNESTABLISHED = "unestablished"
+    NOT_COMPUTED = "not_computed"
+
+
 @dataclass(frozen=True)
 class LocalOrderSnapshot:
     """Typed projection of a ``PaperOrder`` ORM row across the reconciliation boundary."""
@@ -91,6 +106,11 @@ class LocalOrderSnapshot:
     broker_status: str | None
     submission_attempt_count: int
     sync_failure_count: int
+    submission_evidence: LocalSubmissionEvidence = LocalSubmissionEvidence.NOT_COMPUTED
+    """The complete shared verdict ``attempts.classify_submission_evidence(...)`` for a pre-send
+    order, precomputed by the reconciliation loader over the complete attempt history with the
+    canonical provenance rule (20.1-32, G-1); NOT_COMPUTED for every other status and when not
+    loaded (fail closed)."""
 
 
 @dataclass(frozen=True)

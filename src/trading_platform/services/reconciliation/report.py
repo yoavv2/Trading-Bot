@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from trading_platform.core.logging import build_log_context, emit_structured_log, get_logger
 from trading_platform.core.settings import Settings, load_settings
@@ -49,6 +50,10 @@ from trading_platform.services.attribution_inputs import (
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.config.tolerances import MONEY_TOLERANCE, QUANTITY_TOLERANCE
 from trading_platform.services.execution import ExecutionOrderStatus, OrderSide
+from trading_platform.services.execution.attempts import (
+    SubmissionEvidence,
+    load_submission_evidence,
+)
 from trading_platform.services.execution.broker_identity import (
     broker_record_mismatch,
     local_ticker,
@@ -66,6 +71,7 @@ from trading_platform.services.reconciliation.snapshot import (
     LocalFillSnapshot,
     LocalOrderSnapshot,
     LocalPositionSnapshot,
+    LocalSubmissionEvidence,
 )
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 
@@ -74,6 +80,13 @@ _ACTIVE_LOCAL_ORDER_STATUSES = {
     OrderLifecycleState.SUBMITTED,
     OrderLifecycleState.PARTIALLY_FILLED,
 }
+
+#: Statuses whose shared submission verdict reconciliation loads (20.1-32, G-1): an order that was
+#: registered but never reached the broker is the only local order whose absence at the broker can
+#: be explained by the verdict.
+_EVIDENCE_CANDIDATE_STATUSES = frozenset(
+    {OrderLifecycleState.PENDING_SUBMISSION, OrderLifecycleState.SUBMISSION_FAILED}
+)
 
 
 @dataclass(frozen=True)
@@ -495,6 +508,7 @@ def _reconcile_against_broker_state(
         .scalars()
         .all()
     )
+    evidence = _load_reconciliation_evidence(session, local_orders)
     local_fills = (
         session.execute(
             select(PaperFill)
@@ -540,7 +554,10 @@ def _reconcile_against_broker_state(
     # READ-ONLY projection boundary (RECON-03/05): ORM rows are projected into
     # the typed 09-01 snapshots here; no ORM instance crosses this boundary into
     # the pure matcher or the account/threshold evaluations below.
-    local_order_snapshots = [_project_local_order(order) for order in local_orders]
+    local_order_snapshots = [
+        _project_local_order(order, submission_evidence=_local_evidence(evidence, order.id))
+        for order in local_orders
+    ]
     local_fill_snapshots = [_project_local_fill(fill) for fill in local_fills]
     local_position_snapshots = [_project_local_position(position) for position in local_positions]
     local_account_snapshot = (
@@ -632,8 +649,39 @@ def _matcher_scope(
     return orders, fills, positions
 
 
-def _project_local_order(order: PaperOrder) -> LocalOrderSnapshot:
-    """Project a ``PaperOrder`` ORM row into the typed 09-01 snapshot (read-only)."""
+def _load_reconciliation_evidence(
+    session: Session, local_orders: Sequence[PaperOrder]
+) -> dict[uuid.UUID, SubmissionEvidence]:
+    """The complete shared submission verdict of every pre-send local order (20.1-32, G-1).
+
+    The matcher consults the verdict only for pre-send statuses (pending_submission,
+    submission_failed), so every other order keeps NOT_COMPUTED without loss. The candidate set is
+    the pre-send orders whatever their broker id: the complete verdict is carried (a pre-send order
+    with a broker id is BROKER_EVIDENCE, never explained). Batch-loaded outside the matcher: two
+    statements for any number of candidates, none without candidates.
+    """
+
+    candidates = [order for order in local_orders if order.status in _EVIDENCE_CANDIDATE_STATUSES]
+    return load_submission_evidence(session, candidates)
+
+
+def _local_evidence(
+    evidence: Mapping[uuid.UUID, SubmissionEvidence], order_id: uuid.UUID
+) -> LocalSubmissionEvidence:
+    """The pure-value verdict of one order; NOT_COMPUTED when it was not loaded (fail closed)."""
+
+    verdict = evidence.get(order_id)
+    if verdict is None:
+        return LocalSubmissionEvidence.NOT_COMPUTED
+    return LocalSubmissionEvidence(verdict.value)
+
+
+def _project_local_order(
+    order: PaperOrder, *, submission_evidence: LocalSubmissionEvidence
+) -> LocalOrderSnapshot:
+    """Project a ``PaperOrder`` ORM row into the typed 09-01 snapshot (read-only).
+
+    ``submission_evidence`` is a REQUIRED keyword: no caller can forget the verdict."""
     return LocalOrderSnapshot(
         paper_order_id=str(order.id),
         strategy_run_id=str(order.strategy_run_id),
@@ -646,6 +694,7 @@ def _project_local_order(order: PaperOrder) -> LocalOrderSnapshot:
         broker_status=order.broker_status,
         submission_attempt_count=order.submission_attempt_count,
         sync_failure_count=order.sync_failure_count,
+        submission_evidence=submission_evidence,
     )
 
 

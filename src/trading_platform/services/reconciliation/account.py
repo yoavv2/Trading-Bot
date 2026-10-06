@@ -63,6 +63,8 @@ from trading_platform.services.reconciliation.report import (
     _evaluate_account_divergence,
     _evaluate_threshold_breach,
     _finding_event_dict,
+    _load_reconciliation_evidence,
+    _local_evidence,
     _matcher_scope,
     _project_local_account,
     _project_local_fill,
@@ -326,6 +328,7 @@ def _evaluate_account(
         .scalars()
         .all()
     )
+    evidence = _load_reconciliation_evidence(session, local_orders)
     local_fills = (
         session.execute(
             select(PaperFill)
@@ -371,7 +374,10 @@ def _evaluate_account(
         [_project_local_position(position) for position in local_positions]
     )
     findings = match_snapshots(
-        local_orders=[_project_local_order(order) for order in local_orders],
+        local_orders=[
+            _project_local_order(order, submission_evidence=_local_evidence(evidence, order.id))
+            for order in local_orders
+        ],
         local_fills=[_project_local_fill(fill) for fill in local_fills],
         local_positions=local_position_snapshots,
         broker_orders=matcher_orders,
