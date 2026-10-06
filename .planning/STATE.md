@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20.1-35-PLAN.md (G-1 service-level matrix: 122 additive test nodes over the three reconciliation passes, broker-side / identity / scope / threshold pins; no src change; gap closure r3 executing, plans 36-37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
-last_updated: "2026-10-06T13:24:30.000Z"
-last_activity: 2026-10-06 -- 20.1-35 complete (service-level G-1 shape matrix over strategy-job, in-session and account reconciliation, additive tests only; REC-01/REC-02 partial; phase not complete)
+stopped_at: Completed 20.1-36-PLAN.md (G-1 negative real-path matrix: 22 additive test nodes, legacy / unfinished / ambiguous submissions and unexpected broker activity stay blocked, another strategy's uncertainty keeps A6 (and A5 for a legacy order) failing while an owner-scope reconciliation restores only the owner's permission; no src change; gap closure r3 executing, plan 37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
+last_updated: "2026-10-06T14:00:54.000Z"
+last_activity: 2026-10-06 -- 20.1-36 complete (negative real-path G-1 matrix: legacy, unfinished, ambiguous and unexpected broker activity stay blocked; another strategy's uncertainty keeps A6 failing, owner-scope M5 restores only the owner's permission; additive tests only; REC-01/REC-02 partial; phase not complete)
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 100
-  completed_plans: 90
+  completed_plans: 91
   percent: 67
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-30)
 ## Current Position
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
-Plan: 36 of 37 (gap closure r3: plans 32-37, user-approved 2026-10-06; 20.1-32, 20.1-33, 20.1-34 and 20.1-35 complete)
-Status: Executing gap closure r3 (20.1-32, 20.1-33, 20.1-34, 20.1-35 complete; 20.1-36..37 pending; verification pending; phase not complete)
-Last activity: 2026-10-06 -- 20.1-35 complete (service-level G-1 shape matrix over strategy-job, in-session and account reconciliation, additive tests only; REC-01/REC-02 partial; phase not complete)
+Plan: 37 of 37 (gap closure r3: plans 32-37, user-approved 2026-10-06; 20.1-32, 20.1-33, 20.1-34, 20.1-35 and 20.1-36 complete)
+Status: Executing gap closure r3 (20.1-32, 20.1-33, 20.1-34, 20.1-35, 20.1-36 complete; 20.1-37 pending; verification pending; phase not complete)
+Last activity: 2026-10-06 -- 20.1-36 complete (negative real-path G-1 matrix: legacy, unfinished, ambiguous and unexpected broker activity stay blocked; another strategy's uncertainty keeps A6 failing, owner-scope M5 restores only the owner's permission; additive tests only; REC-01/REC-02 partial; phase not complete)
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
 
 v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
@@ -109,6 +109,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1
 | Phase 20.1 P33 | ~40min | 2 tasks | 9 files |
 | Phase 20.1 P34 | ~1h10 | 3 tasks | 6 files |
 | Phase 20.1 P35 | ~20min | 2 tasks | 1 files |
+| Phase 20.1 P36 | ~35min | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -264,6 +265,7 @@ Recent decisions affecting current work:
 - [Phase 20.1-33]: WR-01 / G-2: migration 0030_phase20_1_evidence_update_guards (down_revision 0029; triggers and functions only; 0028/0029 untouched) makes job_id / run_type / strategy_id of an evidence-bearing strategy_runs row immutable (incl. the FK ON DELETE SET NULL: a Job delete that would detach an evidence run aborts as a whole, whatever the Job type; no conversion INTO paper_execution / reconciliation), job_type of a Job behind a standalone reconciliation run immutable in both directions, and completed reconciliation strategy runs and account_reconciliation_runs complete-once (jsonb-cast comparison over explicit column lists; account job_id deliberately not frozen). Legitimate writers verified through the real services; the only post-completion writers were two test fixtures (classification_summary), now set at INSERT. 71 new DB-backed pins, 553 plan-set and 819 extra at-risk tests green (1 expected strict xfail). IN-02 (owner-role bypass) documented only; jobs.outcome_uncertain / completed_at / job_type of flagged or effect Jobs, jobs.payload attribution, strategies.strategy_id renames, forged INSERTs and account_snapshots stay OPEN. Phase 21 heartbeat migration must chain on 0030 (orchestrator). REC-01/REC-02 stay partial (mark-complete NOT run); CR-01 interim prohibition unchanged; OD-1 unimplemented; Phase 20.1 NOT complete
 - [Phase 20.1-34]: G-1 matcher rule (D-G1-A, user decision 2026-10-06): an unmatched pending_submission / submission_failed order is MISSING_BROKER unless the shared verdict carried since 20.1-32 (LocalOrderSnapshot.submission_evidence) is PROVEN_NOT_SENT or a definitive REJECTED; UNESTABLISHED, BROKER_EVIDENCE and NOT_COMPUTED keep the finding (fail closed, ambiguity dominates), submission_attempt_count is no longer read, broker-side matching untouched; matcher.py is the only src change. Real-path regressions (a real standalone reconciliation of either scope, nothing seeded; RED recorded: 10 failing / 4 passing nodes): SAF-01 release then Continue / run_paper_session Start POST the pinned intent once; a recorded rejection reconciles clean, is never resent by Continue and a new Start is refused (replay_of_earlier_decision / action_already_submitted, TL-10); the b3-session strict xfail removed after they passed. Orchestrator-authorized: the 20.1-32 statement-budget fixture aligned with the rule (it relied on the old count-0 exemption). REC-01/REC-02 stay partial (mark-complete NOT run); CR-01 interim prohibition unchanged; OD-1 unimplemented; Phase 20.1 NOT complete; the mandatory pre-UAT dev-database inventory is a pending user step (not run)
 - [Phase 20.1-35]: Service-level pin of the D-G1-A rule, additive tests only (tests/test_reconciliation_shared_evidence.py, 122 nodes, no src change, one shared module database with every assertion order-specific; passes alone, reversed and shuffled): the 24 shared SHAPES plus an UNKNOWN control in the standalone strategy-scope Job pass, the in-session pass (paper_session_reconciliation) and the account pass (75 nodes) report MISSING_BROKER exactly when the shared verdict is neither PROVEN_NOT_SENT nor REJECTED (the finding itself blocks and names the verdict; ambiguity dominates a rejection in both directions) and agree with load_strategy_order_facts for all 24 shapes; a broker order carrying an explained order's client_order_id stays a blocking STATE_MISMATCH, an unrecognized broker order stays MISSING_LOCAL / unrecognized / blocking, a quantity or symbol identity mismatch is refused by recover_inflight_paper_orders (0 recovered, order unbound, blocking broker_order_identity_mismatch event) and the following reports block through BOTH a STATE_MISMATCH finding and an owned_order_attribute_mismatch anomaly, the strategy pass sees only its own orders while the account pass sees every owner's, the repeated-failure counter adds a submission_failure_threshold_exceeded entry for an explained failed order without suppressing or creating a finding, and in-session corrections leave an explained order's sync_failure_count at 0. 13 mutations (scratch plugin, nothing committed) each turn the right nodes red. REC-01/REC-02 stay partial (mark-complete NOT run); CR-01 interim prohibition unchanged; OD-1 unimplemented; Phase 20.1 NOT complete
+- [Phase 20.1-36]: Negative half of G-1 on the real path, additive tests only (tests/test_g1_real_reconciliation_negative_e2e.py, 22 nodes, no src change; every reconciliation is the real service and none is seeded): a legacy order (pending_submission count 0 / 1, submission_failed) and an unfinished (null-outcome) submission keep a blocking MISSING_BROKER (submission_evidence unestablished) in both scopes and the gate stays outcome_unresolved; an ambiguous (read-timeout) submission is never resolved (STATE_MISMATCH when the broker shows it, a CLEAN report when it shows nothing, the gate stays outcome_unresolved, the POST count stays 1); a Start through run_paper_session is refused by the D-15 gate before any broker read or POST in every case and Continue by its submit gate; unexpected broker activity is never hidden by the suppression (an unrecognized broker order next to a SAF-01 release, a client_order_id match with another quantity or symbol, and a broker order for a recorded rejection all block with reconciliation_not_clean, nothing bound, nothing POSTed); permission is not resolution: another strategy's unexplained order makes every real account reconciliation dirty (owner gate reconciliation_not_clean, Continue refused, A6 fails), a real owner-scope reconciliation restores only the owner's permission (gate None, Continue POSTs the pinned intent once) while A6 keeps failing, A5 keeps failing for a legacy order and passes for a broker-id order (where A6 is the new refusal), and the other strategy's order and gate are unchanged. 9 mutations (scratch plugin, nothing committed) each turn the right nodes red. REC-01/REC-02 stay partial (mark-complete NOT run); CR-01 interim prohibition unchanged; OD-1 unimplemented; Phase 20.1 NOT complete
 
 ### Pending Todos
 
@@ -305,6 +307,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-06T13:24:30.000Z
-Stopped at: Completed 20.1-35-PLAN.md (G-1 service-level matrix: 122 additive test nodes over the three reconciliation passes, broker-side / identity / scope / threshold pins; no src change; gap closure r3 executing, plans 36-37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
+Last session: 2026-10-06T14:00:54.000Z
+Stopped at: Completed 20.1-36-PLAN.md (G-1 negative real-path matrix: 22 additive test nodes, legacy / unfinished / ambiguous submissions and unexpected broker activity stay blocked, another strategy's uncertainty keeps A6 (and A5 for a legacy order) failing while an owner-scope reconciliation restores only the owner's permission; no src change; gap closure r3 executing, plan 37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
 Resume file: None
