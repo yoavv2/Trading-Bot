@@ -8,6 +8,7 @@ suites whose subject is not those (``tests/support/paper_execution_seams.py``) a
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -17,7 +18,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from tests.support.basis_fixtures import seed_fresh_broker_snapshot
 from tests.support.calendar_facts import et, seed_calendar
 from tests.support.paper_eligibility import allow_paper_execution
@@ -763,11 +764,80 @@ def test_t1_refusal_ends_the_loop_with_zero_posts_and_leaves_the_intent_unsent( 
     assert order.status == OrderLifecycleState.PENDING_SUBMISSION  # registered, never sent
 
 
+#: Rows the send-path diagnostics dump (read-only, whole rows as JSON).
+_SEND_PATH_TABLES = (
+    "execution_operations",
+    "execution_operation_intents",
+    "execution_operation_jobs",
+    "paper_orders",
+    "order_submission_attempts",
+    "jobs",
+    "execution_events",
+    "active_paper_strategy",
+    "system_controls",
+    "strategies",
+)
+
+
+def _send_path_diagnostics(
+    report: Any, service: Any, price_source: FreshPriceSource, elapsed: tuple[float, float]
+) -> str:
+    """Why a single-intent start left no attempt row: built ONLY when the assertion fails (20.1-38,
+    user instruction 5: capture evidence, never weaken, retry or xfail). Read-only; a diagnostic
+    error is reported inside the message instead of masking the original failure.
+
+    An attempt row is written inside T1 (``authorize_send``) and the order client is called only
+    after T1 committed, so: no attempt row and no service call means execution stopped BEFORE
+    sending (a T1 refusal or another pause; the operation's state / reason say which); a service
+    call without an attempt row would mean attempt recording failed."""
+
+    calls = len(getattr(service, "submitted_intents", []))
+    lines = [
+        f"service submit_order calls: {calls}",
+        f"price source calls: {list(price_source.calls)}",
+        f"elapsed around the run: wall {elapsed[0]:.3f}s, monotonic {elapsed[1]:.3f}s "
+        "(a large gap means a clock step or a sleep)",
+        f"returned report: {getattr(report, 'status', None)!r} "
+        f"{getattr(report, 'result_summary', report)!r}"[:4000],
+    ]
+    try:
+        with session_scope(load_settings()) as session:
+            attempt_rows = session.execute(
+                text("SELECT count(*) FROM order_submission_attempts")
+            ).scalar_one()
+            lines.append(
+                "verdict: "
+                + (
+                    "execution stopped BEFORE sending (no attempt row, service never called)"
+                    if calls == 0 and attempt_rows == 0
+                    else "ATTEMPT RECORDING FAILED (service called, no attempt row)"
+                    if calls > 0 and attempt_rows == 0
+                    else f"other ({attempt_rows} attempt row(s), {calls} call(s))"
+                )
+            )
+            clocks = session.execute(text("SELECT now(), clock_timestamp()")).one()
+            lines.append(
+                f"db now() {clocks[0]}, clock_timestamp() {clocks[1]}, python {datetime.now(UTC)}"
+            )
+            for table in _SEND_PATH_TABLES:
+                rows = session.execute(
+                    text(f"SELECT to_jsonb(t)::text FROM {table} t")  # fixed table names
+                ).scalars()
+                lines.append(f"{table}: {list(rows)}")
+    except Exception as exc:  # diagnostics must never mask the original failure
+        lines.append(f"diagnostics query failed: {type(exc).__name__}: {exc}")
+    return "\n".join(lines)
+
+
 def test_a_service_that_never_touches_the_attempt_log_still_leaves_a_complete_attempt(  # noqa: F811
-    migrated_paper_db: str,
+    migrated_paper_db: str, _seams: FreshPriceSource
 ) -> None:
     """The single send path completes the pre-authorized attempt itself when the client never
-    began it (it returned a result, so the request was accepted)."""
+    began it (it returned a result, so the request was accepted).
+
+    This node failed once in a full-suite run (no attempt row) and passed in every isolated rerun;
+    the cause is not established. The assertion is unchanged; if it fails again, its message
+    carries the run's evidence (``_send_path_diagnostics``)."""
 
     class Silent(ExecutionService):
         def __init__(self) -> None:
@@ -782,12 +852,17 @@ def test_a_service_that_never_touches_the_attempt_log_still_leaves_a_complete_at
 
     seed_batch(DEFAULT_BATCH[:1])
 
-    _start(Silent())
+    service = Silent()
+    wall, monotonic = datetime.now(UTC), time.monotonic()
+    report = _start(service)
+    elapsed = ((datetime.now(UTC) - wall).total_seconds(), time.monotonic() - monotonic)
 
     with session_scope(load_settings()) as session:
         order = session.execute(select(PaperOrder)).scalar_one()
         attempts = load_submission_attempts(session, order.id)
-    assert [a.outcome_class for a in attempts] == [AttemptOutcomeClass.ACCEPTED]
+    assert [a.outcome_class for a in attempts] == [
+        AttemptOutcomeClass.ACCEPTED
+    ], _send_path_diagnostics(report, service, _seams, elapsed)
 
 
 def test_start_path_never_versions_existing_intents(  # noqa: F811
