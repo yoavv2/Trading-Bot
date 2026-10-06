@@ -436,6 +436,9 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 - [x] 20.1-36-PLAN.md — Negative real-path cases: legacy, unfinished, ambiguous, unrecognized broker order, identity mismatch, broker order for a recorded rejection stay blocked; another strategy's uncertainty keeps A6 failing while an owner-scope M5 restores only the owner's permission (REC-01, REC-02)
 - [x] 20.1-37-PLAN.md — Runbook/UAT pending-verification notes (decided rule and consequences; prohibition unchanged), mandatory read-only pre-UAT inventory (test-pinned query, STOP rule), full-suite gate, Deferred (not resolved) list (REC-01, REC-02)
 
+**Gap closure round 4 (E1, user decision 2026-10-06 on escalation E-1; G-1 stays closed, G-2 partial until verified):**
+- [ ] 20.1-38-PLAN.md — E1 correction: 0030 amended in place (unpublished, throwaway databases only): the job_type guard refuses every change when OLD or NEW is `reconciliation` (queued, running and account-reconciliation Jobs included) and keeps its schema-qualified EXISTS arm; all four 0030 functions and the 0029 delete guard run with `search_path = pg_catalog, public, pg_temp`, qualified tables and text-cast comparisons; committed regressions for the pre-run, uncommitted-INSERT and TEMP-shadow windows through the recovery gate; intermittent-test diagnostics (REC-01, REC-02)
+
 **UI hint**: yes (legacy-console compatibility only)
 
 ### Phase 21: Operator Read-Model Foundation
@@ -506,7 +509,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 37/37 | In Progress (gap closure r3 executed; re-verification human_needed) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 37/38 | In Progress (gap E1 open, user decision 2026-10-06; correction 20.1-38 in progress) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
