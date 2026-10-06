@@ -428,6 +428,14 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 - [x] 20.1-30-PLAN.md — Required E2E regressions (c) genuine ambiguity stays blocked and (d) one consumer-agreement matrix incl. order-less flagged Job control (blocked; OD-1 open decision, see 20.1-OD-1-DRAFT.md) (REC-01, REC-02, PAPER-02, COR-06)
 - [x] 20.1-31-PLAN.md — Runbook 05 + HUMAN-UAT: CR-01 fix note marked PENDING VERIFICATION; interim prohibition unchanged (docs only) (REC-01, REC-02)
 
+**Gap closure round 3 (G-1 + review WR-01; planned 2026-10-06):**
+- [ ] 20.1-32-PLAN.md — G-1 evidence input: batch-loaded shared submission verdict on LocalOrderSnapshot for strategy- and account-scope reconciliation (no behaviour change; budget and purity pins; real-reconciliation test helper) (REC-01, REC-02)
+- [ ] 20.1-33-PLAN.md — Review WR-01: migration 0030_phase20_1_evidence_update_guards (run-to-Job link / run_type immutable on evidence runs; completed reconciliation evidence complete-once); IN-02 documented separately (REC-01, REC-02)
+- [ ] 20.1-34-PLAN.md — G-1 matcher rule: MISSING_BROKER suppressed only for PROVEN_NOT_SENT; real-path release regressions (standalone reconciliation → Continue / run_paper_session Start), xfail removed after pass (REC-01, REC-02)
+- [ ] 20.1-35-PLAN.md — Service-level shared-evidence shape matrix across strategy, account and in-session reconciliation; broker-side, identity, scope and threshold pins (REC-01, REC-02)
+- [ ] 20.1-36-PLAN.md — Negative real-path cases: legacy, unfinished, ambiguous, unrecognized broker order, identity mismatch stay blocked (REC-01, REC-02)
+- [ ] 20.1-37-PLAN.md — Runbook/UAT pending-verification notes (prohibition unchanged), full-suite gate, Deferred (not resolved) list (REC-01, REC-02)
+
 **UI hint**: yes (legacy-console compatibility only)
 
 ### Phase 21: Operator Read-Model Foundation
@@ -444,7 +452,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
   5. Coverage and reconciliation detail cover both owner and account scope with classification, origin tags and unexplained exposure (OPR-04, OPR-05).
   6. Worker health reports exactly `idle`, `busy`, `unavailable` or `unknown`; no active Job is never evidence of health; worker health is not part of `/ready` (WRK-01, WRK-02).
   7. Every read returns server `as_of`, writes nothing, and meets the 02 §10 total-request query bound (overview ≤ 15, issues ≤ 12, sessions ≤ 10, coverage ≤ 5, reconciliation list ≤ 1 / detail ≤ 3, activity ≤ 4, reused components included); the overview's verdict and next action come from one decision table and it carries the evaluation-session pipeline and recent activity; the catalog declares each job type's operator mapping (OPR-01, OPR-07, OPR-08).
-  8. A schema-delta test pins exactly one new table (`worker_heartbeats`, migration 0030); no files under `console/` change.
+  8. A schema-delta test pins exactly one new table (`worker_heartbeats`, migration 0031); no files under `console/` change.
 
 **Out of scope**: any console UI (AUD-02, NOTIF-02 → v1.4); issue persistence; auth; control-change storage separation; scheduling.
 **Plans**: 8 plans
@@ -453,7 +461,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 21-01-PLAN.md — Worker heartbeat table (migration 0030), throttled writer, worker-health read (WRK-01, WRK-02)
+- [ ] 21-01-PLAN.md — Worker heartbeat table (migration 0031), throttled writer, worker-health read (WRK-01, WRK-02)
 
 **Wave 2** *(after 21-01: the Operations-engine lane reads `services/worker_health.py`)*
 
@@ -498,7 +506,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 31/31 | In Progress (gaps_found: G-1 reconciliation vs never-sent pending order) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 31/37 | In Progress (gap closure r3 planned: G-1 + review WR-01) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |

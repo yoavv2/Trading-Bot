@@ -36,7 +36,7 @@ v1.3 closes after this phase.
 ## Implementation Decisions (locked)
 
 - **D-01 Worker heartbeat (WRK-01/02).**
-  - `worker_heartbeats` is **the only new table** in this phase (migration `0030`, parent `0029_phase20_1_order_origin_immutable`). *(2026-10-05: renumbered 0028→0030, parent 0029, to follow Phase 20.1's 0028 attempt-log and 0029 order-origin migrations.)*
+  - `worker_heartbeats` is **the only new table** in this phase (migration `0031`, parent `0030_phase20_1_evidence_update_guards`). *(2026-10-05: renumbered 0028→0030, parent 0029; 2026-10-06: renumbered 0030→0031, parent 0030_phase20_1_evidence_update_guards, to follow Phase 20.1's 0028/0029/0030 migrations.)*
   - The run-jobs loop upserts its row, throttled (default 10 s), records a graceful `stopped`, and prunes stale rows.
   - The writer lives in `jobs/` (worker infrastructure self-state, not an operator mutation; ORCH-08 unchanged).
   - `GET /api/v1/system/worker-health` → `idle | busy | unavailable | unknown` (+ reason code; the public read-only deploy uses `unknown` with `no_worker_expected` when `worker_expected=false`).
