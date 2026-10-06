@@ -54,6 +54,7 @@ from sqlalchemy.orm import Session
 from trading_platform.core.settings import Settings
 from trading_platform.db.models import (
     AttemptOutcomeClass,
+    ExecutionOperationIntent,
     OrderLifecycleState,
     OrderSubmissionAttempt,
     PaperOrder,
@@ -391,6 +392,52 @@ def load_submission_attempts(session: Session, paper_order_id: uuid.UUID) -> lis
         .order_by(OrderSubmissionAttempt.attempt_number)
     ).scalars()
     return [_record_from_row(row) for row in rows]
+
+
+def load_submission_evidence(
+    session: Session, orders: Sequence[PaperOrder]
+) -> dict[uuid.UUID, SubmissionEvidence]:
+    """The ONE batch form of the shared verdict for consumers that already hold the order rows
+    (reconciliation, 20.1-32, G-1); exactly two statements for any number of orders (none for
+    no orders). The provenance input is the EARLIEST intent row of ANY operation, as in recovery
+    ``_ORDER_COLUMNS`` and ``intent_identity.load_strategy_order_facts``; the complete verdict is
+    returned (all four values), never a reduced boolean."""
+
+    if not orders:
+        return {}
+    order_ids = [order.id for order in orders]
+    attempts_by_order: dict[uuid.UUID, list[AttemptRecord]] = {}
+    for row in session.execute(
+        select(OrderSubmissionAttempt)
+        .where(OrderSubmissionAttempt.paper_order_id.in_(order_ids))
+        .order_by(OrderSubmissionAttempt.paper_order_id, OrderSubmissionAttempt.attempt_number)
+    ).scalars():
+        attempts_by_order.setdefault(row.paper_order_id, []).append(_record_from_row(row))
+    first_intent_at = dict(
+        session.execute(
+            select(
+                ExecutionOperationIntent.paper_order_id,
+                func.min(ExecutionOperationIntent.created_at),
+            )
+            .where(ExecutionOperationIntent.paper_order_id.in_(order_ids))
+            .group_by(ExecutionOperationIntent.paper_order_id)
+        ).all()
+    )
+    verdicts: dict[uuid.UUID, SubmissionEvidence] = {}
+    for order in orders:
+        attempts = attempts_by_order.get(order.id, [])
+        registered = attempt_log_registered(
+            has_attempts=bool(attempts),
+            order_created_at=order.created_at,
+            first_intent_created_at=first_intent_at.get(order.id),
+        )
+        verdicts[order.id] = classify_submission_evidence(
+            status=order.status,
+            broker_order_id=order.broker_order_id,
+            attempts=attempts,
+            attempt_log_registered=registered,
+        )
+    return verdicts
 
 
 class SubmissionAttemptLog(Protocol):
