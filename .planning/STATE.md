@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20.1-37-PLAN.md (runbook 05 / HUMAN-UAT pending-verification notes with the decided rule D-G1-A and its consequences, mandatory read-only pre-UAT inventory (Step 0) with a test-pinned query and STOP rule, full-suite run at HEAD 82120d7: 3408 passed, 3 failed, 1 error = the two known baseline failures, the known alpaca teardown error and ONE UNEXPECTED failure recorded for re-verification; gap closure r3 executed, verification pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
+stopped_at: "Gap closure r3 executed (20.1-32..37); re-verification human_needed (9/9 SC, 0 gaps; G-1 verified, G-2 verified within approved threat model; escalation E-1 job_type-guard windows pending user decision). Awaiting user: E-1 + review decisions, REQUIREMENTS REC-01/02 status, Step 0 inventory before UAT. CR-01 interim prohibition in force. Phase NOT complete."
 last_updated: "2026-10-06T14:42:00.000Z"
 last_activity: 2026-10-06 -- 20.1-37 complete (documentation and closure bookkeeping for gap round 3: pending-verification notes, mandatory read-only pre-UAT inventory with a test-pinned query, full-suite baseline run with one unexpected failure recorded; prohibition untouched; REC-01/REC-02 partial; gap closure r3 executed, verification pending; phase not complete)
 progress:
