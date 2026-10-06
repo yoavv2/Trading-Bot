@@ -270,13 +270,21 @@ def seed_account_run(
     blocks: bool = False,
     status: str = "succeeded",
     unresolved_reasons: Sequence[str] = (),
+    classification_summary: dict[str, Any] | None = None,
 ) -> AccountReconciliationRun:
+    """An account-level run. ``classification_summary`` is set at INSERT: from 0030 a completed
+    account run is complete-once, so a fixture can no longer assign it after the row exists.
+    ``None`` keeps the column default (an empty object), never a JSON null."""
+
     run = AccountReconciliationRun(
         trigger_source="job",
         status=status if completed_at is not None else "pending",
         completed_at=completed_at,
         blocks_execution=blocks,
         unresolved_reasons=list(unresolved_reasons),
+        classification_summary=(
+            dict(classification_summary) if classification_summary is not None else {}
+        ),
     )
     session.add(run)
     session.flush()

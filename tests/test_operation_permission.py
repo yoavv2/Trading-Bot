@@ -233,9 +233,12 @@ def _blocking_reconciliation(session: Session, world: World) -> None:
 
 
 def _unrecognized_reconciliation(session: Session, world: World) -> None:
-    run = seed_account_run(session, completed_at=at(5), blocks=True)
-    run.classification_summary = {"orders": {"unrecognized": 1}, "fills": {"unrecognized": 0}}
-    session.flush()
+    seed_account_run(
+        session,
+        completed_at=at(5),
+        blocks=True,
+        classification_summary={"orders": {"unrecognized": 1}, "fills": {"unrecognized": 0}},
+    )
 
 
 def _price(script: Callable[[World], Any]) -> Callable[[Session, World], None]:

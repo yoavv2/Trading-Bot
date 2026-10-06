@@ -120,9 +120,12 @@ def _blocking_reconciliation(session: Session) -> None:
 
 
 def _unrecognized(session: Session) -> None:
-    run = seed_account_run(session, completed_at=at(5), blocks=True)
-    run.classification_summary = {"orders": {"unrecognized": 1}, "fills": {"unrecognized": 0}}
-    session.flush()
+    seed_account_run(
+        session,
+        completed_at=at(5),
+        blocks=True,
+        classification_summary={"orders": {"unrecognized": 1}, "fills": {"unrecognized": 0}},
+    )
 
 
 def _working(session: Session, broker_order_id: str = "broker-working-1") -> None:
