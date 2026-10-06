@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Operator Platform
 status: executing
-stopped_at: Completed 20.1-32-PLAN.md (G-1 evidence input; gap closure r3 executing, plans 33-37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
-last_updated: "2026-10-06T11:06:55.952Z"
-last_activity: 2026-10-06 -- 20.1-32 complete (G-1 evidence input: complete shared verdict carried into reconciliation, no behaviour change; REC-01/REC-02 partial; phase not complete)
+stopped_at: Completed 20.1-33-PLAN.md (WR-01 migration 0030 UPDATE guards; gap closure r3 executing, plans 34-37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
+last_updated: "2026-10-06T11:50:30.000Z"
+last_activity: 2026-10-06 -- 20.1-33 complete (migration 0030 UPDATE guards: evidence-run link, standalone-reconciliation Job type and completed reconciliation results immutable; REC-01/REC-02 partial; phase not complete)
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 100
-  completed_plans: 87
+  completed_plans: 88
   percent: 67
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-09-30)
 ## Current Position
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
-Plan: 33 of 37 (gap closure r3: plans 32-37, user-approved 2026-10-06; 20.1-32 complete)
-Status: Executing gap closure r3 (20.1-32 complete; 20.1-33..37 pending; verification pending; phase not complete)
-Last activity: 2026-10-06 -- 20.1-32 complete (G-1 evidence input: complete shared verdict carried into reconciliation, no behaviour change; REC-01/REC-02 partial; phase not complete)
+Plan: 34 of 37 (gap closure r3: plans 32-37, user-approved 2026-10-06; 20.1-32 and 20.1-33 complete)
+Status: Executing gap closure r3 (20.1-32, 20.1-33 complete; 20.1-34..37 pending; verification pending; phase not complete)
+Last activity: 2026-10-06 -- 20.1-33 complete (migration 0030 UPDATE guards: evidence-run link, standalone-reconciliation Job type and completed reconciliation results immutable; REC-01/REC-02 partial; phase not complete)
 **Progress (v1.3):** [██████░░░░] 67% — 4 of 6 phases complete (17, 18, 19, 20); 20.1 and 21 planned
 
 v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
@@ -106,6 +106,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1
 | Phase 20.1 P22 | ~1h | 2 tasks | 5 files |
 | Phase 20.1 P23 | ~1h30 | 2 tasks | 9 files |
 | Phase 20.1 P32 | 36min | 3 tasks | 6 files |
+| Phase 20.1 P33 | ~40min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -258,6 +259,7 @@ Recent decisions affecting current work:
 - [Phase 20-28]: D-11a: control audit timestamps from one clock_timestamp() read after the row lock; no CHECK migration (deferred)
 - [Phase 20.1-17]: TL-4 applied: legacy zero-attempt orders are UNESTABLISHED everywhere; one shared classify_submission_evidence feeds G2, takeover, predicate, A5, submit gate — Closes VERIFICATION SC4/REC-01 and REVIEW SAF-01; authorized deviation reseeded two test_paper_execution tests because the session-level D-15 gate runs before recover_inflight_paper_orders
 - [Phase 20.1-32]: G-1 input half: reconciliation now carries the COMPLETE shared submission verdict (LocalSubmissionEvidence, closed mirror + NOT_COMPUTED, fail closed) batch-loaded for pre-send orders at a fixed +2 statements in strategy scope (incl. the in-session pass) and account scope; matcher.py and submit_orders.py untouched, reports byte-identical to base — REC-01/REC-02 stay partial (G-1) until 20.1-34 reads the field and re-verification; CR-01 interim prohibition unchanged; OD-1 unimplemented; Phase 20.1 NOT complete; shared 24-shape SHAPES table and real-reconciliation helper ready for 20.1-34/35/36
+- [Phase 20.1-33]: WR-01 / G-2: migration 0030_phase20_1_evidence_update_guards (down_revision 0029; triggers and functions only; 0028/0029 untouched) makes job_id / run_type / strategy_id of an evidence-bearing strategy_runs row immutable (incl. the FK ON DELETE SET NULL: a Job delete that would detach an evidence run aborts as a whole, whatever the Job type; no conversion INTO paper_execution / reconciliation), job_type of a Job behind a standalone reconciliation run immutable in both directions, and completed reconciliation strategy runs and account_reconciliation_runs complete-once (jsonb-cast comparison over explicit column lists; account job_id deliberately not frozen). Legitimate writers verified through the real services; the only post-completion writers were two test fixtures (classification_summary), now set at INSERT. 71 new DB-backed pins, 553 plan-set and 819 extra at-risk tests green (1 expected strict xfail). IN-02 (owner-role bypass) documented only; jobs.outcome_uncertain / completed_at / job_type of flagged or effect Jobs, jobs.payload attribution, strategies.strategy_id renames, forged INSERTs and account_snapshots stay OPEN. Phase 21 heartbeat migration must chain on 0030 (orchestrator). REC-01/REC-02 stay partial (mark-complete NOT run); CR-01 interim prohibition unchanged; OD-1 unimplemented; Phase 20.1 NOT complete
 
 ### Pending Todos
 
@@ -299,6 +301,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-10-06T11:06:55.941Z
-Stopped at: Completed 20.1-32-PLAN.md (G-1 evidence input; gap closure r3 executing, plans 33-37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
+Last session: 2026-10-06T11:50:30.000Z
+Stopped at: Completed 20.1-33-PLAN.md (WR-01 migration 0030 UPDATE guards; gap closure r3 executing, plans 34-37 pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)
 Resume file: None
