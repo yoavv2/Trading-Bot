@@ -50,14 +50,16 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from tests.support.real_reconciliation import (
     WallClockTimeline,
+    reconciliation_completed_at,
     run_real_account_reconciliation,
     run_real_strategy_reconciliation,
     scripted_read_broker,
 )
 from tests.support.recovery_agreement import assert_recovery_consumers_agree
+from tests.support.recovery_fixtures import OTHER, seed_intent, seed_paper_run, strategy_row
 from tests.test_cr01_ambiguity_and_agreement_e2e import _null_outcome, _read_timeout
 from tests.test_cr01_reuse_e2e import (  # noqa: F401  (http and _seams are fixtures)
     PENDING,
@@ -75,6 +77,7 @@ from tests.test_g1_real_reconciliation_release_e2e import (
     SCOPES,
     _findings_of,
     _GateSpy,
+    _order_event_count,
     _recorded_rejection_shape,
 )
 from tests.test_paper_execution import (  # noqa: F401  (migrated_paper_db is the database fixture)
@@ -90,9 +93,12 @@ from tests.test_paper_session_operations import (
     S1Broker,
     _conflict,
     _continue_conflict,
+    _continue_validate,
     attempt_outcomes,
+    continue_job,
     count,
     evaluation,
+    run_continue,
 )
 from tests.test_reconciliation_shared_evidence import (
     _attribution,
@@ -112,6 +118,17 @@ from trading_platform.db.session import session_scope
 from trading_platform.services.alpaca import BrokerOrderSnapshot
 from trading_platform.services.execution.operations import end_operation
 from trading_platform.services.execution.submit_orders import run_paper_session
+from trading_platform.services.paper_account_checks import (
+    AccountChecks,
+    CheckId,
+    CheckReason,
+    CheckResult,
+    EvidenceKind,
+    _check_a5,
+    _check_a6,
+    _latest_completed_account_run,
+    evaluate_account_checks,
+)
 from trading_platform.services.recovery import GateCode, strategy_recovery_status
 
 #: The legacy shapes (an order with no operation intent and no attempt row): (status, count).
@@ -215,6 +232,10 @@ def test_legacy_order_keeps_its_finding_and_blocks(
     scope: str,
     legacy_shape: str,
 ) -> None:
+    """A legacy order (no operation intent, no attempt row, no broker id) is reported by the REAL
+    reconciliation of either scope, keeps the gate at ``outcome_unresolved`` (TL-4: no reconciliation
+    releases it) and a Start through ``run_paper_session`` is refused before any broker read."""
+
     status, attempt_count = LEGACY_SHAPES[legacy_shape]
     risk_run, events = _seed_approved_risk_batch()
     _seed_existing_paper_order(
@@ -645,3 +666,207 @@ def test_broker_order_for_a_recorded_rejection_is_never_hidden(
     )
     assert broker.received == {cid1: 1}
     assert _order(order_id).broker_order_id is None
+
+
+# ---------------------------------------------------------------------------
+# Test 7: another strategy's unexplained order: permission is not resolution
+# ---------------------------------------------------------------------------
+
+OTHER_ORDERS = ("legacy_pending_no_broker_id", "failed_with_broker_id_absent")
+
+
+def _seed_other_order(kind: str) -> uuid.UUID:
+    """ONE order of the OTHER registered strategy, inserted with the legacy helpers (the current
+    product cannot produce it: every new order is operation-bound). ``legacy_pending_no_broker_id``
+    is UNESTABLISHED (TL-4): it blocks OTHER's own gate and check A5. ``failed_with_broker_id_absent``
+    carries a broker id the broker will not return (BROKER_EVIDENCE): a reconciliation reports it,
+    but it is no recovery candidate, so OTHER's own gate is open."""
+
+    with session_scope(load_settings()) as session:
+        strategy_row(session, OTHER)
+        run = seed_paper_run(session, None, OTHER)  # a paper run of OTHER, linked to no Job
+        if kind == "legacy_pending_no_broker_id":
+            order = seed_intent(
+                session,
+                run,
+                status=OrderLifecycleState.PENDING_SUBMISSION,
+                attempts=(),
+                broker_order_id=None,
+            )
+        else:
+            order = seed_intent(
+                session,
+                run,
+                status=OrderLifecycleState.SUBMISSION_FAILED,
+                attempts=(),
+                broker_order_id="b-other-1",
+            )
+        return order.id
+
+
+def _order_facts(order_id: uuid.UUID) -> tuple[Any, ...]:
+    """Everything a reconciliation, a gate read or a Continue could change on one order."""
+
+    order = _order(order_id)
+    with session_scope(load_settings()) as session:
+        attempts = session.execute(
+            select(func.count())
+            .select_from(OrderSubmissionAttempt)
+            .where(OrderSubmissionAttempt.paper_order_id == order_id)
+        ).scalar_one()
+    return (
+        order.status.value,
+        order.broker_order_id,
+        order.broker_status,
+        order.submission_attempt_count,
+        order.sync_failure_count,
+        order.last_sync_error,
+        int(attempts),
+        _order_event_count(order_id),
+    )
+
+
+def _a6() -> CheckResult:
+    """A6 as the seeding / handover / release controls read it."""
+
+    with session_scope(load_settings()) as session:
+        return _check_a6(session, _latest_completed_account_run(session))
+
+
+def _a5() -> CheckResult:
+    with session_scope(load_settings()) as session:
+        return _check_a5(session, now=clock.now_utc())
+
+
+def _account_checks() -> AccountChecks:
+    with session_scope(load_settings()) as session:
+        return evaluate_account_checks(session, include_handover=False)
+
+
+def _refs(check: CheckResult) -> set[tuple[EvidenceKind, str]]:
+    return {(ref.kind, ref.id) for ref in check.evidence_refs}
+
+
+@pytest.mark.parametrize("other_order", OTHER_ORDERS)
+def test_another_strategys_unexplained_order_keeps_account_checks_failing_while_owner_scope_restores_permission(
+    http: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Any,
+    other_order: str,
+) -> None:
+    """Permission is not resolution (D-G1-A consequences). The owner holds a released SAF-01 order;
+    ANOTHER strategy holds one unexplained pre-send order. A REAL account reconciliation reports
+    only the other strategy's order, so it is not clean: the owner's gate reads
+    ``reconciliation_not_clean`` and its Continue is refused, and A6 fails. A REAL reconciliation
+    of the OWNER's scope (which never loads the other strategy's order) is clean and restores the
+    owner's permission, but it cannot satisfy A6 (only an account run does), cannot resolve the
+    other strategy's order, and leaves A5 failing for a legacy order (TL-4). The Continue that
+    follows sends the owner's pinned intent once and nothing for the other strategy."""
+
+    legacy = other_order == "legacy_pending_no_broker_id"
+    other_gate = GateCode.OUTCOME_UNRESOLVED if legacy else None
+
+    # 1. the owner holds the SAF-01 order; 2. the other strategy holds ONE unexplained order
+    world = _saf01_shape(PENDING, monkeypatch, WallClockTimeline())
+    j1, order_id, cid1, op, broker = (
+        world.j1,
+        world.order_id,
+        world.cid1,
+        world.operation_id,
+        world.broker,
+    )
+    other_id = _seed_other_order(other_order)
+    other_cid = _order(other_id).client_order_id
+    other_before = _order_facts(other_id)
+    assert other_before[:4] == (
+        ("pending_submission", None, None, 0)
+        if legacy
+        else ("submission_failed", "b-other-1", None, 0)
+    )
+    assert other_before[6] == 0  # no attempt row: a legacy order
+    assert assert_recovery_consumers_agree(http, strategy_id=OTHER, linked_job_ids=[]) is other_gate
+    assert _gate() is GateCode.RECONCILIATION_REQUIRED  # the owner only awaits a reconciliation
+
+    # 3. a REAL ACCOUNT reconciliation against a broker that shows nothing
+    account_report, _job_id = run_real_account_reconciliation(broker=scripted_read_broker())
+    assert [(f["event_type"], f["paper_order_id"]) for f in _findings_of(account_report)] == [
+        ("MISSING_BROKER", str(other_id))
+    ]  # the other strategy's order ONLY; nothing names the owner's released order
+    assert _finding_types(account_report, order_id) == []
+    (finding,) = _findings_for(account_report, other_id)
+    assert finding["details"]["submission_evidence"] == (
+        "unestablished" if legacy else "broker_evidence"
+    )
+    assert finding["blocks_execution"] is True
+    assert account_report.blocks_execution is True
+
+    # 4. the owner: the newest qualifying run after J1's effect is that dirty account run
+    assert (
+        assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1]))
+        is GateCode.RECONCILIATION_NOT_CLEAN
+    )
+    assert _continue_conflict(op).code == "reconciliation_not_clean"
+    a6 = _a6()
+    assert not a6.passed and a6.reason_code is CheckReason.RECONCILIATION_NOT_CLEAN
+    dirty_run = (EvidenceKind.ACCOUNT_RECONCILIATION_RUN, account_report.run_id)
+    assert _refs(a6) == {dirty_run}
+    assert assert_recovery_consumers_agree(http, strategy_id=OTHER, linked_job_ids=[]) is other_gate
+    a5 = _a5()
+    assert not a5.passed and (EvidenceKind.STRATEGY, STRATEGY) in _refs(a5)  # the owner, unresolved
+    assert ((EvidenceKind.STRATEGY, OTHER) in _refs(a5)) is legacy
+    assert _order_facts(other_id) == other_before  # an account reconciliation changes no order
+
+    # 5. a REAL reconciliation of the OWNER's scope: clean (it does not load the other's order)
+    owner_report, _owner_job_id = run_real_strategy_reconciliation(
+        strategy_id=STRATEGY, as_of_session=SESSION, broker=scripted_read_broker()
+    )
+    assert owner_report.blocks_execution is False and owner_report.finding_count == 0
+    assert _finding_types(owner_report, other_id) == []
+    assert reconciliation_completed_at(owner_report) > reconciliation_completed_at(account_report)
+    # the owner's permission is restored
+    assert assert_recovery_consumers_agree(http, **_agree(world, linked=[j1], flagged=[j1])) is None
+    assert _continue_validate(op)["mode"] == "continue"
+
+    # 6. permission is not resolution, asserted right after step 5
+    a6 = _a6()
+    assert not a6.passed and a6.reason_code is CheckReason.RECONCILIATION_NOT_CLEAN
+    # an owner-scope run never satisfies A6: the (dirty) account run still decides
+    assert _refs(a6) == {dirty_run}
+    a5 = _a5()
+    assert (EvidenceKind.STRATEGY, STRATEGY) not in _refs(a5)  # the owner is resolved now
+    if legacy:
+        assert not a5.passed and a5.reason_code is CheckReason.UNRESOLVED_OUTCOME
+        assert (EvidenceKind.STRATEGY, OTHER) in _refs(a5)
+        assert (EvidenceKind.RECOVERY_INTENT, str(other_id)) in _refs(a5)
+    else:
+        assert a5.passed  # A6 is then the one account check that reads the reconciliation and fails
+    # the whole account check set at this moment. A1 fails only because the OWNER's own operation is
+    # still open (step 7 needs it open) and reads no reconciliation evidence; A2 to A4 pass; of the
+    # checks that read reconciliation / recovery evidence A6 always fails and A5 only for a legacy
+    # order. For ``failed_with_broker_id_absent`` A6 is therefore the genuinely new refusal.
+    checks = _account_checks()
+    failed = set(checks.failed_ids())
+    record_property("failed_checks_after_owner_scope", ",".join(sorted(c.value for c in failed)))
+    record_property("a5_after_owner_scope", f"passed={a5.passed}")
+    record_property("a6_after_owner_scope", f"reason={a6.reason_code}")
+    a1 = checks.get(CheckId.A1)
+    assert a1 is not None and a1.reason_code is CheckReason.OPEN_OPERATION
+    assert (EvidenceKind.OPERATION, str(op)) in _refs(a1)
+    assert failed == ({CheckId.A1, CheckId.A5, CheckId.A6} if legacy else {CheckId.A1, CheckId.A6})
+    assert assert_recovery_consumers_agree(http, strategy_id=OTHER, linked_job_ids=[]) is other_gate
+    assert _order_facts(other_id) == other_before  # the other strategy's order is untouched
+
+    # 7. Continue sends the owner's pinned intent once and nothing for the other strategy
+    j2 = continue_job(op)
+    report = run_continue(broker.service(), operation_id=op, job_id=j2)
+    assert [o["client_order_id"] for o in report.result_summary["submitted_orders"]] == [cid1]
+    assert broker.received == {cid1: 1} and other_cid not in broker.received
+    assert attempt_outcomes(cid1) == [(1, "accepted")]
+    assert _order_facts(other_id) == other_before
+    assert assert_recovery_consumers_agree(http, strategy_id=OTHER, linked_job_ids=[]) is other_gate
+    # the owner stays released while Continue runs, and A6 still fails: only an ACCOUNT run satisfies it
+    assert (
+        assert_recovery_consumers_agree(http, **_agree(world, linked=[j1, j2], flagged=[j1, j2]))
+        is None
+    )
+    assert not _a6().passed
