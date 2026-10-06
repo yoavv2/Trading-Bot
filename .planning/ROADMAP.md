@@ -432,7 +432,7 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 - [x] 20.1-32-PLAN.md — G-1 evidence input: batch-loaded COMPLETE shared submission verdict (closed enum LocalSubmissionEvidence) on LocalOrderSnapshot for strategy- and account-scope reconciliation (no behaviour change; budget, parity and purity pins; shared 24-shape table; real-reconciliation test helper) (REC-01, REC-02)
 - [x] 20.1-33-PLAN.md — Review WR-01: migration 0030_phase20_1_evidence_update_guards (job_id / run_type / strategy_id immutable on evidence runs; job_type immutable for the Job behind a standalone reconciliation run; completed reconciliation evidence complete-once; Job lifecycle writes untouched); IN-02 documented separately (REC-01, REC-02)
 - [x] 20.1-34-PLAN.md — G-1 matcher rule (D-G1-A, decided 2026-10-06): MISSING_BROKER unless the shared verdict is PROVEN_NOT_SENT or a definitive REJECTED (ambiguity dominates); real-path release and recorded-rejection regressions (standalone reconciliation → Continue / run_paper_session Start; a rejection is never re-sent), xfail removed after pass (REC-01, REC-02)
-- [ ] 20.1-35-PLAN.md — Service-level shared-evidence shape matrix (incl. definitive rejection and ambiguity dominance) across strategy, account and in-session reconciliation; broker-side, identity, scope and threshold pins (REC-01, REC-02)
+- [x] 20.1-35-PLAN.md — Service-level shared-evidence shape matrix (incl. definitive rejection and ambiguity dominance) across strategy, account and in-session reconciliation; broker-side, identity, scope and threshold pins (REC-01, REC-02)
 - [ ] 20.1-36-PLAN.md — Negative real-path cases: legacy, unfinished, ambiguous, unrecognized broker order, identity mismatch, broker order for a recorded rejection stay blocked; another strategy's uncertainty keeps A6 failing while an owner-scope M5 restores only the owner's permission (REC-01, REC-02)
 - [ ] 20.1-37-PLAN.md — Runbook/UAT pending-verification notes (decided rule and consequences; prohibition unchanged), mandatory read-only pre-UAT inventory (test-pinned query, STOP rule), full-suite gate, Deferred (not resolved) list (REC-01, REC-02)
 
@@ -506,7 +506,7 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 34/37 | In Progress (gap closure r3 executing) | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 35/37 | In Progress (gap closure r3 executing) | - |
 | 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
 | 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
 | 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
