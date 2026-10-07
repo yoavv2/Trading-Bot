@@ -1,0 +1,16 @@
+spec_version: 1
+name: Time-series momentum 252 (example)
+description: >-
+  Example translated from the original time_series_momentum_daily strategy. Long when the close
+  is above the close 252 sessions earlier; otherwise exit (the original emits EXIT whenever it is
+  not LONG).
+timeframe: daily
+direction: long_only
+indicators:
+  lookback_close: {type: lag, source: close, periods: 252}
+entry:
+  all_of:
+    - {left: close, op: gt, right: lookback_close}
+exit:
+  any_of:
+    - {left: close, op: le, right: lookback_close}

@@ -68,6 +68,11 @@ class BacktestTrade(TimestampedModel, Base):
     realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
     net_pnl: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
     holding_period_sessions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Research (0031): the actual rounding residual of the entry fill under the run's
+    # quantity policy; ``None`` on trading-path rows.
+    rounding_slack: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=6), nullable=True
+    )
 
     strategy_run: Mapped["StrategyRun"] = relationship(back_populates="backtest_trades")
     symbol_ref: Mapped["Symbol"] = relationship()

@@ -36,6 +36,7 @@ from trading_platform.services.config.validation import (
     ExecutionMode,
     validate_config,
 )
+from trading_platform.services.research.environment import apply_research_environment
 
 # Distinct from CONCURRENT_RUN_LOCK_EXIT_CODE (services/concurrency_guard.py,
 # value 3) so operators/schedulers can tell a config/DB startup refusal apart
@@ -62,6 +63,10 @@ def enforce_startup_config(
     except ConfigValidationError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(CONFIG_VALIDATION_EXIT_CODE) from exc
+
+    # Research mode pins the exchange-calendar start (and clears it otherwise) at the
+    # single process chokepoint, so worker and API never diverge on it.
+    apply_research_environment(settings)
 
     if require_database:
         reachable, reason = check_database_connection(settings)

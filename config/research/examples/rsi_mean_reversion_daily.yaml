@@ -1,0 +1,16 @@
+spec_version: 1
+name: RSI mean reversion 14 (example)
+description: >-
+  Example translated from the original rsi_mean_reversion_daily strategy. The original feeds a
+  100-bar window to Wilder's recursion, so history is 100 (mathematical minimum 15). Long when the
+  RSI is below 30; exit when it is above 70.
+timeframe: daily
+direction: long_only
+indicators:
+  rsi14: {type: rsi, source: close, window: 14, history: 100}
+entry:
+  all_of:
+    - {left: rsi14, op: lt, right: 30}
+exit:
+  any_of:
+    - {left: rsi14, op: gt, right: 70}

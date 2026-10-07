@@ -137,6 +137,16 @@ class BaseStrategy(ABC):
             "Override this method to emit strategy signals."
         )
 
+    def bar_source(self) -> tuple[str, bool]:
+        """``(provider, adjusted)`` the strategy passes explicitly to every bar read.
+
+        Trading default is ``("polygon", True)``, the access layer's own defaults,
+        so the recorded evaluation-manifest parameters stay byte-identical.
+        Research mode points it at the research provider through settings.
+        """
+        research = self.settings.research
+        return research.bar_provider, research.bar_adjusted
+
     @property
     def warmup_periods(self) -> int:
         """Minimum number of daily bars required before signals are emitted.

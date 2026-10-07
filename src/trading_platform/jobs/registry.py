@@ -365,3 +365,78 @@ def build_default_registry(settings: Settings | None = None) -> JobRegistry:
     )
 
     return registry
+
+
+RESEARCH_JOB_TYPES: tuple[str, ...] = (
+    "catalog-sync",
+    "ingest-tiingo-bars",
+    "sync-market-sessions",
+    "research-freeze",
+    "research-backtest",
+    "research-evaluate",
+)
+"""The closed set a research-mode process registers (plan S0 + S3). No trading Job type
+(paper session, broker sync, reconciliation, risk evaluation, external activity,
+Polygon ingest, symbol metadata sync) is reachable in research mode."""
+
+
+def build_research_registry(settings: Settings | None = None) -> JobRegistry:
+    """Registry for ``research.mode`` processes: exactly ``RESEARCH_JOB_TYPES``.
+
+    Separate from ``build_default_registry`` so the trading registry's pinned
+    contents never change. Research Job types are appended here as later stages
+    land (``research-backtest``, ``research-evaluate`` in S3).
+    """
+    resolved = settings or load_settings()
+    registry = JobRegistry()
+
+    from trading_platform.jobs.handlers.catalog_sync import CatalogSyncJobHandler
+    from trading_platform.jobs.handlers.catalog_sync_submission import CatalogSyncSubmissionSpec
+    from trading_platform.jobs.handlers.ingest_tiingo_bars import IngestTiingoBarsJobHandler
+    from trading_platform.jobs.handlers.ingest_tiingo_bars_submission import (
+        IngestTiingoBarsSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.research_jobs import (
+        ResearchBacktestJobHandler,
+        ResearchEvaluateJobHandler,
+        ResearchFreezeJobHandler,
+    )
+    from trading_platform.jobs.handlers.research_submission import (
+        ResearchBacktestSubmissionSpec,
+        ResearchEvaluateSubmissionSpec,
+        ResearchFreezeSubmissionSpec,
+    )
+    from trading_platform.jobs.handlers.sync_market_sessions import (
+        SyncMarketSessionsJobHandler,
+    )
+    from trading_platform.jobs.handlers.sync_market_sessions_submission import (
+        SyncMarketSessionsSubmissionSpec,
+    )
+
+    registry.register(
+        CatalogSyncJobHandler(settings=resolved), submission_spec=CatalogSyncSubmissionSpec(resolved)
+    )
+    registry.register(
+        IngestTiingoBarsJobHandler(settings=resolved),
+        submission_spec=IngestTiingoBarsSubmissionSpec(resolved),
+    )
+    registry.register(
+        SyncMarketSessionsJobHandler(settings=resolved),
+        submission_spec=SyncMarketSessionsSubmissionSpec(resolved),
+    )
+    registry.register(ResearchFreezeJobHandler(settings=resolved), submission_spec=ResearchFreezeSubmissionSpec(resolved))
+    registry.register(
+        ResearchBacktestJobHandler(settings=resolved), submission_spec=ResearchBacktestSubmissionSpec(resolved)
+    )
+    registry.register(
+        ResearchEvaluateJobHandler(settings=resolved), submission_spec=ResearchEvaluateSubmissionSpec(resolved)
+    )
+    return registry
+
+
+def build_registry_for(settings: Settings | None = None) -> JobRegistry:
+    """The registry a process should run: research when ``research.mode`` is on, else trading."""
+    resolved = settings or load_settings()
+    if resolved.research.mode:
+        return build_research_registry(resolved)
+    return build_default_registry(resolved)

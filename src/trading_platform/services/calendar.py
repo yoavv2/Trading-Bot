@@ -25,9 +25,29 @@ logger = logging.getLogger(__name__)
 _DEFAULT_EXCHANGE = "XNYS"
 
 
+_PINNED_CALENDAR_START: date | None = None
+
+
+def pin_calendar_start(start: date | None) -> None:
+    """Pin (or clear, with ``None``) the first session of every calendar this
+    module builds. Research mode sets it from ``settings.research.calendar_start``
+    so the library's rolling default bound cannot shorten usable history. The
+    trading path never calls this: with no pin, ``get_calendar`` is the
+    library-default call it always was."""
+
+    global _PINNED_CALENDAR_START
+    _PINNED_CALENDAR_START = start
+
+
+def pinned_calendar_start() -> date | None:
+    return _PINNED_CALENDAR_START
+
+
 def get_calendar(exchange: str = _DEFAULT_EXCHANGE) -> Any:
     """Return an exchange_calendars calendar object for the given exchange."""
-    return xcals.get_calendar(exchange)
+    if _PINNED_CALENDAR_START is None:
+        return xcals.get_calendar(exchange)
+    return xcals.get_calendar(exchange, start=pd.Timestamp(_PINNED_CALENDAR_START))
 
 
 def sessions_in_range(

@@ -117,6 +117,7 @@ class TrendFollowingDailyStrategy(BaseStrategy):
         exit_window = config.exits.exit_window
 
         signals: list[Signal] = []
+        provider, adjusted = self.bar_source()
 
         for ticker in config.universe:
             bars = bars_for_sessions(
@@ -124,6 +125,8 @@ class TrendFollowingDailyStrategy(BaseStrategy):
                 symbol=ticker,
                 n_sessions=warmup,
                 as_of=as_of,
+                adjusted=adjusted,
+                provider=provider,
             )
 
             snapshot, signal = self._evaluate_symbol(

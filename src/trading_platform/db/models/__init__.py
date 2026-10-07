@@ -56,6 +56,23 @@ from trading_platform.db.models.recovery_record import (
     RecoveryRecordKind,
     UnresolvedReason,
 )
+from trading_platform.db.models.research import (
+    AiDraft,
+    AssetCatalogEntry,
+    AssetList,
+    AssetListItem,
+    DataFreeze,
+    ProviderRequestLedgerEntry,
+    ResearchFreeze,
+    ResearchRunLink,
+    ResearchStudy,
+    StrategyDraft,
+    StrategyVersion,
+    StudyEvaluation,
+    StudyRevision,
+    StudyRevisionJob,
+    TestWindowExposure,
+)
 from trading_platform.db.models.risk_event import RiskEvent
 from trading_platform.db.models.strategy import Strategy, StrategyStatus
 from trading_platform.db.models.strategy_run import StrategyRun, StrategyRunStatus, StrategyRunType
@@ -67,6 +84,21 @@ from trading_platform.db.models.system_control import (
 )
 
 __all__ = [
+    "AiDraft",
+    "AssetCatalogEntry",
+    "AssetList",
+    "AssetListItem",
+    "DataFreeze",
+    "ProviderRequestLedgerEntry",
+    "ResearchFreeze",
+    "ResearchRunLink",
+    "ResearchStudy",
+    "StrategyDraft",
+    "StrategyVersion",
+    "StudyEvaluation",
+    "StudyRevision",
+    "StudyRevisionJob",
+    "TestWindowExposure",
     "AbsenceEvidenceItem",
     "AccountReconciliationRun",
     "AccountReconciliationScope",

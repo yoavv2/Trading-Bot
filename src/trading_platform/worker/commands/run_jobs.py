@@ -15,7 +15,7 @@ import socket
 from trading_platform.core.logging import configure_logging, get_logger
 from trading_platform.core.settings import build_settings_payload
 from trading_platform.core.startup import enforce_startup_config
-from trading_platform.jobs.registry import build_default_registry
+from trading_platform.jobs.registry import build_registry_for
 from trading_platform.jobs.runner import run_worker_loop
 from trading_platform.services.config.validation import ExecutionMode, config_failure_message
 
@@ -50,7 +50,9 @@ def run_jobs_command(args: argparse.Namespace) -> None:
     # not an authorization/uniqueness mechanism).
     worker_id = args.worker_id or f"{socket.gethostname()}:{os.getpid()}"
 
-    registry = build_default_registry(settings)
+    # Research mode (settings.research.mode) selects the research registry; the
+    # trading registry is otherwise unchanged.
+    registry = build_registry_for(settings)
     report = run_worker_loop(
         worker_id=worker_id,
         registry=registry,

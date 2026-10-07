@@ -728,6 +728,10 @@ _MAKEFILE = _ROOT / "Makefile"
 _SCRIPT_EXEMPTIONS: dict[str, str] = {
     "migrate.py": "deployment tooling (schema migrations)",
     "seed_phase1.py": "deployment tooling (strategy catalog seed)",
+    "create_research_db.py": (
+        "deployment tooling (creates and migrates the isolated research database; "
+        "optionally restores a preserved inputs export into it; never touches the trading DB)"
+    ),
     "generate_signals.py": (
         "read-only: evaluates the strategy against persisted bars, writes nothing "
         "(verified transitively)"
@@ -741,7 +745,7 @@ _SCRIPT_EXEMPTIONS: dict[str, str] = {
     ),
     "report_strategy_analytics.py": "read/report (D-31; tests/test_read_path_purity.py)",
 }
-_DEPLOYMENT_TOOLING = {"migrate.py", "seed_phase1.py"}
+_DEPLOYMENT_TOOLING = {"migrate.py", "seed_phase1.py", "create_research_db.py"}
 _KEPT_MAKE_TARGETS = {
     "up",
     "down",
@@ -760,6 +764,13 @@ _KEPT_MAKE_TARGETS = {
 }
 _SCRIPT_TOP_LEVEL_DEFS: dict[str, set[str]] = {
     "migrate.py": {"build_alembic_config", "build_parser", "main"},
+    "create_research_db.py": {
+        "build_parser",
+        "create_database_if_missing",
+        "describe_target",
+        "main",
+        "upgrade_to_head",
+    },
     "seed_phase1.py": {"_config_reference", "seed_phase_one", "build_parser", "main"},
     "generate_signals.py": {"build_parser", "resolve_as_of", "main"},
     "export_backtest_report.py": {"build_parser", "main"},
@@ -796,6 +807,11 @@ _MUTATING_ENTRY_POINTS = {
     "authorize_send",
     "complete_attempt_late",
     "ingest_daily_bars",
+    # Research (S0): research-DB writers; reachable from Job handlers and deployment tooling only.
+    "ingest_tiingo_daily_bars",
+    "sync_asset_catalog",
+    "create_data_freeze",
+    "restore_inputs",
     "sync_symbol_metadata",
     "upsert_symbol_metadata",
     "sync_market_sessions",

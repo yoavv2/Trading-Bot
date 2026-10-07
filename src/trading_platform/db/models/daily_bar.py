@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -53,12 +54,20 @@ class DailyBar(TimestampedModel, Base):
     high: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
     low: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
     close: Mapped[Decimal] = mapped_column(Numeric(precision=20, scale=6), nullable=False)
-    volume: Mapped[int] = mapped_column(Integer, nullable=False)
+    volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
     vwap: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
     trade_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     adjusted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     provider: Mapped[str] = mapped_column(String(64), nullable=False, default="polygon")
     provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Research (0031): corporate-action factors stored on raw rows (Tiingo). ``None`` on
+    # trading-path rows, which never carry them.
+    split_factor: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=True
+    )
+    dividend_cash: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=True
+    )
 
     symbol_ref: Mapped["Symbol"] = relationship(
         back_populates="daily_bars",

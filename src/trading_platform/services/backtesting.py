@@ -33,6 +33,54 @@ from trading_platform.strategies.registry import StrategyRegistry, build_default
 from trading_platform.strategies.signals import Signal, SignalDirection
 
 MONEY_SCALE = Decimal("0.000001")
+FRACTIONAL_QUANTITY_SCALE = Decimal("0.000001")
+
+QUANTITY_POLICY_WHOLE_SHARES = "whole_shares"
+QUANTITY_POLICY_FRACTIONAL = "fractional"
+
+
+@dataclass(frozen=True)
+class EngineOptions:
+    """Explicit engine inputs. ``from_settings`` reproduces the trading path exactly
+    (whole shares, ``settings.backtest`` capital/costs/slots, the research bar source
+    defaults ``polygon``/adjusted); research runs pass every value explicitly
+    (proposal Part H.2/J.3: one asset, one slot, study capital and costs, the study's
+    quantity policy, ``rounding_slack`` recorded per fill, provider/adjusted pinned).
+    """
+
+    initial_capital: Decimal
+    commission_per_order: Decimal
+    slippage_bps: Decimal
+    max_concurrent_positions: int
+    quantity_policy: str
+    bar_provider: str
+    bar_adjusted: bool
+    research: bool = False
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "EngineOptions":
+        backtest_settings = settings.backtest
+        return cls(
+            initial_capital=_money(backtest_settings.initial_capital),
+            commission_per_order=_money(backtest_settings.fees.commission_per_order),
+            slippage_bps=Decimal(str(backtest_settings.slippage.bps)),
+            max_concurrent_positions=backtest_settings.max_concurrent_positions,
+            quantity_policy=QUANTITY_POLICY_WHOLE_SHARES,
+            bar_provider=settings.research.bar_provider,
+            bar_adjusted=settings.research.bar_adjusted,
+            research=False,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "initial_capital": str(self.initial_capital),
+            "commission_per_order": str(self.commission_per_order),
+            "slippage_bps": str(self.slippage_bps),
+            "max_concurrent_positions": self.max_concurrent_positions,
+            "quantity_policy": self.quantity_policy,
+            "bar_provider": self.bar_provider,
+            "bar_adjusted": self.bar_adjusted,
+        }
 
 
 @dataclass(frozen=True)
@@ -273,13 +321,21 @@ def _execute_backtest_run(
     strategy,
     from_date: date,
     to_date: date,
+    options: EngineOptions | None = None,
 ) -> dict[str, Any]:
-    backtest_settings = settings.backtest
     exchange = settings.market_data.calendar.exchange
-    initial_capital = _money(backtest_settings.initial_capital)
-    commission_per_order = _money(backtest_settings.fees.commission_per_order)
-    slippage_bps = Decimal(str(backtest_settings.slippage.bps))
-    slot_notional = initial_capital / Decimal(backtest_settings.max_concurrent_positions)
+    # Trading path: every value below is what ``settings.backtest`` always supplied, and
+    # the bar source is the access layer's own default; research passes its own options.
+    opts = options or EngineOptions.from_settings(settings)
+    bar_provider = opts.bar_provider
+    bar_adjusted = opts.bar_adjusted
+    initial_capital = opts.initial_capital
+    commission_per_order = opts.commission_per_order
+    slippage_bps = opts.slippage_bps
+    max_concurrent_positions = opts.max_concurrent_positions
+    slot_notional = initial_capital / Decimal(max_concurrent_positions)
+    zero_quantity_fill_count = 0
+    rounding_slack_total = Decimal("0")
 
     with session_scope(settings) as session:
         strategy_run = session.get(StrategyRun, run_id)
@@ -321,6 +377,8 @@ def _execute_backtest_run(
                 session,
                 session_date,
                 symbols=list(strategy.metadata.universe),
+                adjusted=bar_adjusted,
+                provider=bar_provider,
             )
             fills_due = pending_actions.pop(session_date, [])
 
@@ -363,7 +421,7 @@ def _execute_backtest_run(
                 if action.signal.symbol in open_positions:
                     skipped_entry_fill_count += 1
                     continue
-                if len(open_positions) >= backtest_settings.max_concurrent_positions:
+                if len(open_positions) >= max_concurrent_positions:
                     skipped_entry_fill_count += 1
                     continue
 
@@ -373,14 +431,18 @@ def _execute_backtest_run(
                     continue
 
                 fill_price = _apply_entry_fill_price(bar.open, slippage_bps)
-                quantity = _entry_quantity(
+                quantity, rounding_slack = _entry_quantity(
                     cash=cash,
                     slot_notional=slot_notional,
                     fill_price=fill_price,
                     commission=commission_per_order,
+                    quantity_policy=opts.quantity_policy,
                 )
                 if quantity <= 0:
+                    # Proposal J.3: a quantity that rounds to zero under the selected policy
+                    # is a recorded finding, not a silent skip.
                     skipped_entry_fill_count += 1
+                    zero_quantity_fill_count += 1
                     continue
 
                 entry_slippage = _slippage_cost(bar.open, fill_price, quantity)
@@ -396,7 +458,10 @@ def _execute_backtest_run(
                     entry_slippage=entry_slippage,
                     exit_commission=Decimal("0"),
                     exit_slippage=Decimal("0"),
+                    # ``None`` on trading-path rows (unchanged); the actual residual on research rows.
+                    rounding_slack=rounding_slack if opts.research else None,
                 )
+                rounding_slack_total += rounding_slack
                 session.add(trade)
                 session.flush()
 
@@ -448,7 +513,7 @@ def _execute_backtest_run(
                 projected_open_positions = (
                     len(open_positions) - len(scheduled_exit_symbols) + scheduled_entry_count
                 )
-                if projected_open_positions >= backtest_settings.max_concurrent_positions:
+                if projected_open_positions >= max_concurrent_positions:
                     signal_actions[signal.symbol] = ("ignored_max_positions", None)
                     max_positions_rejections += 1
                     continue
@@ -537,6 +602,11 @@ def _execute_backtest_run(
             "starting_capital": float(initial_capital),
             "ending_equity": float(ending_equity),
         }
+        if opts.research:
+            # Research-only, additive keys (the trading summary stays byte-identical).
+            summary["engine_options"] = opts.to_dict()
+            summary["zero_quantity_fills"] = zero_quantity_fill_count
+            summary["rounding_slack_total"] = str(_money(rounding_slack_total))
         strategy_run.result_summary = summary
         return summary
 
@@ -596,11 +666,27 @@ def _entry_quantity(
     slot_notional: Decimal,
     fill_price: Decimal,
     commission: Decimal,
-) -> Decimal:
+    quantity_policy: str = QUANTITY_POLICY_WHOLE_SHARES,
+) -> tuple[Decimal, Decimal]:
+    """``(quantity, rounding_slack)`` under the policy (proposal J.3).
+
+    ``affordable_notional = min(slot_notional, cash - commission)``; the quantity is
+    rounded DOWN (to a whole share, or to six decimals under ``fractional``), so
+    ``quantity * fill_price <= affordable_notional`` always holds and a fill can never
+    overspend. The slack is the actual residual ``affordable_notional - quantity * fill_price``.
+    """
+
     affordable_notional = min(slot_notional, cash - commission)
     if affordable_notional <= 0:
-        return Decimal("0")
-    return (affordable_notional / fill_price).quantize(Decimal("1"), rounding=ROUND_DOWN)
+        return Decimal("0"), Decimal("0")
+    if quantity_policy == QUANTITY_POLICY_FRACTIONAL:
+        quantity = (affordable_notional / fill_price).quantize(FRACTIONAL_QUANTITY_SCALE, rounding=ROUND_DOWN)
+    elif quantity_policy == QUANTITY_POLICY_WHOLE_SHARES:
+        quantity = (affordable_notional / fill_price).quantize(Decimal("1"), rounding=ROUND_DOWN)
+    else:
+        raise ValueError(f"unknown quantity policy {quantity_policy!r}")
+    slack = _money(affordable_notional - quantity * fill_price) if quantity > 0 else Decimal("0")
+    return quantity, slack
 
 
 def _money(value: Decimal | float | int) -> Decimal:

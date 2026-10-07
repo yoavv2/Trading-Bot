@@ -8,6 +8,9 @@ from datetime import UTC, datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from trading_platform.api.research.strategies import router as research_strategies_router
+from trading_platform.api.research.studies import revisions_router as research_revisions_router
+from trading_platform.api.research.studies import studies_router as research_studies_router
 from trading_platform.api.routes.analytics import router as analytics_router
 from trading_platform.api.routes.controls import router as controls_router
 from trading_platform.api.routes.execution_operations import (
@@ -25,7 +28,7 @@ from trading_platform.api.routes.system import router as system_router
 from trading_platform.core.logging import configure_logging, get_logger
 from trading_platform.core.settings import load_settings
 from trading_platform.core.startup import enforce_startup_config
-from trading_platform.jobs.registry import JobRegistry, build_default_registry
+from trading_platform.jobs.registry import JobRegistry, build_registry_for
 from trading_platform.services.config.validation import ExecutionMode
 
 
@@ -38,8 +41,17 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.logging)
     logger = get_logger("trading_platform.bootstrap")
 
+    # The router set was chosen at construction from the same settings. A process whose
+    # environment changed in between would otherwise serve trading routes in research
+    # mode (or the reverse); refuse to start rather than serve the wrong surface.
+    if bool(settings.research.mode) != bool(getattr(app.state, "research_mode", False)):
+        raise RuntimeError(
+            "research.mode changed between application construction and startup; "
+            "restart the process so the mounted routers match the settings."
+        )
+
     if getattr(app.state, "job_registry", None) is None:
-        app.state.job_registry = build_default_registry(settings)
+        app.state.job_registry = build_registry_for(settings)
     app.state.settings = settings
     app.state.started_at = datetime.now(UTC).isoformat()
     app.state.bootstrapped = True
@@ -79,27 +91,54 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     return JSONResponse(status_code=500, content={"detail": {"code": "internal_error"}})
 
 
-def create_app(*, job_registry: JobRegistry | None = None) -> FastAPI:
+#: Infrastructure routers every process serves: liveness/readiness and the generic Job
+#: surface (list, detail, progress, logs, events, submit/cancel/retry). In research mode the
+#: Job routes act on the research-only registry, so no trading Job type is submittable.
+_INFRASTRUCTURE_ROUTERS = (health_router, jobs_router, job_types_router)
+
+#: Trading surface: strategy catalog, analytics, runs, operations, system, safety controls,
+#: recovery and execution operations, market-data state. Mounted only outside research mode.
+_TRADING_ROUTERS = (
+    strategies_router,
+    analytics_router,
+    runs_router,
+    operations_router,
+    system_router,
+    controls_router,
+    recovery_router,
+    execution_operations_router,
+    market_data_router,
+)
+
+#: Research surface (``/api/v1/research/*``): mounted only in research mode, so no research
+#: route exists on a trading process and no trading route exists on a research process.
+_RESEARCH_ROUTERS = (research_strategies_router, research_studies_router, research_revisions_router)
+
+
+def create_app(
+    *, job_registry: JobRegistry | None = None, research_mode: bool | None = None
+) -> FastAPI:
+    """Build the application for one mode.
+
+    ``research_mode`` defaults to ``settings.research.mode``. The two surfaces are
+    disjoint apart from the infrastructure routers; the lifespan re-checks the mode
+    against the startup settings and refuses to serve on a mismatch.
+    """
+
+    mode = load_settings().research.mode if research_mode is None else bool(research_mode)
     app = FastAPI(
-        title="Trading Strategy Platform",
+        title="Trading Strategy Platform" if not mode else "Trading Strategy Platform (research)",
         version="0.1.0",
         lifespan=lifespan,
     )
+    app.state.research_mode = mode
     if job_registry is not None:
         app.state.job_registry = job_registry
     app.add_exception_handler(Exception, _unhandled_exception_handler)
-    app.include_router(health_router)
-    app.include_router(strategies_router)
-    app.include_router(analytics_router)
-    app.include_router(runs_router)
-    app.include_router(jobs_router)
-    app.include_router(job_types_router)
-    app.include_router(operations_router)
-    app.include_router(system_router)
-    app.include_router(controls_router)
-    app.include_router(recovery_router)
-    app.include_router(execution_operations_router)
-    app.include_router(market_data_router)
+    for router in _INFRASTRUCTURE_ROUTERS:
+        app.include_router(router)
+    for router in _RESEARCH_ROUTERS if mode else _TRADING_ROUTERS:
+        app.include_router(router)
     return app
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -396,6 +397,76 @@ class OrchestrationSettings(BaseModel):
     mutations_enabled: bool = False
 
 
+
+class TiingoProviderSettings(BaseModel):
+    """Typed settings for the Tiingo end-of-day REST provider (research only).
+
+    The key is sent only as an ``Authorization: Token`` header; the adapter never
+    places it in a URL. ``requests_per_hour`` is the free plan's published limit
+    and bounds the adapter's in-process request budget.
+    """
+
+    base_url: str = "https://api.tiingo.com"
+    api_key: str = ""
+    max_retries: int = 3
+    retry_backoff_factor: float = 0.5
+    timeout_seconds: float = 30.0
+    # Verified entitlement of the free plan (2026-10-07): 50 requests per hour, 1,000 per
+    # day, 500 unique symbols per month. Configure these to the account's actual plan; the
+    # shared ledger (``DatabaseRequestBudget``) enforces them across every process.
+    requests_per_hour: int = Field(default=50, ge=1)
+    requests_per_day: int = Field(default=1000, ge=1)
+    unique_symbols_per_month: int = Field(default=500, ge=1)
+
+
+class ResearchAiSettings(BaseModel):
+    """Assistant configuration (S5). Disabled until a key AND explicit limits exist.
+
+    No numerical budget is approved; ``max_requests_per_day`` / ``max_output_tokens``
+    default to 0, which keeps the assistant unusable even when ``enabled`` is set.
+    """
+
+    enabled: bool = False
+    provider: Literal["anthropic"] = "anthropic"
+    model: str = "claude-sonnet-5-5"
+    api_key: str = ""
+    timeout_seconds: float = 60.0
+    max_requests_per_day: int = Field(default=0, ge=0)
+    max_output_tokens: int = Field(default=0, ge=0)
+    max_input_characters: int = Field(default=20_000, ge=1)
+    max_revisions_per_draft: int = Field(default=5, ge=1)
+
+    @property
+    def usable(self) -> bool:
+        return (
+            self.enabled
+            and bool(self.api_key)
+            and self.max_requests_per_day > 0
+            and self.max_output_tokens > 0
+        )
+
+
+class ResearchSettings(BaseModel):
+    """Research-mode settings. Every default keeps the trading path unchanged.
+
+    ``mode`` switches the process into research mode (research Job registry only,
+    research routers only). ``bar_provider`` / ``bar_adjusted`` are the bar source
+    the engine and the strategies pass explicitly to the access layer; the trading
+    defaults are ``("polygon", True)``. ``calendar_start`` pins the exchange
+    calendar's first session for research so the library's rolling default bound
+    (about twenty years back, moving daily) cannot silently shorten usable history.
+    """
+
+    mode: bool = False
+    bar_provider: str = "polygon"
+    bar_adjusted: bool = True
+    calendar_start: date | None = None
+    max_assets_per_study: int = Field(default=10, ge=1)
+    quantity_policy_default: Literal["fractional", "whole_shares"] = "fractional"
+    tiingo: TiingoProviderSettings = TiingoProviderSettings()
+    ai: ResearchAiSettings = ResearchAiSettings()
+
+
 class Settings(BaseModel):
     app: AppMetadata = AppMetadata()
     api: ApiSettings = ApiSettings()
@@ -410,6 +481,7 @@ class Settings(BaseModel):
     broker: BrokerSettings = BrokerSettings()
     execution: ExecutionSettings = ExecutionSettings()
     orchestration: OrchestrationSettings = OrchestrationSettings()
+    research: ResearchSettings = ResearchSettings()
 
 
 class EnvironmentOverrides(BaseSettings):
@@ -433,6 +505,7 @@ class EnvironmentOverrides(BaseSettings):
     broker: BrokerSettings = BrokerSettings()
     execution: ExecutionSettings = ExecutionSettings()
     orchestration: OrchestrationSettings = OrchestrationSettings()
+    research: ResearchSettings = ResearchSettings()
 
 
 def _resolve_path(raw_path: str | Path) -> Path:
@@ -507,10 +580,47 @@ def build_settings_payload(
     strategy_config = _load_strategy_bundle(resolved_strategy_dir)
     env_overrides = EnvironmentOverrides().model_dump(exclude_unset=True, mode="python")
 
-    return _deep_merge(
+    merged = _deep_merge(
         _deep_merge(_deep_merge(defaults, file_config), strategy_config),
         env_overrides,
     )
+    return _apply_tiingo_key_alias(merged)
+
+
+TIINGO_API_KEY_ALIAS = "TIINGO_API_KEY"
+
+
+def _tiingo_key_from_alias() -> str | None:
+    """Resolve the un-prefixed ``TIINGO_API_KEY`` alias (process env, then the
+    same dotenv file ``EnvironmentOverrides`` reads; ``None`` when that file is
+    disabled, as the test suite does). The value is returned, never logged."""
+
+    value = os.environ.get(TIINGO_API_KEY_ALIAS)
+    if value:
+        return value.strip() or None
+    env_file = EnvironmentOverrides.model_config.get("env_file")
+    if not env_file:
+        return None
+    path = _resolve_path(str(env_file))
+    if not path.exists():
+        return None
+    from dotenv import dotenv_values
+
+    aliased = dotenv_values(path).get(TIINGO_API_KEY_ALIAS)
+    return (aliased or "").strip() or None
+
+
+def _apply_tiingo_key_alias(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fill ``research.tiingo.api_key`` from the alias when the prefixed form is empty."""
+
+    research = payload.setdefault("research", {})
+    tiingo = research.setdefault("tiingo", {})
+    if tiingo.get("api_key"):
+        return payload
+    aliased = _tiingo_key_from_alias()
+    if aliased:
+        tiingo["api_key"] = aliased
+    return payload
 
 
 @lru_cache(maxsize=1)

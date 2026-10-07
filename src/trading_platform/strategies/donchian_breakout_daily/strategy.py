@@ -87,12 +87,15 @@ class DonchianBreakoutDailyStrategy(BaseStrategy):
         config = get_strategy_config(self.settings, "donchian_breakout_daily")
         params = config.indicators
         signals: list[Signal] = []
+        provider, adjusted = self.bar_source()
         for ticker in config.universe:
             bars = bars_for_sessions(
                 db_session,
                 symbol=ticker,
                 n_sessions=params.warmup_periods,
                 as_of=as_of,
+                adjusted=adjusted,
+                provider=provider,
             )
             snapshot, (direction, reason) = self._evaluate_symbol(
                 ticker=ticker,

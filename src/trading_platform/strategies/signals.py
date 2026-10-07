@@ -44,6 +44,12 @@ class SignalReason(str, Enum):
     RSI_NEUTRAL = "rsi_neutral"
     DONCHIAN_WITHIN_CHANNEL = "donchian_within_channel"
 
+    # Declarative (research) specification reasons -- generic, strategy-agnostic.
+    RULE_ENTRY = "rule_entry"
+    RULE_EXIT = "rule_exit"
+    RULE_NO_SIGNAL = "rule_no_signal"
+    RULE_INSUFFICIENT_HISTORY = "rule_insufficient_history"
+
 
 @dataclass(frozen=True)
 class IndicatorSnapshot:

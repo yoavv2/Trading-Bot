@@ -1,0 +1,17 @@
+spec_version: 1
+name: Donchian breakout 55/20 (example)
+description: >-
+  Example translated from the original donchian_breakout_daily strategy. Channels use the bars
+  strictly preceding the current one (shift 1). Long when the close breaks above the 55-session
+  high; exit when it breaks below the 20-session low.
+timeframe: daily
+direction: long_only
+indicators:
+  channel_high: {type: highest, source: high, window: 55, shift: 1}
+  channel_low: {type: lowest, source: low, window: 20, shift: 1}
+entry:
+  all_of:
+    - {left: close, op: gt, right: channel_high}
+exit:
+  any_of:
+    - {left: close, op: lt, right: channel_low}
