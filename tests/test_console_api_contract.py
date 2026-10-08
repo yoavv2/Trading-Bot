@@ -27,6 +27,10 @@ _API_LITERAL = re.compile(r"([\"'`])(/api/v1[^\"'`]*)\1")
 # the endpoint literal may sit on the line after the call's opening paren.
 _MUTATION_CALL = re.compile(r"\b(postJson|putJson)\s*<[^>]*>\s*\(\s*([\"'`])(/api/v1[^\"'`]*)\2")
 _MUTATION_METHOD = {"postJson": "POST", "putJson": "PUT"}
+# Research writes go through one helper that names the method first (console/src/lib/api.ts).
+_RESEARCH_MUTATION_CALL = re.compile(
+    r"\bresearchMutation\s*<[^>]*>\s*\(\s*[\"']?(POST|PUT|DELETE)[\"']?\s*,\s*([\"'`])(/api/v1[^\"'`]*)\2"
+)
 _WHOLE_SEGMENT_PARAM = re.compile(r"(?<=/)\$\{[^}]*\}(?=/|$)")
 _TRAILING_INTERPOLATION = re.compile(r"\$\{[^}]*\}")
 _PARAM_TOKEN = "__param__"
@@ -59,6 +63,9 @@ def _console_endpoints() -> set[tuple[str, str]]:
         for match in _MUTATION_CALL.finditer(source):
             mutation_offsets.add(match.start(2))
             endpoints.add((_MUTATION_METHOD[match.group(1)], _normalize(match.group(3))))
+        for match in _RESEARCH_MUTATION_CALL.finditer(source):
+            mutation_offsets.add(match.start(2))
+            endpoints.add((match.group(1), _normalize(match.group(3))))
         for match in _API_LITERAL.finditer(source):
             if match.start(1) not in mutation_offsets:
                 # fetchApi/useApiQuery only ever issue GET.
@@ -70,7 +77,10 @@ def _registered_routes() -> list[tuple[str, re.Pattern[str]]]:
     from trading_platform.api.app import create_app
 
     routes: list[tuple[str, re.Pattern[str]]] = []
-    for route in create_app().routes:
+    # The console serves both surfaces: the trading pages against a trading-mode API and
+    # the Research section against a research-mode API (mounted exclusively, S2 gap 1).
+    all_routes = [*create_app(research_mode=False).routes, *create_app(research_mode=True).routes]
+    for route in all_routes:
         candidates = (
             route.effective_candidates() if hasattr(route, "effective_candidates") else [route]
         )

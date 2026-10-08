@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
-import { KillSwitchBanner } from "@/components/KillSwitchBanner";
+import { KillSwitchBannerForMode, ResearchNavLink } from "@/components/research/ResearchGate";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,7 +30,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-zinc-950 text-zinc-100">
-        <nav className="flex items-center gap-6 border-b border-zinc-800 px-4 py-2 text-sm">
+        <nav className="flex flex-wrap items-center gap-x-6 gap-y-1 border-b border-zinc-800 px-4 py-2 text-sm">
           <span className="font-semibold tracking-tight text-zinc-300">
             Operator Console
           </span>
@@ -52,8 +52,9 @@ export default function RootLayout({
           <Link href="/controls" className="text-zinc-400 hover:text-zinc-100">
             Controls
           </Link>
+          <ResearchNavLink />
         </nav>
-        <KillSwitchBanner />
+        <KillSwitchBannerForMode />
         {children}
       </body>
     </html>

@@ -13,9 +13,10 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from trading_platform.api.dependencies import get_settings, require_mutations_enabled
+from trading_platform.orchestration.research_studies import build_study_service
 from trading_platform.services.research.freeze import InputsChangedAfterFreezeError
 from trading_platform.services.research.studies import StudyError, StudyService
 
@@ -24,7 +25,7 @@ revisions_router = APIRouter(prefix="/api/v1/research/revisions", tags=["researc
 
 
 def get_study_service(request: Request) -> StudyService:
-    return StudyService(get_settings(request))
+    return build_study_service(get_settings(request))
 
 
 Service = Annotated[StudyService, Depends(get_study_service)]
@@ -84,7 +85,7 @@ async def create_study(request: Request, service: Service) -> JSONResponse:
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_request", reason="settings_not_object")
     try:
         created = service.create_study(name=body["name"], kind=body.get("kind", "substantive"), settings=body["settings"])
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=created)
 
@@ -93,7 +94,7 @@ async def create_study(request: Request, service: Service) -> JSONResponse:
 def get_study(study_id: str, service: Service) -> dict[str, Any]:
     try:
         return {"as_of": _as_of(), "study": service.get_study(_uuid(study_id, "study_not_found"))}
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
 
 
@@ -104,7 +105,7 @@ async def create_revision(study_id: str, request: Request, service: Service) -> 
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_request", reason="settings_not_object")
     try:
         revision = service.create_revision(_uuid(study_id, "study_not_found"), settings=body["settings"])
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
     return JSONResponse(status_code=status.HTTP_201_CREATED, content={"revision": revision})
 
@@ -118,7 +119,7 @@ async def create_revision(study_id: str, request: Request, service: Service) -> 
 def get_revision(revision_id: str, service: Service) -> dict[str, Any]:
     try:
         return {"as_of": _as_of(), "revision": service.get_revision(_uuid(revision_id, "revision_not_found"))}
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
 
 
@@ -126,7 +127,7 @@ def get_revision(revision_id: str, service: Service) -> dict[str, Any]:
 def get_readiness(revision_id: str, service: Service) -> dict[str, Any]:
     try:
         return {"as_of": _as_of(), "readiness": service.readiness(_uuid(revision_id, "revision_not_found"))}
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
 
 
@@ -134,7 +135,7 @@ def get_readiness(revision_id: str, service: Service) -> dict[str, Any]:
 def run_revision(revision_id: str, service: Service) -> JSONResponse:
     try:
         submitted = service.run_initial(_uuid(revision_id, "revision_not_found"))
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
     return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=submitted)
 
@@ -143,7 +144,7 @@ def run_revision(revision_id: str, service: Service) -> JSONResponse:
 def get_progress(revision_id: str, service: Service) -> dict[str, Any]:
     try:
         return {"as_of": _as_of(), **service.progress(_uuid(revision_id, "revision_not_found"))}
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
 
 
@@ -151,7 +152,7 @@ def get_progress(revision_id: str, service: Service) -> dict[str, Any]:
 def get_results(revision_id: str, service: Service) -> dict[str, Any]:
     try:
         return {"as_of": _as_of(), **service.results(_uuid(revision_id, "revision_not_found"))}
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
 
 
@@ -159,7 +160,7 @@ def get_results(revision_id: str, service: Service) -> dict[str, Any]:
 def get_comparison(revision_id: str, service: Service) -> dict[str, Any]:
     try:
         return {"as_of": _as_of(), **service.comparison(_uuid(revision_id, "revision_not_found"))}
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
 
 
@@ -167,8 +168,27 @@ def get_comparison(revision_id: str, service: Service) -> dict[str, Any]:
 def get_exposures(revision_id: str, service: Service) -> dict[str, Any]:
     try:
         return {"as_of": _as_of(), **service.exposures(_uuid(revision_id, "revision_not_found"))}
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
+
+
+@revisions_router.get("/{revision_id}/runs/{run_id}/curve")
+def get_run_curve(revision_id: str, run_id: str, service: Service) -> dict[str, Any]:
+    try:
+        return {"as_of": _as_of(), **service.run_curve(_uuid(revision_id, "revision_not_found"), _uuid(run_id, "revision_not_found"))}
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
+        raise _translate(exc) from exc
+
+
+@revisions_router.get("/{revision_id}/report", response_class=HTMLResponse)
+def get_report(revision_id: str, service: Service, format: str = "html") -> Any:
+    try:
+        documents = service.report_documents(_uuid(revision_id, "revision_not_found"))
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
+        raise _translate(exc) from exc
+    if format == "md":
+        return HTMLResponse(content=documents["markdown"], media_type="text/markdown; charset=utf-8")
+    return HTMLResponse(content=documents["html"])
 
 
 @revisions_router.post("/{revision_id}/freeze", dependencies=[Depends(require_mutations_enabled)])
@@ -188,7 +208,7 @@ async def freeze_revision(revision_id: str, request: Request, service: Service) 
             acceptance=body["acceptance"],
             co_leading_choice_reason=body.get("co_leading_choice_reason"),
         )
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=frozen)
 
@@ -201,7 +221,7 @@ async def run_final_test(revision_id: str, request: Request, service: Service) -
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_request", reason="rerun_not_boolean")
     try:
         submitted = service.run_final_test(_uuid(revision_id, "revision_not_found"), rerun=rerun)
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc
     return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=submitted)
 
@@ -210,5 +230,5 @@ async def run_final_test(revision_id: str, request: Request, service: Service) -
 def export_revision(revision_id: str, service: Service) -> dict[str, Any]:
     try:
         return service.export(_uuid(revision_id, "revision_not_found"))
-    except StudyError as exc:
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
         raise _translate(exc) from exc

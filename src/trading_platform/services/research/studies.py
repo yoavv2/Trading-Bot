@@ -23,6 +23,7 @@ import csv
 import hashlib
 import json
 import uuid
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -35,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from trading_platform.core.settings import Settings
 from trading_platform.db.models import Job, StrategyRun
+from trading_platform.db.models.market_session import MarketSession
 from trading_platform.db.models.research import (
     AssetCatalogEntry,
     AssetList,
@@ -50,8 +52,11 @@ from trading_platform.db.models.research import (
     TestWindowExposure,
 )
 from trading_platform.db.session import session_scope
-from trading_platform.jobs.dependencies import submit_job
-from trading_platform.services.calendar import get_calendar, pinned_calendar_start
+from trading_platform.services.calendar import (
+    get_calendar,
+    pinned_calendar_start,
+    sessions_in_range,
+)
 from trading_platform.services.read_recording import canonical_json, sha256_hex
 from trading_platform.services.research.backtest import (
     ResearchRunRequest,
@@ -75,6 +80,7 @@ from trading_platform.services.research.ranking import (
     final_test_outcome,
     rank_candidates,
 )
+from trading_platform.services.research.report import render_html, render_markdown
 from trading_platform.services.tiingo import PROVIDER as TIINGO_PROVIDER
 
 MODE_SINGLE = "single_asset_independent"
@@ -210,6 +216,16 @@ class StudySettings(BaseModel):
     adjusted: bool = True
     note: str = Field(default="", max_length=2000)
 
+    @field_validator("strategy_version_ids")
+    @classmethod
+    def _distinct_versions(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        # Several approved versions of ONE family are allowed (they compare as separate
+        # candidates); the same version twice would silently double its pairs, so it is
+        # refused rather than deduplicated.
+        if len(set(value)) != len(value):
+            raise ValueError("strategy_version_ids must not repeat a version")
+        return value
+
     @field_validator("assets", mode="before")
     @classmethod
     def _normalize_assets(cls, value: Any) -> list[str]:
@@ -322,9 +338,26 @@ def _lock(session: Session, name: str, key: uuid.UUID) -> None:
 # ---------------------------------------------------------------------------
 
 
+#: ``(session, job_type, payload, depends_on) -> job_id``: the Job submission seam. Domain
+#: services never import the Job framework (JOB-04); ``orchestration/research_studies.py``
+#: supplies ``jobs.dependencies.submit_job`` to the service instances that submit graphs.
+JobSubmitter = Callable[[Session, str, dict[str, Any], Sequence[uuid.UUID]], uuid.UUID]
+
+
+class JobSubmitterNotConfiguredError(StudyError):
+    code = "job_submitter_not_configured"
+    status = 500
+
+
 class StudyService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, job_submitter: JobSubmitter | None = None) -> None:
         self._settings = settings
+        self._job_submitter = job_submitter
+
+    def _submit(self, session: Session, job_type: str, payload: dict[str, Any], depends_on: Sequence[uuid.UUID] = ()) -> uuid.UUID:
+        if self._job_submitter is None:
+            raise JobSubmitterNotConfiguredError("this service instance cannot submit Jobs")
+        return self._job_submitter(session, job_type, payload, list(depends_on))
 
     # -- studies and revisions ---------------------------------------------
 
@@ -518,25 +551,27 @@ class StudyService:
                 if entry.catalog_end is None or entry.catalog_end < st.range.end:
                     err("coverage_end_too_early", pair, requested_end=st.range.end.isoformat(), catalog_end=_iso(entry.catalog_end))
 
-        freeze_job = session.execute(
-            select(StudyRevisionJob)
-            .where(StudyRevisionJob.study_revision_id == revision.id, StudyRevisionJob.role == ROLE_FREEZE)
-            .order_by(StudyRevisionJob.created_at.desc())
-        ).scalars().first()
-        if freeze_job is not None and freeze_job.detail.get("integrity_errors"):
-            for finding in freeze_job.detail["integrity_errors"]:
-                err("integrity_error", finding.get("asset", "?"), **{k: v for k, v in finding.items() if k != "asset"})
-        if revision.data_freeze_id is not None:
-            freeze = session.get(DataFreeze, revision.data_freeze_id)
-            if freeze is not None:
-                for reason in inputs_changed_after_freeze(session, freeze):
-                    err("inputs_changed_after_freeze", str(freeze.id), reason=reason)
+        # The integrity check compares downloaded bars with the exchange sessions stored in
+        # ``market_sessions``; without them every bar is ``date_not_session`` and the freeze
+        # fails for a reason that has nothing to do with the data. Listing the gap here keeps
+        # readiness honest: the operator syncs the sessions (``sync-market-sessions`` Job)
+        # before anything is downloaded. Checked only when every pair's warm-up start is
+        # known and inside the pinned calendar, so it never masks a warm-up error.
+        known_starts = [date.fromisoformat(v) for v in required_starts.values() if v is not None]
+        if known_starts and not any(e["code"] == "warmup_not_satisfiable" for e in errors):
+            self._check_market_sessions(session, err, min(known_starts), st.range.end)
 
+        preflight_errors = list(errors)
+        inputs = self._inputs_state(session, revision)
         return {
             "revision_id": str(revision.id),
-            "ready": not errors,
-            "status": "ready" if not errors else "not_ready",
-            "errors": errors,
+            # ``ready`` is the preflight verdict: what must hold before ingestion and the
+            # integrity check can begin. It is never an approval of the inputs.
+            "ready": not preflight_errors,
+            "status": "ready" if not preflight_errors else "not_ready",
+            "preflight": {"ready": not preflight_errors, "errors": preflight_errors},
+            "inputs": inputs,
+            "errors": preflight_errors,
             "checked": {
                 "strategy_versions": len(st.strategy_version_ids),
                 "assets": len(st.assets),
@@ -545,6 +580,163 @@ class StudyService:
                 "pinned_calendar_start": _iso(pinned),
             },
         }
+
+    def _check_market_sessions(self, session: Session, err: Callable[..., None], start: date, end: date) -> None:
+        """``market_sessions_not_synced`` when the exchange sessions the integrity check and
+        the freeze rely on are not all stored for ``[start, end]``."""
+
+        exchange = self._settings.market_data.calendar.exchange
+        try:
+            expected = sessions_in_range(start, end, exchange)
+        except Exception:  # noqa: BLE001 - a range outside the calendar's bounds is reported by the window checks
+            return
+        if not expected:
+            return
+        stored = set(
+            session.execute(
+                select(MarketSession.session_date)
+                .where(MarketSession.exchange == exchange)
+                .where(MarketSession.session_date >= start)
+                .where(MarketSession.session_date <= end)
+            ).scalars()
+        )
+        missing = sorted(d for d in expected if d not in stored)
+        if missing:
+            err(
+                "market_sessions_not_synced",
+                "market_sessions",
+                exchange=exchange,
+                from_date=start.isoformat(),
+                to_date=end.isoformat(),
+                missing_sessions=len(missing),
+                first_missing=missing[0].isoformat(),
+                last_missing=missing[-1].isoformat(),
+            )
+
+    def _inputs_state(self, session: Session, revision: StudyRevision) -> dict[str, Any]:
+        """The integrity/freeze verdict for THIS revision's CURRENT inputs (proposal H.3,
+        S4 readiness contract):
+
+        * ``pending``: no freeze attempt has completed (none submitted, or still queued/running);
+        * ``failed``: the latest freeze attempt failed; its integrity findings are listed and
+          every downstream backtest and evaluation of that graph was cancelled by the framework;
+        * ``verified``: the latest attempt succeeded and nothing in the frozen scope changed since;
+        * ``stale``: a freeze exists but the inputs changed after it (the reasons are listed);
+          results computed on the frozen inputs stay valid, new Jobs refuse to run.
+
+        Findings always carry the attempt they came from, so an old failure is never shown as
+        the verdict on newer inputs."""
+
+        links = list(
+            session.execute(
+                select(StudyRevisionJob)
+                .where(StudyRevisionJob.study_revision_id == revision.id, StudyRevisionJob.role == ROLE_FREEZE)
+                .order_by(StudyRevisionJob.created_at)
+            ).scalars()
+        )
+        attempts: list[tuple[Job, StudyRevisionJob]] = []
+        for link in links:
+            job = session.get(Job, link.job_id)
+            if job is None:
+                continue
+            attempts.append((job, link))
+            # Operator retries of a failed freeze Job (one level) belong to the same attempt chain.
+            for retry in session.execute(select(Job).where(Job.retry_of_job_id == job.id).order_by(Job.queued_at)).scalars():
+                attempts.append((retry, link))
+        attempts.sort(key=lambda pair: pair[0].queued_at)
+        latest = attempts[-1][0] if attempts else None
+        latest_link = attempts[-1][1] if attempts else None
+        freeze = session.get(DataFreeze, revision.data_freeze_id) if revision.data_freeze_id else None
+        errors: list[dict[str, Any]] = []
+        attempt_summary = (
+            {
+                "job_id": str(latest.id),
+                "status": latest.status.value,
+                "queued_at": _iso(latest.queued_at),
+                "completed_at": _iso(latest.completed_at),
+                "failure_message": latest.failure_message,
+                "link": f"/api/v1/jobs/{latest.id}",
+            }
+            if latest is not None
+            else None
+        )
+        if latest is None or latest.status.value in ("queued", "running"):
+            state = "pending"
+        elif latest.status.value == "cancelled":
+            state = "pending"
+            errors.append({"code": "freeze_cancelled", "item": str(latest.id)})
+        elif latest.status.value == "failed":
+            state = "failed"
+            findings = (latest_link.detail.get("integrity_errors") if latest_link else None) or []
+            for finding in findings:
+                errors.append(
+                    {
+                        "code": "integrity_error",
+                        "item": finding.get("asset", "?"),
+                        "finding": finding.get("code"),
+                        "severity": finding.get("severity"),
+                        "session_date": finding.get("session_date"),
+                        "detail": finding.get("detail"),
+                    }
+                )
+            if not findings:
+                errors.append({"code": "freeze_failed", "item": str(latest.id), "reason": latest.failure_message})
+        elif freeze is None:
+            state = "pending"
+        else:
+            reasons = inputs_changed_after_freeze(session, freeze)
+            if reasons:
+                state = "stale"
+                for reason in reasons:
+                    errors.append({"code": "inputs_changed_after_freeze", "item": str(freeze.id), "reason": reason})
+            else:
+                state = "verified"
+        return {
+            "state": state,
+            "verified": state == "verified",
+            "errors": errors,
+            "attempt": attempt_summary,
+            "attempts": len(attempts),
+            "data_freeze": {
+                "data_freeze_id": str(freeze.id),
+                "frozen_at": _iso(freeze.frozen_at),
+                "input_digest": freeze.input_digest,
+                "integrity": freeze.integrity_summary,
+                "inputs_path": freeze.inputs_path,
+            }
+            if freeze is not None
+            else None,
+            "downstream": (
+                "a failed freeze cancels every backtest and evaluation of its graph"
+                if state == "failed"
+                else "backtests and evaluation run only after a verified freeze"
+            ),
+        }
+
+    def run_curve(self, revision_id: uuid.UUID, run_id: uuid.UUID) -> dict[str, Any]:
+        """Equity and drawdown series of one run of the revision (for charts and the report)."""
+
+        with session_scope(self._settings) as session:
+            self._load_revision(session, revision_id)
+            link = session.get(ResearchRunLink, run_id)
+            if link is None or link.study_revision_id != revision_id:
+                raise RevisionNotFoundError(run_id=str(run_id), reason="run_not_in_revision")
+            _trades, equity = load_run_rows(session, run_id)
+            peak: Decimal | None = None
+            points = []
+            for row in equity:
+                peak = row.total_equity if peak is None or row.total_equity > peak else peak
+                drawdown = float(row.total_equity / peak - Decimal(1)) if peak and peak > 0 else 0.0
+                points.append({"session_date": row.session_date.isoformat(), "total_equity": float(row.total_equity), "drawdown": drawdown, "gross_exposure": float(row.gross_exposure)})
+            return {
+                "revision_id": str(revision_id),
+                "run_id": str(run_id),
+                "asset": link.asset,
+                "window_role": link.window_role,
+                "benchmark": link.strategy_version_id is None,
+                "strategy_version_id": str(link.strategy_version_id) if link.strategy_version_id else None,
+                "points": points,
+            }
 
     # -- initial run graph ------------------------------------------------------
 
@@ -561,39 +753,39 @@ class StudyService:
                 date.fromisoformat(v) for v in readiness["checked"]["required_start_by_pair"].values() if v is not None
             )
             jobs: dict[str, Any] = {}
-            ingest_id = submit_job(
-                job_type="ingest-tiingo-bars",
-                payload={"from_date": required.isoformat(), "to_date": st.range.end.isoformat(), "assets": list(st.assets)},
-                session=session,
+            ingest_id = self._submit(
+                session,
+                "ingest-tiingo-bars",
+                {"from_date": required.isoformat(), "to_date": st.range.end.isoformat(), "assets": list(st.assets)},
             )
             self._link_job(session, ingest_id, revision_id, ROLE_INGEST, SCOPE_INITIAL, {"from_date": required.isoformat(), "to_date": st.range.end.isoformat()})
-            freeze_id = submit_job(job_type="research-freeze", payload={"study_revision_id": str(revision_id)}, depends_on=[ingest_id], session=session)
+            freeze_id = self._submit(session, "research-freeze", {"study_revision_id": str(revision_id)}, [ingest_id])
             self._link_job(session, freeze_id, revision_id, ROLE_FREEZE, SCOPE_INITIAL, {})
             backtest_ids: list[uuid.UUID] = []
             for asset in st.assets:
                 for role in INITIAL_WINDOWS:
                     for version_id in versions:
-                        bid = submit_job(
-                            job_type="research-backtest",
-                            payload={"study_revision_id": str(revision_id), "strategy_version_id": str(version_id), "asset": asset, "window_role": role, "rerun_of": None},
-                            depends_on=[freeze_id],
-                            session=session,
+                        bid = self._submit(
+                            session,
+                            "research-backtest",
+                            {"study_revision_id": str(revision_id), "strategy_version_id": str(version_id), "asset": asset, "window_role": role, "rerun_of": None},
+                            [freeze_id],
                         )
                         self._link_job(session, bid, revision_id, ROLE_BACKTEST, SCOPE_INITIAL, {"strategy_version_id": str(version_id), "asset": asset, "window_role": role})
                         backtest_ids.append(bid)
-                    bench = submit_job(
-                        job_type="research-backtest",
-                        payload={"study_revision_id": str(revision_id), "strategy_version_id": None, "asset": asset, "window_role": role, "rerun_of": None},
-                        depends_on=[freeze_id],
-                        session=session,
+                    bench = self._submit(
+                        session,
+                        "research-backtest",
+                        {"study_revision_id": str(revision_id), "strategy_version_id": None, "asset": asset, "window_role": role, "rerun_of": None},
+                        [freeze_id],
                     )
                     self._link_job(session, bench, revision_id, ROLE_BENCHMARK, SCOPE_INITIAL, {"asset": asset, "window_role": role})
                     backtest_ids.append(bench)
-            evaluate_id = submit_job(
-                job_type="research-evaluate",
-                payload={"study_revision_id": str(revision_id), "scope": SCOPE_INITIAL, "is_rerun": False},
-                depends_on=backtest_ids,
-                session=session,
+            evaluate_id = self._submit(
+                session,
+                "research-evaluate",
+                {"study_revision_id": str(revision_id), "scope": SCOPE_INITIAL, "is_rerun": False},
+                backtest_ids,
             )
             try:
                 self._link_job(session, evaluate_id, revision_id, ROLE_EVALUATE, SCOPE_INITIAL, {})
@@ -967,6 +1159,11 @@ class StudyService:
                 raise FinalTestNotFrozenError(revision_id=str(revision_id))
             st = settings_from_json(revision.settings_json)
             data_freeze = session.get(DataFreeze, revision.data_freeze_id) if revision.data_freeze_id else None
+            # Inputs that changed after the freeze refuse the submission here (409
+            # ``inputs_changed_after_freeze``), not only inside the Jobs: nothing is queued
+            # that would run on inputs the freeze never verified.
+            if data_freeze is not None:
+                require_inputs_unchanged(session, data_freeze)
             originals = {
                 (link.strategy_version_id, link.asset): link.run_id
                 for link, _run in self._runs_for(session, revision_id, roles=("final_test",), rerun=False)
@@ -990,15 +1187,15 @@ class StudyService:
                 "window_role": "final_test",
                 "rerun_of": str(originals[(None, freeze.asset)]) if rerun else None,
             }
-            candidate_job = submit_job(job_type="research-backtest", payload=candidate_payload, session=session)
+            candidate_job = self._submit(session, "research-backtest", candidate_payload)
             self._link_job(session, candidate_job, revision_id, ROLE_BACKTEST, SCOPE_FINAL, {"asset": freeze.asset, "window_role": "final_test"}, is_rerun=rerun)
-            benchmark_job = submit_job(job_type="research-backtest", payload=benchmark_payload, session=session)
+            benchmark_job = self._submit(session, "research-backtest", benchmark_payload)
             self._link_job(session, benchmark_job, revision_id, ROLE_BENCHMARK, SCOPE_FINAL, {"asset": freeze.asset, "window_role": "final_test"}, is_rerun=rerun)
-            evaluate_job = submit_job(
-                job_type="research-evaluate",
-                payload={"study_revision_id": str(revision_id), "scope": SCOPE_FINAL, "is_rerun": rerun},
-                depends_on=[candidate_job, benchmark_job],
-                session=session,
+            evaluate_job = self._submit(
+                session,
+                "research-evaluate",
+                {"study_revision_id": str(revision_id), "scope": SCOPE_FINAL, "is_rerun": rerun},
+                [candidate_job, benchmark_job],
             )
             try:
                 self._link_job(session, evaluate_job, revision_id, ROLE_EVALUATE, SCOPE_FINAL, {}, is_rerun=rerun)
@@ -1129,6 +1326,25 @@ class StudyService:
                 self._mark_inspected(session, revision_id)
             return {"revision_id": str(revision_id), "state": "evaluated", "comparison": comparison}
 
+    def _curves(self, revision_id: uuid.UUID) -> dict[str, dict[str, Any]]:
+        with session_scope(self._settings) as session:
+            run_ids = [link.run_id for link, _run in self._runs_for(session, revision_id, roles=WINDOW_ROLES, rerun=False) + self._runs_for(session, revision_id, roles=WINDOW_ROLES, rerun=True)]
+        return {str(run_id): self.run_curve(revision_id, run_id) for run_id in run_ids}
+
+    def report_documents(self, revision_id: uuid.UUID) -> dict[str, Any]:
+        """``report.html`` and ``report.md`` rendered from the stored comparison and the run
+        curves; reading the report counts as inspecting the results."""
+
+        payload = self.comparison(revision_id)
+        if payload["comparison"] is None:
+            raise RevisionNotReadyError("not evaluated", reason="not_evaluated")
+        curves = self._curves(revision_id)
+        return {
+            "revision_id": str(revision_id),
+            "html": render_html(payload["comparison"], curves),
+            "markdown": render_markdown(payload["comparison"], curves),
+        }
+
     def export(self, revision_id: uuid.UUID, *, export_root: Path | None = None) -> dict[str, Any]:
         """Write ``comparison.json`` and per-run ``summary.json``/``trades.csv``/``equity_curve.csv``
         under ``.data/research/studies/<revision>/`` (git-ignored, Tiingo licence)."""
@@ -1139,6 +1355,11 @@ class StudyService:
         payload = self.comparison(revision_id)
         (directory / "comparison.json").write_text(json.dumps(payload["comparison"], indent=2, sort_keys=True, default=str))
         written = ["comparison.json"]
+        if payload["comparison"] is not None:
+            curves = self._curves(revision_id)
+            (directory / "report.html").write_text(render_html(payload["comparison"], curves))
+            (directory / "report.md").write_text(render_markdown(payload["comparison"], curves))
+            written += ["report.html", "report.md"]
         with session_scope(self._settings) as session:
             for link, run in self._runs_for(session, revision_id, roles=WINDOW_ROLES, rerun=False) + self._runs_for(session, revision_id, roles=WINDOW_ROLES, rerun=True):
                 run_dir = directory / "runs" / str(run.id)

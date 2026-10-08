@@ -28,6 +28,9 @@ def health(request: Request) -> dict[str, object]:
         "service": settings.app.slug,
         "version": settings.app.version,
         "timestamp": datetime.now(UTC).isoformat(),
+        # Additive: which surface this process serves (the console shows its Research
+        # section only against a research-mode API).
+        "mode": "research" if settings.research.mode else "trading",
     }
 
 

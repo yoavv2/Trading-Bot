@@ -29,21 +29,48 @@ function routeOf(pagePath: string): string {
 describe("console route inventory (20.1-14)", () => {
   const files = walk(APP_ROOT).filter((f) => !/\.test\.(ts|tsx)$/.test(f));
 
-  it("console routes are exactly the nine existing pages", () => {
-    const pages = files.filter((f) => /(^|\/)page\.tsx$/.test(f)).map(routeOf).sort();
-    expect(pages).toEqual(
-      [
-        "/",
-        "/controls",
-        "/jobs",
-        "/jobs/new",
-        "/jobs/[jobId]",
-        "/paper",
-        "/runs",
-        "/runs/[runId]",
-        "/strategy",
-      ].sort(),
-    );
+  const TRADING_PAGES = [
+    "/",
+    "/controls",
+    "/jobs",
+    "/jobs/new",
+    "/jobs/[jobId]",
+    "/paper",
+    "/runs",
+    "/runs/[runId]",
+    "/strategy",
+  ];
+
+  // S4 (proposal Part L): the Research section is the one sanctioned addition; it is
+  // visible only against a research-mode API and never touches the trading pages above.
+  const RESEARCH_PAGES = [
+    "/research",
+    "/research/strategies",
+    "/research/strategies/new",
+    "/research/strategies/drafts/[draftId]",
+    "/research/strategies/versions/[versionId]",
+    "/research/assets",
+    "/research/studies",
+    "/research/studies/new",
+    "/research/studies/[studyId]",
+  ];
+
+  it("trading console routes are exactly the nine existing pages", () => {
+    const pages = files
+      .filter((f) => /(^|\/)page\.tsx$/.test(f))
+      .map(routeOf)
+      .filter((route) => !route.startsWith("/research"))
+      .sort();
+    expect(pages).toEqual([...TRADING_PAGES].sort());
+  });
+
+  it("research routes are exactly the sanctioned research pages", () => {
+    const pages = files
+      .filter((f) => /(^|\/)page\.tsx$/.test(f))
+      .map(routeOf)
+      .filter((route) => route.startsWith("/research"))
+      .sort();
+    expect(pages).toEqual([...RESEARCH_PAGES].sort());
   });
 
   it("no route handler or other page-like file was added", () => {

@@ -25,6 +25,14 @@ from trading_platform.db.models.symbol import Symbol
 BIGINT_MAX = 9_223_372_036_854_775_807
 EXTREME_MOVE = Decimal("0.5")
 RATIO_TOLERANCE = Decimal("1e-9")
+#: Prices are stored at six decimals (``daily_bars`` NUMERIC(20, 6)). Rounding each side of a
+#: pair to that scale moves ``adjusted - raw x (adj_close / close)`` by up to about 1.5e-6
+#: for same-magnitude fields, which at a $400 price is a relative spread of ~4e-9: above the
+#: relative tolerance although the provider's rows are consistent (seen on SPY and MSFT in
+#: the S6 smoke run: max absolute spread 9.9e-7, i.e. under one stored unit). A session is
+#: therefore inconsistent only when the spread exceeds BOTH bounds.
+STORED_PRICE_UNIT = Decimal("1e-6")
+ABSOLUTE_TOLERANCE = STORED_PRICE_UNIT * 2
 
 
 class IntegrityCode(StrEnum):
@@ -218,10 +226,23 @@ def check_asset_rows(
         if r is not None and (r.split_factor is None or r.dividend_cash is None):
             findings.append(IntegrityFinding(IntegrityCode.FACTOR_MISSING, asset, session_date))
         if r_ok and a_ok and r is not None and a is not None:
-            ratios = [a.open / r.open, a.high / r.high, a.low / r.low, a.close / r.close]
-            base = ratios[-1]
-            if any(abs(ratio / base - 1) > RATIO_TOLERANCE for ratio in ratios):
-                findings.append(IntegrityFinding(IntegrityCode.ADJUSTMENT_RATIO_INCONSISTENT, asset, session_date))
+            base = a.close / r.close
+            pairs = ((a.open, r.open), (a.high, r.high), (a.low, r.low), (a.close, r.close))
+            inconsistent = [
+                (adj_value, raw_value)
+                for adj_value, raw_value in pairs
+                if abs((adj_value / raw_value) / base - 1) > RATIO_TOLERANCE and abs(adj_value - raw_value * base) > ABSOLUTE_TOLERANCE
+            ]
+            if inconsistent:
+                adj_value, raw_value = inconsistent[0]
+                findings.append(
+                    IntegrityFinding(
+                        IntegrityCode.ADJUSTMENT_RATIO_INCONSISTENT,
+                        asset,
+                        session_date,
+                        f"adjusted {adj_value} vs raw {raw_value} x {base:.9f}",
+                    )
+                )
 
     def _moves(series: dict[date, Any], code: IntegrityCode, explained_by_split: bool) -> None:
         prev: Any | None = None

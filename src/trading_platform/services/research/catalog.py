@@ -69,12 +69,17 @@ class CatalogSyncReport:
     rows_named: int = 0
     named_by_source: dict[str, int] = field(default_factory=dict)
     synced_at: datetime | None = None
+    #: Source rows that shared a ticker with an earlier row after normalisation (``BRK.B``
+    #: and ``BRK-B``, or one ticker on two exchanges); one row per ticker is kept, the one
+    #: with the latest ``catalog_end`` (then the earliest ``catalog_start``).
+    duplicate_tickers: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "provider": self.provider,
             "rows_total": self.rows_total,
             "rows_named": self.rows_named,
+            "duplicate_tickers": self.duplicate_tickers,
             "named_by_source": dict(self.named_by_source),
             "synced_at": self.synced_at.isoformat() if self.synced_at else None,
             "name_search_coverage": "populated names only",
@@ -178,14 +183,36 @@ def parse_sec_names(payload: dict[str, Any]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _dedupe_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """One row per normalised ticker. The public list repeats a ticker (one listing per
+    exchange, or ``BRK.B`` next to ``BRK-B``); a single INSERT ... ON CONFLICT cannot touch
+    the same row twice, so the sync keeps the row with the latest ``catalog_end`` and, on a
+    tie, the earliest ``catalog_start``. Returns the kept rows and the dropped count."""
+
+    chosen: dict[str, dict[str, Any]] = {}
+    dropped = 0
+    for row in rows:
+        ticker = row["ticker"]
+        current = chosen.get(ticker)
+        if current is None:
+            chosen[ticker] = row
+            continue
+        dropped += 1
+        key_new = (row.get("catalog_end") or date.min, -(row.get("catalog_start") or date.max).toordinal())
+        key_old = (current.get("catalog_end") or date.min, -(current.get("catalog_start") or date.max).toordinal())
+        if key_new > key_old:
+            chosen[ticker] = row
+    return list(chosen.values()), dropped
+
+
 def sync_asset_catalog(
     session: Session, sources: CatalogSources, *, now: datetime | None = None
 ) -> CatalogSyncReport:
     synced_at = now or datetime.now(UTC)
-    rows = parse_tiingo_supported(sources.tiingo_csv_text)
+    rows, duplicates = _dedupe_rows(parse_tiingo_supported(sources.tiingo_csv_text))
     nasdaq = parse_nasdaq_names(sources.nasdaq_text) if sources.nasdaq_text else {}
     sec = parse_sec_names(sources.sec_json) if sources.sec_json else {}
-    report = CatalogSyncReport(provider=PROVIDER, synced_at=synced_at)
+    report = CatalogSyncReport(provider=PROVIDER, synced_at=synced_at, duplicate_tickers=duplicates)
 
     existing_names = {
         ticker: (name, source)

@@ -255,7 +255,9 @@ def test_tiingo_ingestion_partial_and_all_failed(research_db: str) -> None:
 TIINGO_CSV = """ticker,exchange,assetType,priceCurrency,startDate,endDate
 AAPL,NASDAQ,Stock,USD,1980-12-12,2026-10-06
 SPY,NYSE,ETF,USD,1993-01-29,2026-10-06
+SPY,NYSE ARCA,ETF,USD,1993-01-29,2026-10-07
 BRK-B,NYSE,Stock,USD,1996-05-09,2026-10-06
+BRK.B,NYSE,Stock,USD,1996-05-09,2026-10-06
 NONAME,NASDAQ,Stock,USD,2010-01-04,2026-10-06
 SECONLY,NASDAQ,Stock,USD,2010-01-04,2026-10-06
 XOTC,PINK,Stock,USD,2000-01-03,2026-10-06
@@ -277,11 +279,14 @@ def test_catalog_sync_scope_names_sources_search_and_enrichment(research_db: str
     sources = catalog_module.CatalogSources(tiingo_csv_text=TIINGO_CSV, nasdaq_text=NASDAQ_TXT, sec_json=SEC_JSON)
     with session_scope(settings) as session:
         report = catalog_module.sync_asset_catalog(session, sources)
-        assert (report.rows_total, report.rows_named) == (5, 4)
+        # Two source rows repeat a ticker (SPY on a second exchange, BRK.B beside BRK-B): one
+        # row per ticker survives, the latest catalog_end wins, the drop is reported.
+        assert (report.rows_total, report.rows_named, report.duplicate_tickers) == (5, 4, 2)
         assert report.named_by_source == {"nasdaq_trader": 3, "sec_edgar": 1}
         assert report.to_dict()["name_search_coverage"] == "populated names only"
         rows = {r.ticker: r for r in session.execute(select(AssetCatalogEntry)).scalars()}
         assert set(rows) == {"AAPL", "SPY", "BRK-B", "NONAME", "SECONLY"}
+        assert rows["SPY"].exchange == "NYSE ARCA" and rows["SPY"].catalog_end == date(2026, 10, 7)
         assert rows["BRK-B"].name == "Berkshire Hathaway Inc. Class B" and rows["BRK-B"].name_source == "nasdaq_trader"
         assert rows["SECONLY"].name_source == "sec_edgar" and rows["NONAME"].name is None
         assert catalog_module.name_coverage(session) == (4, 5)
@@ -340,6 +345,16 @@ def test_integrity_row_codes_each_have_a_fixture() -> None:
     assert IntegrityCode.PAIR_MISSING in _codes(d, clean[:-1])
     inconsistent = clean[:-2] + [_row(d[2], False), _row(d[2], True, h=150)]
     assert IntegrityCode.ADJUSTMENT_RATIO_INCONSISTENT in _codes(d, inconsistent)
+    # Provider-consistent rows stored at six decimals (the S6 smoke run's SPY shape): the
+    # per-field ratios differ from the close ratio by ~2.6e-9 only because each stored value
+    # was rounded; that is not an inconsistency. A real 1e-4 drift on one field still is.
+    factor = Decimal("0.938480139")
+    raw = {"o": Decimal("433.59"), "h": Decimal("441.07"), "lo": Decimal("433.19"), "c": Decimal("441.07")}
+    rounded = {k: (v * factor).quantize(Decimal("0.000001")) for k, v in raw.items()}
+    stored = clean[:-2] + [_row(d[2], False, **raw), _row(d[2], True, **rounded)]
+    assert IntegrityCode.ADJUSTMENT_RATIO_INCONSISTENT not in _codes(d, stored)
+    drifted = clean[:-2] + [_row(d[2], False, **raw), _row(d[2], True, **{**rounded, "h": rounded["h"] + Decimal("0.05")})]
+    assert IntegrityCode.ADJUSTMENT_RATIO_INCONSISTENT in _codes(d, drifted)
     assert IntegrityCode.SOURCE_MIXED in _codes(d, clean + [_row(d[0], True, provider="polygon")])
     assert IntegrityCode.FACTOR_MISSING in _codes(d, _pair(d[0], sf=None) + _pair(d[1]) + _pair(d[2]))
     assert IntegrityCode.ASSET_ABSENT in _codes(d, [])

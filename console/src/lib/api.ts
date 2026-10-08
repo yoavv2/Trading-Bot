@@ -569,3 +569,173 @@ export function disableStrategy(
     { status: "disabled", reason },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Research section (S4). Synchronous research writes go through ONE helper that
+// names the HTTP method first, so the console-side mutation inventory test and
+// tests/test_console_api_contract.py can enumerate them. No Idempotency-Key: the
+// research routes are explicit, re-runnable writes on the research database.
+// ---------------------------------------------------------------------------
+
+/** Operator copy for the research routes' closed error codes. */
+const RESEARCH_ERROR_COPY: Readonly<
+  Record<string, (detail: Record<string, unknown> | null) => string>
+> = {
+  draft_not_found: () => "This draft no longer exists (it may have been approved or deleted).",
+  version_not_found: () => "This strategy version was not found.",
+  draft_invalid: (detail) => {
+    const errors = detail && Array.isArray(detail.errors) ? detail.errors.length : 0;
+    return `The draft is invalid and cannot be approved: ${errors} finding(s). Fix them in the editor first.`;
+  },
+  invalid_draft_input: (detail) =>
+    `Invalid input: ${detail && typeof detail.field === "string" ? detail.field : "field"} ${
+      detail && typeof detail.reason === "string" ? detail.reason : "is not acceptable"
+    }.`,
+  invalid_request: (detail) =>
+    `Request rejected${detail && typeof detail.reason === "string" ? ` (${detail.reason})` : ""} — this is a console bug, not an operator error.`,
+  study_not_found: () => "This study was not found.",
+  revision_not_found: () => "This study revision was not found.",
+  invalid_study_settings: (detail) =>
+    `Study settings rejected: ${detail && typeof detail.field === "string" ? detail.field : "field"} ${
+      detail && typeof detail.reason === "string" ? detail.reason : "is not acceptable"
+    }.`,
+  revision_not_ready: (detail) => {
+    const errors = detail && Array.isArray(detail.errors) ? detail.errors.length : 0;
+    return `The revision is not ready: ${errors} readiness error(s). Nothing was started.`;
+  },
+  run_already_started: () => "This revision already has its initial run; create a new revision to run again.",
+  freeze_not_allowed: (detail) =>
+    `Freeze refused: ${detail && typeof detail.reason === "string" ? detail.reason.replace(/_/g, " ") : "not allowed"}.`,
+  already_frozen: () => "This revision is already frozen.",
+  final_test_not_frozen: () => "Freeze the candidate and its acceptance values before running the final test.",
+  final_test_already_run: () => "The final test of this revision already ran; use a technical rerun.",
+  final_test_not_run: () => "There is no completed final test to rerun.",
+  inputs_not_frozen: () => "The inputs of this revision are not frozen.",
+  inputs_changed_after_freeze: () => "The inputs changed after the freeze; this revision's Jobs refuse to run.",
+  asset_list_not_found: () => "This saved list was not found.",
+  asset_list_name_taken: () => "A saved list with this name already exists.",
+  invalid_asset_list: (detail) =>
+    `Saved list rejected: ${detail && typeof detail.field === "string" ? detail.field : "field"} ${
+      detail && typeof detail.reason === "string" ? detail.reason : "is not acceptable"
+    }.`,
+  asset_not_in_catalog: () => "This ticker is not in the catalog.",
+};
+
+export function researchErrorMessage(
+  code: string | null,
+  detail: Record<string, unknown> | null,
+): string {
+  if (code !== null && Object.hasOwn(RESEARCH_ERROR_COPY, code)) {
+    return RESEARCH_ERROR_COPY[code](detail);
+  }
+  return mutationErrorMessage(code, detail);
+}
+
+async function researchMutation<T>(
+  method: "POST" | "PUT" | "DELETE",
+  endpoint: string,
+  body?: unknown,
+): Promise<MutationResult<T>> {
+  let response: Response;
+  try {
+    response = await fetch(`/backend${endpoint}`, {
+      method,
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    return {
+      ok: false,
+      status: null,
+      code: null,
+      message: `${endpoint} is unreachable (network or proxy failure)`,
+      detail: null,
+    };
+  }
+  const status = response.status;
+  let parsed: unknown = null;
+  try {
+    parsed = await response.json();
+  } catch {
+    parsed = null;
+  }
+  if (response.ok) {
+    if (!parsed || typeof parsed !== "object") {
+      return unreadableSuccess(endpoint, status);
+    }
+    return { ok: true, data: parsed as T, replayed: false, status };
+  }
+  const rawDetail =
+    parsed && typeof parsed === "object" && "detail" in parsed
+      ? (parsed as { detail?: unknown }).detail
+      : null;
+  const detail =
+    rawDetail && typeof rawDetail === "object" && !Array.isArray(rawDetail)
+      ? (rawDetail as Record<string, unknown>)
+      : null;
+  const code = detail && typeof detail.code === "string" ? detail.code : null;
+  return {
+    ok: false,
+    status,
+    code,
+    message:
+      typeof rawDetail === "string" ? rawDetail : researchErrorMessage(code, detail),
+    detail,
+  };
+}
+
+export function createDraft(body: { title: string; yaml_text: string }) {
+  return researchMutation<{ draft: unknown }>("POST", "/api/v1/research/strategies/drafts", body);
+}
+export function updateDraft(draftId: string, body: { title?: string; yaml_text?: string }) {
+  return researchMutation<{ draft: unknown }>("PUT", `/api/v1/research/strategies/drafts/${encodeURIComponent(draftId)}`, body);
+}
+export function deleteDraft(draftId: string) {
+  return researchMutation<{ deleted: boolean }>("DELETE", `/api/v1/research/strategies/drafts/${encodeURIComponent(draftId)}`);
+}
+export function duplicateDraft(draftId: string) {
+  return researchMutation<{ draft: unknown }>("POST", `/api/v1/research/strategies/drafts/${encodeURIComponent(draftId)}/duplicate`, {});
+}
+export function approveDraft(draftId: string) {
+  return researchMutation<{ version: unknown }>("POST", `/api/v1/research/strategies/drafts/${encodeURIComponent(draftId)}/approve`, {});
+}
+export function validateYamlText(yamlText: string) {
+  return researchMutation<{ validation: unknown }>("POST", "/api/v1/research/strategies/validate", { yaml_text: yamlText });
+}
+export function editVersion(versionId: string) {
+  return researchMutation<{ draft: unknown }>("POST", `/api/v1/research/strategies/versions/${encodeURIComponent(versionId)}/edit`, {});
+}
+export function duplicateVersion(versionId: string) {
+  return researchMutation<{ draft: unknown }>("POST", `/api/v1/research/strategies/versions/${encodeURIComponent(versionId)}/duplicate`, {});
+}
+export function createAssetList(body: { name: string; tickers: string[] }) {
+  return researchMutation<{ list: unknown }>("POST", "/api/v1/research/asset-lists", body);
+}
+export function updateAssetList(listId: string, body: { name?: string; tickers?: string[] }) {
+  return researchMutation<{ list: unknown }>("PUT", `/api/v1/research/asset-lists/${encodeURIComponent(listId)}`, body);
+}
+export function deleteAssetList(listId: string) {
+  return researchMutation<{ deleted: boolean }>("DELETE", `/api/v1/research/asset-lists/${encodeURIComponent(listId)}`);
+}
+export function createStudy(body: { name: string; kind: string; settings: Record<string, unknown> }) {
+  return researchMutation<{ study: unknown; revision: unknown }>("POST", "/api/v1/research/studies", body);
+}
+export function createRevision(studyId: string, settings: Record<string, unknown>) {
+  return researchMutation<{ revision: unknown }>("POST", `/api/v1/research/studies/${encodeURIComponent(studyId)}/revisions`, { settings });
+}
+export function runRevision(revisionId: string) {
+  return researchMutation<{ jobs: unknown }>("POST", `/api/v1/research/revisions/${encodeURIComponent(revisionId)}/run`, {});
+}
+export function freezeRevision(
+  revisionId: string,
+  body: { strategy_version_id: string; asset: string; acceptance: { constraint_value: number; objective_minimum: number }; co_leading_choice_reason?: string },
+) {
+  return researchMutation<{ freeze: unknown }>("POST", `/api/v1/research/revisions/${encodeURIComponent(revisionId)}/freeze`, body);
+}
+export function runFinalTest(revisionId: string, rerun: boolean) {
+  return researchMutation<{ jobs: unknown }>("POST", `/api/v1/research/revisions/${encodeURIComponent(revisionId)}/final-test`, { rerun });
+}
+export function exportRevision(revisionId: string) {
+  return researchMutation<{ path: string; files: string[] }>("POST", `/api/v1/research/revisions/${encodeURIComponent(revisionId)}/export`, {});
+}

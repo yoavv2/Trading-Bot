@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from trading_platform.api.research.catalog import asset_lists_router as research_asset_lists_router
+from trading_platform.api.research.catalog import catalog_router as research_catalog_router
 from trading_platform.api.research.strategies import router as research_strategies_router
 from trading_platform.api.research.studies import revisions_router as research_revisions_router
 from trading_platform.api.research.studies import studies_router as research_studies_router
@@ -112,7 +114,13 @@ _TRADING_ROUTERS = (
 
 #: Research surface (``/api/v1/research/*``): mounted only in research mode, so no research
 #: route exists on a trading process and no trading route exists on a research process.
-_RESEARCH_ROUTERS = (research_strategies_router, research_studies_router, research_revisions_router)
+_RESEARCH_ROUTERS = (
+    research_strategies_router,
+    research_studies_router,
+    research_revisions_router,
+    research_catalog_router,
+    research_asset_lists_router,
+)
 
 
 def create_app(

@@ -48,6 +48,38 @@ describe("console mutation inventory (20.1-14)", () => {
     );
   });
 
+  // S4: research writes go through the single `researchMutation(method, endpoint)` helper
+  // in lib/api.ts; the set is pinned exactly, apart from the trading five above.
+  const RESEARCH_CALL = /\bresearchMutation<[^>]*>\(\s*"(POST|PUT|DELETE)",\s*([`"])([^`"]+)\2/g;
+
+  it("research mutation endpoints are exactly the pinned set", () => {
+    const found = new Set<string>();
+    for (const match of apiSource.matchAll(RESEARCH_CALL)) {
+      found.add(`${match[1]} ${normalise(match[3].replace(/\$\{RS\}/g, "/api/v1/research/strategies").replace(/\$\{RC\}/g, "/api/v1/research"))}`);
+    }
+    expect([...found].sort()).toEqual(
+      [
+        "POST /api/v1/research/strategies/drafts",
+        "PUT /api/v1/research/strategies/drafts/{id}",
+        "DELETE /api/v1/research/strategies/drafts/{id}",
+        "POST /api/v1/research/strategies/drafts/{id}/duplicate",
+        "POST /api/v1/research/strategies/drafts/{id}/approve",
+        "POST /api/v1/research/strategies/validate",
+        "POST /api/v1/research/strategies/versions/{id}/edit",
+        "POST /api/v1/research/strategies/versions/{id}/duplicate",
+        "POST /api/v1/research/asset-lists",
+        "PUT /api/v1/research/asset-lists/{id}",
+        "DELETE /api/v1/research/asset-lists/{id}",
+        "POST /api/v1/research/studies",
+        "POST /api/v1/research/studies/{id}/revisions",
+        "POST /api/v1/research/revisions/{id}/run",
+        "POST /api/v1/research/revisions/{id}/freeze",
+        "POST /api/v1/research/revisions/{id}/final-test",
+        "POST /api/v1/research/revisions/{id}/export",
+      ].sort(),
+    );
+  });
+
   it("nothing outside lib/api.ts calls a mutation helper or sets a mutating method", () => {
     const violations: string[] = [];
     for (const file of sources(SRC_ROOT)) {
@@ -56,7 +88,7 @@ describe("console mutation inventory (20.1-14)", () => {
         continue;
       }
       const text = readFileSync(file, "utf8");
-      if (/\b(postJson|putJson)\b/.test(text) || /method:\s*["'](POST|PUT|PATCH|DELETE)["']/.test(text)) {
+      if (/\b(postJson|putJson|researchMutation)\b/.test(text) || /method:\s*["'](POST|PUT|PATCH|DELETE)["']/.test(text)) {
         violations.push(rel);
       }
     }

@@ -40,6 +40,7 @@ from trading_platform.db.models.research import (
 from trading_platform.db.session import session_scope
 from trading_platform.jobs.registry import build_research_registry
 from trading_platform.jobs.runner import run_worker_loop
+from trading_platform.orchestration.research_studies import build_study_service
 from trading_platform.services import calendar as calendar_module
 from trading_platform.services.calendar import sessions_in_range, upsert_market_sessions
 from trading_platform.services.research import tiingo_ingestion
@@ -53,7 +54,6 @@ from trading_platform.services.research.studies import (
     FreezeNotAllowedError,
     RevisionNotReadyError,
     RunAlreadyStartedError,
-    StudyService,
 )
 from trading_platform.services.tiingo import TiingoAssetMetadata, TiingoDailyRow
 
@@ -157,7 +157,20 @@ def _settings_dict(versions: list[str], **overrides) -> dict:
 
 
 def _drain(settings, max_jobs: int) -> dict:
-    return run_worker_loop(worker_id="s3-test", registry=build_research_registry(settings), max_jobs=max_jobs, poll_interval_seconds=0.01, settings=settings)
+    """Execute up to ``max_jobs`` Jobs, one worker pass at a time, and stop early once no
+    Job is claimable (a failed graph cascades its dependents to cancelled, so waiting for a
+    fixed count would spin forever)."""
+
+    registry = build_research_registry(settings)
+    executed, idle = 0, 0
+    while executed < max_jobs and idle < 10:
+        report = run_worker_loop(worker_id="s3-test", registry=registry, max_jobs=1, once=True, poll_interval_seconds=0.01, settings=settings)
+        if report["jobs_executed"]:
+            executed += report["jobs_executed"]
+            idle = 0
+        else:
+            idle += 1
+    return {"jobs_executed": executed}
 
 
 def _count(table: str) -> int:
@@ -172,10 +185,10 @@ def _count(table: str) -> int:
 
 def test_readiness_lists_every_error_and_refuses_the_run(pipeline, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = pipeline["settings"]
-    service = StudyService(settings)
+    service = build_study_service(settings)
     monkeypatch.setenv("TRADING_PLATFORM_RESEARCH__MAX_ASSETS_PER_STUDY", "2")
     clear_settings_cache()
-    service = StudyService(load_settings())
+    service = build_study_service(load_settings())
     unknown_version = str(uuid.uuid4())
     broken = _settings_dict(
         [pipeline["fast"]["version_id"], unknown_version],
@@ -209,7 +222,7 @@ def test_readiness_lists_every_error_and_refuses_the_run(pipeline, monkeypatch: 
 
 
 def test_readiness_coverage_and_warmup_checks_per_pair(pipeline) -> None:
-    service = StudyService(pipeline["settings"])
+    service = build_study_service(pipeline["settings"])
     created = service.create_study(name="coverage", kind="substantive", settings=_settings_dict([pipeline["fast"]["version_id"]], assets=["AAA", "LATE"]))
     readiness = service.readiness(uuid.UUID(created["revision"]["revision_id"]))
     pair = f"{pipeline['fast']['version_id']}:LATE"
@@ -229,7 +242,7 @@ def test_readiness_coverage_and_warmup_checks_per_pair(pipeline) -> None:
 
 def test_initial_run_evaluation_freeze_final_test_exposures_rerun_restore_and_export(pipeline, tmp_path: Path) -> None:
     settings = pipeline["settings"]
-    service = StudyService(settings)
+    service = build_study_service(settings)
     versions = [pipeline["fast"]["version_id"], pipeline["slow"]["version_id"]]
     trading_before = {t: _count(t) for t in ("paper_orders", "execution_operations", "system_controls", "risk_events", "active_paper_strategy")}
 

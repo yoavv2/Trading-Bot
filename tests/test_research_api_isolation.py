@@ -67,6 +67,16 @@ RESEARCH_ROUTES = {
     ("POST", "/api/v1/research/revisions/{revision_id}/freeze"),
     ("POST", "/api/v1/research/revisions/{revision_id}/final-test"),
     ("POST", "/api/v1/research/revisions/{revision_id}/export"),
+    ("GET", "/api/v1/research/revisions/{revision_id}/runs/{run_id}/curve"),
+    ("GET", "/api/v1/research/revisions/{revision_id}/report"),
+    ("GET", "/api/v1/research/catalog"),
+    ("GET", "/api/v1/research/catalog/search"),
+    ("GET", "/api/v1/research/catalog/assets/{ticker}"),
+    ("GET", "/api/v1/research/asset-lists"),
+    ("POST", "/api/v1/research/asset-lists"),
+    ("GET", "/api/v1/research/asset-lists/{list_id}"),
+    ("PUT", "/api/v1/research/asset-lists/{list_id}"),
+    ("DELETE", "/api/v1/research/asset-lists/{list_id}"),
 }
 
 #: The research writes; every one carries ``require_mutations_enabled``.
@@ -127,7 +137,7 @@ def _guarded(candidate) -> bool:
 
 def test_research_mode_route_inventory_is_exactly_research_plus_infrastructure() -> None:
     routes = _routes(api_app.create_app(research_mode=True))
-    assert set(routes) == INFRASTRUCTURE_ROUTES | RESEARCH_ROUTES  # 12 infrastructure + 30 research routes
+    assert set(routes) == INFRASTRUCTURE_ROUTES | RESEARCH_ROUTES  # 12 infrastructure + 41 research routes
     for key in RESEARCH_MUTATING_ROUTES:
         assert _guarded(routes[key]), f"{key} is missing require_mutations_enabled"
     for key in RESEARCH_READ_ONLY_POSTS:
@@ -304,7 +314,7 @@ def test_research_mutations_are_guarded_when_mutations_are_disabled(
     monkeypatch.setattr(api_app, "enforce_startup_config", lambda **kwargs: settings)
     with TestClient(api_app.create_app()) as client:
         for method, path in sorted(RESEARCH_MUTATING_ROUTES):
-            concrete = path.replace("{draft_id}", str(uuid.uuid4())).replace("{version_id}", str(uuid.uuid4())).replace("{study_id}", str(uuid.uuid4())).replace("{revision_id}", str(uuid.uuid4()))
+            concrete = path.replace("{draft_id}", str(uuid.uuid4())).replace("{version_id}", str(uuid.uuid4())).replace("{study_id}", str(uuid.uuid4())).replace("{revision_id}", str(uuid.uuid4())).replace("{list_id}", str(uuid.uuid4()))
             response = client.request(method, concrete, json={"not": "valid"})
             assert response.status_code == 403, (method, path)
             assert response.json()["detail"] == {"code": "mutations_disabled"}
