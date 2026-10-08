@@ -37,7 +37,7 @@
 
 **Outcome:** Every backtest/risk/paper run inspectable without reading raw logs; console is the surface v1.3 builds operations onto.
 
-## v1.3 — Operator Platform (Started 2026-07-15)
+## v1.3 — Operator Platform (Started 2026-07-15; FROZEN 2026-10-06, incomplete)
 
 Console evolves from read-only monitor to operations control center. Operator API becomes the single orchestration surface; generic DB-backed Job framework (lifecycle, progress, logs, dependencies, audit); kill-switch and strategy control from UI. First step of the Autonomous Trading Operating System direction. Phase numbering continues from 17.
 
@@ -45,11 +45,23 @@ Console evolves from read-only monitor to operations control center. Operator AP
 
 - Phase 17: Job Framework (2026-07-20) — complete
 - Phase 18: Orchestration Surface (2026-07-21) — complete; ORCH-01/02 Partial (`scripts/` bypass) until Phase 20; post-phase race/test hardening (dependency-cascade and cancellation-timeout sweep races, real-PostgreSQL race tests) completed 2026-07-22 in PR #1
-- Phase 19: Job Operations Vertical Slice — not started
-- Phase 20: Complete Operation Migration & Safety Controls — not started
-- Phase 21: Operations History & Polish — not started; v1.3 closes after this phase
+- Phase 19: Job Operations Vertical Slice (2026-09-26) — complete
+- Phase 20: Complete Operation Migration & Safety Controls (2026-09-29) — complete
+- Phase 20.1: Operator-State Correctness & Paper-Account Ownership (INSERTED 2026-09-30) — 38 plans executed; **not complete** at the freeze (re-verification round 5 `gaps_found`: G-2 partial with E2–E4, E-5, D-1, OD-1 open; CR-01 prohibition in force; human UAT not run); REC-01/REC-02 partial
+- Phase 21: Operator Read-Model Foundation (re-planned 2026-09-30) — not started; frozen
 
-**Next milestone direction:** Strategy Research / Strategy Lab.
+**Outcome:** frozen incomplete on 2026-10-06 by the research pivot; the open Phase 20.1 findings are not resolved. v1.4 Operator Console (Phases 22–27) never started. Checkpoint tag `checkpoint/pre-research-pivot-2026-10-06` → `f4ab1a5`.
+
+## Strategy Research — first increment (Implemented 2026-10-07 → 2026-10-08)
+
+**Shipped:** stages S0–S6 of `.planning/research/strategy-research-pivot/01-IMPLEMENTATION-PLAN.md` in commits `9050515`, `ca199b6`, `f167f55`, `519e73f` (pushed).
+
+- S0 research foundation (isolated `trading_research`, Tiingo adapter, catalog, integrity, freeze) · S1 specification v1 and interpreter with parity to the four originals · S2 drafts and immutable versions over HTTP · S3 studies, readiness, Job graph, metrics/evidence/ranking, freeze and once-only final test, exposures · S4 research console and static report · S6 smoke run on real Tiingo data · research as the primary application (`make dev`, `make research-bootstrap`) · S5 bounded assistant (`claude-haiku-5-5`, contract `s5-v2`, live-validated)
+
+**Outcome:** the author → approve → study → compare → freeze → final-test workflow works end to end locally; limitations recorded in `ROADMAP.md` and `README.md`.
+
+**Next agreed order (not authorized):** Pine export and equivalence checking → visual rule builder → portfolio mode.
 
 ---
-*Last updated: 2026-09-23 — v1.3 re-scoped (post-phase race/test hardening recorded under Phase 18, Phases 19–21 re-cut, scheduling deferred)*
+*Last updated: 2026-10-08 — v1.3 recorded as frozen incomplete (Phases 19–20 complete, 20.1 not complete, 21 not started); Strategy Research first increment recorded as implemented.*
+*Previous: 2026-09-23 — v1.3 re-scoped (post-phase race/test hardening recorded under Phase 18, Phases 19–21 re-cut, scheduling deferred)*

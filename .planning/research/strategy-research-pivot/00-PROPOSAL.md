@@ -6,14 +6,28 @@
 
 ---
 
+## Current status (2026-10-08; authoritative summary, supersedes stale "planning only" statements below)
+
+- **Implemented and committed.** Stages S0–S6 of `01-IMPLEMENTATION-PLAN.md` are implemented, integration-validated and pushed: `9050515` (S0–S3, Tiingo pipeline), `ca199b6` (S4 console and reporting, S6 smoke run on real Tiingo data), `f167f55` (research as the primary local application), `519e73f` (S5 assistant). HEAD `519e73f` = `origin/main`. Per-stage records: plan §9–§16; summary §17.
+- **Startup.** `make research-bootstrap` once (idempotent), then `make dev` (research API :8000 + worker + console :3000). http://localhost:3000 lands on Studies; navigation Strategies · Assets · Studies · Jobs; legacy operator URLs redirect. `make dev-trading` starts the frozen trading stack.
+- **Databases.** `trading_research` at `0033_research_assistant` (not `0031`/`0032` as some parts below say); `trading_platform` untouched at `0021`.
+- **Assistant.** Implemented (S5) and live-validated with four requests on 2026-10-08. Default and active model is `claude-haiku-5-5` (the provisional `claude-sonnet-5-5` named in Parts K and R was replaced after the live contract redesign); provider contract `s5-v2`; initial operating limits 10 requests/day and 4096 output tokens, configurable, not a monetary guarantee.
+- **Validation.** Browser runs (Playwright) for S4, the product landing and S5; the S6 smoke run on real Tiingo data (SPY, MSFT, throwaway database, dropped); console vitest 431, `tsc`, eslint, build; full Python suite after S4/S6 and before S5 (`final8_pytest.txt`, 2026-10-08 01:16, under `.data/research/validation-2026-10-08/`): 3662 passed, the 2 known baseline failures, 1 known teardown `InsufficientPrivilege` error; after S5 and the `s5-v2` corrections only focused checks (plan §16); no full-suite run recorded on the final post-S5 tree; no fully green full suite claimed.
+- **Study wizard** lists every approved version grouped by family (the "latest version only" gap noted in plan §13 was closed in §14).
+- **Not implemented.** Pine export and equivalence, visual rule builder, portfolio mode (next agreed order, Part R), and the Part Q deferrals. None is authorized by this document.
+- **Frozen.** Part A's statement on Phase 20.1 and the trading code remains true.
+- **Known limitations.** Calendar sessions only from the pinned 2014-01-02 through the library's last session (~1 year ahead); catalog names partial (Nasdaq Trader; SEC 403); per-revision ingestion re-downloads the whole range; unapplied assistant proposal not restored after reload; pre-existing baseline test and environment issues.
+
+---
+
 ## Part A. Checkpoint and frozen work
 
 | Item | Value |
 | --- | --- |
 | Branch / HEAD | `main` @ `f4ab1a5`; working tree clean except this proposal (untracked); no stash |
-| Remote | 531 commits ahead of `origin/main`; not pushed |
+| Remote | 531 commits ahead of `origin/main`; not pushed _(status 2026-10-08: pushed; HEAD `519e73f` = `origin/main`)_ |
 | Tag | `checkpoint/pre-research-pivot-2026-10-06` → `f4ab1a5` (local only) |
-| Main DB | `trading_platform` at alembic `0021`; code head is `0030`; not upgraded |
+| Main DB | `trading_platform` at alembic `0021`; code head is `0030`; not upgraded _(status 2026-10-08: still `0021`; the code head is `0033_research_assistant`, applied only to `trading_research`)_ |
 | Broker | Alpaca not contacted |
 | Providers | Tiingo: the revision-4 read-only probe (26 requests, key in header only). This revision downloaded Tiingo's public `supported_tickers.zip` once (no key) to size the catalog, and read three official documentation pages |
 
@@ -254,7 +268,7 @@ Policy:
 
 ## Part K. AI integration (small, explicit, bounded)
 
-- Provider and SDK: the official Anthropic Python SDK (`anthropic`), the project's language. Provisional model `claude-sonnet-5-5`, configurable, never hard-coded; the assistant stays disabled until an API key and explicit per-day and per-request limits are configured. No numerical budget is approved.
+- Provider and SDK: the official Anthropic Python SDK (`anthropic`), the project's language. Provisional model `claude-sonnet-5-5`, configurable, never hard-coded; the assistant stays disabled until an API key and explicit per-day and per-request limits are configured. No numerical budget is approved. _(Implemented 2026-10-08, plan §16: default model `claude-haiku-5-5`, contract `s5-v2`, activated locally with 10 requests/day and 4096 output tokens as initial operating limits; still disabled by default in the code and unusable without a key and both limits.)_
 - Configuration under `research.ai`: `enabled` (default false), `provider`, `model`, `api_key` (from `ANTHROPIC_API_KEY`, never logged; the log sanitizer already redacts `api_key` and `authorization`), `timeout_seconds`, `max_requests_per_day`, `max_output_tokens`, `max_input_characters`, `max_revisions_per_draft`. Limits are enforced in the service and counted in the database; the Anthropic console's own spend limit is a separate control the user sets.
 - Request shape: one `messages.create` per draft or revision, with adaptive thinking left at its default, a structured output format (`output_config.format`) that is the specification JSON schema plus `unsupported_requests` and `note`, no tools, no forced tool choice (rejected on current models), no prefill. The system prompt (schema, supported features, semantics, examples) is stable and cached with `cache_control`. A `refusal` stop reason surfaces as `ai_refused`.
 - Validation runs on the returned specification exactly as on hand-written YAML. Schema validity is not semantic correctness; the UI says so and requires explicit approval.
@@ -269,7 +283,7 @@ Policy:
 - `/research/strategies`: list, versions, duplicate; `/research/strategies/new` and `/research/strategies/drafts/[id]`: YAML editor, assistant panel, explanation, validation, approve.
 - `/research/assets`: catalog search, saved lists.
 - `/research/studies`: list; `/research/studies/new`: wizard; `/research/studies/[id]`: revisions, readiness, progress, results (per-asset tables, charts, evidence, ranking, benchmark, limitations, final test, exposures, exports).
-- Trading pages are untouched. The research section is visible only when the API runs in research mode. **S4 (2026-10-07):** `GET /health` carries an additive `mode` field (`research` | `trading`); the console shows the Research navigation entry only against a research-mode API and every research page explains a trading-mode API instead of rendering 404s. The console route inventory pins the nine trading pages and the nine research pages as two exact sets; research writes go through one `researchMutation(method, endpoint)` helper in `lib/api.ts`, pinned as an exact set beside the five trading mutations.
+- Trading pages are untouched. The research section is visible only when the API runs in research mode. _(Superseded 2026-10-08, plan §15: the research platform is the product; `make dev` runs research mode; the trading page shells were removed from the console and their URLs redirect; navigation is Strategies · Assets · Studies · Jobs.)_ **S4 (2026-10-07):** `GET /health` carries an additive `mode` field (`research` | `trading`); the console shows the Research navigation entry only against a research-mode API and every research page explains a trading-mode API instead of rendering 404s. The console route inventory pins the nine trading pages and the nine research pages as two exact sets; research writes go through one `researchMutation(method, endpoint)` helper in `lib/api.ts`, pinned as an exact set beside the five trading mutations.
 
 **API** under `/api/v1/research/`: strategies (drafts CRUD, validate, explain, approve, versions), assistant (draft, revise), catalog (search, asset detail, sync), asset lists, studies (create, revisions, readiness, run, results, comparison, freeze, final test, exposures, exports), AI usage. Reads return `as_of`. Mutations are typed and refuse with closed codes.
 
@@ -287,7 +301,7 @@ Isolated `trading_research` database on the local Postgres server, migrated `000
 
 Research settings (defaults keep the trading path unchanged): bar provider and adjusted flag passed explicitly by the engine and strategies; pinned research calendar start; `max_assets_per_study`; quantity policy; the Tiingo key alias for `TIINGO_API_KEY`; `research.ai.*`.
 
-With `TRADING_PLATFORM_RESEARCH_MODE=1` the worker registers exactly `ingest_tiingo_bars`, `sync_market_sessions`, `research_backtest`, `research_evaluate`, `catalog_sync`. The main database stays at `0021`. **S3 amendment (2026-10-07):** the integrity check and data freeze are their own Job, `research-freeze`, between the download and the backtests (a restart boundary, and the readiness `integrity_error` items come from it), so the research registry is the closed set of six: `catalog-sync`, `ingest-tiingo-bars`, `sync-market-sessions`, `research-freeze`, `research-backtest`, `research-evaluate`. Migration `0032_research_studies` adds `provider_request_ledger`, `study_evaluations` and `study_revision_jobs`; the research database is at `0032`.
+With `TRADING_PLATFORM_RESEARCH_MODE=1` the worker registers exactly `ingest_tiingo_bars`, `sync_market_sessions`, `research_backtest`, `research_evaluate`, `catalog_sync`. The main database stays at `0021`. **S3 amendment (2026-10-07):** the integrity check and data freeze are their own Job, `research-freeze`, between the download and the backtests (a restart boundary, and the readiness `integrity_error` items come from it), so the research registry is the closed set of six: `catalog-sync`, `ingest-tiingo-bars`, `sync-market-sessions`, `research-freeze`, `research-backtest`, `research-evaluate`. Migration `0032_research_studies` adds `provider_request_ledger`, `study_evaluations` and `study_revision_jobs`; the research database is at `0032`. _(S5, 2026-10-08: `0033_research_assistant` widens `ai_drafts`; the research database is at `0033`. The research-mode switch is the setting `research.mode`, i.e. `TRADING_PLATFORM_RESEARCH__MODE=true`, set by the Makefile; the `TRADING_PLATFORM_RESEARCH_MODE=1` spelling above is the planning-time name.)_
 
 ---
 
@@ -315,10 +329,10 @@ Per-asset results map to one chart each. Signal equivalence (per-bar chart expor
 | W4 Assistant | R15 AI service, configuration, limits, provenance · R16 assistant UI (draft, revise, approve) |
 | W5 Gate | R17 integration smoke run on the Tiingo path (YAML-authored or example version, two assets, about three years including warm-up, throwaway DB); depends on W0–W3 only, never on W4; then the first substantive study. R18 assistant integration check: runs only when the assistant is configured and enabled, separately from the research smoke run |
 
-Size: about three times revision 4's M1. The product is usable after W3; W4 completes the first usable product as decided; the W5 research smoke run gates substantive research and does not depend on the assistant, which stays disabled until credentials and explicit limits exist.
+Size: about three times revision 4's M1. The product is usable after W3; W4 completes the first usable product as decided; the W5 research smoke run gates substantive research and does not depend on the assistant, which stays disabled until credentials and explicit limits exist. _(Status 2026-10-08: W0–W5 delivered — R1–R17 implemented, R18 performed with four live requests; see "Current status" above and plan §17.)_
 
 ### Acceptance criteria (testable)
-1. **Isolation and scope pins.** `alembic_version` is `0021…` on the main DB and `0031…` on the research DB; a path-diff test shows no change under `services/execution/`, `services/reconciliation/`, `services/alpaca.py`, `services/recovery.py`, `alembic/versions/0022…0030`, or the console's trading pages.
+1. **Isolation and scope pins.** `alembic_version` is `0021…` on the main DB and `0031…` on the research DB _(now `0033…` after S3/S5)_; a path-diff test shows no change under `services/execution/`, `services/reconciliation/`, `services/alpaca.py`, `services/recovery.py`, `alembic/versions/0022…0030`, or the console's trading pages.
 2. **Research-mode registry** contains exactly the five research job types; no trading job type can be submitted in research mode. (S0/S1 register the three that exist, `catalog-sync`, `ingest-tiingo-bars`, `sync-market-sessions`, pinned as a closed set; `research-backtest` and `research-evaluate` join the pin in S3.)
 3. **Trading-path invariance.** With default settings every bar read on the risk and paper paths carries `provider="polygon"`, `adjusted=True`, whole-share quantities, and the library-default calendar; the recorded evaluation-manifest parameters are byte-identical before and after W0; the existing suite passes.
 4. **Tiingo adapter.** Mock transport: header auth only, no `token` query parameter; 429 → `provider_rate_limited`; session date from the first 10 characters; raw and adjusted rows with factors per session; adjusted volume above 2,147,483,647 inserts.
@@ -353,10 +367,10 @@ Portfolio mode UI, ranking and evidence semantics (M2) · visual rule builder (M
 
 ## Part R. Decisions: adopted defaults and what remains
 
-Adopted on 2026-10-07 as planning defaults: Anthropic SDK with `claude-sonnet-5-5` as the provisional, configurable model, AI disabled until credentials and explicit spending limits are configured (no numerical budget approved); `fractional` quantities with the corrected rounding rules; the US stock and ETF catalog in USD on the major exchanges; a configurable limit of 10 assets per study with no silent truncation; synchronous HTTP for authoring and configuration writes with ingestion and backtests as Jobs; M2 order Pine export and equivalence checking → visual builder → portfolio mode.
+Adopted on 2026-10-07 as planning defaults: Anthropic SDK with `claude-sonnet-5-5` as the provisional, configurable model _(replaced in implementation by `claude-haiku-5-5`, 2026-10-08; see "Current status")_, AI disabled until credentials and explicit spending limits are configured (no numerical budget approved); `fractional` quantities with the corrected rounding rules; the US stock and ETF catalog in USD on the major exchanges; a configurable limit of 10 assets per study with no silent truncation; synchronous HTTP for authoring and configuration writes with ingestion and backtests as Jobs; M2 order Pine export and equivalence checking → visual builder → portfolio mode.
 
 Genuinely open items are listed, localized to the stage they affect, in `01-IMPLEMENTATION-PLAN.md` Part 7. Objective values, constraint caps and floors, costs, windows and assets are per-study inputs and block nothing.
 
 ---
 
-*Checkpoint tag:* `checkpoint/pre-research-pivot-2026-10-06` (local). *Nothing pushed. No main-DB upgrade. No broker contact. No purchases. Tiingo contacted read-only in revision 4 only; this revision used public documentation and the public ticker list.*
+*Checkpoint tag:* `checkpoint/pre-research-pivot-2026-10-06` (local). *Nothing pushed* _(as of revision 6; the implementation commits were pushed 2026-10-08)_. *No main-DB upgrade. No broker contact. No purchases. Tiingo contacted read-only in revision 4 only; this revision used public documentation and the public ticker list.*

@@ -1,6 +1,6 @@
 # Strategy Specification v1: Contract
 
-**Status:** planning contract (2026-10-07). Consumed by the YAML editor, the AI assistant, the validator, the interpreter, the explanation renderer, the later visual builder and the later Pine generator. No implementation yet.
+**Status:** implemented contract (S1, 2026-10-07; committed in `9050515`; unchanged since apart from the §12 implementation notes). Implemented by `src/trading_platform/strategies/spec/` (schema, validator, history derivation, canonical hash, explanation) and `strategies/declarative.py` (the interpreter); consumed by the YAML editor, the AI assistant (S5, contract `s5-v2` renders to this YAML) and the explanation renderer. The visual builder and the Pine generator are future consumers (not implemented; see `ROADMAP.md`). Parity with the four originals (§9) passed before the examples were seeded. _Original status line (2026-10-07): planning contract; no implementation yet._
 **Legend:** **[Settled]** required by the approved product direction · **[Chosen]** implementation choice made in planning, changeable without a product decision · **[Open]** needs the user.
 
 ---
@@ -156,7 +156,7 @@ Output sections: name and description; "Enter long when …" with one numbered l
 ## 11. Open items for this contract
 
 - **[Settled 2026-10-07]** `ema` ships in v1.
-- **[Open]** Maximum `history` for recursive indicators (1000 proposed).
+- **[Open]** Maximum `history` for recursive indicators (1000 proposed). _Implementation note: the validator enforces `MAX_HISTORY = 1000` (`strategies/spec/schema.py`); changing the bound remains a product decision._
 
 ---
 

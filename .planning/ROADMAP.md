@@ -5,11 +5,48 @@
 - ✅ **v1.0 MVP Backtest & Paper Trading** - Phases 1-6 (shipped 2026-03-15)
 - ✅ **v1.1 Execution Correctness & Hardening** - Phases 7-12 (shipped 2026-07-15; full detail archived in `.planning/milestones/v1.1-paused/`)
 - ✅ **v1.2 Operator Console v0** - Phases 13-16 (shipped 2026-07-09; full detail archived in `.planning/milestones/v1.2-operator-console/`)
-- 🚧 **v1.3 Operator Platform** - Phases 17-21, including inserted Phase 20.1 (in progress — 17–20 complete; 20.1 and 21 planned)
-- 📋 **v1.4 Operator Console** - Phases 22-27 (planned; follows v1.3) — the console rebuild on the Phase 21 read models: design first (Phase 22), then the rebuild (23–27). Carries AUD-02 and NOTIF-02.
-- 🔭 **v1.5 (next after v1.4): Strategy Research / Strategy Lab** — work moves toward strategy research after the Operator Console. Scheduling (SCHED-01..03) belongs to a later Paper Automation milestone.
+- ⏸ **v1.3 Operator Platform** - Phases 17-21 incl. inserted 20.1 — **FROZEN 2026-10-06, incomplete**: 17–20 complete; 20.1 executed through plan 38 but not complete (open findings listed under "Historical / frozen"); 21 not started
+- ⏸ **v1.4 Operator Console** - Phases 22-27 — FROZEN, not started
+- ⏸ **v1.5 Strategy Lab** — superseded by the research product below; SCHED-01..03 (Paper Automation) remain deferred with no target
+- ✅ **Strategy Research, first increment (S0–S6)** — implemented and integration-validated 2026-10-07/08 (`.planning/research/strategy-research-pivot/01-IMPLEMENTATION-PLAN.md` §9–§17); this is the **active roadmap**
+- 📋 **Strategy Research, next increments** — agreed order: Pine export and equivalence checking → visual rule builder → portfolio mode; **not authorized for implementation** by this document
 
-## Overview
+## Active roadmap: Strategy Research
+
+The product is a local, single-user strategy research application (research pivot 2026-10-06; proposal rev. 6 approved 2026-10-07; research is the primary local application since 2026-10-08). The trading backend is frozen; research processes never mount a trading route, never register a trading Job type, never touch `trading_platform` (at `0021`) and never contact a broker.
+
+### Increment 1 — implemented and integration-validated (S0–S6)
+
+| Stage | Delivered | Code commit | Validation |
+| --- | --- | --- | --- |
+| S0 Research foundation | `research` settings, calendar pin, migration `0031`, research-mode registry, Tiingo adapter (header auth), catalog sync, integrity, freeze/export/restore, `create_research_db.py` | `9050515` | plan §9–§10; `tests/test_research_foundation.py`, `tests/test_research_data_pipeline.py` |
+| S1 Specification and interpreter | `strategies/spec/` validator, history derivation, canonical hash, explanation; `DeclarativeDailyStrategy`; parity with the four originals; seeded examples | `9050515` | plan §9; `tests/test_strategy_spec_validation.py`, `tests/test_strategy_spec_parity.py` |
+| S2 Versions and authoring API | drafts, validate, approve into immutable versions, lineage, duplicate; research routers mounted exclusively in research mode | `9050515` | plan §11; `tests/test_research_strategies_api.py`, `tests/test_research_api_isolation.py` |
+| S3 Study engine and evaluation | shared Tiingo request ledger (`0032`), studies/revisions, readiness, Job graph, research backtests with quantity policy and benchmark, metrics/evidence/ranking/verdict, freeze, once-only final test, exposures, exports | `9050515` | plan §12; `tests/test_research_studies_pipeline.py`, `tests/test_research_engine_metrics.py`, `tests/test_research_budget.py` |
+| S4 Research UI | Strategies, Assets, Studies pages; readiness/progress/results; static report; browser validation against a stubbed Tiingo | `ca199b6` | plan §13–§14; `tests/test_research_console_contract.py`; console vitest |
+| S6 Smoke run | real Tiingo data (SPY, MSFT, example version, throwaway DB, dropped) through the whole pipeline | `ca199b6` (record) | plan §14 |
+| Research as the product | `make dev` research stack, `make research-bootstrap`, landing on Studies, navigation Strategies · Assets · Studies · Jobs, legacy URL redirects, Playwright on both hosts | `f167f55` | plan §15; `tests/test_dev_workflow.py`, `tests/test_research_bootstrap.py`, `consoleRedirects.test.ts` |
+| S5 Assistant | bounded, accounted drafting/revision (`0033`), explicit Apply, separate approval, provenance; default `claude-haiku-5-5`, contract `s5-v2`; live-validated with four requests | `519e73f` | plan §16; `tests/test_research_assistant.py`, `tests/test_research_assistant_converter.py`; console panel tests |
+
+**Recorded limitations of increment 1:** calendar sessions from the pinned start (2014-01-02) through the library's last session (~1 year ahead); catalog names partial (Nasdaq Trader; SEC 403); per-revision ingestion re-downloads the whole required range; unapplied assistant proposal not restored on reload; live assistant latency seen on four requests only; two pre-pivot baseline test failures and the teardown privilege error remain (last full suite after S4/S6, before S5: 3662 passed + 2 failed + 1 error, `final8_pytest.txt`; focused checks only after S5; no full-suite run recorded on the final post-S5 tree). Pine export, portfolio UI and the visual builder do not exist.
+
+### Next agreed development order (recorded; each requires separate authorization)
+
+1. **Pine Script export and equivalence checking** — generate Pine from the specification (the indicator/operator set was bounded so each element has a Pine equivalent), pin the TradingView assumptions (proposal Part O), compare per-bar signals and trade lists against `backtest_signals` / `backtest_trades`.
+2. **Visual rule builder** — a UI over the same specification; no new semantics (proposal Part E.3).
+3. **Portfolio mode** — `portfolio_combined` studies with their own ranking and evidence semantics (today refused as `mode_not_supported_yet`).
+
+No detailed plans exist for these; none is implied as scheduled.
+
+### Later / deferred (proposal Part Q)
+
+Python authoring in an isolated sandbox (Part E.4 requirements), automatic parameter search and grids, walk-forward, cost sweeps, whole-market scanning, composite scoring and return ÷ drawdown, survivorship-free or point-in-time universes, exact dividend-factor reconciliation, CSV import, Polygon plan change, Alpaca market data; Phase 21, v1.4 and the Phase 20.1 open items (frozen, see below).
+
+## Historical / frozen: v1.3 Operator Platform and v1.4 Operator Console
+
+_The remainder of this file is the pre-pivot roadmap, kept as the record. It is not active. Phase 20.1 remains incomplete with the findings listed in its section; Phase 21 and the v1.4 console direction were never started; the pivot resolves none of it._
+
+### Historical overview (v1.3, as written 2026-09-30)
 
 v1.3 (re-scoped 2026-09-23 after a repository audit) finishes the investment in the Job framework and HTTP orchestration surface by making them usable from the Operator Console. Every existing long-running manual operation runs as a Job that the operator submits, observes, cancels, and retries from generic Job surfaces; immediate safety controls work from the console without depending on the worker; and every mutation bypass (`scripts/`, dead CLI paths, Makefile targets) is eliminated. No Redis/Celery, no push transport, no auth/RBAC, no scheduling.
 
@@ -29,7 +66,7 @@ v1.3 (re-scoped 2026-09-23 after a repository audit) finishes the investment in 
 
 Phase order: Phase 17 built the generic Job framework; Phase 18 built the idempotent HTTP orchestration surface, followed by post-phase race/test hardening of the framework (PR #1). The production registry was intentionally left empty at the end of Phase 18. Phase 19 proves the whole chain end-to-end with one real operation (backtest) and builds the generic Job UI. Phase 20 migrates every remaining operation, restores safety controls, adds operator retry, and retires all bypasses. Phase 20.1 (inserted) fixes the operator-state semantics: paper-account ownership, attribution, submission uncertainty, recovery, execution operations, calendar/evaluation/execution facts, and data provenance. Phase 21 builds the read models (and the worker heartbeat) the new console needs, then v1.3 closes.
 
-## Phases
+## Historical phases (trading platform; frozen)
 
 **Phase Numbering:**
 
@@ -77,7 +114,7 @@ Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-
 
 </details>
 
-### 🚧 v1.3 Operator Platform (In Progress)
+### ⏸ v1.3 Operator Platform (FROZEN 2026-10-06, incomplete)
 
 **Milestone Goal:** Every existing long-running operation executes as a Job that the operator submits, observes, cancels, and retries from generic Job surfaces in the console; immediate safety controls work from the console without depending on the worker; and exactly one mutation path exists per operation class — no bypasses.
 
@@ -90,7 +127,7 @@ Full requirements, success criteria, and plan lists: `.planning/milestones/v1.2-
 
 **Deferred out of v1.3:** SCHED-01..03 (→ future Paper Automation milestone), AUD-03 (multi-user identity groundwork — single operator). NOTIF-01 folded into AUD-02. **Moved to v1.4 (2026-09-30):** AUD-02, NOTIF-02.
 
-### 📋 v1.4 Operator Console (Planned)
+### ⏸ v1.4 Operator Console (FROZEN; never started)
 
 **Milestone Goal:** An operator understands at a glance whether trading is safe and working, what needs attention, and what to do next. The console is rebuilt on the Phase 21 read models using the hybrid information architecture (posture + session pipeline + attention; `research/operator-console-ia/02-HYBRID-IA-PROPOSAL.md`). Desktop and mobile; mobile limited to monitoring and emergency controls until an auth/network model exists.
 
@@ -312,7 +349,9 @@ Plans:
 - [x] 20-24-PLAN.md — Delete bypass scripts/Makefile targets; closed-world boundary test
 **UI hint**: yes
 
-### Phase 20.1: Operator-State Correctness & Paper-Account Ownership (INSERTED)
+### Phase 20.1: Operator-State Correctness & Paper-Account Ownership (INSERTED) — FROZEN 2026-10-06, NOT COMPLETE
+
+_Status at the freeze: 38 plans executed; re-verification round 5 `gaps_found` — E1 and G-1 closed; G-2 partial (E2 jobs.id swap, E3 DELETE + re-INSERT, E4 planted operator in public); escalations E-5 (0028 to_jsonb plant), D-1; OD-1 open decision; CR-01 interim Continue/Retry prohibition in force; mandatory pre-UAT inventory and human UAT not performed; REC-01/REC-02 partial. Unchanged by the pivot._
 
 **Goal**: Trading-safety semantics are correct and explicit before any read model or console is built. At most one active paper strategy owns the Alpaca account, starting with none; attribution is evidence-based with an owner-less account-level check; external activity is recorded through an audited path; order submissions are never re-sent ambiguously and uncertain outcomes are recovered by verified broker state; evaluation never corrupts account truth; batch and symbol-metadata outcomes are honest; trading day, evaluation session and execution window are separate facts; evaluations carry data provenance; and a multi-order session is an explicit, pausable execution operation. New controls are API-only until v1.4, and the existing console stays truthful.
 **Depends on**: Phase 20
@@ -441,7 +480,9 @@ Plans (execution waves follow true dependency depth: the Alembic chain 0021→00
 
 **UI hint**: yes (legacy-console compatibility only)
 
-### Phase 21: Operator Read-Model Foundation
+### Phase 21: Operator Read-Model Foundation — FROZEN, NOT STARTED
+
+_Its planned migration number `0031` was taken by `0031_research_platform`; Phase 21 renumbers if it ever resumes._
 
 **Goal**: The backend exposes every operator-facing fact the v1.4 console needs as read-only, bounded, tested APIs whose meaning is carried in closed enums (trading permission, posture, verdict and next action, issues, session pipeline and execution operations, market-data coverage, reconciliation detail, activity, worker health, catalog), so the console rebuild does no domain interpretation. Worker health is backed by a persisted heartbeat. v1.3 closes after this phase.
 **Depends on**: Phase 20.1
@@ -484,8 +525,9 @@ Plans:
 
 ## Progress
 
-**Execution Order:**
-v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phase 20 starts only after the Phase 19 vertical slice is verified. v1.3 closes after Phase 21. v1.4 (22 → 23 → 24/25/26 → 27) follows, then v1.5 Strategy Lab.
+**Execution Order (current):** research increment 1 (S0–S6) is complete; the next agreed order is Pine export and equivalence → visual rule builder → portfolio mode, each needing separate authorization.
+
+_Historical order (frozen): v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential; v1.3 closes after Phase 21; v1.4 (22 → 23 → 24/25/26 → 27) follows, then v1.5 Strategy Lab._
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -509,16 +551,28 @@ v1.3 executes 17 → 18 → 19 → 20 → 20.1 → 21, strictly sequential. Phas
 | 18. Orchestration Surface | v1.3 | 6/6 | Complete (ORCH-01/02 Partial → Phase 20) | 2026-07-21 |
 | 19. Job Operations Vertical Slice | v1.3 | 12/12 | Complete | 2026-09-26 |
 | 20. Complete Operation Migration & Safety Controls | v1.3 | 28/28 | Complete | 2026-09-29 |
-| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 38/38 | In Progress (E1 closed, re-verification round 5 gaps_found: G-2 partial, E2–E4 need user decisions; human UAT pending) | - |
-| 21. Operator Read-Model Foundation | v1.3 | 0/7 | Planned | - |
-| 22. UX & Design Language | v1.4 | 0/TBD | Not started | - |
-| 23. Shell & Overview | v1.4 | 0/TBD | Not started | - |
-| 24. Trading | v1.4 | 0/TBD | Not started | - |
-| 25. Portfolio · Market data · Research | v1.4 | 0/TBD | Not started | - |
-| 26. Activity & System | v1.4 | 0/TBD | Not started | - |
-| 27. Mobile | v1.4 | 0/TBD | Not started | - |
+| 20.1. Operator-State Correctness & Paper-Account Ownership (INSERTED) | v1.3 | 38/38 plans executed | FROZEN 2026-10-06, not complete (round 5 gaps_found: G-2 partial, E2–E4, E-5, D-1, OD-1; CR-01 prohibition; human UAT not run) | - |
+| 21. Operator Read-Model Foundation | v1.3 | 0/8 | FROZEN, not started | - |
+| 22. UX & Design Language | v1.4 | 0/TBD | FROZEN, not started | - |
+| 23. Shell & Overview | v1.4 | 0/TBD | FROZEN, not started | - |
+| 24. Trading | v1.4 | 0/TBD | FROZEN, not started | - |
+| 25. Portfolio · Market data · Research | v1.4 | 0/TBD | FROZEN, not started | - |
+| 26. Activity & System | v1.4 | 0/TBD | FROZEN, not started | - |
+| 27. Mobile | v1.4 | 0/TBD | FROZEN, not started | - |
+| Research S0. Research foundation | Research 1 | — | Implemented (`9050515`) | 2026-10-07 |
+| Research S1. Specification and interpreter | Research 1 | — | Implemented (`9050515`) | 2026-10-07 |
+| Research S2. Versions and authoring API | Research 1 | — | Implemented (`9050515`) | 2026-10-07 |
+| Research S3. Study engine and evaluation | Research 1 | — | Implemented (`9050515`) | 2026-10-07 |
+| Research S4. Research UI | Research 1 | — | Implemented (`ca199b6`) | 2026-10-08 |
+| Research S5. Assistant | Research 1 | — | Implemented, live-validated (`519e73f`) | 2026-10-08 |
+| Research S6. Smoke run | Research 1 | — | Executed on real Tiingo data (`ca199b6` record) | 2026-10-08 |
+| Research as the product (startup, bootstrap, landing) | Research 1 | — | Implemented (`f167f55`) | 2026-10-08 |
+| Pine export and equivalence | Research next | — | Not started; not authorized | - |
+| Visual rule builder | Research next | — | Not started; not authorized | - |
+| Portfolio mode | Research next | — | Not started; not authorized | - |
 
 ---
-*Roadmap updated: 2026-09-30 — Operator Console IA programme: Phase 20.1 INSERTED (operator-state correctness & paper-account ownership, 14 plans); Phase 21 re-planned as Operator Read-Model Foundation (7 plans, worker heartbeat included); AUD-02/NOTIF-02 moved to the new v1.4 Operator Console milestone (Phases 22–27); Strategy Lab becomes v1.5; mutation path 2 widened to synchronous operator controls with no broker call. Sources: `research/operator-console-ia/03-PLANNING-CHANGES.md` rev. 8, `04-IMPLEMENTATION-PLANS.md`, `05-INTERIM-API-OPERATIONS.md`.*
+*Roadmap updated: 2026-10-08 — research pivot: Strategy Research increment 1 (S0–S6) recorded as implemented and integration-validated with its limitations; next agreed order (Pine export and equivalence → visual rule builder → portfolio mode) and deferred items recorded without authorization; v1.3 (Phase 20.1 incomplete, Phase 21 not started) and v1.4 marked frozen; Progress table extended.*
+*Previous: 2026-09-30 — Operator Console IA programme: Phase 20.1 INSERTED (operator-state correctness & paper-account ownership, 14 plans); Phase 21 re-planned as Operator Read-Model Foundation (7 plans, worker heartbeat included); AUD-02/NOTIF-02 moved to the new v1.4 Operator Console milestone (Phases 22–27); Strategy Lab becomes v1.5; mutation path 2 widened to synchronous operator controls with no broker call. Sources: `research/operator-console-ia/03-PLANNING-CHANGES.md` rev. 8, `04-IMPLEMENTATION-PLANS.md`, `05-INTERIM-API-OPERATIONS.md`.*
 *Previous update 2026-09-23 — v1.3 re-scoped after repository audit: post-phase race/test hardening (PR #1) recorded under Phase 18, Phases 19–21 re-cut (vertical slice → migration & safety controls → history & polish), SCHED-01..03 and AUD-03 deferred, ORCH-01/02 marked Partial pending Phase 20. Previous update 2026-07-15.*
 *Roadmap updated: 2026-10-03 — Phase 20.1 plan 20.1-11 split by responsibility into 20.1-11 (storage, state machine, reads, End), 20.1-15 (submission execution) and 20.1-16 (Continue); 16 plans; 14 moved to wave 10 and 13 to wave 11.*

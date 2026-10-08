@@ -1,88 +1,118 @@
-# Trading Strategy Platform
+# Strategy Research
 
-Trading Strategy Platform is a local-first Python foundation for a single-user, auditable strategy system. The current repository is the first operational slice of that platform: typed configuration loading, a FastAPI control plane, strategy registration, PostgreSQL persistence, Alembic migrations, and and the initial `TrendFollowingDailyV1` strategy.
+Strategy Research is a local, single-user application for writing daily,
+long-only trading strategies, testing them on historical U.S. stock and ETF
+data, and comparing the evidence per asset. It replaced the earlier
+automated-trading / operator-console direction of this repository on
+2026-10-06 (`.planning/research/strategy-research-pivot/`). The trading
+backend (paper execution, reconciliation, broker code, migrations 0022–0030)
+stays in the repository, frozen; it is not part of the product UI.
 
-This is not a live trading system yet. It is the Phase 1 foundation for one.
+This is a research tool. It does not place orders, does not contact a broker,
+and makes no claim that a strategy will perform in the future.
 
-## Current Scope
+## What the product does today
 
-Implemented today:
+- **Author strategies** as a bounded YAML specification (`spec_version: 1`):
+  daily bars, long-only, one asset per run, indicators `sma`, `ema`, `rsi`,
+  `highest`, `lowest`, `lag`, `change_pct`, comparison and crossing operators,
+  `all_of` / `any_of` groups. Validation runs on every change with closed error
+  codes; a deterministic plain-language explanation is rendered from the
+  specification itself. Contract: `.planning/research/strategy-research-pivot/02-STRATEGY-SPEC-V1.md`.
+- **Draft with an assistant** (optional): describe an idea or ask for a
+  correction; the assistant returns a candidate specification, an
+  `unsupported_requests` list and a note. The same validator and explanation
+  run on it; nothing is written until you click **Apply**, and approval stays a
+  separate action.
+- **Approve immutable versions.** Drafts are mutable; approved versions are
+  append-only (a database trigger refuses UPDATE and DELETE). Editing an
+  approved version opens a new draft with lineage. Four example versions
+  (trend following 50/200, RSI mean reversion, Donchian breakout, time-series
+  momentum) are seeded by the bootstrap after passing a parity test against the
+  original Python strategies.
+- **Pick assets** from a catalog of U.S. stocks and ETFs (Tiingo public list,
+  names joined from Nasdaq Trader), search by ticker or name, keep saved lists.
+- **Define studies.** A study revision is an immutable snapshot of: strategy
+  versions, assets (up to a configured limit, default 10, never truncated),
+  date range, development / validation / final-test windows, capital, quantity
+  policy, trading costs, the ranking objective and the risk constraint. Costs,
+  objective and constraint are entered per study; nothing is pre-filled.
+- **Check readiness** before anything runs: every failing item is listed
+  (coverage, warm-up, missing settings, missing exchange sessions, integrity
+  findings after download, inputs changed after a freeze). Nothing is dropped,
+  shortened or substituted.
+- **Run** as Jobs: download only the selected assets for the range plus
+  warm-up, freeze the inputs (integrity check, digest, `inputs/` export), run
+  one backtest per (version, asset, window) plus a buy-and-hold benchmark per
+  (asset, window), evaluate. Progress is visible on the generic Jobs pages.
+- **Compare** per asset: return and risk tables, equity and drawdown charts,
+  evidence descriptors and grades with their limitations, ranking by the
+  study's objective with reasons, the benchmark shown beside each candidate and
+  never used as a gate, a verdict that can be "insufficient evidence" or "no
+  candidate qualifies".
+- **Freeze and final-test.** Freezing records the chosen candidate and the
+  acceptance criteria; the final test runs only after a freeze, only on the
+  frozen candidate, once (a technical rerun is linked and must reproduce the
+  same digests). Final-test exposures on an asset are shown to every later
+  study that overlaps those dates.
+- **Export** `comparison.json`, per-run `summary.json` / `trades.csv` /
+  `equity_curve.csv`, and a static `report.html` / `report.md`, under
+  `.data/research/` (git-ignored).
 
-- FastAPI application with `/health`, `/ready`, `/strategies`, and `/api/v1/system`
-- File-first configuration using `config/app.yaml` and `config/strategies/*.yaml`
-- Environment variable overrides via the `TRADING_PLATFORM_` prefix
-- Strategy registry with the first registered strategy: `trend_following_daily`
-- PostgreSQL persistence for strategy catalog entries and Job-linked run records
-- Alembic migration flow for schema management
-- Seed script for the initial strategy catalog entry
-- Operator console Jobs and controls as the sole manual mutation surface
-- Docker Compose PostgreSQL, plus an opt-in full container stack (`stack` profile)
-- Pytest coverage for app boot, strategy registry, and migrations
-
-Not implemented yet:
-
-- Historical market-data ingestion
-- Backtesting
-- Paper broker integration
-- Real risk, execution, and analytics engines
-- Live or paper trading automation beyond placeholder scaffolding
+Scope and limitations are listed at the end of this file.
 
 ## Stack
 
-- Python 3.12+
-- FastAPI
-- SQLAlchemy
-- Alembic
-- PostgreSQL 16
-- Docker Compose
-- pytest
+- Python 3.12+, FastAPI, SQLAlchemy, Alembic, PostgreSQL 16
+- Next.js console (`console/`, Node.js 22+)
+- Tiingo for daily bars (header authentication; personal-use license)
+- Anthropic Python SDK for the optional assistant
 
-## Repository Layout
+## Repository layout
 
 ```text
 .
-├── alembic/                    # Database migrations
+├── alembic/versions/           # 0001–0030 trading schema (frozen); 0031–0033 research schema
 ├── config/
-│   ├── app.yaml               # Base application/runtime config
-│   └── strategies/
-│       └── trend_following_daily.yaml
+│   ├── app.yaml                # Base application/runtime config
+│   └── strategies/*.yaml       # The four original Python strategies (parity oracles)
+├── console/                    # Next.js console: Strategies, Assets, Studies, Jobs
 ├── scripts/
-│   ├── export_backtest_report.py / generate_signals.py / operator_status.py / report_strategy_analytics.py  # read/report tools
-│   ├── migrate.py             # Alembic wrapper
-│   └── seed_phase1.py         # Seed initial strategy metadata
+│   ├── bootstrap_research.py   # make research-bootstrap
+│   ├── create_research_db.py   # Create + migrate the research database (refuses the trading name)
+│   ├── migrate.py / seed_phase1.py            # Trading-database tooling (frozen)
+│   └── export_backtest_report.py / generate_signals.py / operator_status.py / report_strategy_analytics.py  # read/report tools (trading)
 ├── src/trading_platform/
-│   ├── api/                   # FastAPI app and routes
-│   ├── core/                  # Settings and logging
-│   ├── db/                    # SQLAlchemy models and session helpers
-│   ├── services/              # Placeholder data/risk/execution/analytics services
-│   ├── strategies/            # Strategy contracts and implementations
-│   └── worker/                # Worker CLI
-├── tests/
-├── docker-compose.yml
-├── Dockerfile
-├── Makefile
-└── pyproject.toml
+│   ├── api/research/           # Research routers (mounted only in research mode)
+│   ├── api/routes/             # Trading routers (mounted only in trading mode) + health/jobs
+│   ├── jobs/                   # Generic Job framework (shared); research registry of six Job types
+│   ├── services/research/      # Catalog, Tiingo ingestion, budget, integrity, freeze, studies, backtest, metrics, evidence, ranking, report, assistant, bootstrap
+│   ├── strategies/spec/        # Specification schema, validator, history derivation, explanation
+│   ├── strategies/declarative.py              # The one interpreter for approved versions
+│   └── services/, worker/, ...  # Trading backend (frozen)
+├── tests/                      # tests/test_research_*.py cover the research product
+├── docker-compose.yml, Dockerfile, Makefile, pyproject.toml
+└── .planning/                  # Project state, roadmap, requirements, research documents
 ```
 
-## Quick Start
+## Quick start
 
-### Local development (canonical)
+There is one supported way to run the product locally: the research API, the
+Job worker and the console as host processes, started together by `make dev`,
+against the PostgreSQL database `trading_research` on `localhost:5432` (for
+example a native Homebrew PostgreSQL).
 
-The product is the **strategy research platform** (research pivot, 2026-10-06:
-`.planning/research/strategy-research-pivot/`). There is exactly one supported
-way to run it locally: the research API, the Job worker and the console as host
-processes, started together by `make dev`, in research mode against the
-PostgreSQL database `trading_research` (`localhost:5432`, e.g. a native
-Homebrew PostgreSQL). The frozen trading surface is not part of the product UI;
-`make dev-trading` starts it against the database named in `.env` when needed.
+### One-time setup
 
-One-time setup:
-
-1. Create an environment file and fill in the database and provider keys:
+1. Create the environment file:
 
    ```bash
    cp .env.example .env
    ```
+
+   Set `TIINGO_API_KEY` (read by the server-side Tiingo client only). The
+   database host and port come from the same file; the research database name
+   is forced by the Makefile and cannot be redirected to the trading database.
 
 2. Create a virtual environment and install dependencies:
 
@@ -94,256 +124,268 @@ One-time setup:
    cp console/.env.example console/.env.local
    ```
 
-3. Make sure PostgreSQL is running on `localhost:5432`, then prepare the
-   research database (idempotent; re-run after pulling new migrations or to
-   refresh the public asset catalog with `--refresh-catalog`):
+3. With PostgreSQL running on `localhost:5432`, prepare the research database
+   (idempotent; re-run after pulling new migrations):
 
    ```bash
    make research-bootstrap
    ```
 
    It creates `trading_research` when missing, migrates it to the single
-   Alembic head, seeds the four example strategy versions, syncs the public
-   asset catalog (keyless downloads) and stores the exchange sessions from the
-   pinned research calendar start (`RESEARCH_CALENDAR_START`, 2014-01-02)
-   through the end of next year. Existing drafts, versions, lists, studies and
-   results are kept. The trading database is never touched (`make migrate` /
-   `make seed` remain the trading-database tooling).
+   Alembic head (`0033_research_assistant`), seeds the four example strategy
+   versions, syncs the public asset catalog (no key needed; `--refresh-catalog`
+   re-syncs) and stores XNYS exchange sessions from the pinned research
+   calendar start (`RESEARCH_CALENDAR_START`, 2014-01-02) through the last
+   session the calendar library can answer for (about one year ahead). Existing
+   drafts, versions, lists, studies and results are kept. The trading database
+   is never touched.
 
-Every day:
+### Every day
 
 ```bash
 make dev
 ```
 
-Then open **http://localhost:3000** — it lands on Research → Studies.
+Then open **http://localhost:3000** (`127.0.0.1` works too). It lands on
+Studies; the primary navigation is **Strategies · Assets · Studies · Jobs**.
 
-`make dev` refuses to start if port 8000 or 3000 is already taken (for example
-by the Compose stack), then runs in one process group:
+`make dev` refuses to start if port 8000 or 3000 is taken, then runs three
+processes in one group (`Ctrl-C` stops all of them):
 
 - **Research API** on `http://127.0.0.1:8000` with `--reload`
   (`TRADING_PLATFORM_RESEARCH__MODE=true`, calendar pinned, database
-  `trading_research`; `GET /health` reports `"mode": "research"`). Backend code
-  changes under `src/` are picked up automatically. Mutations are enabled for
-  this API process only; the application default stays off.
+  `trading_research`). `GET /health` reports `"mode": "research"`. Only the
+  research routers and the generic health/jobs routers are mounted; every
+  trading route is a 404 in this process. Mutations are enabled for this API
+  process only.
 - **Job worker** (`python -m trading_platform.worker run-jobs`) in research
-  mode on the same database (research Job registry only), restarted by
-  `watchfiles` on changes under `src/`. A restart lets the in-flight Job finish
-  for up to 30 seconds; a Job still running after that is reclaimed by the
-  lost-lease sweep.
-- **Console** on `http://localhost:3000` (also reachable as `127.0.0.1`):
-  Strategies, Assets, Studies and the generic Jobs pages. Legacy operator
-  console URLs (`/strategy`, `/runs`, `/paper`, `/controls`) redirect to the
-  research pages.
+  mode on the same database, restarted on changes under `src/`. The research
+  registry contains exactly `catalog-sync`, `ingest-tiingo-bars`,
+  `sync-market-sessions`, `research-freeze`, `research-backtest`,
+  `research-evaluate`; no trading Job type can be submitted.
+- **Console** on `http://localhost:3000`. Legacy operator-console URLs
+  (`/`, `/strategy`, `/runs`, `/paper`, `/controls`) redirect permanently to
+  the research pages.
 
-Press `Ctrl-C` to stop all three. Changes to `config/` or `.env` need a
-`make dev` restart. `TIINGO_API_KEY` in `.env` is read by the server-side
-Tiingo client only (price ingestion runs as Jobs submitted by a study).
+Changes to `config/` or `.env` need a `make dev` restart. `make api`,
+`make worker` and `make console` run one piece in the foreground (API and
+worker in research mode; `make api` reads `mutations_enabled` from `.env`
+like any deployment, so mutating routes return `403 mutations_disabled`
+unless enabled there).
 
-`make api`, `make worker` and `make console` run a single piece in the
-foreground for debugging (API and worker in research mode). `make api` is
-configuration-neutral about mutations: it reads `mutations_enabled` from
-`.env`/config like any deployment, so mutating routes return
-`403 mutations_disabled` unless you enable them there.
+## The research workflow
 
-`make dev-trading` is the frozen trading console (status, runs, paper,
-controls, kill switch) against the database in `.env`; its pages are no longer
-served by the console, only its API and Jobs.
+1. **Author.** Strategies → New strategy (or open a draft). Write YAML, or ask
+   the assistant. Findings, derived values (`history_required`,
+   `history_minimum`, scale class) and the explanation update as you type.
+   Save as draft.
+2. **Approve.** Approve the draft into an immutable version (explicit
+   confirmation). The version page shows the YAML as approved, the
+   explanation, the lineage and, for assistant-drafted versions, the full
+   attempt chain.
+3. **Study.** Studies → New study: choose approved versions (several per
+   family allowed, compared as separate candidates), tickers or a saved list,
+   range and the three windows, capital, quantity policy, costs, objective and
+   constraint. Readiness lists every blocking item. First time on a fresh
+   database, `sync-market-sessions` is already done by the bootstrap; a study
+   submits its own ingestion and freeze Jobs.
+4. **Compare.** On the study page: inputs verified or not, verdict, ranking,
+   per-asset tables and charts, evidence grades, limitations, the benchmark
+   beside each candidate, exposures from other studies on the same assets.
+   Reading results with a final-test evaluation marks the revision's
+   exposures as inspected.
+5. **Freeze.** Choose the leading candidate and record the acceptance criteria
+   (refused while candidates are co-leading, while acceptance is incomplete,
+   or when the candidate is not eligible).
+6. **Final test.** Runs the frozen candidate and its benchmark on the
+   final-test window once; the outcome block shows the frozen criteria, the
+   result, and the benchmark comparison separately. Export the report.
 
-### Alternative: full Docker Compose stack
+Studies with changed settings become a new revision of the same study; earlier
+revisions and their results remain.
 
-The containerized stack (`db`, one-shot `migrate`, `api`, `worker`) sits behind
-the Compose `stack` profile. Use it **instead of** `make dev`, never alongside
-it: its API binds port 8000 and its worker polls its own `db`.
+## Research assistant (optional)
 
-```bash
-make up      # docker compose --profile stack up --build -d
-make logs    # follow db/api/worker logs
-make down    # stop and remove the stack
-```
-
-Notes:
-
-- The images contain an installed copy of `src/`; code changes need `make up`
-  again (rebuild). Nothing reloads.
-- The stack uses the Compose `db` (its own volume, unseeded) and only the
-  environment set in `docker-compose.yml` (mutations enabled; no Polygon or
-  Alpaca keys). Seeding and other `scripts/` run from the host repository.
-- A bare `docker compose up` starts only `db`. If a native PostgreSQL already
-  owns port 5432, set `POSTGRES_HOST_PORT` to publish the Compose database on
-  another port.
-- `migrate` runs `alembic upgrade head` (assets baked into the image) before
-  `api` and `worker` start. The image pins `TRADING_PLATFORM_CONFIG_FILE` and
-  `TRADING_PLATFORM_STRATEGY_CONFIG_DIR` to `/app/config`, because the
-  installed package cannot locate the repo `config/` directory on its own.
-
-## Common Commands
-
-```bash
-make research-bootstrap  # Prepare trading_research (migrate, examples, catalog, sessions); idempotent
-make dev        # Canonical local development: research API + worker + console
-make dev-trading # Frozen trading stack (API + worker + console) against the .env database
-make api        # Research API only, with --reload (configuration-neutral about mutations)
-make worker     # Research Job worker only, restarted on code changes
-make console    # Console only
-make migrate    # Apply Alembic migrations to the .env (trading) database
-make seed       # Seed the initial strategy record (trading database)
-make up         # Alternative: full Compose stack (stack profile)
-make down       # Stop the Compose stack
-make logs       # Follow Compose db/api/worker logs
-make export-backtest-report  # Read-only backtest report export
-make generate-signals        # Read-only signal evaluation
-make test       # Run the current test suite
-```
-
-All mutating operations run as Jobs (the research studies submit theirs; the
-console's `/jobs/new` page submits the generic ones); there are no Makefile
-targets for them.
-
-## Research Console
-
-The Next.js research console lives at `console/` and is started by `make dev`.
-It proxies to this FastAPI app (no new backend capabilities) and gates every
-research page on `GET /health` reporting `"mode": "research"`; against a
-trading-mode or unreachable API it shows the command to start the research
-stack instead of empty panels. See `console/README.md` for `.env.local` and
-the proxy design.
-
-## Research Assistant (S5)
-
-The Strategies editor has an assistant panel (describe a strategy, or ask for a
-correction of the YAML in the editor). It returns a candidate specification, an
-`unsupported_requests` list and a short note; the same validator and the same
-deterministic explanation as handwritten YAML run on it; nothing is written until
-you click **Apply**, and approval into an immutable version stays the editor's
-separate action. Every attempt is recorded in `ai_drafts` (provider, model, prompt
-version, request id, token usage, validation result, specification hash, failure
-state, timestamps) and the chain is shown on the draft and on the approved version.
-
-It is **disabled by default** and the editor works without it. To activate it,
-set in the API environment (`.env` or the shell) and restart `make dev`:
+The Strategies editor has an assistant panel. It is **disabled by default**
+and the editor works without it. To activate it, set in `.env` (or the shell
+of the API process) and restart `make dev`:
 
 ```bash
 ANTHROPIC_API_KEY=...                                  # server-side only, never logged
 TRADING_PLATFORM_RESEARCH__AI__ENABLED=true
-TRADING_PLATFORM_RESEARCH__AI__MAX_REQUESTS_PER_DAY=20 # your choice; retries count
-TRADING_PLATFORM_RESEARCH__AI__MAX_OUTPUT_TOKENS=4000  # your choice; passed as max_tokens
+TRADING_PLATFORM_RESEARCH__AI__MAX_REQUESTS_PER_DAY=10 # your choice; retries count
+TRADING_PLATFORM_RESEARCH__AI__MAX_OUTPUT_TOKENS=4096  # your choice; passed as max_tokens
 ```
 
-Bounds enforced per attempt by the application (`GET /api/v1/research/assistant`
-reports limits and usage): input size, output tokens, requests per day and
-concurrent requests (counted in the shared `provider_request_ledger` across every
-process), revisions per draft, an overall deadline across both attempts, one
-automatic retry on invalid output, no implicit SDK retries. No monetary guarantee
-is made here: spending limits in the Anthropic console are a separate control.
-The default model is `claude-haiku-5-5` (configurable with `TRADING_PLATFORM_RESEARCH__AI__MODEL`; no silent fallback to another model).
+- **Model:** `claude-haiku-5-5` by default, configurable with
+  `TRADING_PLATFORM_RESEARCH__AI__MODEL`; the configured model is used as is
+  (no silent fallback). The provider-facing contract (system prompt and
+  structured-output schema) is versioned as `s5-v2` and stamped on every
+  attempt.
+- **Limits** (all enforced per attempt, before the provider is called, and
+  reported by `GET /api/v1/research/assistant`): input size, output tokens,
+  requests per day and concurrent requests (counted in the shared
+  `provider_request_ledger` across every process), revisions per draft, an
+  overall deadline across both attempts (`TIMEOUT_SECONDS`, default 60), one
+  automatic retry on invalid output, no implicit SDK retries. The values above
+  (10 requests/day, 4096 output tokens) are the initial operating limits used
+  during validation; they are request and token caps, **not a monetary
+  guarantee**. Spending limits in the Anthropic console are a separate control.
+- **Accounting and provenance:** every attempt is recorded in `ai_drafts`
+  (provider, model, prompt version, request id, token usage incl. cache
+  read/creation, validation result, specification hash, failure code,
+  timestamps). The chain is shown on the draft and on the approved version.
+  The API key never appears in stored bodies or logs.
+- **What it never does:** approve, run a study, see results, call tools, reach
+  a broker or the trading database.
 
-## Break-glass Kill Switch
-
-Every normal way to change the global kill switch or a strategy's
-enabled/disabled state goes through the console's mutation-gated HTTP API
-(`OperatorControlService`, guarded by `mutations_enabled`). If the API is
-unavailable, there is exactly one supported bypass, and it is trip-only:
+## Common commands
 
 ```bash
-docker compose run --rm worker python -m trading_platform.worker kill-switch-trip --reason "api down"
+make research-bootstrap  # Prepare trading_research (migrate, examples, catalog, sessions); idempotent
+make dev                 # Research API + worker + console (the product)
+make api                 # Research API only, with --reload
+make worker              # Research Job worker only, restarted on code changes
+make console             # Console only
+make console-install     # npm install for the console
+make test                # A focused subset of the Python suite (six trading test files); see Testing
+make dev-trading         # Frozen trading stack (API + worker + console) against the .env database
+make migrate / make seed # Trading-database tooling (frozen)
+make up / down / logs    # Alternative Compose stack (stack profile); never alongside make dev
 ```
 
-This is the worker CLI's sole exception to "the HTTP Job API is the only
-manual mutation surface" (see `docs/gsd/decisions/D-15` or 20-CONTEXT.md).
-It writes the same `StrategyRun` (`operator_control`, `trigger_source:
-break_glass_cli`) and `ExecutionEvent` (`kill_switch_trip`) audit rows as
-the HTTP control, requires a non-empty `--reason` (max 500 characters), and
-works with no broker credentials configured and no `mutations_enabled` flag
-set, since it never reads that flag. It can only make the system safer: the
-worker CLI has no reset, enable, or disable command. Once the API is back,
-reset the kill switch (and re-enable/disable strategies) only through the
-console/HTTP control.
+Long-running work (catalog sync, ingestion, freeze, backtests, evaluation)
+runs as Jobs submitted by the studies or from the console's `/jobs/new` page.
+Authoring writes (drafts, versions, asset lists, study definitions, freezes)
+are synchronous HTTP writes on the research database.
 
-## Configuration Model
+## Databases and isolation
 
-Runtime settings are assembled in this order:
+| Database | Alembic revision | Role |
+| --- | --- | --- |
+| `trading_research` | `0033_research_assistant` (head) | The product. Created and migrated by `make research-bootstrap`. |
+| `trading_platform` | `0021_phase20_operations_safety` | The frozen trading database. Not upgraded to 0022–0030 (Phase 20.1 work) and never touched by research processes. |
 
-1. Built-in typed defaults in `src/trading_platform/core/settings.py`
-2. Base YAML from `config/app.yaml`
-3. Strategy YAML files from `config/strategies/*.yaml`
-4. Environment variable overrides from `.env` or the process environment
+Research mode is a process-level switch: it selects the research Job registry
+and the research routers only. Research reads carry provider `tiingo` and the
+adjusted flag explicitly; trading defaults are unchanged.
 
-Environment overrides use the `TRADING_PLATFORM_` prefix and `__` as the nested delimiter.
+## Configuration
 
-Examples:
+Settings are assembled from built-in defaults, `config/app.yaml`,
+`config/strategies/*.yaml` and environment overrides with the
+`TRADING_PLATFORM_` prefix and `__` as the nested delimiter. Research settings
+live under `TRADING_PLATFORM_RESEARCH__*`:
 
 ```bash
-TRADING_PLATFORM_API__PORT=8001
-TRADING_PLATFORM_DATABASE__HOST=localhost
-TRADING_PLATFORM_STRATEGIES__TREND_FOLLOWING_DAILY__RISK__MAX_POSITIONS=7
+TRADING_PLATFORM_RESEARCH__MODE=true                 # set by the Makefile for every research process
+TRADING_PLATFORM_RESEARCH__CALENDAR_START=2014-01-02 # pinned first session (Makefile RESEARCH_CALENDAR_START)
+TRADING_PLATFORM_RESEARCH__MAX_ASSETS_PER_STUDY=10
+TRADING_PLATFORM_RESEARCH__QUANTITY_POLICY_DEFAULT=fractional   # or whole_shares
+TRADING_PLATFORM_RESEARCH__TIINGO__REQUESTS_PER_HOUR=50          # shared ledger limits; default = Tiingo free plan
+TRADING_PLATFORM_RESEARCH__TIINGO__REQUESTS_PER_DAY=1000
+TRADING_PLATFORM_RESEARCH__TIINGO__UNIQUE_SYMBOLS_PER_MONTH=500
+TIINGO_API_KEY=...                                   # alias of TRADING_PLATFORM_RESEARCH__TIINGO__API_KEY
 ```
 
-The current default strategy configuration lives at `config/strategies/trend_following_daily.yaml` and defines:
-
-- strategy id and display name
-- enabled flag
-- universe symbols
-- moving-average windows
-- basic risk parameters
-- exit configuration
-
-## API Surface
-
-Current routes exposed by the FastAPI app:
-
-- `GET /health` returns a basic liveness response
-- `GET /ready` reports bootstrap and database readiness
-- `GET /strategies` lists public metadata for registered strategies
-- `GET /api/v1/system` returns application, API, strategy catalog, and database metadata
-
-Example:
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/ready
-curl http://127.0.0.1:8000/strategies
-curl http://127.0.0.1:8000/api/v1/system
-```
-
-## Persistence
-
-The current schema is intentionally minimal and centers on two tables:
-
-- `strategies`: persisted strategy catalog metadata
-- `strategy_runs`: persisted strategy run records
-
-Job-driven operations create or refresh the strategy record and store run rows linked to their Job.
+Assistant settings are listed above. `.env.example` carries the full set with
+comments.
 
 ## Testing
 
-Run the test suite with:
+The research product is covered by `tests/test_research_*.py` (foundation,
+API isolation, strategies API, data pipeline, studies pipeline, engine
+metrics, budget, console contract, bootstrap, assistant, assistant converter)
+and by the console's vitest suite (`cd console && npm test`). Most Python
+tests need a reachable PostgreSQL on the configured host/port and create
+throwaway migrated databases.
+
+Run everything with:
 
 ```bash
-make test
+PYTHONPATH=src .venv/bin/pytest -q
 ```
 
-Some tests require a reachable PostgreSQL instance on the configured host/port. The existing tests are designed for the local Compose database.
+`make test` runs only six trading-era test files and is not the full suite.
 
-## Current Strategy
+Known baseline issues in the full suite, present before the research pivot and
+unchanged by it: two trading-era failures (`universe_size` assertions in
+`tests/test_api_reads.py` and `tests/test_app_boot.py`) and an intermittent
+teardown-only `InsufficientPrivilege` error when dropping throwaway databases
+under a non-superuser role (it leaves `alpaca_execution_*` databases behind).
+Full-suite evidence, in order:
 
-The first registered strategy is `TrendFollowingDailyV1`, exposed as `trend_following_daily`.
+- **After S4/S6, before S5** (2026-10-08 01:16, `final8_pytest.txt`, kept
+  under `.data/research/validation-2026-10-08/`): 3662 passed, the 2 known
+  baseline failures, 1 known teardown `InsufficientPrivilege` error.
+- **After S5 and the `s5-v2` corrections:** focused checks only, recorded in
+  the implementation plan §16: the research assistant and converter modules,
+  the research test modules touched, the console suite (431 vitest tests,
+  `tsc`, eslint, production build), the S5 browser run and four live requests.
+- **No full-suite run is recorded on the final post-S5 tree** (`519e73f`).
 
-Its current role in the codebase is to prove:
+No fully green full-suite run is claimed.
 
-- strategy discovery through a registry
-- config-driven metadata
-- strategy execution plumbing
-- persistence of strategy and run metadata
+## Scope and limitations
 
-It does not yet place orders, ingest candles, or run backtests.
+Supported scope:
 
-## Roadmap Direction
+- Daily bars, long-only, one position per asset, no pyramiding, no leverage.
+- U.S. stocks and ETFs in USD from the Tiingo catalog.
+- Each (version, asset, window) is an independent single-asset test with one
+  slot and the study capital. Results are **not** a portfolio simulation
+  (`portfolio_combined` is refused as `mode_not_supported_yet`).
+- One validation window and one final test per revision; evidence grades are
+  heuristics and say so.
 
-The intended direction for the project is:
+Not expressible in the specification (reported as such, never silently
+approximated): shorting or long-short, intraday or weekly bars, intrabar stop
+or target prices, trailing stops, position sizing inside the strategy,
+conditions on other assets, pyramiding, arbitrary code, look-ahead shifts.
 
-1. Historical data ingestion for the initial U.S. equities universe
-2. Deterministic backtesting and persisted analytics
-3. Paper trading through a broker integration
-4. Stronger risk controls and observability
-5. A future dashboard backed by FastAPI APIs
+Remaining limitations of the implemented increment:
+
+- **Calendar range.** Exchange sessions are stored from the pinned start
+  (2014-01-02) through the calendar library's last available session (about
+  one year ahead). Studies outside that range are not ready
+  (`calendar_start_not_pinned`, `market_sessions_not_synced`, window checks).
+- **Partial name coverage.** The catalog sync names rows from Nasdaq Trader
+  only (about 12.7k of 23.2k rows at the last sync); the SEC name source
+  answers 403 to the sync. Name search covers populated names only and the
+  Assets page says so. Tiingo metadata fills gaps on view, once per asset.
+- **Repeat ingestion.** A revision downloads the whole required range per
+  asset even when bars already exist (the upsert is idempotent; every request
+  is charged to the shared Tiingo ledger).
+- **Assistant proposal after reload.** The panel is per page load: a proposal
+  not yet applied is not restored after a reload (every proposal remains
+  retrievable by id through the API). Live model latency has been observed
+  only on four validation requests.
+- **Baseline test and environment issues** listed under Testing.
+- **Not implemented:** Pine Script export and equivalence checking, the
+  portfolio mode UI, the visual rule builder, Python authoring, parameter
+  search, walk-forward, cost sweeps, whole-market scanning. Order of the next
+  agreed increments: Pine export and equivalence → visual builder → portfolio
+  mode (`.planning/ROADMAP.md`). None is authorized for implementation by this
+  document.
+
+## Frozen trading backend
+
+`make dev-trading` starts the former operator stack (trading-mode API, worker
+and console) against the database named in `.env`. Its pages are no longer
+served by the console; only its API and the generic Jobs pages remain. Phase
+20.1 (operator-state correctness) is incomplete with open verification
+findings, and Phase 21 was never started; see `.planning/ROADMAP.md`
+"Historical / frozen". The break-glass kill-switch trip
+(`python -m trading_platform.worker kill-switch-trip --reason ...`) still
+exists for that stack (decision D-15 in
+`.planning/phases/20-complete-operation-migration-safety-controls/20-CONTEXT.md`).
+
+### Alternative: Docker Compose stack (trading-era)
+
+The containerized stack (`db`, one-shot `migrate`, `api`, `worker`) sits behind
+the Compose `stack` profile (`make up` / `make down` / `make logs`). It was
+built for the trading stack: it migrates and runs against its own `db`
+volume with the environment in `docker-compose.yml` and does not set research
+mode. Use it instead of `make dev`, never alongside it (same ports). A bare
+`docker compose up` starts only `db`; set `POSTGRES_HOST_PORT` if a native
+PostgreSQL already owns 5432.

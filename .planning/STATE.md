@@ -1,29 +1,56 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: Operator Platform
-status: executing
-stopped_at: "20.1-38 executed: E1 closed and verified (round 5, through the recovery gate); re-verification gaps_found: G-2 partial (E2 jobs.id swap, E3 DELETE + re-INSERT, E4 planted operator in public) and E-5 (0028 to_jsonb plant) need user decisions; REC-01/REC-02 partial. CR-01 interim prohibition in force. Phase NOT complete."
-last_updated: "2026-10-06T19:20:00.000Z"
-last_activity: 2026-10-06 -- 20.1-38 complete (E1 correction: 0030 amended in place; E1 closed and verified in re-verification round 5; G-2 partial with E2-E4 pending user decisions; REC-01/REC-02 partial; phase not complete)
+milestone: research-increment-1
+milestone_name: Strategy Research (first increment, S0-S6)
+status: implemented
+stopped_at: "Research first increment S0-S6 implemented, integration-validated and committed (HEAD 519e73f = origin/main). No further development authorized; next agreed order: Pine export and equivalence -> visual rule builder -> portfolio mode. Frozen since 2026-10-06: Phase 20.1 incomplete (G-2 partial: E2-E4; E-5, D-1, OD-1; CR-01 prohibition; human UAT not run), Phase 21 not started, v1.4 not started."
+last_updated: "2026-10-08T17:00:00.000Z"
+last_activity: 2026-10-08 -- documentation update after the research pivot (PROJECT, STATE, ROADMAP, REQUIREMENTS, research docs, README); no code change
 progress:
-  total_phases: 6
-  completed_phases: 4
-  total_plans: 101
-  completed_plans: 93
-  percent: 67
+  total_phases: 7
+  completed_phases: 7
+  total_plans: 7
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-30)
+See: .planning/PROJECT.md (updated 2026-10-08) and `.planning/research/strategy-research-pivot/` (00 proposal rev. 6, 01 implementation plan with per-stage status §9–§17, 02 specification contract).
 
-**Core value:** Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
-**Current focus:** Phase 20.1 — operator-state-correctness
+**Core value:** Produce trustworthy, reproducible evidence about a strategy on specific assets and windows, with nothing silently omitted, substituted or implied.
+**Current focus:** none active. The first research increment is implemented; further development (next agreed order: Pine export and equivalence → visual rule builder → portfolio mode) requires a separate instruction.
 
 ## Current Position
+
+Milestone: Strategy Research, first increment — stages S0–S6 of `01-IMPLEMENTATION-PLAN.md` — IMPLEMENTED and integration-validated (the `progress` frontmatter counts these seven stages only; it says nothing about later increments).
+HEAD: `519e73f` (2026-10-08) = `origin/main`; working tree clean before this documentation update. Commits: `9050515` (S0–S3, Tiingo pipeline), `ca199b6` (S4 console + reporting, S6 smoke run), `f167f55` (research as the primary application), `519e73f` (S5 assistant).
+Databases: `trading_research` at `0033_research_assistant` (4 example versions, catalog 23,208 rows / 12,669 named, XNYS sessions 2014-01-02 → 2027-10-08 at the last bootstrap); `trading_platform` at `0021_phase20_operations_safety`, untouched.
+Product entry: `make research-bootstrap` once, `make dev` daily, http://localhost:3000 → Studies; navigation Strategies · Assets · Studies · Jobs; legacy operator URLs redirect.
+Assistant: activated locally on `claude-haiku-5-5` (contract `s5-v2`) with 10 requests/day and 4096 output tokens as initial operating limits (not a monetary guarantee); four live attempts used on 2026-10-08 (two `ok`); the resulting draft deliberately not approved.
+
+**Validation evidence (recorded, not re-run for this update):** full Python suite after S4/S6, before S5 (`final8_pytest.txt`, 2026-10-08 01:16, under `.data/research/validation-2026-10-08/`): 3662 passed, 2 known baseline failures (`test_api_reads` / `test_app_boot` `universe_size`), 1 known teardown `InsufficientPrivilege` error (`test_alpaca_execution`); after S5 and the `s5-v2` corrections: focused checks only (assistant/converter modules, touched research modules, console suite, S5 browser run, four live requests; plan §16); no full-suite run recorded on the final post-S5 tree `519e73f`; console vitest 431, `tsc`, eslint, production build clean; Playwright runs for S4 (stubbed Tiingo), the product landing (localhost and 127.0.0.1) and S5 (fake provider); S6 smoke run on real Tiingo data (SPY, MSFT) in a throwaway database. A fully green full suite is not claimed.
+
+**Open limitations (first increment):** calendar sessions only from the pinned start through the library's last session (~1 year ahead); catalog names partial (Nasdaq Trader only; SEC 403); per-revision ingestion re-downloads the full required range; unapplied assistant proposal lost on page reload (retrievable by id); live assistant latency observed on four requests only; baseline test/environment issues above; no Pine export, portfolio UI or visual builder.
+
+**Frozen trading work (unchanged since 2026-10-06):** Phase 20.1 NOT complete — re-verification round 5 `gaps_found` (E1 and G-1 closed; G-2 partial: E2 jobs.id swap, E3 DELETE + re-INSERT, E4 planted operator in public; escalations E-5, D-1; OD-1 open); REC-01/REC-02 partial; CR-01 interim Continue/Retry prohibition in force; mandatory pre-UAT inventory and human UAT not performed. Phase 21 planned, not started. v1.4 not started. The pivot resolves none of this. Checkpoint tag `checkpoint/pre-research-pivot-2026-10-06` → `f4ab1a5` (local).
+
+## Session Continuity
+
+Last session: 2026-10-08 (documentation update after a context reset)
+Stopped at: PROJECT.md, STATE.md, ROADMAP.md, REQUIREMENTS.md, MILESTONES.md, the three research documents, README.md, console/README.md and .env.example updated to describe the research product; no application code, migrations, databases, `.env` or running services touched; nothing committed or pushed.
+Resume file: None
+Next: nothing scheduled. Further development needs a separate instruction (agreed order in ROADMAP.md).
+
+---
+
+# Historical: v1.3 Operator Platform execution record (frozen 2026-10-06; kept verbatim)
+
+_Everything below is the pre-pivot state file as it stood at the freeze. "Current", "next" and "pending" in it refer to that time. The Phase 20.1 gaps it lists remain open._
+
+### Current Position at the freeze (2026-10-06)
 
 Phase: 20.1 (operator-state-correctness) — EXECUTING
 Plan: 38 of 38 (gap closure r4: plan 38, the E1 correction approved by the user 2026-10-06, complete; gap closure r3 plans 32-37 complete)
@@ -33,7 +60,7 @@ Last activity: 2026-10-06 -- 20.1-38 complete: 0030 amended in place (column arm
 
 v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1 (INSERTED 2026-09-30)** → 21 (re-planned: Operator Read-Model Foundation) → close v1.3 → **v1.4 Operator Console** (Phases 22–27) → v1.5 Strategy Lab. Scheduling deferred. Source: `.planning/research/operator-console-ia/` (03 rev. 8, 04, 05).
 
-## Performance Metrics
+### Performance Metrics (historical)
 
 | Plan | Duration | Tasks | Files |
 | --- | --- | --- | --- |
@@ -112,7 +139,7 @@ v1.3 phase list: 17 ✓ → 18 ✓ → 19 ✓ → 20 ✓ (2026-09-29) → **20.1
 | Phase 20.1 P36 | ~35min | 3 tasks | 1 files |
 | Phase 20.1 P37 | ~40min | 2 tasks | 3 files |
 
-## Accumulated Context
+### Accumulated Context (historical)
 
 ### Decisions
 
@@ -310,7 +337,7 @@ Recent decisions affecting current work:
 - (found 2026-07-19 during 17-07, tracking-only, not a code blocker) JOB-05's end-to-end readiness gap noted in 17-05's SUMMARY is now closed: claim_next_job (17-07) actually calls unsatisfied_dependency_exists on every claim, and test_claim_skips_job_with_unsatisfied_dependency exercises the full path. requirements mark-complete was intentionally NOT run for JOB-05 in this plan since 17-07's frontmatter declares only [JOB-02] -- mark JOB-05 Complete at the next plan that touches it, or at /gsd-transition.
 - (found 2026-07-20 during 17-08, tracking-only, not a code blocker) 17-08's frontmatter lists requirements [JOB-07, JOB-06, JOB-05]; only JOB-07 was marked Complete (the JobReadService + /api/v1/jobs routes close its "observable via the API during and after execution" text end-to-end). JOB-05 and JOB-06 remain Pending -- this plan only reads dependency/cancellation state on the new detail/events routes; it ships no dependency-gated start behavior and no operator-facing cancel action, so neither requirement's literal text is newly satisfied. JOB-05 still needs its readiness mechanism exercised by a real execution loop beyond claim_next_job (17-05/17-07 precedent); JOB-06 still needs an operator-facing surface calling request_cancellation (Phase 18/19 scope, 17-06 precedent). Full detail: 17-08-SUMMARY.md "Requirements Frontmatter Discrepancy".
 
-## Session Continuity
+### Session Continuity at the freeze (historical)
 
 Last session: 2026-10-06T14:42:00.000Z
 Stopped at: Completed 20.1-37-PLAN.md (runbook 05 / HUMAN-UAT pending-verification notes with the decided rule D-G1-A and its consequences, mandatory read-only pre-UAT inventory (Step 0) with a test-pinned query and STOP rule, full-suite run at HEAD 82120d7: 3408 passed, 3 failed, 1 error = the two known baseline failures, the known alpaca teardown error and ONE UNEXPECTED failure recorded for re-verification; gap closure r3 executed, verification pending; Phase 20.1 NOT complete; CR-01 interim prohibition in force)

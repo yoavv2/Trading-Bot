@@ -1,16 +1,63 @@
-# Trading Strategy Platform
+# Strategy Research (Trading Strategy Platform repository)
 
 ## What This Is
 
-A single-user algorithmic trading platform for research, backtesting, and paper trading. The v1 system is intentionally scoped around one operator, one brokerage account, one portfolio, and one initial strategy, but the architecture must be strategy-platform-ready from day one so additional strategies, per-strategy configs, per-strategy analytics, and future dashboard controls can be added without reshaping the core engine.
+A local, single-user application for authoring daily, long-only trading strategies as a bounded declarative specification, testing them on historical U.S. stock and ETF data (Tiingo), and comparing the evidence per asset: readiness before any run, immutable strategy versions and study revisions, per-study objective and constraint, a separate buy-and-hold comparison, a freeze step and a once-only final test. It replaced the automated-trading / operator-console direction on 2026-10-06 (research pivot; product direction approved 2026-10-07; "the research platform is the primary local application" decided 2026-10-08). Planning record: `.planning/research/strategy-research-pivot/` (00 proposal rev. 6, 01 implementation plan with per-stage status, 02 specification contract).
 
-The initial product focus is a Daily Trend Following workflow for U.S. equities on daily candles. The first end-to-end outcome is historical validation followed by automated paper execution and next-day inspection with full auditability, not live trading or a public SaaS product.
+The repository still contains the trading platform built through v1.3 (Phases 1–20 complete; Phase 20.1 incomplete). That code, its migrations 0022–0030 and its console components are **frozen**: not part of the product UI, not upgraded, not contacted (no broker calls). They are reachable only through `make dev-trading`.
 
 ## Core Value
 
-Build a trustworthy, auditable trading platform that can reproducibly validate a strategy, run it in daily paper trading, and explain every action or blocked action without ambiguity.
+Produce trustworthy, reproducible evidence about a strategy on specific assets and windows, with nothing silently omitted, substituted, shortened or implied, and with every result traceable to an exact strategy version, exact inputs and exact settings.
 
-## Current Milestone: v1.3 Operator Platform
+## Current Milestone: Strategy Research, first increment (S0–S6) — implemented and integration-validated
+
+**Goal:** the first usable end-to-end product: author → approve → study → compare → freeze → final test, on an isolated research database with Tiingo data, plus a bounded drafting assistant.
+
+**State (2026-10-08; HEAD `519e73f` = `origin/main`, pushed):** stages S0–S6 of `01-IMPLEMENTATION-PLAN.md` are implemented and committed in four commits (`9050515` S0–S3 and the Tiingo pipeline, `ca199b6` S4 console and reporting incl. the S6 smoke run, `f167f55` research as the primary application, `519e73f` S5 assistant). No further development is authorized by this document; the next agreed order is recorded in `ROADMAP.md`.
+
+**Implemented capabilities** (stage → implementation):
+
+| Capability | Stage | Where |
+| --- | --- | --- |
+| Isolated research mode: research Job registry and research routers only; `trading_research` database at `0033_research_assistant`; `trading_platform` untouched at `0021` | S0, S2 | `core/settings.py` `ResearchSettings`, `api/app.py`, `jobs/registry.py`; `tests/test_research_api_isolation.py`, `tests/test_research_foundation.py` |
+| Tiingo adapter (header auth only) with a shared request ledger across processes; catalog of U.S. stocks and ETFs; integrity checks; data freeze with `inputs/` export, digest verification and restore | S0, S3 | `services/research/{tiingo_ingestion,budget,catalog,integrity,freeze}.py`; `tests/test_research_budget.py`, `tests/test_research_data_pipeline.py` |
+| Specification v1: validator with closed error codes, history derivation, unit check and scale class, canonical JSON and `spec_sha256`, deterministic explanation | S1 | `strategies/spec/`; `tests/test_strategy_spec_validation.py` |
+| One interpreter (`DeclarativeDailyStrategy`) with parity against the four original Python strategies; four seeded example versions | S1 | `strategies/declarative.py`, `research_registry.py`, `services/research/examples.py`; `tests/test_strategy_spec_parity.py` |
+| Drafts → explicit approval → immutable versions (append-only trigger), lineage, duplicate | S2 | `services/research/strategies.py`, `api/research/strategies.py`; `tests/test_research_strategies_api.py` |
+| Studies with immutable revisions; readiness with closed codes and no silent substitution; Job graph ingest → freeze → per-(version, asset, window) backtests + benchmarks → evaluate; freeze; once-only final test; cross-study exposures; reproducible reruns | S3 | `services/research/{studies,backtest,benchmark,metrics,evidence,ranking}.py`, `orchestration/research_studies.py`; `tests/test_research_studies_pipeline.py`, `tests/test_research_engine_metrics.py` |
+| Research console: Strategies, Assets, Studies, Jobs; readiness, progress, results, charts, freeze, final test, exposures, export; static `report.html`/`report.md` | S4 | `console/src/app/research/*`, `components/research/*`, `services/research/report.py`; `tests/test_research_console_contract.py`, console vitest |
+| Research as the product: `make dev` (research API + worker + console), `make research-bootstrap` (idempotent), landing on Studies, legacy URLs redirect | §15 | `Makefile`, `scripts/bootstrap_research.py`, `services/research/bootstrap.py`, `console/src/lib/{navigation,legacyRedirects}.ts`; `tests/test_dev_workflow.py`, `tests/test_research_bootstrap.py` |
+| Assistant: bounded, accounted (`provider_request_ledger`), one retry, explicit Apply, separate approval, full provenance; default `claude-haiku-5-5`, contract `s5-v2` | S5 | `services/research/assistant.py`, `api/research/assistant.py`, `console/src/components/research/AssistantPanel.tsx`; `tests/test_research_assistant.py`, `tests/test_research_assistant_converter.py` |
+| Integration smoke run on real Tiingo data (SPY, MSFT, example version, throwaway database, dropped) | S6 | `01-IMPLEMENTATION-PLAN.md` §14 |
+
+**Validation evidence (recorded in `01-IMPLEMENTATION-PLAN.md` §10–§16):** full Python suite after S4/S6 and before S5 (`final8_pytest.txt`, 2026-10-08 01:16, kept under `.data/research/validation-2026-10-08/`): 3662 passed, the 2 known baseline failures, 1 known teardown `InsufficientPrivilege` error; after S5 and the `s5-v2` corrections only focused checks were run (assistant and converter modules, touched research modules, console suite, S5 browser run, four live requests; plan §16); no full-suite run is recorded on the final post-S5 tree `519e73f`, so no fully green full suite is claimed; console vitest 431, `tsc`, eslint and production build clean; Playwright browser runs against the real pages for S4 (stubbed Tiingo), the product landing (both hosts) and S5 (fake provider); the S6 smoke run on real Tiingo data; four live Haiku requests (two `ok`) during assistant activation.
+
+**Invariants of the research product:**
+
+1. One canonical specification, one validator, one interpreter: YAML and the assistant produce the same document; nothing else executes a strategy.
+2. Approved versions and study revisions are immutable; results reference exact versions, inputs (`input_digest`, freeze digest) and settings.
+3. Nothing is silently dropped, trimmed or substituted: readiness and the run endpoint refuse with the same closed codes.
+4. Objective, constraint, costs, assets and windows are per-study inputs; no product default for them.
+5. Every (version, asset, window) is an independent single-asset test; the benchmark is shown beside it and never gates acceptance.
+6. The final test runs only after a freeze, only for the frozen candidate, once; reruns must reproduce the digests.
+7. Research processes never mount a trading route, never register a trading Job type, never touch `trading_platform`, never contact a broker.
+8. Assistant requests are bounded per attempt (input, output tokens, per day, concurrency, revisions, deadline) and recorded; approval is a separate human action; caps are not a monetary guarantee.
+
+**Remaining limitations (see `README.md` "Scope and limitations"):** calendar sessions only from the pinned start (2014-01-02) through the library's last session (about one year ahead); partial name coverage in the catalog (Nasdaq Trader names only; SEC source answers 403); a revision re-downloads its whole required range per asset; an unapplied assistant proposal is not restored after a page reload; the two baseline test failures and the teardown privilege error pre-date the pivot and remain; Pine export, portfolio mode UI and the visual builder do not exist.
+
+**Not implemented; next agreed order (not authorized by this document):** Pine Script export and equivalence checking → visual rule builder → portfolio mode. Later/deferred (proposal Part Q): Python authoring in isolation, automatic parameter search, walk-forward, cost sweeps, whole-market scanning, composite scoring, point-in-time universes, dividend-factor reconciliation, CSV import.
+
+**Non-goals of the research product:** live or paper trading, broker contact, autonomous tuning against results, multi-user, scheduling.
+
+## Frozen: Phase 20.1, Phase 21, v1.4 and the operator-console direction (2026-10-06)
+
+The v1.3 milestone below is kept as the historical record and is **not active**. Its state at the freeze: Phases 17–20 complete; Phase 20.1 executed through plan 20.1-38 but **not complete** (re-verification round 5 `gaps_found`: G-2 partial with E2, E3, E4 open; escalations E-5, D-1; OD-1; the CR-01 interim Continue/Retry prohibition in force; mandatory pre-UAT inventory and human UAT not performed); REC-01 and REC-02 partial; Phase 21 planned, not started; v1.4 Operator Console not started; v1.5 Strategy Lab superseded by the research product. None of these gaps is resolved by the pivot. Resuming any of it requires a separate decision.
+
+## Frozen Milestone (historical, kept verbatim): v1.3 Operator Platform
+
+_Text below is the pre-pivot record as of 2026-09-30/2026-10-06; "current", "remaining" and "next" in it describe that time, not today._
+
 
 **Goal (re-scoped 2026-09-23):** Every existing long-running operation executes as a Job that the operator submits, observes, cancels, and retries from generic Job surfaces in the console; immediate safety controls work from the console without depending on the worker; and exactly one mutation path exists per operation class — no `scripts/`, CLI, or Makefile bypasses (sole exception: the trip-only break-glass `kill-switch-trip` worker subcommand, ORCH-01, amended 2026-09-27).
 
@@ -77,7 +124,9 @@ Read-only Next.js console over the FastAPI read surface, shipped as phases 13–
 
 Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and completed on 2026-07-13 through 2026-07-14, delivering concurrency guards, the reconciliation rewrite, startup hardening, and verified query-performance invariants. Phase 11 closed with paper preflight bounded to two queries, linear reconciliation benchmarks, and named-index EXPLAIN proof for every critical query path. Phase 12 (structural refactor and tooling) completed 2026-07-15 — the final v1.1 phase — splitting worker orchestration into bounded `worker/commands/*` modules (`__main__.py` reduced to 32 routing-only lines), reorganizing execution/reconciliation/config into declared service packages, confirming the single canonical settings surface, and wiring ruff + mypy as merge-blocking local pre-commit gates. The whole refactor landed with zero behavior change: the full suite held at its 306-pass baseline with no assertion changes, independently verified. All ten STRUCT/TOOL requirements are Complete; every v1.1 phase (7–12) is now executed. Full scope is recorded in `.planning/milestones/v1.1-paused/` and MILESTONES.md.
 
-## Requirements
+## Requirements (trading-era; frozen)
+
+_The requirement list below is the pre-pivot trading scope, kept with its statuses. Research requirements live in `REQUIREMENTS.md` ("Research scope")._
 
 ### Validated
 
@@ -142,7 +191,9 @@ Phase 7 (Correctness Kernel) shipped 2026-04-20. Phases 8–11 resumed and compl
 - Corporate-actions-heavy handling beyond what is needed for clean daily bars — do the minimum required for reliable daily-bar research first.
 - Complex walk-forward optimization UI — not needed before the core backtest and paper workflow is stable.
 
-## Context
+## Context (pre-pivot; retained for history)
+
+_Everything in this section describes the trading-platform direction adopted before 2026-10-06. The Autonomous Trading Operating System stages, the paper-trading use case, the Polygon/Alpaca integrations and the operator-console phases are not current plans._
 
 ### Long-Term Direction — Autonomous Trading Operating System (adopted 2026-07-15)
 
@@ -584,7 +635,9 @@ The future API should expose platform data cleanly to the dashboard without dire
 - Operational simplicity beats broad market coverage or infrastructure sophistication in v1.
 - The initial target is a working backtest and paper-trading system before any dashboard expansion.
 
-## Constraints
+## Constraints (pre-pivot; retained for history)
+
+_These are the trading-platform constraints as written before 2026-10-06. The research product's constraints are the invariants and non-goals in "Current Milestone" above._
 
 - **Operator model**: Single-user only in v1 — the system is intentionally a private operator platform, not a public SaaS product.
 - **Market scope**: U.S. equities on daily candles only — keeps the first build narrow enough to validate the workflow reliably.
@@ -617,6 +670,13 @@ The future API should expose platform data cleanly to the dashboard without dire
 | Keep the first implementation local-first and Dockerized | Simplicity, repeatability, and low cost matter more than cloud sophistication | — Pending |
 | Defer dashboard work until the engine is trustworthy | The engine, analytics, and paper workflow must be credible before UI investment | — Pending |
 | DB connection lifecycle is an explicit reloadable manager (`db/session.py`), not a process-immutable singleton (DB-01) | The 215-test suite must be able to point the engine/session factory at the test database vs. the local database within one process; a hard singleton would break that. Engine/session memoization uses the keyed `(url, echo)` dict-cache exclusively — no `functools`-decorator-based memoization of engines/sessions anywhere (DB-02) | 10-03: session.py docstring declares the model; import-boundary test pins it |
+| Pivot to a strategy research product; trading backend frozen (2026-10-06/07) | The operator console reported records without conclusions and the paper-trading correctness work (Phase 20.1) kept reopening; the user's goal is research evidence, not automated execution | Research pivot proposal rev. 6 approved 2026-10-07; S0–S6 implemented; Phase 20.1/21 frozen incomplete |
+| One canonical declarative specification for YAML, the assistant and the later builder; one interpreter | No per-authoring-method engines; parity with the four originals earned by test | `strategies/spec/`, `declarative.py`; parity matrix passed, examples seeded |
+| Isolated `trading_research` database and research-mode process switch | The trading database must stay at `0021` and no research process may reach a trading route or Job type | `0031`–`0033` research migrations; mount exclusivity and registry pins |
+| Tiingo as the research data source (header auth, shared ledger, personal-use license) | Verified free-plan facts; Polygon plan unchanged | Adapter, budget ledger, catalog from the public list |
+| Research is the primary local application (2026-10-08) | `make dev` previously started trading mode and hid the research pages | `make dev` = research stack; `make research-bootstrap`; legacy URLs redirect; `make dev-trading` for the frozen stack |
+| Assistant default model `claude-haiku-5-5`, contract `s5-v2`, limits 10/day and 4096 output tokens as initial operating values (2026-10-08) | The planned Sonnet default was switched after the live schema rejection and contract redesign; caps are request/token bounds, not money | Live-validated with four requests; configurable, never substituted |
+| Next agreed order: Pine export and equivalence → visual rule builder → portfolio mode | Each sits on the same specification; order fixed in proposal Part R | Recorded in `ROADMAP.md`; not authorized for implementation |
 
 ## Evolution
 
@@ -636,4 +696,5 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-29 — Phase 20 complete (all remaining operations as Jobs; synchronous safety controls; Retry with lineage; mutation bypasses retired; UAT gaps 1-4 closed and live-re-tested; migration 0022 declined)*
+*Last updated: 2026-10-08 — research pivot documented: Strategy Research first increment (S0–S6) implemented and integration-validated; v1.3 / Phase 20.1 / Phase 21 / v1.4 frozen as historical; next agreed order recorded, not authorized.*
+*Previous update 2026-09-29 — Phase 20 complete (all remaining operations as Jobs; synchronous safety controls; Retry with lineage; mutation bypasses retired; UAT gaps 1-4 closed and live-re-tested; migration 0022 declined).*

@@ -1,4 +1,77 @@
-# Requirements: Trading Strategy Platform — Milestone v1.3 Operator Platform
+# Requirements: Strategy Research (active) · Trading Strategy Platform v1.3 (frozen)
+
+**Research scope defined:** 2026-10-07 (proposal rev. 6, `.planning/research/strategy-research-pivot/00-PROPOSAL.md`; stages in `01-IMPLEMENTATION-PLAN.md`; contract in `02-STRATEGY-SPEC-V1.md`). **Status recorded:** 2026-10-08.
+**Core Value:** Produce trustworthy, reproducible evidence about a strategy on specific assets and windows, with nothing silently omitted, substituted or implied.
+
+## Research scope (active)
+
+Research requirements use new `RS-` identifiers. Trading-era identifiers (JOB-, ORCH-, OPS-, CTRL-, PAPER-, COR-, REC-, OPR-, WRK-, AUD-, …) keep their meaning and statuses in the frozen section below and are not reused.
+
+**Scope rule:** research processes run in research mode only (research Job registry of six types; research routers plus health/jobs; every trading route a 404; `trading_platform` never touched; no broker contact). Long-running work is a Job; authoring and configuration writes are synchronous HTTP writes on the research database behind the same `mutations_enabled` guard. Strategies are daily, long-only; each (version, asset, window) run is an independent single-asset test.
+
+### Implemented (increment 1, S0–S6)
+
+- [x] **RS-01** Isolated research environment: `research.mode` process switch, `trading_research` database (`0031`–`0033`), trading database untouched at `0021`, research-mode registry and router mount exclusivity pinned by test *(S0, S2 — `core/settings.py`, `api/app.py`, `jobs/registry.py`; `tests/test_research_foundation.py`, `tests/test_research_api_isolation.py`)*
+- [x] **RS-02** Tiingo adapter with header authentication only (a `token` query parameter is refused), closed failure codes, and a shared request ledger across processes (`provider_request_ledger`) with configurable hour/day/symbol limits *(S0, S3 — `services/research/tiingo_ingestion.py`, `budget.py`; `tests/test_research_budget.py`)*
+- [x] **RS-03** Asset catalog of U.S. stocks and ETFs from the public Tiingo list with names joined from Nasdaq Trader; search by ticker or name over populated names with a named-versus-total count; saved lists; coverage checks against catalog dates *(S0, S4 — `services/research/catalog.py`, `asset_lists.py`)*
+- [x] **RS-04** Integrity checks with closed codes, data freeze with digest, `inputs/` export under `.data/research/`, change detection, digest-verified restore *(S0 — `services/research/integrity.py`, `freeze.py`; `tests/test_research_data_pipeline.py`)*
+- [x] **RS-05** Specification v1: schema, validator with the closed error codes of contract §7, history derivation (§5), unit check and scale class, canonical JSON and `spec_sha256`, deterministic explanation *(S1 — `strategies/spec/`; `tests/test_strategy_spec_validation.py`)*
+- [x] **RS-06** One interpreter (`DeclarativeDailyStrategy`) executing every approved version; parity with the four original Python strategies proven by the §9 matrix before the examples were seeded; no `behaviour_differs_from_original` entry needed *(S1 — `strategies/declarative.py`, `research_registry.py`, `services/research/examples.py`; `tests/test_strategy_spec_parity.py`)*
+- [x] **RS-07** Drafts are mutable; approval is explicit and inserts one immutable version (append-only trigger; UPDATE/DELETE refused); editing or duplicating a version opens a draft with lineage; concurrent approvals are serialized *(S2 — `services/research/strategies.py`, `api/research/strategies.py`; `tests/test_research_strategies_api.py`)*
+- [x] **RS-08** Studies with immutable revisions; objective, constraint, costs, assets (configurable limit, never truncated) and windows entered per study; readiness lists every failing item with closed codes and the run endpoint refuses with the same codes; nothing is dropped, shortened or substituted *(S3 — `services/research/studies.py`; `tests/test_research_studies_pipeline.py`)*
+- [x] **RS-09** Run as a Job graph: `ingest-tiingo-bars` → `research-freeze` → one `research-backtest` per (version, asset, window ∈ development, validation) plus a benchmark per (asset, window) → `research-evaluate`; the initial graph creates no final-test run *(S3 — `orchestration/research_studies.py`, `jobs/registry.py`)*
+- [x] **RS-10** Metrics pinned per proposal Part I.2 with `None` plus a note for undefined cases; evidence descriptors and grades with limitation text; ranking by the study's objective and constraint with closed statuses and verdicts that can be `insufficient_evidence` or `no_candidate_qualifies`; buy-and-hold shown beside each candidate and never a gate *(S3 — `services/research/{metrics,evidence,ranking,benchmark}.py`; `tests/test_research_engine_metrics.py`)*
+- [x] **RS-11** Freeze records the candidate and acceptance criteria (refused on co-leading ties, incomplete acceptance, ineligible candidates); the final test runs only after a freeze, only for the frozen candidate, once (technical reruns linked and digest-compared, `reproducibility_failure` on mismatch); final-test exposures are visible to every overlapping study with `run_recorded` / `results_inspected` states *(S3)*
+- [x] **RS-12** Quantity policy `fractional` (six decimals, `ROUND_DOWN`, `rounding_slack` recorded) or `whole_shares`; price-scale invariance tested for `price_scale_free` specifications only *(S3 — `services/backtesting.py` `EngineOptions`)*
+- [x] **RS-13** Research console: Strategies (editor with inline validation and explanation, versions, lineage), Assets (search, lists), Studies (wizard with every approved version, readiness, polled progress, results tables and charts, freeze, final test, exposures, export, report links); generic Jobs pages; every page gated on `GET /health` `mode` *(S4 — `console/src/app/research/*`, `components/research/*`; `tests/test_research_console_contract.py`, console vitest)*
+- [x] **RS-14** Static `report.html` / `report.md` and `comparison.json`, per-run `summary.json` / `trades.csv` / `equity_curve.csv` exported under `.data/research/` only *(S4 — `services/research/report.py`)*
+- [x] **RS-15** Research is the primary local application: `make dev` runs research API + worker + console; `make research-bootstrap` is idempotent (create + migrate, seed examples, catalog, sessions from the pinned start); `/` lands on Studies; navigation Strategies · Assets · Studies · Jobs; legacy operator URLs redirect; `make dev-trading` keeps the frozen stack *(§15 — `Makefile`, `scripts/bootstrap_research.py`, `services/research/bootstrap.py`, `console/src/lib/{navigation,legacyRedirects}.ts`; `tests/test_dev_workflow.py`, `tests/test_research_bootstrap.py`)*
+- [x] **RS-16** Assistant: one bounded, accounted request per draft or revision with structured output on the specification shape; the same validator and explanation; one automatic retry on invalid output; explicit Apply and separate approval; per-attempt bounds (input size, output tokens, requests per day and concurrency in the shared ledger, revisions per draft, overall deadline); provenance per attempt incl. `prompt_version` (`s5-v2`); key never stored; disabled by default and unusable without a key and both limits; model configurable (`claude-haiku-5-5` default), never substituted; caps are not a monetary guarantee *(S5 — `services/research/assistant.py`, `api/research/assistant.py`, `AssistantPanel.tsx`; `tests/test_research_assistant.py`, `tests/test_research_assistant_converter.py`)*
+- [x] **RS-17** Integration smoke run on real Tiingo data through the whole pipeline in a throwaway database with the smoke banner, assistant disabled, database dropped afterwards *(S6 — plan §14; outcome is an integration result, not a research claim)*
+
+### Not implemented (recorded; not authorized)
+
+- [ ] **RS-N1** Pine Script export and equivalence checking (next agreed first; proposal Part O)
+- [ ] **RS-N2** Visual rule builder on the same specification (next agreed second; Part E.3)
+- [ ] **RS-N3** Portfolio mode (`portfolio_combined`) with its own ranking and evidence semantics (next agreed third; refused today as `mode_not_supported_yet`)
+- [ ] **RS-N4** Python authoring in an isolated sandbox with the Part E.4 requirements (later)
+- [ ] **RS-N5** Automatic parameter search, grids, walk-forward, cost sweeps (later)
+- [ ] **RS-N6** Whole-market scanning, composite scoring, point-in-time universes, dividend-factor reconciliation, CSV import (later; Part Q)
+
+### Known limitations of the implemented scope
+
+Calendar sessions from the pinned start (2014-01-02) through the library's last session (~1 year ahead); catalog names partial (SEC source answers 403; Nasdaq Trader names only); per-revision ingestion re-downloads the whole required range; an unapplied assistant proposal is not restored after a page reload; live assistant latency observed on four requests only; two pre-pivot baseline test failures and the teardown `InsufficientPrivilege` error remain in the full suite.
+
+### Research traceability
+
+| Requirement | Stage | Code commit | Status |
+|-------------|-------|-------------|--------|
+| RS-01 | S0, S2 | `9050515` | Implemented |
+| RS-02 | S0, S3 | `9050515` | Implemented |
+| RS-03 | S0, S4 | `9050515`, `ca199b6` | Implemented (names partial, see limitations) |
+| RS-04 | S0 | `9050515` | Implemented |
+| RS-05 | S1 | `9050515` | Implemented |
+| RS-06 | S1 | `9050515` | Implemented (parity matrix passed) |
+| RS-07 | S2 | `9050515` | Implemented |
+| RS-08 | S3 | `9050515` | Implemented |
+| RS-09 | S3 | `9050515` | Implemented |
+| RS-10 | S3 | `9050515` | Implemented |
+| RS-11 | S3 | `9050515` | Implemented |
+| RS-12 | S3 | `9050515` | Implemented |
+| RS-13 | S4 | `ca199b6`, `f167f55` | Implemented; browser-validated |
+| RS-14 | S4 | `ca199b6` | Implemented |
+| RS-15 | §15 | `f167f55` | Implemented; validated on both hosts |
+| RS-16 | S5 | `519e73f` | Implemented; live-validated (four requests) |
+| RS-17 | S6 | `ca199b6` (record) | Executed 2026-10-08 |
+| RS-N1..N6 | — | — | Not started; not authorized |
+
+**Coverage:** 17 research requirements implemented in increment 1; 6 recorded as not implemented. No completion percentage is stated.
+
+---
+
+# Frozen: Trading Strategy Platform — Milestone v1.3 Operator Platform (historical; statuses as of the freeze 2026-10-06)
+
+_Everything below is the pre-pivot requirement set, kept verbatim with its statuses. v1.3 was frozen incomplete on 2026-10-06: Phase 20.1's REC-01 and REC-02 are partial with open findings, Phase 21 (AUD-01, OPR-01..08, WRK-01/02) was never started, and v1.4 (AUD-02, NOTIF-02) never began. The pivot resolves none of these; "Pending" below means "pending at the freeze"._
 
 **Defined:** 2026-07-15
 **Re-scoped:** 2026-09-23 (repository audit — vertical-slice re-cut; scheduling and identity groundwork deferred)
@@ -108,7 +181,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [ ] **WRK-01**: The run-jobs worker persists its own heartbeat (throttled upsert, graceful stop recorded, stale rows pruned) in `worker_heartbeats`, written from the jobs infrastructure layer
 - [ ] **WRK-02**: Worker health read reports exactly `idle | busy | unavailable | unknown` (with reason); the absence of an active Job is never evidence of health; worker health is not part of `/ready`
 
-## v1.4 Requirements (Operator Console — planned)
+## v1.4 Requirements (Operator Console — planned at the freeze; FROZEN, never started)
 
 - [ ] **AUD-02** *(moved from v1.3, 2026-09-30)*: Operator can view and filter the operational history (kind, type, outcome, date range) in the console, including job completions, failures, and kill-switch trips *(absorbs NOTIF-01; built on OPR-06)*
 - [ ] **NOTIF-02** *(moved from v1.3, 2026-09-30)*: Failures, uncertainty and anything needing attention are visible from any screen via a global indicator without navigating to a detail page *(built on OPR-02)*
@@ -126,7 +199,9 @@ Re-scoped out on 2026-09-23. Not built in v1.3.
 | AUD-03: Audit schema carries an operator-identity field for future multi-user | Deferred (no target milestone) | Single-operator platform; identity fields are added only when a concrete requirement needs them |
 | NOTIF-01: In-console operational status feed | Merged into AUD-02 | The filterable history view (failures, completions, kill-switch trips) is the feed |
 
-## Future Requirements
+## Future Requirements (historical)
+
+_Written before the pivot. EXP-01 (experiment domain) and RSCH-01 (research objects) are realized in a different shape by the research product (studies, revisions, versions, freezes); PORT-01 corresponds to the deferred portfolio mode (RS-N3); the operator follow-ups and SCHED-01..03 stay frozen with the trading platform._
 
 Deferred to later milestones (ATOS Stages 2–7). Tracked but not in current roadmap. **Milestone order (2026-09-30): v1.3 → v1.4 Operator Console → v1.5 Strategy Research / Strategy Lab.**
 
@@ -213,31 +288,31 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 | COR-05 | Phase 20.1 | Complete |
 | EXT-01 | Phase 20.1 | Complete |
 | COR-06 | Phase 20.1 | Complete |
-| REC-01 | Phase 20.1 | In Progress (partial — G-2: gaps E2–E4 open; G-1 and E1 closed) |
-| REC-02 | Phase 20.1 (plans 20.1-11, 20.1-15, 20.1-16) | In Progress (partial — G-2: gaps E2–E4 open; G-1 and E1 closed) |
+| REC-01 | Phase 20.1 | In Progress at the freeze (partial — G-2: gaps E2–E4 open; G-1 and E1 closed); FROZEN 2026-10-06 |
+| REC-02 | Phase 20.1 (plans 20.1-11, 20.1-15, 20.1-16) | In Progress at the freeze (partial — G-2: gaps E2–E4 open; G-1 and E1 closed); FROZEN 2026-10-06 |
 | COR-01 | Phase 20.1 | Complete |
 | COR-03 | Phase 20.1 | Complete |
 | COR-04 | Phase 20.1 | Complete |
 | PROV-01 | Phase 20.1 | Complete |
 | COMPAT-01 | Phase 20.1 | Complete |
-| AUD-01 | Phase 21 | Pending |
-| OPR-01 | Phase 21 | Pending |
-| OPR-02 | Phase 21 | Pending |
-| OPR-03 | Phase 21 | Pending |
-| OPR-04 | Phase 21 | Pending |
-| OPR-05 | Phase 21 | Pending |
-| OPR-06 | Phase 21 | Pending |
-| OPR-07 | Phase 21 | Pending |
-| OPR-08 | Phase 21 | Pending |
-| WRK-01 | Phase 21 | Pending |
-| WRK-02 | Phase 21 | Pending |
-| AUD-02 | v1.4 (Phase 26, Activity) | Pending (moved 2026-09-30) |
-| NOTIF-02 | v1.4 (Phase 23, Shell) | Pending (moved 2026-09-30) |
+| AUD-01 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-01 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-02 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-03 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-04 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-05 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-06 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-07 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| OPR-08 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| WRK-01 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| WRK-02 | Phase 21 | Pending at the freeze; Phase 21 FROZEN, not started |
+| AUD-02 | v1.4 (Phase 26, Activity) | Pending (moved 2026-09-30); v1.4 FROZEN, not started |
+| NOTIF-02 | v1.4 (Phase 23, Shell) | Pending (moved 2026-09-30); v1.4 FROZEN, not started |
 | SCHED-01..03 | — | Deferred (Paper Automation) |
 | AUD-03 | — | Deferred |
 | NOTIF-01 | v1.4 (via AUD-02) | Merged |
 
-**Coverage:**
+**Coverage (as of the freeze 2026-10-06; unchanged since):**
 - Active v1.3 requirements: 54 (41 complete, 13 pending — AUD-01, OPR-01..08 and WRK-01/02 not started, plus REC-01 and REC-02 reopened as partial 2026-10-06, Phase 20.1 G-1, which is now closed, as is gap E1; they stay partial for G-2 gaps E2–E4); the table is the source of truth: 43 rows were Complete before the reopening, 43 − 2 = 41, and 11 + 2 = 13; COR-02 of the programme is realized by REC-01 + REC-02
 - Mapped to phases: 54 (Phases 17–21, incl. inserted 20.1)
 - v1.4 requirements mapped so far: 2 (AUD-02, NOTIF-02; moved from v1.3)
@@ -252,3 +327,4 @@ Which phases cover which requirements. Updated 2026-09-23 re-scope.
 *2026-10-06 — REC-01 and REC-02 reopened as partial (Phase 20.1 G-1); no other requirement changed.*
 *2026-10-06 (later) — REC-01 and REC-02 stay partial: G-1 is closed and verified, but the user ruled escalation E-1 an open verification gap (E1, G-2 partial); they return to Complete only when the E1 correction (plan 20.1-38) is verified. Counts unchanged; no other requirement changed.*
 *2026-10-06 (round 5) — E1 closed and verified (plan 20.1-38, 20.1-VERIFICATION.md round 5); REC-01 and REC-02 stay partial because G-2 is still partial (gaps E2–E4, user decisions pending), as the re-verification recommends. Counts unchanged; no other requirement changed.*
+*2026-10-08 — research pivot: research scope (RS-01..17 implemented, RS-N1..N6 not implemented) added at the top with its own traceability; the v1.3 section marked frozen with statuses as of 2026-10-06; Phase 21 / v1.4 rows annotated frozen; no trading requirement ID reused or re-statused.*
