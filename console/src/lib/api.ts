@@ -644,6 +644,8 @@ const RESEARCH_ERROR_COPY: Readonly<
     `The provider rejected the API key${detail && typeof detail.provider_message === "string" && detail.provider_message ? ` (${detail.provider_message})` : ""}. Check ANTHROPIC_API_KEY and restart the API.`,
   ai_rate_limited: () => "The provider rate-limited this request. Wait a moment and try again; the attempt was charged.",
   ai_proposal_not_applicable: () => "This proposal ended without a specification and cannot be applied.",
+  ai_output_invalid: (detail) =>
+    `The assistant's answer did not match the study proposal contract after one retry${Array.isArray(detail?.findings) && detail!.findings.length > 0 ? ` (${(detail!.findings as string[]).slice(0, 3).join("; ")})` : ""}. Nothing was applied; rephrase and try again.`,
   ai_draft_not_found: () => "This assistant proposal was not found.",
   invalid_assistant_input: (detail) =>
     `Assistant input rejected: ${detail && typeof detail.field === "string" ? detail.field : "field"} ${
@@ -754,6 +756,9 @@ export function applyAssistantProposal(aiDraftId: string, body: { draft_id?: str
     `/api/v1/research/assistant/proposals/${encodeURIComponent(aiDraftId)}/apply`,
     body,
   );
+}
+export function requestStudyProposal(body: { user_text: string; base_proposal?: Record<string, unknown> | null }) {
+  return researchMutation<{ proposal: unknown }>("POST", "/api/v1/research/assistant/study-proposals", body);
 }
 export function createAssetList(body: { name: string; tickers: string[] }) {
   return researchMutation<{ list: unknown }>("POST", "/api/v1/research/asset-lists", body);

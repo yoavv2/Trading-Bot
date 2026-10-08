@@ -487,18 +487,22 @@ describe("wizard defaults and version selection", () => {
     expect(state.slippageBps).toBe("");
     expect(state.constraintValue).toBe("");
     expect(state.objective).toBe("return_first");
-    expect(state.assetsText).toBe("AAA");
+    expect(state.assets).toEqual(["AAA"]);
+    // Stored windows are kept to the day (custom mode because 60/20/20 does not reproduce them).
+    expect(state.periodMode).toBe("custom");
+    expect(wizardToSettings(state).windows).toEqual(stored.windows);
+    expect(wizardToSettings(state).range).toEqual(stored.range);
     expect(wizardToSettings(state).strategy_version_ids).toEqual(["old", "new"]);
   });
 });
 
 describe("wizardToSettings", () => {
   it("never pre-fills costs, objective or constraint", () => {
-    const settings = wizardToSettings({ ...EMPTY_WIZARD, objective: "", assetsText: "aapl msft, aapl" });
+    const settings = wizardToSettings({ ...EMPTY_WIZARD, objective: "", assets: ["aapl", "msft", "AAPL", "brk.b"] });
     expect(settings.costs).toBeUndefined();
     expect(settings.objective).toBeUndefined();
     expect(settings.constraint_value).toBeUndefined();
-    expect(settings.assets).toEqual(["AAPL", "MSFT", "AAPL"]);
+    expect(settings.assets).toEqual(["AAPL", "MSFT", "BRK-B"]);
     const full = wizardToSettings({ ...EMPTY_WIZARD, slippageBps: "5", commission: "0", constraintValue: "0.2", assetListId: "list-1" });
     expect(full.costs).toEqual({ slippage_bps: "5", commission_per_order: "0" });
     expect(full.objective).toBe("return_first");

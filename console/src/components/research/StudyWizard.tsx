@@ -5,19 +5,29 @@ import { createRevision, createStudy } from "@/lib/api";
 import { useApiQuery } from "@/lib/useApiQuery";
 import { useMutationCapability } from "@/lib/useMutationCapability";
 import { ErrorState } from "@/components/ErrorState";
-import type { AssetList, Revision, StrategyVersion, Study, StudySettings } from "@/lib/research/types";
+import type { AssetList, CatalogCoverage, Revision, StrategyVersion, Study, StudySettings } from "@/lib/research/types";
+import { dedupe, normalizeTicker } from "@/lib/research/assets";
+import { DEFAULT_SPLIT, computeWindows, splitFromWindows, validatePeriod, windowsEqual, type Split, type Windows } from "@/lib/research/windows";
+import { AssetPicker } from "./AssetPicker";
+import { ResearchPeriod, type PeriodMode } from "./ResearchPeriod";
+import { StudyAssistant } from "./StudyAssistant";
 
 type VersionsBody = { versions: StrategyVersion[] };
 type ListsBody = { lists: AssetList[] };
 type StudyBody = { study: Study };
+type CoverageBody = { catalog: CatalogCoverage };
 
 export type WizardState = {
   name: string;
   versionIds: string[];
-  assetsText: string;
+  /** Manually chosen tickers (normalised). A saved list's tickers are added by the backend. */
+  assets: string[];
   assetListId: string;
   rangeStart: string;
   rangeEnd: string;
+  /** The split preset; in `preset` mode the windows are always derived from it. */
+  split: Split;
+  periodMode: PeriodMode;
   development: { start: string; end: string };
   validation: { start: string; end: string };
   finalTest: { start: string; end: string };
@@ -34,15 +44,18 @@ export type WizardState = {
 /**
  * The form's starting state. `return_first` is the default objective selection (proposal
  * I.4); its risk-cap value, the costs and the study name start EMPTY and are required
- * inputs, never product defaults.
+ * inputs, never product defaults. The 60/20/20 split is a convenience preset for the
+ * window boundaries, not a research methodology.
  */
 export const EMPTY_WIZARD: WizardState = {
   name: "",
   versionIds: [],
-  assetsText: "",
+  assets: [],
   assetListId: "",
   rangeStart: "",
   rangeEnd: "",
+  split: { ...DEFAULT_SPLIT },
+  periodMode: "preset",
   development: { start: "", end: "" },
   validation: { start: "", end: "" },
   finalTest: { start: "", end: "" },
@@ -56,22 +69,24 @@ export const EMPTY_WIZARD: WizardState = {
   kind: "substantive",
 };
 
+export function wizardWindows(state: WizardState): Windows {
+  return { development: state.development, validation: state.validation, final_test: state.finalTest };
+}
+
 /**
  * Pure mapping from the form state to the study settings snapshot the API stores. Costs,
  * objective and constraint are sent only when entered (never pre-filled): a missing value
  * is reported by readiness as `costs_missing` / `objective_missing` / `constraint_missing`,
  * not defaulted here. Version ids are sent once each, in selection order; the immutable
- * revision keeps them as `strategy_version_ids`.
+ * revision keeps them as `strategy_version_ids`. Manual tickers are sent normalised and
+ * de-duplicated; with `asset_list_id` the backend appends the list's tickers (the tags on
+ * screen show that same union).
  */
 export function wizardToSettings(state: WizardState): Record<string, unknown> {
-  const assets = state.assetsText
-    .split(/[\s,]+/)
-    .map((t) => t.trim().toUpperCase())
-    .filter(Boolean);
   const settings: Record<string, unknown> = {
     mode: "single_asset_independent",
     strategy_version_ids: Array.from(new Set(state.versionIds)),
-    assets,
+    assets: dedupe(state.assets.map(normalizeTicker)),
     range: { start: state.rangeStart, end: state.rangeEnd },
     windows: { development: state.development, validation: state.validation, final_test: state.finalTest },
     initial_capital: state.initialCapital,
@@ -96,19 +111,32 @@ export function wizardToSettings(state: WizardState): Record<string, unknown> {
 /**
  * Pure inverse for "new revision (new settings)": the latest revision's immutable
  * settings pre-fill the form so the user changes only what they mean to change. Costs,
- * objective and constraint are copied exactly as stored (empty stays empty).
+ * objective and constraint are copied exactly as stored (empty stays empty). The stored
+ * windows are kept EXACTLY: the form opens in custom mode unless the default preset
+ * reproduces them to the day. The stored asset snapshot becomes manual tags (the list,
+ * if any, stays referenced; tickers it gained since are shown as list tags).
  */
 export function settingsToWizard(settings: StudySettings, name: string): WizardState {
+  const windows: Windows = {
+    development: { ...settings.windows.development },
+    validation: { ...settings.windows.validation },
+    final_test: { ...settings.windows.final_test },
+  };
+  const preset = computeWindows(settings.range.start, settings.range.end, DEFAULT_SPLIT);
+  const matchesPreset = preset !== null && windowsEqual(preset, windows);
+  const split = matchesPreset ? { ...DEFAULT_SPLIT } : (splitFromWindows(settings.range.start, settings.range.end, windows) ?? { ...DEFAULT_SPLIT });
   return {
     name,
     versionIds: [...settings.strategy_version_ids],
-    assetsText: settings.assets.join(", "),
+    assets: [...settings.assets],
     assetListId: settings.asset_list_id ?? "",
     rangeStart: settings.range.start,
     rangeEnd: settings.range.end,
-    development: { ...settings.windows.development },
-    validation: { ...settings.windows.validation },
-    finalTest: { ...settings.windows.final_test },
+    split,
+    periodMode: matchesPreset ? "preset" : "custom",
+    development: windows.development,
+    validation: windows.validation,
+    finalTest: windows.final_test,
     initialCapital: settings.initial_capital,
     quantityPolicy: settings.quantity_policy === "whole_shares" ? "whole_shares" : "fractional",
     slippageBps: settings.costs?.slippage_bps ?? "",
@@ -137,19 +165,30 @@ export function groupVersions(versions: StrategyVersion[]): VersionFamily[] {
   return families.sort((a, b) => a.name.localeCompare(b.name) || a.strategy_id.localeCompare(b.strategy_id));
 }
 
-const FIELD = "mt-1 block w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100";
-
-function DateField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block text-xs text-zinc-400">
-      {label}
-      <input type="date" value={value} onChange={(event) => onChange(event.target.value)} className={FIELD} />
-    </label>
-  );
+/** Everything that stops creation before the API would refuse it (pydantic 422), by control. */
+export function wizardBlockers(state: WizardState, isRevision: boolean, listTickers: string[]): string[] {
+  const blockers: string[] = [];
+  if (!isRevision && !state.name.trim()) {
+    blockers.push("Study name is required.");
+  }
+  if (state.versionIds.length === 0) {
+    blockers.push("Select at least one approved strategy version.");
+  }
+  if (dedupe([...state.assets.map(normalizeTicker), ...listTickers.map(normalizeTicker)]).length === 0) {
+    blockers.push("Add at least one asset (or choose a saved list).");
+  }
+  if (validatePeriod(state.rangeStart, state.rangeEnd, wizardWindows(state)).length > 0) {
+    blockers.push("Fix the research period.");
+  }
+  if (!/^\s*\d+(\.\d+)?\s*$/.test(state.initialCapital) || Number(state.initialCapital) <= 0) {
+    blockers.push("Initial capital must be a positive number.");
+  }
+  return blockers;
 }
 
-function VersionPicker({ selected, onToggle }: { selected: string[]; onToggle: (versionId: string) => void }) {
-  const versions = useApiQuery<VersionsBody>("/api/v1/research/strategies/versions");
+const FIELD = "mt-1 block w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100";
+
+function VersionPicker({ selected, onToggle, versions }: { selected: string[]; onToggle: (versionId: string) => void; versions: ReturnType<typeof useApiQuery<VersionsBody>> }) {
   if (!versions.result) {
     return <p className="mt-2 text-sm text-zinc-500">Loading…</p>;
   }
@@ -213,12 +252,16 @@ function VersionPicker({ selected, onToggle }: { selected: string[]; onToggle: (
  */
 export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (href: string) => void; fromStudyId?: string | null }) {
   const lists = useApiQuery<ListsBody>("/api/v1/research/asset-lists");
+  const coverage = useApiQuery<CoverageBody>("/api/v1/research/catalog");
+  const versions = useApiQuery<VersionsBody>("/api/v1/research/strategies/versions");
   const source = useApiQuery<StudyBody>(fromStudyId ? `/api/v1/research/studies/${encodeURIComponent(fromStudyId)}` : "/api/v1/research/studies?wizard=new");
   const capability = useMutationCapability();
   const [state, setState] = useState<WizardState>(EMPTY_WIZARD);
   const [prefilledFrom, setPrefilledFrom] = useState<string | null>(null);
+  const [prefilledRevision, setPrefilledRevision] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [applied, setApplied] = useState<string | null>(null);
 
   // Pre-fill once from the latest revision of the source study; later refetches never
   // overwrite what the user has typed.
@@ -228,6 +271,7 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
     setPrefilledFrom(fromStudyId);
     if (latest) {
       setState(settingsToWizard(latest.settings, source.result.data.study.name));
+      setPrefilledRevision(latest.revision_no);
     }
   }
 
@@ -266,8 +310,21 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
     onNavigate(`/research/studies/${(result.data as { study: Study }).study.study_id}`);
   }
 
-  const disabled = busy || capability.state !== "enabled";
+  const listsData = lists.result?.ok ? lists.result.data.lists : null;
+  const listsFailure = lists.result && !lists.result.ok ? lists.result.message : null;
+  const selectedList = listsData?.find((list) => list.list_id === state.assetListId) ?? null;
+  const listTickers = selectedList?.tickers ?? [];
+  const maxAssets = coverage.result?.ok ? coverage.result.data.catalog.max_assets_per_study : null;
+  const periodIssues = validatePeriod(state.rangeStart, state.rangeEnd, wizardWindows(state));
+  const blockers = wizardBlockers(state, Boolean(fromStudyId), listTickers);
+  const disabled = busy || capability.state !== "enabled" || blockers.length > 0;
   const constraintLabel = state.objective === "risk_first" ? "CAGR floor on the validation window (required; may be negative, zero or positive)" : "Max drawdown cap as a magnitude on the validation window (required; e.g. 0.2 means -20%)";
+  const revisionNote = fromStudyId
+    ? prefilledRevision !== null
+      ? `Dates kept exactly from revision ${prefilledRevision}${state.periodMode === "custom" ? " (custom periods preserved to the day)" : " (they match the default preset)"}. Change them only if you mean to.`
+      : null
+    : null;
+
   return (
     <div className="space-y-4">
       {fromStudyId ? (
@@ -277,46 +334,67 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           {source.result && !source.result.ok ? " The source study could not be loaded; the form starts empty." : ""}
         </p>
       ) : null}
+
+      <StudyAssistant
+        current={state}
+        isRevision={Boolean(fromStudyId)}
+        capability={capability}
+        onApply={(update, summary) => {
+          patch(update);
+          setApplied(summary);
+        }}
+      />
+      {applied ? (
+        <p role="status" className="rounded border border-emerald-900 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-100">
+          {applied} Review the sections below; nothing is created until you click Create.
+        </p>
+      ) : null}
+
       <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
         <h2 className="text-sm font-semibold text-zinc-200">1. Strategy versions (approved only)</h2>
-        <VersionPicker selected={state.versionIds} onToggle={toggleVersion} />
-        <p className="mt-2 text-xs text-zinc-500">Selected: {state.versionIds.length} version(s). The immutable study snapshot keeps every selected version id.</p>
+        <VersionPicker selected={state.versionIds} onToggle={toggleVersion} versions={versions} />
+        <p className="mt-2 text-xs text-zinc-500">Selected: {state.versionIds.length} version(s).</p>
       </section>
+
       <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
         <h2 className="text-sm font-semibold text-zinc-200">2. Assets</h2>
-        <label className="mt-2 block text-xs text-zinc-400">
-          Tickers (comma or space separated)
-          <input value={state.assetsText} onChange={(event) => patch({ assetsText: event.target.value })} className={FIELD} placeholder="AAPL, MSFT" />
-        </label>
-        <label className="mt-2 block text-xs text-zinc-400">
-          Or a saved list (its tickers are snapshotted into the revision)
-          <select value={state.assetListId} onChange={(event) => patch({ assetListId: event.target.value })} className={FIELD}>
-            <option value="">none</option>
-            {lists.result?.ok ? lists.result.data.lists.map((list) => <option key={list.list_id} value={list.list_id}>{list.name} ({list.tickers.length})</option>) : null}
-          </select>
-        </label>
-        <p className="mt-1 text-xs text-zinc-500">The per-study limit is checked by readiness; nothing is dropped silently.</p>
+        <AssetPicker
+          manual={state.assets}
+          onManualChange={(assets) => patch({ assets })}
+          listId={state.assetListId}
+          onListChange={(assetListId) => patch({ assetListId })}
+          lists={listsData}
+          listsFailure={listsFailure}
+          maxAssets={maxAssets}
+        />
       </section>
+
       <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
-        <h2 className="text-sm font-semibold text-zinc-200">3. Dates and windows</h2>
-        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
-          <DateField label="Range start" value={state.rangeStart} onChange={(v) => patch({ rangeStart: v })} />
-          <DateField label="Range end" value={state.rangeEnd} onChange={(v) => patch({ rangeEnd: v })} />
-          <DateField label="Development start" value={state.development.start} onChange={(v) => patch({ development: { ...state.development, start: v } })} />
-          <DateField label="Development end" value={state.development.end} onChange={(v) => patch({ development: { ...state.development, end: v } })} />
-          <DateField label="Validation start" value={state.validation.start} onChange={(v) => patch({ validation: { ...state.validation, start: v } })} />
-          <DateField label="Validation end" value={state.validation.end} onChange={(v) => patch({ validation: { ...state.validation, end: v } })} />
-          <DateField label="Final test start" value={state.finalTest.start} onChange={(v) => patch({ finalTest: { ...state.finalTest, start: v } })} />
-          <DateField label="Final test end" value={state.finalTest.end} onChange={(v) => patch({ finalTest: { ...state.finalTest, end: v } })} />
-        </div>
-        <p className="mt-1 text-xs text-zinc-500">The initial run covers development and validation only; the final test is a separate, freeze-gated action. Warm-up history before the development window is downloaded automatically.</p>
+        <h2 className="text-sm font-semibold text-zinc-200">3. Research period</h2>
+        <ResearchPeriod
+          value={{ rangeStart: state.rangeStart, rangeEnd: state.rangeEnd, split: state.split, mode: state.periodMode, windows: wizardWindows(state) }}
+          onChange={(next) =>
+            patch({
+              rangeStart: next.rangeStart,
+              rangeEnd: next.rangeEnd,
+              split: next.split,
+              periodMode: next.mode,
+              development: next.windows.development,
+              validation: next.windows.validation,
+              finalTest: next.windows.final_test,
+            })
+          }
+          issues={periodIssues}
+          revisionNote={revisionNote}
+        />
       </section>
+
       <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
         <h2 className="text-sm font-semibold text-zinc-200">4. Capital, quantities, costs, objective</h2>
-        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3">
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
           <label className="block text-xs text-zinc-400">
             Initial capital
-            <input value={state.initialCapital} onChange={(event) => patch({ initialCapital: event.target.value })} className={FIELD} />
+            <input value={state.initialCapital} onChange={(event) => patch({ initialCapital: event.target.value })} className={FIELD} inputMode="decimal" />
           </label>
           <label className="block text-xs text-zinc-400">
             Quantity policy
@@ -334,15 +412,15 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           </label>
           <label className="block text-xs text-zinc-400">
             Slippage, bps per side (required; no default — the engine&apos;s 5 bps is only an example)
-            <input required value={state.slippageBps} onChange={(event) => patch({ slippageBps: event.target.value })} className={FIELD} placeholder="enter a value" />
+            <input required value={state.slippageBps} onChange={(event) => patch({ slippageBps: event.target.value })} className={FIELD} placeholder="enter a value" inputMode="decimal" />
           </label>
           <label className="block text-xs text-zinc-400">
             Commission per order (required; no default — 0 is only an example)
-            <input required value={state.commission} onChange={(event) => patch({ commission: event.target.value })} className={FIELD} placeholder="enter a value" />
+            <input required value={state.commission} onChange={(event) => patch({ commission: event.target.value })} className={FIELD} placeholder="enter a value" inputMode="decimal" />
           </label>
           <label className="block text-xs text-zinc-400">
             {constraintLabel}
-            <input required value={state.constraintValue} onChange={(event) => patch({ constraintValue: event.target.value })} className={FIELD} placeholder="enter a value (no approved default)" />
+            <input required value={state.constraintValue} onChange={(event) => patch({ constraintValue: event.target.value })} className={FIELD} placeholder="enter a value (no approved default)" inputMode="decimal" />
           </label>
         </div>
         <p className="mt-1 text-xs text-zinc-500">Costs and the constraint value are your inputs; a missing one makes the revision not ready (`costs_missing`, `constraint_missing`) instead of being filled in.</p>
@@ -361,13 +439,21 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           </label>
         ) : null}
       </section>
+
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={submit} disabled={disabled || (!fromStudyId && !state.name.trim())} className="rounded border border-cyan-700 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-950 disabled:opacity-50">
+        <button type="button" onClick={submit} disabled={disabled} className="rounded border border-cyan-700 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-950 disabled:opacity-50">
           {fromStudyId ? "Create new revision" : "Create study (revision 1)"}
         </button>
         <span className="text-xs text-zinc-500">Creating does not run anything; the readiness screen lists every problem first.</span>
         {capability.state !== "enabled" ? <span className="text-xs text-zinc-500">{capability.reason ?? "Mutation availability unknown"}</span> : null}
       </div>
+      {blockers.length > 0 ? (
+        <ul className="list-disc pl-5 text-xs text-amber-200" aria-label="Before creating">
+          {blockers.map((blocker) => (
+            <li key={blocker}>{blocker}</li>
+          ))}
+        </ul>
+      ) : null}
       {message ? (
         <p role="alert" className="rounded border border-red-800 bg-red-950/60 px-3 py-2 text-sm text-red-100">
           {message} Your entries are kept.

@@ -97,6 +97,52 @@ export type AssistantAttempt = {
 
 export type AssistantProvenance = { summary: string; requests: number; revisions: number; attempts: AssistantAttempt[] };
 
+// Study assistant (POST /api/v1/research/assistant/study-proposals): a validated proposal
+// for the study wizard. Empty strings mean "not proposed"; nothing is persisted and nothing
+// is created until the user applies it to the form and then creates the study.
+export type StudyProposalAsset = { ticker: string; in_catalog: boolean; name: string | null };
+export type StudyProposalStrategy = { version_id: string; strategy_id: string; name: string; version_no: number; reference: string; matched_by: "version_id" | "name" };
+export type StudyProposalSettings = {
+  name: string;
+  assets: StudyProposalAsset[];
+  strategies: { resolved: StudyProposalStrategy[]; unresolved: { reference: string; reason: string }[] };
+  range_start: string;
+  range_end: string;
+  split: { development_pct: number; validation_pct: number; final_test_pct: number } | null;
+  windows: { development: Window; validation: Window; final_test: Window } | null;
+  initial_capital: string;
+  quantity_policy: "" | "fractional" | "whole_shares";
+  slippage_bps: string;
+  commission_per_order: string;
+  objective: "" | "return_first" | "risk_first";
+  constraint_value: string;
+  note: string;
+  kind: "" | "substantive" | "smoke";
+};
+export type StudyProposal = {
+  status: string;
+  prompt_version: string;
+  attempt_no: number;
+  summary: string;
+  missing: { field: string; detail: string }[];
+  unsupported_requests: UnsupportedRequest[];
+  settings: StudyProposalSettings;
+  provenance: {
+    provider: string;
+    model: string;
+    prompt_version: string;
+    request_id: string | null;
+    stop_reason: string | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_input_tokens: number | null;
+    cache_creation_input_tokens: number | null;
+    deadline_seconds: number | null;
+    started_at: string | null;
+    completed_at: string | null;
+  };
+};
+
 export type StrategyVersion = {
   version_id: string;
   strategy_id: string;

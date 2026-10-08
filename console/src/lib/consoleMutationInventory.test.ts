@@ -79,6 +79,8 @@ describe("console mutation inventory (20.1-14)", () => {
         // S5 assistant: one bounded request, one explicit apply (approval stays the draft route)
         "POST /api/v1/research/assistant/proposals",
         "POST /api/v1/research/assistant/proposals/{id}/apply",
+        // Study assistant: one bounded request; applying to the form is client-side, creation stays POST /studies
+        "POST /api/v1/research/assistant/study-proposals",
       ].sort(),
     );
   });

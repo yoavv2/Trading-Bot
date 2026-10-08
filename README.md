@@ -206,8 +206,12 @@ revisions and their results remain.
 
 ## Research assistant (optional)
 
-The Strategies editor has an assistant panel. It is **disabled by default**
-and the editor works without it. To activate it, set in `.env` (or the shell
+The Strategies editor has an assistant panel, and the study wizard has a
+"Describe your study" assistant (`POST /api/v1/research/assistant/study-proposals`,
+contract `study-v1`: it proposes study settings for review, resolves strategies
+against approved versions and never invents costs, constraints or ids; applying
+only fills the form). Both share the settings below and are **disabled by
+default**; the editor and the wizard work without them. To activate it, set in `.env` (or the shell
 of the API process) and restart `make dev`:
 
 ```bash

@@ -40,8 +40,17 @@ research start command instead of rendering empty panels.
    its proposal is applied to a draft only by an explicit click).
 2. **Approve** the draft into an immutable version (confirmation dialog).
 3. **Study**: the wizard lists every approved version grouped by family (older
-   ones marked), tickers or a saved list, range and windows, capital, quantity
-   policy, costs, objective and constraint (required, never pre-filled). The
+   ones marked); an asset combobox (catalog search by ticker or name, keyboard
+   selection, removable tags, bulk paste, a saved list shown as `list` tags that
+   match the stored snapshot exactly); a **Research period** (start and end date
+   with shortcuts, an editable split preset — 60/20/20 by default, a convenience
+   not a methodology — a three-colour timeline of the computed windows, and
+   **Customize periods** for the six window dates with the backend's ordering
+   rules checked beside each control); capital, quantity policy, costs,
+   objective and constraint (required, never pre-filled). A new revision keeps
+   the stored dates to the day (custom periods preserved). An optional
+   **Describe your study** assistant proposes settings for review; **Apply to
+   form** fills the wizard and creation stays the wizard's own button. The
    readiness panel lists every blocking item; **Run** submits the Job graph.
 4. **Compare** on the study page: inputs state, verdict, ranking by name and
    version number, per-asset tables and charts, evidence grades, benchmark
@@ -66,6 +75,26 @@ restored after a page reload (it stays retrievable by id through the API).
 Activation, model configuration, limits and accounting are described in the
 root `README.md` ("Research assistant"). The default model is
 `claude-haiku-5-5`; the contract version shown on provenance rows is `s5-v2`.
+
+## Study assistant
+
+Mounted at the top of `/research/studies/new` (collapsed by default). Same
+activation, limits and allowance as the editor assistant (`GET
+/api/v1/research/assistant`); one request is `POST
+/api/v1/research/assistant/study-proposals`, contract version `study-v1`.
+The proposal shows what the assistant understood, the information it did
+**not** invent (costs, risk constraint, capital, dates are listed as missing),
+the strategies resolved against approved versions (by version id or family
+name; unresolved references are named, never guessed), the tickers with a
+catalog flag, the periods as they would be applied, and a table of the fields
+**Apply to form** will replace. Follow-up instructions revise the proposal:
+the whole previous proposal (summary, missing items, unsupported requests,
+settings) is sent back as the base. The follow-up counter is per page load;
+the only enforced limits are the API's daily allowance and concurrency.
+Applying only patches the fields the proposal filled; a range-only proposal
+switches the period to the preset split (split and windows patched together),
+while a proposal that repeats the unchanged range leaves custom periods alone.
+Nothing is persisted but the usage ledger.
 
 ## Prerequisites
 
