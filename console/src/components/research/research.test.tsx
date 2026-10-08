@@ -6,7 +6,7 @@ import { ReadinessPanel } from "./ReadinessPanel";
 import { ResultsView } from "./ResultsView";
 import { FinalTestPanel } from "./FinalTestPanel";
 import { DraftEditor } from "./DraftEditor";
-import { KillSwitchBannerForMode, ResearchGate } from "./ResearchGate";
+import { ResearchGate } from "./ResearchGate";
 import { wizardToSettings, settingsToWizard, groupVersions, EMPTY_WIZARD } from "./StudyWizard";
 import type { Candidate, Comparison, FinalTestBlock, Metrics, Readiness } from "@/lib/research/types";
 
@@ -400,35 +400,47 @@ describe("ResearchGate", () => {
       </ResearchGate>,
     );
     await screen.findByText("This API runs in trading mode.");
+    expect(screen.getByRole("alert").textContent).toContain("make dev");
     expect(screen.queryByText("research content")).toBeNull();
   });
-});
 
-describe("KillSwitchBannerForMode", () => {
-  it("renders no kill-switch banner against a research-mode API", async () => {
-    const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (String(url).endsWith("/health")) {
-        return Promise.resolve(jsonResponse(200, { status: "ok", service: "x", version: "1", timestamp: "t", mode: "research" }));
-      }
-      return Promise.resolve(jsonResponse(404, { detail: "Not Found" }));
-    });
+  it("names an unreachable API with the start command and a retry instead of loading forever", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
     vi.stubGlobal("fetch", fetchMock);
-    render(<KillSwitchBannerForMode />);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.queryByText(/Kill-switch state UNKNOWN/)).toBeNull();
+    render(
+      <ResearchGate title="Research">
+        <p>research content</p>
+      </ResearchGate>,
+    );
+    await screen.findByText("The research API is unreachable.");
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("TRADING_CONSOLE_API_BASE_URL");
+    expect(alert.textContent).toContain("make dev");
+    expect(screen.queryByText("research content")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
 
-  it("keeps the banner against a trading-mode API", async () => {
-    const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (String(url).endsWith("/health")) {
-        return Promise.resolve(jsonResponse(200, { status: "ok", service: "x", version: "1", timestamp: "t", mode: "trading" }));
-      }
-      return Promise.resolve(jsonResponse(200, { name: "kill_switch", state: "armed", is_tripped: false, last_changed_at: "t", last_change_actor: null, last_change_reason: null, last_change_run_id: null }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    render(<KillSwitchBannerForMode />);
-    await screen.findByText("Kill switch: ARMED");
+  it("reports a failing /health status instead of rendering research panels", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(502, { detail: "bad gateway" })));
+    render(
+      <ResearchGate title="Research">
+        <p>research content</p>
+      </ResearchGate>,
+    );
+    await screen.findByText("The research API answered 502 to GET /health.");
+    expect(screen.queryByText("research content")).toBeNull();
+  });
+
+  it("renders the page content against a research-mode API", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { status: "ok", service: "x", version: "1", timestamp: "t", mode: "research" })));
+    render(
+      <ResearchGate title="Research">
+        <p>research content</p>
+      </ResearchGate>,
+    );
+    await screen.findByText("research content");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

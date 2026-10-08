@@ -732,6 +732,12 @@ _SCRIPT_EXEMPTIONS: dict[str, str] = {
         "deployment tooling (creates and migrates the isolated research database; "
         "optionally restores a preserved inputs export into it; never touches the trading DB)"
     ),
+    "bootstrap_research.py": (
+        "deployment tooling (research pivot): creates/migrates the research database via "
+        "create_research_db, then services.research.bootstrap seeds the example versions, "
+        "the public asset catalog and the pinned-calendar sessions; idempotent, never clears, "
+        "refuses the trading DB and a trading-mode process"
+    ),
     "generate_signals.py": (
         "read-only: evaluates the strategy against persisted bars, writes nothing "
         "(verified transitively)"
@@ -745,7 +751,7 @@ _SCRIPT_EXEMPTIONS: dict[str, str] = {
     ),
     "report_strategy_analytics.py": "read/report (D-31; tests/test_read_path_purity.py)",
 }
-_DEPLOYMENT_TOOLING = {"migrate.py", "seed_phase1.py", "create_research_db.py"}
+_DEPLOYMENT_TOOLING = {"migrate.py", "seed_phase1.py", "create_research_db.py", "bootstrap_research.py"}
 _KEPT_MAKE_TARGETS = {
     "up",
     "down",
@@ -757,10 +763,14 @@ _KEPT_MAKE_TARGETS = {
     "test",
     "console",
     "console-install",
-    # Canonical host development (tests/test_dev_workflow.py).
+    # Canonical host development (tests/test_dev_workflow.py): `dev` is the research
+    # product, `dev-trading` the frozen trading console, `research-bootstrap` the
+    # one-time research database preparation.
     "api",
     "worker",
     "dev",
+    "dev-trading",
+    "research-bootstrap",
 }
 _SCRIPT_TOP_LEVEL_DEFS: dict[str, set[str]] = {
     "migrate.py": {"build_alembic_config", "build_parser", "main"},
@@ -771,6 +781,7 @@ _SCRIPT_TOP_LEVEL_DEFS: dict[str, set[str]] = {
         "main",
         "upgrade_to_head",
     },
+    "bootstrap_research.py": {"build_parser", "main"},
     "seed_phase1.py": {"_config_reference", "seed_phase_one", "build_parser", "main"},
     "generate_signals.py": {"build_parser", "resolve_as_of", "main"},
     "export_backtest_report.py": {"build_parser", "main"},

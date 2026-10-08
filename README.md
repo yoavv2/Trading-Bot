@@ -68,10 +68,13 @@ Not implemented yet:
 
 ### Local development (canonical)
 
-There is exactly one supported way to run the platform locally: the API, the
-Job worker and the operator console as host processes, started together by
-`make dev`, against the PostgreSQL database named in `.env`
-(`localhost:5432`, e.g. a native Homebrew PostgreSQL).
+The product is the **strategy research platform** (research pivot, 2026-10-06:
+`.planning/research/strategy-research-pivot/`). There is exactly one supported
+way to run it locally: the research API, the Job worker and the console as host
+processes, started together by `make dev`, in research mode against the
+PostgreSQL database `trading_research` (`localhost:5432`, e.g. a native
+Homebrew PostgreSQL). The frozen trading surface is not part of the product UI;
+`make dev-trading` starts it against the database named in `.env` when needed.
 
 One-time setup:
 
@@ -91,13 +94,21 @@ One-time setup:
    cp console/.env.example console/.env.local
    ```
 
-3. Make sure PostgreSQL is running on `localhost:5432`, then migrate and seed
-   (re-run `make migrate` after pulling new migrations):
+3. Make sure PostgreSQL is running on `localhost:5432`, then prepare the
+   research database (idempotent; re-run after pulling new migrations or to
+   refresh the public asset catalog with `--refresh-catalog`):
 
    ```bash
-   make migrate
-   make seed
+   make research-bootstrap
    ```
+
+   It creates `trading_research` when missing, migrates it to the single
+   Alembic head, seeds the four example strategy versions, syncs the public
+   asset catalog (keyless downloads) and stores the exchange sessions from the
+   pinned research calendar start (`RESEARCH_CALENDAR_START`, 2014-01-02)
+   through the end of next year. Existing drafts, versions, lists, studies and
+   results are kept. The trading database is never touched (`make migrate` /
+   `make seed` remain the trading-database tooling).
 
 Every day:
 
@@ -105,31 +116,39 @@ Every day:
 make dev
 ```
 
+Then open **http://localhost:3000** — it lands on Research → Studies.
+
 `make dev` refuses to start if port 8000 or 3000 is already taken (for example
 by the Compose stack), then runs in one process group:
 
-- **API** on `http://127.0.0.1:8000` with `--reload`: backend code changes
-  under `src/` are picked up automatically. Mutations are enabled for this API
-  process only (`TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED=true`); the
-  application default stays off.
-- **Job worker** (`python -m trading_platform.worker run-jobs`), restarted by
+- **Research API** on `http://127.0.0.1:8000` with `--reload`
+  (`TRADING_PLATFORM_RESEARCH__MODE=true`, calendar pinned, database
+  `trading_research`; `GET /health` reports `"mode": "research"`). Backend code
+  changes under `src/` are picked up automatically. Mutations are enabled for
+  this API process only; the application default stays off.
+- **Job worker** (`python -m trading_platform.worker run-jobs`) in research
+  mode on the same database (research Job registry only), restarted by
   `watchfiles` on changes under `src/`. A restart lets the in-flight Job finish
   for up to 30 seconds; a Job still running after that is reclaimed by the
   lost-lease sweep.
-- **Console** on `http://localhost:3000`.
+- **Console** on `http://localhost:3000` (also reachable as `127.0.0.1`):
+  Strategies, Assets, Studies and the generic Jobs pages. Legacy operator
+  console URLs (`/strategy`, `/runs`, `/paper`, `/controls`) redirect to the
+  research pages.
 
 Press `Ctrl-C` to stop all three. Changes to `config/` or `.env` need a
-`make dev` restart.
-
-Run operations (backtests, data ingestion, risk, paper sessions,
-reconciliation) as Jobs from the console at `/jobs/new`, and manage the kill
-switch and strategy enable/disable from `/controls`. The HTTP Job API is the
-only mutation path.
+`make dev` restart. `TIINGO_API_KEY` in `.env` is read by the server-side
+Tiingo client only (price ingestion runs as Jobs submitted by a study).
 
 `make api`, `make worker` and `make console` run a single piece in the
-foreground for debugging. `make api` is configuration-neutral: it reads
-`mutations_enabled` from `.env`/config like any deployment, so mutating routes
-return `403 mutations_disabled` unless you enable them there.
+foreground for debugging (API and worker in research mode). `make api` is
+configuration-neutral about mutations: it reads `mutations_enabled` from
+`.env`/config like any deployment, so mutating routes return
+`403 mutations_disabled` unless you enable them there.
+
+`make dev-trading` is the frozen trading console (status, runs, paper,
+controls, kill switch) against the database in `.env`; its pages are no longer
+served by the console, only its API and Jobs.
 
 ### Alternative: full Docker Compose stack
 
@@ -161,12 +180,14 @@ Notes:
 ## Common Commands
 
 ```bash
-make dev        # Canonical local development: API + worker + console
-make api        # API only, with --reload (configuration-neutral)
-make worker     # Job worker only, restarted on code changes
-make console    # Operator console only
-make migrate    # Apply Alembic migrations to the .env database
-make seed       # Seed the initial strategy record
+make research-bootstrap  # Prepare trading_research (migrate, examples, catalog, sessions); idempotent
+make dev        # Canonical local development: research API + worker + console
+make dev-trading # Frozen trading stack (API + worker + console) against the .env database
+make api        # Research API only, with --reload (configuration-neutral about mutations)
+make worker     # Research Job worker only, restarted on code changes
+make console    # Console only
+make migrate    # Apply Alembic migrations to the .env (trading) database
+make seed       # Seed the initial strategy record (trading database)
 make up         # Alternative: full Compose stack (stack profile)
 make down       # Stop the Compose stack
 make logs       # Follow Compose db/api/worker logs
@@ -175,14 +196,18 @@ make generate-signals        # Read-only signal evaluation
 make test       # Run the current test suite
 ```
 
-All mutating operations run as Jobs from the console (`/jobs/new`) and
-controls from `/controls`; there are no Makefile targets for them.
+All mutating operations run as Jobs (the research studies submit theirs; the
+console's `/jobs/new` page submits the generic ones); there are no Makefile
+targets for them.
 
-## Operator Console
+## Research Console
 
-The Next.js operator console lives at `console/` and is started by `make dev`.
-It proxies to this FastAPI app (no new backend capabilities). See
-`console/README.md` for `.env.local` and the proxy design.
+The Next.js research console lives at `console/` and is started by `make dev`.
+It proxies to this FastAPI app (no new backend capabilities) and gates every
+research page on `GET /health` reporting `"mode": "research"`; against a
+trading-mode or unreachable API it shows the command to start the research
+stack instead of empty panels. See `console/README.md` for `.env.local` and
+the proxy design.
 
 ## Break-glass Kill Switch
 

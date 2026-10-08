@@ -1,9 +1,18 @@
-# Operator Console
+# Research Console
 
-Read-only Next.js operator console for the trading platform. This is a
-debugging instrument for a single operator, not a customer-facing dashboard —
-every screen it will grow shows what the running system is doing right now
-and lets the operator halt it if needed.
+Next.js console for the strategy research platform: author strategy
+specifications (YAML), validate and approve immutable versions, search the
+asset catalog and keep saved lists, define studies, check readiness, run them,
+compare the evidence per asset, freeze a candidate and run the final test. The
+generic Jobs pages (`/jobs`, `/jobs/new`, `/jobs/<id>`) list and submit the
+research Jobs the studies run on.
+
+The former operator console (system status, runs, paper trading, controls,
+kill-switch banner) is no longer served: `/`, `/strategy`, `/runs`, `/paper`
+and `/controls` redirect to the research pages (`src/lib/legacyRedirects.ts`,
+applied by `next.config.ts`). The trading components stay in the tree, frozen.
+Every research page gates on `GET /health` reporting `"mode": "research"`;
+against a trading-mode or unreachable API it shows what to start instead.
 
 ## Prerequisites
 
@@ -34,7 +43,8 @@ From the repo root:
 make dev
 ```
 
-Then open http://localhost:3000. `make console` (equivalent to
+Then open http://localhost:3000 (it lands on Research → Studies; `127.0.0.1`
+works too — both hosts are in `allowedDevOrigins`). `make console` (equivalent to
 `cd console && npm run dev -- --port 3000`) starts the console alone when the
 API and worker are already running.
 

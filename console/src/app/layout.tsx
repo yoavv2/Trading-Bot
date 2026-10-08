@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
-import { KillSwitchBannerForMode, ResearchNavLink } from "@/components/research/ResearchGate";
+import { HOME_HREF, PRIMARY_NAVIGATION, PRODUCT_NAME } from "@/lib/navigation";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,8 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Operator Console",
-  description: "Read-only operator console for the trading platform.",
+  title: "Strategy Research",
+  description:
+    "Research console: author strategy specifications, pick assets, run studies and compare evidence.",
 };
 
 export default function RootLayout({
@@ -30,31 +31,22 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-zinc-950 text-zinc-100">
-        <nav className="flex flex-wrap items-center gap-x-6 gap-y-1 border-b border-zinc-800 px-4 py-2 text-sm">
-          <span className="font-semibold tracking-tight text-zinc-300">
-            Operator Console
-          </span>
-          <Link href="/" className="text-zinc-400 hover:text-zinc-100">
-            System Status
+        <nav
+          aria-label="Primary"
+          className="flex flex-wrap items-center gap-x-6 gap-y-1 border-b border-zinc-800 px-4 py-2 text-sm"
+        >
+          <Link
+            href={HOME_HREF}
+            className="font-semibold tracking-tight text-cyan-200 hover:text-cyan-100"
+          >
+            {PRODUCT_NAME}
           </Link>
-          <Link href="/strategy" className="text-zinc-400 hover:text-zinc-100">
-            Strategy
-          </Link>
-          <Link href="/runs" className="text-zinc-400 hover:text-zinc-100">
-            Runs
-          </Link>
-          <Link href="/jobs" className="text-zinc-400 hover:text-zinc-100">
-            Jobs
-          </Link>
-          <Link href="/paper" className="text-zinc-400 hover:text-zinc-100">
-            Paper Trading
-          </Link>
-          <Link href="/controls" className="text-zinc-400 hover:text-zinc-100">
-            Controls
-          </Link>
-          <ResearchNavLink />
+          {PRIMARY_NAVIGATION.map((item) => (
+            <Link key={item.href} href={item.href} className="text-zinc-400 hover:text-zinc-100">
+              {item.label}
+            </Link>
+          ))}
         </nav>
-        <KillSwitchBannerForMode />
         {children}
       </body>
     </html>

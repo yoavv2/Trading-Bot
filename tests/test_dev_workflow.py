@@ -92,6 +92,13 @@ def test_make_worker_restarts_the_long_running_job_worker() -> None:
     assert args.max_jobs is None
 
 
+_RESEARCH_ENV = (
+    "TRADING_PLATFORM_RESEARCH__MODE=true "
+    "TRADING_PLATFORM_RESEARCH__CALENDAR_START=2014-01-02 "
+    "TRADING_PLATFORM_DATABASE__NAME=trading_research"
+)
+
+
 @requires_make_and_lsof
 def test_make_dev_enables_mutations_only_for_its_api_process() -> None:
     recipe = _make_dry_run("dev")
@@ -102,6 +109,42 @@ def test_make_dev_enables_mutations_only_for_its_api_process() -> None:
     assert "npm run dev -- --port 3000" in recipe
     # The application default stays closed; only `make dev` opts in.
     assert OrchestrationSettings().mutations_enabled is False
+
+
+@requires_make_and_lsof
+def test_make_dev_is_the_research_product_on_the_research_database() -> None:
+    """`make dev` starts the API and the worker in research mode against `trading_research`;
+    the console needs no mode flag (it follows GET /health). The database name is forced in
+    the recipe so `.env` cannot point a research process at the trading database."""
+
+    recipe = _make_dry_run("dev")
+    api_line = next(line for line in recipe.splitlines() if "uvicorn" in line)
+    worker_line = next(line for line in recipe.splitlines() if "watchfiles" in line)
+
+    assert api_line.strip().startswith(_RESEARCH_ENV)
+    assert worker_line.strip().startswith(_RESEARCH_ENV)
+    assert recipe.count(_RESEARCH_ENV) == 2
+    assert "TRADING_PLATFORM_DATABASE__NAME=trading_platform" not in recipe
+
+
+@requires_make_and_lsof
+def test_make_api_and_worker_single_targets_are_research_too() -> None:
+    assert _make_dry_run("api").strip().startswith(_RESEARCH_ENV)
+    assert _make_dry_run("worker").strip().startswith(_RESEARCH_ENV)
+    bootstrap = _make_dry_run("research-bootstrap").strip()
+    assert bootstrap.startswith(_RESEARCH_ENV)
+    assert bootstrap.endswith("scripts/bootstrap_research.py")
+
+
+@requires_make_and_lsof
+def test_make_dev_trading_keeps_the_frozen_trading_recipe() -> None:
+    recipe = _make_dry_run("dev-trading")
+
+    assert "TRADING_PLATFORM_RESEARCH__MODE" not in recipe
+    assert "trading_research" not in recipe
+    assert recipe.count(_MUTATIONS_ENV) == 1
+    assert f"{_MUTATIONS_ENV} PYTHONPATH=src .venv/bin/uvicorn" in recipe
+    assert "npm run dev -- --port 3000" in recipe
 
 
 def _free_port() -> int:
