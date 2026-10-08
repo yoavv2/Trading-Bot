@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -20,6 +21,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -167,6 +169,34 @@ class AiDraft(TimestampedModel, Base):
     output_spec_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     validation_result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     failure_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    # 0033: full provenance of one attempt (plan S5).
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    request_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("strategy_drafts.id", ondelete="SET NULL"), nullable=True
+    )
+    parent_ai_draft_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_drafts.id", ondelete="SET NULL"), nullable=True
+    )
+    retry_of_ai_draft_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_drafts.id", ondelete="SET NULL"), nullable=True
+    )
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("provider_request_ledger.id", ondelete="SET NULL"), nullable=True
+    )
+    base_yaml_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_yaml_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unsupported_requests: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    stop_reason: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    cache_read_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_creation_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deadline_seconds: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ResearchStudy(TimestampedModel, Base):

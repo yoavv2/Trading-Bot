@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from trading_platform.api.research.assistant import router as research_assistant_router
 from trading_platform.api.research.catalog import asset_lists_router as research_asset_lists_router
 from trading_platform.api.research.catalog import catalog_router as research_catalog_router
 from trading_platform.api.research.strategies import router as research_strategies_router
@@ -120,6 +121,7 @@ _RESEARCH_ROUTERS = (
     research_revisions_router,
     research_catalog_router,
     research_asset_lists_router,
+    research_assistant_router,
 )
 
 

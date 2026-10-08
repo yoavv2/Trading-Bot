@@ -45,7 +45,7 @@ def test_research_defaults_keep_the_trading_path() -> None:
     assert research.max_assets_per_study == 10
     assert research.quantity_policy_default == "fractional"
     assert research.ai.enabled is False and research.ai.usable is False
-    assert research.ai.model == "claude-sonnet-5-5"
+    assert research.ai.model == "claude-haiku-5-5"
     assert research.tiingo.api_key == ""
 
 

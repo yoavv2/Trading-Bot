@@ -209,6 +209,35 @@ trading-mode or unreachable API it shows the command to start the research
 stack instead of empty panels. See `console/README.md` for `.env.local` and
 the proxy design.
 
+## Research Assistant (S5)
+
+The Strategies editor has an assistant panel (describe a strategy, or ask for a
+correction of the YAML in the editor). It returns a candidate specification, an
+`unsupported_requests` list and a short note; the same validator and the same
+deterministic explanation as handwritten YAML run on it; nothing is written until
+you click **Apply**, and approval into an immutable version stays the editor's
+separate action. Every attempt is recorded in `ai_drafts` (provider, model, prompt
+version, request id, token usage, validation result, specification hash, failure
+state, timestamps) and the chain is shown on the draft and on the approved version.
+
+It is **disabled by default** and the editor works without it. To activate it,
+set in the API environment (`.env` or the shell) and restart `make dev`:
+
+```bash
+ANTHROPIC_API_KEY=...                                  # server-side only, never logged
+TRADING_PLATFORM_RESEARCH__AI__ENABLED=true
+TRADING_PLATFORM_RESEARCH__AI__MAX_REQUESTS_PER_DAY=20 # your choice; retries count
+TRADING_PLATFORM_RESEARCH__AI__MAX_OUTPUT_TOKENS=4000  # your choice; passed as max_tokens
+```
+
+Bounds enforced per attempt by the application (`GET /api/v1/research/assistant`
+reports limits and usage): input size, output tokens, requests per day and
+concurrent requests (counted in the shared `provider_request_ledger` across every
+process), revisions per draft, an overall deadline across both attempts, one
+automatic retry on invalid output, no implicit SDK retries. No monetary guarantee
+is made here: spending limits in the Anthropic console are a separate control.
+The default model is `claude-haiku-5-5` (configurable with `TRADING_PLATFORM_RESEARCH__AI__MODEL`; no silent fallback to another model).
+
 ## Break-glass Kill Switch
 
 Every normal way to change the global kill switch or a strategy's

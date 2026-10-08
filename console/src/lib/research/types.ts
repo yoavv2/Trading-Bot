@@ -9,9 +9,93 @@ export type Draft = {
   yaml_text: string;
   source: string;
   parent_version_id: string | null;
+  ai_draft_id?: string | null;
+  assistant?: AssistantProvenance | null;
   created_at: string | null;
   updated_at: string | null;
 };
+
+// S5 assistant (GET /api/v1/research/assistant, POST .../assistant/proposals).
+export type AssistantStatus = {
+  enabled: boolean;
+  configured: boolean;
+  missing: string[];
+  provider: string;
+  model: string;
+  prompt_version: string;
+  limits: {
+    max_requests_per_day: number;
+    max_output_tokens: number;
+    max_input_characters: number;
+    max_revisions_per_draft: number;
+    max_concurrent_requests: number;
+    timeout_seconds: number;
+    automatic_retries_on_invalid_output: number;
+  };
+  usage: { requests_today: number; remaining_today: number; in_flight: number; revisions_used: number | null };
+  note: string;
+};
+
+export type UnsupportedRequest = { code: string; detail: string };
+
+export type AssistantProposal = {
+  ai_draft_id: string;
+  kind: "draft" | "revision";
+  status: string;
+  failure_code: string | null;
+  attempt_no: number;
+  retry_of_ai_draft_id: string | null;
+  parent_ai_draft_id: string | null;
+  draft_id: string | null;
+  request_token: string | null;
+  user_text: string;
+  base_yaml_text: string | null;
+  yaml_text: string | null;
+  note: string | null;
+  unsupported_requests: UnsupportedRequest[];
+  validation: ValidationOutcome | null;
+  explanation: string | null;
+  spec_sha256: string | null;
+  provenance: {
+    provider: string;
+    model: string;
+    prompt_version: string;
+    request_id: string | null;
+    stop_reason: string | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cache_read_input_tokens: number | null;
+    cache_creation_input_tokens: number | null;
+    deadline_seconds: number | null;
+    started_at: string | null;
+    completed_at: string | null;
+  };
+  applied_at: string | null;
+  created_at: string | null;
+};
+
+export type AssistantAttempt = {
+  ai_draft_id: string;
+  kind: string;
+  attempt_no: number;
+  status: string;
+  failure_code: string | null;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  request_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  spec_sha256: string | null;
+  user_text: string;
+  note: string | null;
+  unsupported_requests: UnsupportedRequest[];
+  started_at: string | null;
+  completed_at: string | null;
+  applied_at: string | null;
+};
+
+export type AssistantProvenance = { summary: string; requests: number; revisions: number; attempts: AssistantAttempt[] };
 
 export type StrategyVersion = {
   version_id: string;
@@ -25,6 +109,8 @@ export type StrategyVersion = {
   source: string;
   parent_version_id: string | null;
   behaviour_differs_from_original: string | null;
+  ai_draft_id?: string | null;
+  assistant?: AssistantProvenance | null;
   approved_at: string | null;
   yaml_text?: string;
   spec_json?: Record<string, unknown>;

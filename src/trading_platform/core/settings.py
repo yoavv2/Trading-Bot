@@ -428,13 +428,19 @@ class ResearchAiSettings(BaseModel):
 
     enabled: bool = False
     provider: Literal["anthropic"] = "anthropic"
-    model: str = "claude-sonnet-5-5"
+    model: str = "claude-haiku-5-5"
     api_key: str = ""
-    timeout_seconds: float = 60.0
+    #: Overall deadline of one assistant request (both attempts together); each SDK call gets
+    #: the remaining time. The SDK's implicit retries are disabled (every attempt is accounted).
+    timeout_seconds: float = Field(default=60.0, gt=0)
     max_requests_per_day: int = Field(default=0, ge=0)
     max_output_tokens: int = Field(default=0, ge=0)
     max_input_characters: int = Field(default=20_000, ge=1)
     max_revisions_per_draft: int = Field(default=5, ge=1)
+    #: In-flight assistant requests across every process (counted in the shared ledger).
+    max_concurrent_requests: int = Field(default=1, ge=1)
+    #: Empty = the SDK default endpoint. Set only for a local mock provider in validation runs.
+    base_url: str = ""
 
     @property
     def usable(self) -> bool:
@@ -584,7 +590,7 @@ def build_settings_payload(
         _deep_merge(_deep_merge(defaults, file_config), strategy_config),
         env_overrides,
     )
-    return _apply_tiingo_key_alias(merged)
+    return _apply_anthropic_key_alias(_apply_tiingo_key_alias(merged))
 
 
 TIINGO_API_KEY_ALIAS = "TIINGO_API_KEY"
@@ -620,6 +626,41 @@ def _apply_tiingo_key_alias(payload: dict[str, Any]) -> dict[str, Any]:
     aliased = _tiingo_key_from_alias()
     if aliased:
         tiingo["api_key"] = aliased
+    return payload
+
+
+ANTHROPIC_API_KEY_ALIAS = "ANTHROPIC_API_KEY"
+
+
+def _anthropic_key_from_alias() -> str | None:
+    """Resolve the un-prefixed ``ANTHROPIC_API_KEY`` alias (process env, then the dotenv
+    file ``EnvironmentOverrides`` reads). Returned, never logged (plan S5)."""
+
+    value = os.environ.get(ANTHROPIC_API_KEY_ALIAS)
+    if value:
+        return value.strip() or None
+    env_file = EnvironmentOverrides.model_config.get("env_file")
+    if not env_file:
+        return None
+    path = _resolve_path(str(env_file))
+    if not path.exists():
+        return None
+    from dotenv import dotenv_values
+
+    aliased = dotenv_values(path).get(ANTHROPIC_API_KEY_ALIAS)
+    return (aliased or "").strip() or None
+
+
+def _apply_anthropic_key_alias(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fill ``research.ai.api_key`` from the alias when the prefixed form is empty."""
+
+    research = payload.setdefault("research", {})
+    ai = research.setdefault("ai", {})
+    if ai.get("api_key"):
+        return payload
+    aliased = _anthropic_key_from_alias()
+    if aliased:
+        ai["api_key"] = aliased
     return payload
 
 

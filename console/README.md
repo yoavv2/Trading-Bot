@@ -11,7 +11,9 @@ The former operator console (system status, runs, paper trading, controls,
 kill-switch banner) is no longer served: `/`, `/strategy`, `/runs`, `/paper`
 and `/controls` redirect to the research pages (`src/lib/legacyRedirects.ts`,
 applied by `next.config.ts`). The trading components stay in the tree, frozen.
-Every research page gates on `GET /health` reporting `"mode": "research"`;
+The Strategies editor carries the assistant panel (S5): disabled until the API is
+configured (`research.ai.*`); the panel then shows limits and usage, and a proposal is
+applied to a draft only by an explicit click. Every research page gates on `GET /health` reporting `"mode": "research"`;
 against a trading-mode or unreachable API it shows what to start instead.
 
 ## Prerequisites

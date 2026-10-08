@@ -8,6 +8,7 @@ import { useMutationCapability } from "@/lib/useMutationCapability";
 import { ErrorState } from "@/components/ErrorState";
 import type { Draft, StrategyVersion, ValidationOutcome } from "@/lib/research/types";
 import { ExplanationPanel, ValidationPanel } from "./ValidationPanel";
+import { AssistantPanel } from "./AssistantPanel";
 
 const STARTER_YAML = `spec_version: 1
 name: My strategy
@@ -156,8 +157,10 @@ export function DraftEditor({ draftId, onNavigate }: { draftId: string | null; o
 
   const pending = validatedText !== null && validatedText !== yaml;
   const canApprove = Boolean(draftId) && validation?.valid === true && !pending;
+  const provenance = draftId && query.result?.ok ? query.result.data.draft.assistant : null;
 
   return (
+    <div className="space-y-4">
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <section className="space-y-3">
         <label className="block text-sm">
@@ -222,6 +225,11 @@ export function DraftEditor({ draftId, onNavigate }: { draftId: string | null; o
           </p>
         ) : null}
         {outcome.kind === "info" ? <p className="text-sm text-emerald-300">{outcome.message}</p> : null}
+        {provenance ? (
+          <p className="text-xs text-zinc-500" data-testid="draft-provenance">
+            {provenance.summary.replace(", approved by user", "")} · {provenance.attempts[0]?.provider}/{provenance.attempts[0]?.model} · prompt {provenance.attempts[0]?.prompt_version}
+          </p>
+        ) : null}
         {draftId && query.result?.ok && query.result.data.draft.parent_version_id ? (
           <p className="text-xs text-zinc-500">
             Derived from version{" "}
@@ -236,6 +244,27 @@ export function DraftEditor({ draftId, onNavigate }: { draftId: string | null; o
         <ValidationPanel outcome={validation} pending={pending} />
         <ExplanationPanel explanation={validation?.valid && !pending ? validation.explanation : null} />
       </div>
+    </div>
+    <AssistantPanel
+      draftId={draftId}
+      editorYaml={yaml}
+      editorIsStarter={yaml === STARTER_YAML}
+      capability={capability}
+      onUseInEditor={(text) => {
+        setYaml(text);
+        setOutcome({ kind: "info", message: "Proposal copied into the editor; save the draft to keep it." });
+      }}
+      onApplied={(draft) => {
+        if (!draftId) {
+          onNavigate(`/research/strategies/drafts/${draft.draft_id}`);
+          return;
+        }
+        setYaml(draft.yaml_text);
+        setTitle(draft.title);
+        setOutcome({ kind: "info", message: "Assistant proposal applied to this draft (saved)." });
+        query.refetch();
+      }}
+    />
     </div>
   );
 }

@@ -619,6 +619,36 @@ const RESEARCH_ERROR_COPY: Readonly<
       detail && typeof detail.reason === "string" ? detail.reason : "is not acceptable"
     }.`,
   asset_not_in_catalog: () => "This ticker is not in the catalog.",
+  // S5 assistant (closed codes of services/research/assistant.py)
+  ai_disabled: () => "The assistant is disabled. Enable it with TRADING_PLATFORM_RESEARCH__AI__ENABLED=true, set ANTHROPIC_API_KEY and both limits, then restart the API.",
+  ai_not_configured: (detail) =>
+    `The assistant is enabled but not configured: ${Array.isArray(detail?.missing) ? (detail!.missing as string[]).join("; ") : "missing settings"}. Restart the API after setting them.`,
+  ai_input_too_long: (detail) =>
+    `The request is too long (${detail && typeof detail.length === "number" ? detail.length : "?"} characters; limit ${detail && typeof detail.limit === "number" ? detail.limit : "?"}). Shorten the description or the YAML.`,
+  ai_daily_limit_reached: (detail) =>
+    `The daily assistant allowance is used up (${detail && typeof detail.used === "number" ? detail.used : "?"} of ${detail && typeof detail.limit === "number" ? detail.limit : "?"} requests, retries included). It resets 24 hours after the oldest request; raise TRADING_PLATFORM_RESEARCH__AI__MAX_REQUESTS_PER_DAY to change it.`,
+  ai_revision_limit_reached: (detail) =>
+    `This draft reached its assistant revision limit (${detail && typeof detail.limit === "number" ? detail.limit : "?"}). Edit the YAML by hand or duplicate the draft.`,
+  ai_busy: () => "Another assistant request is still in flight. Wait for it to finish, then try again.",
+  ai_timeout: (detail) =>
+    `The assistant did not answer within the deadline${detail && typeof detail.deadline_seconds === "number" ? ` (${detail.deadline_seconds}s)` : ""}. The attempt was charged and recorded; try again or raise TRADING_PLATFORM_RESEARCH__AI__TIMEOUT_SECONDS.`,
+  ai_refused: () => "The provider declined to answer this request. Rephrase it; the attempt was recorded.",
+  ai_output_truncated: (detail) =>
+    `The assistant's output hit the output-token limit (${detail && typeof detail.limit === "number" ? detail.limit : "?"}). Ask for a smaller strategy or raise TRADING_PLATFORM_RESEARCH__AI__MAX_OUTPUT_TOKENS.`,
+  ai_provider_error: (detail) =>
+    `The provider answered an error${detail && typeof detail.provider_status === "number" ? ` (HTTP ${detail.provider_status})` : ""}${
+      detail && typeof detail.provider_message === "string" && detail.provider_message ? `: ${detail.provider_message}` : ""
+    }. Nothing was applied; the attempt was recorded.`,
+  ai_provider_unavailable: () => "The provider could not be reached (network). Nothing was applied; the attempt was recorded.",
+  ai_auth_failed: (detail) =>
+    `The provider rejected the API key${detail && typeof detail.provider_message === "string" && detail.provider_message ? ` (${detail.provider_message})` : ""}. Check ANTHROPIC_API_KEY and restart the API.`,
+  ai_rate_limited: () => "The provider rate-limited this request. Wait a moment and try again; the attempt was charged.",
+  ai_proposal_not_applicable: () => "This proposal ended without a specification and cannot be applied.",
+  ai_draft_not_found: () => "This assistant proposal was not found.",
+  invalid_assistant_input: (detail) =>
+    `Assistant input rejected: ${detail && typeof detail.field === "string" ? detail.field : "field"} ${
+      detail && typeof detail.reason === "string" ? detail.reason : "is not acceptable"
+    }.`,
 };
 
 export function researchErrorMessage(
@@ -708,6 +738,22 @@ export function editVersion(versionId: string) {
 }
 export function duplicateVersion(versionId: string) {
   return researchMutation<{ draft: unknown }>("POST", `/api/v1/research/strategies/versions/${encodeURIComponent(versionId)}/duplicate`, {});
+}
+export function requestAssistantProposal(body: {
+  user_text: string;
+  draft_id?: string;
+  base_yaml_text?: string;
+  parent_ai_draft_id?: string;
+  request_token?: string;
+}) {
+  return researchMutation<{ proposal: unknown }>("POST", "/api/v1/research/assistant/proposals", body);
+}
+export function applyAssistantProposal(aiDraftId: string, body: { draft_id?: string; title?: string }) {
+  return researchMutation<{ draft: unknown; proposal: unknown; already_applied: boolean }>(
+    "POST",
+    `/api/v1/research/assistant/proposals/${encodeURIComponent(aiDraftId)}/apply`,
+    body,
+  );
 }
 export function createAssetList(body: { name: string; tickers: string[] }) {
   return researchMutation<{ list: unknown }>("POST", "/api/v1/research/asset-lists", body);

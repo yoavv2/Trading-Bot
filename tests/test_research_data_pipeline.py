@@ -91,7 +91,7 @@ def test_migration_head_tables_columns_and_append_only_trigger(research_db: str)
     engine = sa.create_engine(settings.database.url)
     inspector = inspect(engine)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0032_research_studies"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0033_research_assistant"
     tables = set(inspector.get_table_names())
     assert {
         "ai_drafts", "strategy_versions", "strategy_drafts", "asset_catalog", "asset_lists",
@@ -440,7 +440,7 @@ def test_create_research_db_script_creates_migrates_refuses_trading_name(researc
         assert create_research_db.main(["--database", name]) == 0
         params = _admin_params()
         with psycopg.connect(host=params["host"], port=params["port"], user=params["user"], password=params["password"], dbname=name) as connection:
-            assert connection.execute("select version_num from alembic_version").fetchone()[0] == "0032_research_studies"
+            assert connection.execute("select version_num from alembic_version").fetchone()[0] == "0033_research_assistant"
         assert create_research_db.main(["--database", name]) == 0  # idempotent
     finally:
         os.environ["TRADING_PLATFORM_DATABASE__NAME"] = research_db

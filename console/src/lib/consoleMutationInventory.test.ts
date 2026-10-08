@@ -76,6 +76,9 @@ describe("console mutation inventory (20.1-14)", () => {
         "POST /api/v1/research/revisions/{id}/freeze",
         "POST /api/v1/research/revisions/{id}/final-test",
         "POST /api/v1/research/revisions/{id}/export",
+        // S5 assistant: one bounded request, one explicit apply (approval stays the draft route)
+        "POST /api/v1/research/assistant/proposals",
+        "POST /api/v1/research/assistant/proposals/{id}/apply",
       ].sort(),
     );
   });

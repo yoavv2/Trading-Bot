@@ -505,3 +505,162 @@ describe("wizardToSettings", () => {
     expect(full.asset_list_id).toBe("list-1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// S5 assistant panel
+// ---------------------------------------------------------------------------
+
+import { AssistantPanel } from "./AssistantPanel";
+
+const ASSISTANT_OK = {
+  enabled: true,
+  configured: true,
+  missing: [],
+  provider: "anthropic",
+  model: "claude-haiku-5-5",
+  prompt_version: "s5-v2",
+  limits: { max_requests_per_day: 20, max_output_tokens: 2000, max_input_characters: 20000, max_revisions_per_draft: 5, max_concurrent_requests: 1, timeout_seconds: 60, automatic_retries_on_invalid_output: 1 },
+  usage: { requests_today: 2, remaining_today: 18, in_flight: 0, revisions_used: null },
+  note: "Limits are enforced per attempt; provider spending controls are separate.",
+};
+
+const PROPOSAL = {
+  ai_draft_id: "0a1b2c3d-0000-4000-8000-000000000001",
+  kind: "draft",
+  status: "ok",
+  failure_code: null,
+  attempt_no: 1,
+  retry_of_ai_draft_id: null,
+  parent_ai_draft_id: null,
+  draft_id: null,
+  request_token: "t",
+  user_text: "trend",
+  base_yaml_text: null,
+  yaml_text: "spec_version: 1\nname: Trend following 50/200\n",
+  note: "A moving-average trend filter.",
+  unsupported_requests: [{ code: "stop_or_target_price_not_supported", detail: "a 5% stop was requested" }],
+  validation: { valid: true, errors: [], derived: { name: "Trend following 50/200", spec_sha256: "abc", history_required: 200, history_minimum: 200, scale_class: "scale_free", terms_used: ["sma_fast"], operators_used: ["gt"] }, explanation: "Enter long when 1. close is above sma_slow." },
+  explanation: "Enter long when 1. close is above sma_slow.",
+  spec_sha256: "abc",
+  provenance: { provider: "anthropic", model: "claude-haiku-5-5", prompt_version: "s5-v2", request_id: "req_1", stop_reason: "end_turn", input_tokens: 1200, output_tokens: 300, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, deadline_seconds: 60, started_at: "t", completed_at: "t" },
+  applied_at: null,
+  created_at: "t",
+};
+
+const CAPABILITY = { state: "enabled" as const, reason: null, catalog: null, loading: false };
+
+describe("AssistantPanel", () => {
+  it("explains a disabled assistant with the exact settings to set and keeps the input disabled", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { as_of: "t", assistant: { ...ASSISTANT_OK, enabled: false, configured: false, missing: ["TRADING_PLATFORM_RESEARCH__AI__ENABLED=true", "ANTHROPIC_API_KEY (or TRADING_PLATFORM_RESEARCH__AI__API_KEY)"] } })));
+    render(<AssistantPanel draftId={null} editorYaml="" editorIsStarter capability={CAPABILITY} onUseInEditor={() => {}} onApplied={() => {}} />);
+    await screen.findByText("The assistant is disabled.");
+    expect(screen.getByText("ANTHROPIC_API_KEY (or TRADING_PLATFORM_RESEARCH__AI__API_KEY)")).toBeTruthy();
+    expect((screen.getByLabelText("Describe the strategy") as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByText("Draft with the assistant") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows an exhausted allowance and refuses to ask", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { as_of: "t", assistant: { ...ASSISTANT_OK, usage: { ...ASSISTANT_OK.usage, requests_today: 20, remaining_today: 0 } } })));
+    render(<AssistantPanel draftId={null} editorYaml="" editorIsStarter capability={CAPABILITY} onUseInEditor={() => {}} onApplied={() => {}} />);
+    await screen.findByText(/allowance is used up \(20\/20\)/);
+    fireEvent.change(screen.getByLabelText("Describe the strategy"), { target: { value: "trend" } });
+    expect((screen.getByText("Draft with the assistant") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("renders a proposal with YAML, unsupported requests, note, findings and explanation; one click sends one tokenised request", async () => {
+    const posts: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && String(url).endsWith("/assistant/proposals")) {
+        posts.push(JSON.parse(String(init.body)));
+        return new Promise((resolve) => setTimeout(() => resolve(jsonResponse(200, { as_of: "t", proposal: PROPOSAL })), 30));
+      }
+      return Promise.resolve(jsonResponse(200, { as_of: "t", assistant: ASSISTANT_OK }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const used: string[] = [];
+    render(<AssistantPanel draftId={null} editorYaml="" editorIsStarter capability={CAPABILITY} onUseInEditor={(y) => used.push(y)} onApplied={() => {}} />);
+    await screen.findByText(/today 2\/20 requests/);
+    fireEvent.change(screen.getByLabelText("Describe the strategy"), { target: { value: "50/200 trend with a 5% stop" } });
+    const button = screen.getByText("Draft with the assistant") as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await screen.findByTestId("assistant-proposal");
+    expect(posts).toHaveLength(1);
+    expect(posts[0].user_text).toBe("50/200 trend with a 5% stop");
+    expect(typeof posts[0].request_token).toBe("string");
+    expect(posts[0].base_yaml_text).toBeUndefined();
+    expect(screen.getByText("stop_or_target_price_not_supported")).toBeTruthy();
+    expect(screen.getByText("a 5% stop was requested")).toBeTruthy();
+    expect(screen.getByText("A moving-average trend filter.")).toBeTruthy();
+    expect(screen.getByText("Enter long when 1. close is above sma_slow.")).toBeTruthy();
+    expect((screen.getByLabelText("Proposed specification (YAML, editable)") as HTMLTextAreaElement).value).toContain("Trend following 50/200");
+    fireEvent.click(screen.getByText("Use in editor"));
+    expect(used).toEqual(["spec_version: 1\nname: Trend following 50/200\n"]);
+    // editing the proposal blocks the verbatim apply until reset
+    fireEvent.change(screen.getByLabelText("Proposed specification (YAML, editable)"), { target: { value: "spec_version: 1\nname: edited\n" } });
+    expect((screen.getByText("Apply as a new draft") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText("reset to the proposal"));
+    expect((screen.getByText("Apply as a new draft") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps the typed text and the last proposal when a request fails, and shows the typed reason", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && String(url).endsWith("/assistant/proposals")) {
+        calls += 1;
+        if (calls === 1) {
+          return Promise.resolve(jsonResponse(200, { as_of: "t", proposal: PROPOSAL }));
+        }
+        return Promise.resolve(jsonResponse(504, { detail: { code: "ai_timeout", deadline_seconds: 60, ai_draft_id: "x" } }));
+      }
+      return Promise.resolve(jsonResponse(200, { as_of: "t", assistant: ASSISTANT_OK }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AssistantPanel draftId="d1" editorYaml="spec_version: 1\nname: seed\n" editorIsStarter={false} capability={CAPABILITY} onUseInEditor={() => {}} onApplied={() => {}} />);
+    await screen.findByText(/today 2\/20 requests/);
+    const input = screen.getByLabelText("Describe the correction");
+    fireEvent.change(input, { target: { value: "use 60 days" } });
+    const button = screen.getByText("Request a revision") as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await screen.findByTestId("assistant-proposal");
+    fireEvent.change(screen.getByLabelText("Describe the correction"), { target: { value: "and exit at 2% below" } });
+    await waitFor(() => expect((screen.getByText("Request a revision") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Request a revision"));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("alert").textContent).toContain("did not answer within the deadline (60s)");
+    expect(screen.getByRole("alert").textContent).toContain("Your text and the last proposal are kept");
+    expect((screen.getByLabelText("Describe the correction") as HTMLTextAreaElement).value).toBe("and exit at 2% below");
+    expect(screen.getByTestId("assistant-proposal")).toBeTruthy();
+  });
+
+  it("applies a proposal to the current draft explicitly and reports an already-applied repeat", async () => {
+    let applies = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && String(url).endsWith("/apply")) {
+        applies += 1;
+        expect(JSON.parse(String(init.body))).toEqual({ draft_id: "d1" });
+        return Promise.resolve(jsonResponse(200, { as_of: "t", draft: { draft_id: "d1", title: "T", yaml_text: PROPOSAL.yaml_text, source: "assistant", parent_version_id: null, created_at: null, updated_at: null }, proposal: { ...PROPOSAL, applied_at: "t" }, already_applied: applies > 1 }));
+      }
+      if (init?.method === "POST") {
+        return Promise.resolve(jsonResponse(200, { as_of: "t", proposal: PROPOSAL }));
+      }
+      return Promise.resolve(jsonResponse(200, { as_of: "t", assistant: { ...ASSISTANT_OK, usage: { ...ASSISTANT_OK.usage, revisions_used: 1 } } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const applied: string[] = [];
+    render(<AssistantPanel draftId="d1" editorYaml="spec_version: 1\nname: seed\n" editorIsStarter={false} capability={CAPABILITY} onUseInEditor={() => {}} onApplied={(d) => applied.push(d.draft_id)} />);
+    await screen.findByText(/this draft 1\/5 revisions/);
+    fireEvent.change(screen.getByLabelText("Describe the correction"), { target: { value: "x" } });
+    await waitFor(() => expect((screen.getByText("Request a revision") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("Request a revision"));
+    await screen.findByTestId("assistant-proposal");
+    fireEvent.click(screen.getByText("Apply as this draft's YAML"));
+    await screen.findByText("Proposal applied to the draft.");
+    expect(applied).toEqual(["d1"]);
+    fireEvent.click(screen.getByText("Apply as this draft's YAML"));
+    await screen.findByText("This proposal was already applied to the draft.");
+  });
+});

@@ -206,7 +206,9 @@ def _check_yaml_text(yaml_text: Any) -> str:
     if not isinstance(yaml_text, str):
         raise InvalidDraftInputError("yaml_text", "must be a string")
     if not yaml_text.strip() or len(yaml_text) > MAX_YAML_LENGTH or "\x00" in yaml_text:
-        raise InvalidDraftInputError("yaml_text", f"must be nonblank and at most {MAX_YAML_LENGTH} characters")
+        raise InvalidDraftInputError(
+            "yaml_text", f"must be nonblank and at most {MAX_YAML_LENGTH} characters"
+        )
     return yaml_text
 
 
@@ -238,8 +240,13 @@ class ResearchStrategyService:
             return [draft_to_dict(d) for d in drafts]
 
     def get_draft(self, draft_id: uuid.UUID) -> dict[str, Any]:
+        from trading_platform.services.research.assistant import assistant_provenance
+
         with session_scope(self._settings) as session:
-            return draft_to_dict(self._load_draft(session, draft_id))
+            draft = self._load_draft(session, draft_id)
+            payload = draft_to_dict(draft)
+            payload["assistant"] = assistant_provenance(session, draft.ai_draft_id)
+            return payload
 
     def create_draft(
         self, *, title: str, yaml_text: str, source: str = SOURCE_MANUAL
@@ -350,9 +357,13 @@ class ResearchStrategyService:
             else:
                 family = uuid.uuid4()
 
-            session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": family_lock_key(family)})
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": family_lock_key(family)}
+            )
             latest = session.execute(
-                select(func.max(StrategyVersion.version_no)).where(StrategyVersion.strategy_id == family)
+                select(func.max(StrategyVersion.version_no)).where(
+                    StrategyVersion.strategy_id == family
+                )
             ).scalar_one()
             approved_at = now or datetime.now(UTC)
             version = StrategyVersion(
@@ -410,8 +421,13 @@ class ResearchStrategyService:
         return sorted(families.values(), key=lambda f: (f["latest"]["name"], f["strategy_id"]))
 
     def get_version(self, version_id: uuid.UUID) -> dict[str, Any]:
+        from trading_platform.services.research.assistant import assistant_provenance
+
         with session_scope(self._settings) as session:
-            return version_to_dict(self._load_version(session, version_id))
+            version = self._load_version(session, version_id)
+            payload = version_to_dict(version)
+            payload["assistant"] = assistant_provenance(session, version.ai_draft_id, approved=True)
+            return payload
 
     def lineage(self, version_id: uuid.UUID) -> list[dict[str, Any]]:
         """Ancestors from the root to the version itself (root first)."""
@@ -433,7 +449,9 @@ class ResearchStrategyService:
     # -- loaders -------------------------------------------------------------
 
     @staticmethod
-    def _load_draft(session: Session, draft_id: uuid.UUID, *, for_update: bool = False) -> StrategyDraft:
+    def _load_draft(
+        session: Session, draft_id: uuid.UUID, *, for_update: bool = False
+    ) -> StrategyDraft:
         stmt = select(StrategyDraft).where(StrategyDraft.id == draft_id)
         if for_update:
             stmt = stmt.with_for_update()

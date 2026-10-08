@@ -56,6 +56,21 @@ export function VersionDetail({ versionId, onNavigate }: { versionId: string; on
           <dd className="font-mono text-xs">{v.spec_sha256}</dd>
           <dt className="text-zinc-400">Family</dt>
           <dd className="font-mono text-xs">{v.strategy_id}</dd>
+          {v.assistant ? (
+            <>
+              <dt className="text-zinc-400">Assistant</dt>
+              <dd data-testid="assistant-provenance">
+                {v.assistant.summary}
+                <ul className="mt-1 space-y-0.5 text-xs text-zinc-400">
+                  {v.assistant.attempts.map((a) => (
+                    <li key={a.ai_draft_id} className="font-mono">
+                      {a.kind} #{a.attempt_no} · {a.status} · {a.provider}/{a.model} · prompt {a.prompt_version} · request {a.request_id ?? "—"} · tokens {a.input_tokens ?? "?"}/{a.output_tokens ?? "?"} · {a.completed_at ?? "—"}
+                    </li>
+                  ))}
+                </ul>
+              </dd>
+            </>
+          ) : null}
           {v.behaviour_differs_from_original ? (
             <>
               <dt className="text-amber-300">Differs from original</dt>

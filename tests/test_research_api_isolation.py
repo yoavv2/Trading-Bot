@@ -77,6 +77,11 @@ RESEARCH_ROUTES = {
     ("GET", "/api/v1/research/asset-lists/{list_id}"),
     ("PUT", "/api/v1/research/asset-lists/{list_id}"),
     ("DELETE", "/api/v1/research/asset-lists/{list_id}"),
+    # S5 assistant
+    ("GET", "/api/v1/research/assistant"),
+    ("GET", "/api/v1/research/assistant/proposals/{ai_draft_id}"),
+    ("POST", "/api/v1/research/assistant/proposals"),
+    ("POST", "/api/v1/research/assistant/proposals/{ai_draft_id}/apply"),
 }
 
 #: The research writes; every one carries ``require_mutations_enabled``.
