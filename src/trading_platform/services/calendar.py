@@ -50,6 +50,14 @@ def get_calendar(exchange: str = _DEFAULT_EXCHANGE) -> Any:
     return xcals.get_calendar(exchange, start=pd.Timestamp(_PINNED_CALENDAR_START))
 
 
+def exchange_today(exchange: str = _DEFAULT_EXCHANGE) -> date:
+    """The current calendar date in the exchange's own timezone (UTC when the calendar
+    carries none). Separate so tests can pin "today"."""
+
+    tz = getattr(get_calendar(exchange), "tz", None) or UTC
+    return datetime.now(UTC).astimezone(tz).date()
+
+
 def sessions_in_range(
     start: date,
     end: date,

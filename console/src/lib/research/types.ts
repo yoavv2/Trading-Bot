@@ -246,6 +246,18 @@ export type Study = { study_id: string; name: string; kind: string; created_at: 
 
 export type ReadinessError = { code: string; item: string; [key: string]: unknown };
 
+// Study preflight (POST /api/v1/research/studies/preflight): readiness' coverage checks
+// against the wizard's entries, without creating a study. Read-only.
+export type StudyPreflight = {
+  calendar: { exchange: string; pinned_start: string | null; today: string; last_completed_session: string | null };
+  assets: { ticker: string; in_catalog: boolean; name: string | null; catalog_start: string | null; catalog_end: string | null }[];
+  versions: { version_id: string; name: string | null; version_no: number | null; history_required: number | null; approved: boolean }[];
+  required_start_by_version: Record<string, string | null>;
+  latest_common_catalog_end: string | null;
+  errors: ReadinessError[];
+  checked: { strategy_versions: number; assets: number; pairs: number };
+};
+
 export type InputsState = "pending" | "failed" | "stale" | "verified";
 
 export type Readiness = {

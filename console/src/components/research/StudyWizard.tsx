@@ -6,7 +6,9 @@ import { useApiQuery } from "@/lib/useApiQuery";
 import { useMutationCapability } from "@/lib/useMutationCapability";
 import { ErrorState } from "@/components/ErrorState";
 import type { AssetList, CatalogCoverage, Revision, StrategyVersion, Study, StudySettings } from "@/lib/research/types";
-import { dedupe, normalizeTicker } from "@/lib/research/assets";
+import { dedupe, mergeAssets, normalizeTicker } from "@/lib/research/assets";
+import { coverageByTicker, endDateAdvice, groupPreflight, missingInputs } from "@/lib/research/preflight";
+import { useStudyPreflight } from "@/lib/useStudyPreflight";
 import { DEFAULT_SPLIT, computeWindows, splitFromWindows, validatePeriod, windowsEqual, type Split, type Windows } from "@/lib/research/windows";
 import { AssetPicker } from "./AssetPicker";
 import { ResearchPeriod, type PeriodMode } from "./ResearchPeriod";
@@ -315,6 +317,20 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
   const selectedList = listsData?.find((list) => list.list_id === state.assetListId) ?? null;
   const listTickers = selectedList?.tickers ?? [];
   const maxAssets = coverage.result?.ok ? coverage.result.data.catalog.max_assets_per_study : null;
+  // Coverage / warm-up preflight for the exact snapshot that will be stored (manual + list),
+  // re-run whenever versions, assets, the range or the development start change.
+  const allAssets = mergeAssets(state.assets, listTickers);
+  const preflight = useStudyPreflight({
+    strategy_version_ids: state.versionIds,
+    assets: allAssets,
+    range: state.rangeStart && state.rangeEnd ? { start: state.rangeStart, end: state.rangeEnd } : null,
+    development_start: state.development.start || null,
+  });
+  const assetCoverage = coverageByTicker(allAssets, preflight.data, preflight.failure);
+  const findings = preflight.data ? groupPreflight(preflight.data) : null;
+  const endAdvice = endDateAdvice(preflight.data, state.rangeEnd);
+  const lastCompletedSession = (preflight.data ?? preflight.last)?.calendar.last_completed_session ?? null;
+  const missing = missingInputs(state);
   const periodIssues = validatePeriod(state.rangeStart, state.rangeEnd, wizardWindows(state));
   const blockers = wizardBlockers(state, Boolean(fromStudyId), listTickers);
   const disabled = busy || capability.state !== "enabled" || blockers.length > 0;
@@ -366,6 +382,10 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           lists={listsData}
           listsFailure={listsFailure}
           maxAssets={maxAssets}
+          coverage={assetCoverage}
+          coverageLoading={preflight.loading}
+          findings={findings}
+          preflightFailure={preflight.failure}
         />
       </section>
 
@@ -386,6 +406,8 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           }
           issues={periodIssues}
           revisionNote={revisionNote}
+          lastCompletedSession={lastCompletedSession}
+          endAdvice={endAdvice}
         />
       </section>
 
@@ -412,15 +434,30 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           </label>
           <label className="block text-xs text-zinc-400">
             Slippage, bps per side (required; no default — the engine&apos;s 5 bps is only an example)
-            <input required value={state.slippageBps} onChange={(event) => patch({ slippageBps: event.target.value })} className={FIELD} placeholder="enter a value" inputMode="decimal" />
+            <input required value={state.slippageBps} onChange={(event) => patch({ slippageBps: event.target.value })} className={FIELD} placeholder="enter a value" inputMode="decimal" aria-describedby={state.slippageBps.trim() === "" ? "warn-slippage" : undefined} />
+            {state.slippageBps.trim() === "" ? (
+              <span id="warn-slippage" className="mt-0.5 block text-amber-300">
+                Not entered: the revision will report costs_missing until it is.
+              </span>
+            ) : null}
           </label>
           <label className="block text-xs text-zinc-400">
             Commission per order (required; no default — 0 is only an example)
-            <input required value={state.commission} onChange={(event) => patch({ commission: event.target.value })} className={FIELD} placeholder="enter a value" inputMode="decimal" />
+            <input required value={state.commission} onChange={(event) => patch({ commission: event.target.value })} className={FIELD} placeholder="enter a value" inputMode="decimal" aria-describedby={state.commission.trim() === "" ? "warn-commission" : undefined} />
+            {state.commission.trim() === "" ? (
+              <span id="warn-commission" className="mt-0.5 block text-amber-300">
+                Not entered: the revision will report costs_missing until it is (0 is accepted).
+              </span>
+            ) : null}
           </label>
           <label className="block text-xs text-zinc-400">
             {constraintLabel}
-            <input required value={state.constraintValue} onChange={(event) => patch({ constraintValue: event.target.value })} className={FIELD} placeholder="enter a value (no approved default)" inputMode="decimal" />
+            <input required value={state.constraintValue} onChange={(event) => patch({ constraintValue: event.target.value })} className={FIELD} placeholder="enter a value (no approved default)" inputMode="decimal" aria-describedby={state.constraintValue.trim() === "" ? "warn-constraint" : undefined} />
+            {state.constraintValue.trim() === "" ? (
+              <span id="warn-constraint" className="mt-0.5 block text-amber-300">
+                Not entered: the revision will report constraint_missing until the {state.objective === "risk_first" ? "CAGR floor" : "drawdown cap"} is set.
+              </span>
+            ) : null}
           </label>
         </div>
         <p className="mt-1 text-xs text-zinc-500">Costs and the constraint value are your inputs; a missing one makes the revision not ready (`costs_missing`, `constraint_missing`) instead of being filled in.</p>
@@ -447,6 +484,18 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
         <span className="text-xs text-zinc-500">Creating does not run anything; the readiness screen lists every problem first.</span>
         {capability.state !== "enabled" ? <span className="text-xs text-zinc-500">{capability.reason ?? "Mutation availability unknown"}</span> : null}
       </div>
+      {blockers.length === 0 && missing.length > 0 ? (
+        <div role="status" className="rounded border border-amber-900 bg-amber-950/30 px-3 py-2 text-xs text-amber-100" data-testid="not-ready-summary">
+          <p className="font-semibold">This revision can be created, but will not be ready to run.</p>
+          <ul className="mt-1 list-disc pl-5">
+            {missing.map((item) => (
+              <li key={item.key}>
+                {item.label}: {item.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {blockers.length > 0 ? (
         <ul className="list-disc pl-5 text-xs text-amber-200" aria-label="Before creating">
           {blockers.map((blocker) => (

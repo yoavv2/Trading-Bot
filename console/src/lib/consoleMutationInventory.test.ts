@@ -71,6 +71,8 @@ describe("console mutation inventory (20.1-14)", () => {
         "PUT /api/v1/research/asset-lists/{id}",
         "DELETE /api/v1/research/asset-lists/{id}",
         "POST /api/v1/research/studies",
+        // Read-only preflight (POST for its body; writes nothing, no mutation gate)
+        "POST /api/v1/research/studies/preflight",
         "POST /api/v1/research/studies/{id}/revisions",
         "POST /api/v1/research/revisions/{id}/run",
         "POST /api/v1/research/revisions/{id}/freeze",

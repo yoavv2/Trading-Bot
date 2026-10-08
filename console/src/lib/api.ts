@@ -769,6 +769,10 @@ export function updateAssetList(listId: string, body: { name?: string; tickers?:
 export function deleteAssetList(listId: string) {
   return researchMutation<{ deleted: boolean }>("DELETE", `/api/v1/research/asset-lists/${encodeURIComponent(listId)}`);
 }
+/** Read-only: readiness' coverage/warm-up checks for the wizard's current entries (no study is created). */
+export function preflightStudy(body: { strategy_version_ids: string[]; assets: string[]; range: { start: string; end: string } | null; development_start: string | null }) {
+  return researchMutation<{ preflight: unknown }>("POST", "/api/v1/research/studies/preflight", body);
+}
 export function createStudy(body: { name: string; kind: string; settings: Record<string, unknown> }) {
   return researchMutation<{ study: unknown; revision: unknown }>("POST", "/api/v1/research/studies", body);
 }

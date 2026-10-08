@@ -18,6 +18,7 @@ import {
   type WindowRole,
   type Windows,
 } from "@/lib/research/windows";
+import type { EndDateAdvice } from "@/lib/research/preflight";
 
 const FIELD = "mt-1 block w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100";
 const FIELD_BAD = "mt-1 block w-full rounded border border-red-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100";
@@ -43,6 +44,10 @@ type Props = {
   onChange: (next: PeriodValue) => void;
   issues: PeriodIssue[];
   revisionNote: string | null;
+  /** The exchange calendar's last completed session (from preflight), or null when unknown. */
+  lastCompletedSession: string | null;
+  /** Assets whose catalog ends before the chosen end date, with the explicit alternative. */
+  endAdvice: EndDateAdvice;
 };
 
 function Messages({ messages, id }: { messages: string[]; id: string }) {
@@ -112,9 +117,11 @@ export function WindowTimeline({ windows }: { windows: Windows }) {
  * "Customize periods" mode exposing the six window dates. In preset mode the windows are
  * always recomputed from the range and split; custom mode keeps whatever is entered.
  */
-export function ResearchPeriod({ value, onChange, issues, revisionNote }: Props) {
+export function ResearchPeriod({ value, onChange, issues, revisionNote, lastCompletedSession, endAdvice }: Props) {
   const id = useId();
-  const today = todayIso();
+  // Shortcuts end on the calendar's last completed session when it is known; otherwise on
+  // today's local date, which the end-date coverage check then reports if it is too late.
+  const shortcutEnd = lastCompletedSession ?? todayIso();
   const computed = computeWindows(value.rangeStart, value.rangeEnd, value.split);
   const problem = splitProblem(value.split);
   const customShare = value.mode === "custom" ? splitFromWindows(value.rangeStart, value.rangeEnd, value.windows) : null;
@@ -169,7 +176,30 @@ export function ResearchPeriod({ value, onChange, issues, revisionNote }: Props)
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <DateInput id={`${id}-start`} label="Start date" value={value.rangeStart} onChange={(v) => setRange(v, value.rangeEnd)} messages={issuesFor(issues, "rangeStart")} />
-        <DateInput id={`${id}-end`} label="End date" value={value.rangeEnd} onChange={(v) => setRange(value.rangeStart, v)} messages={issuesFor(issues, "rangeEnd")} />
+        <div>
+          <DateInput id={`${id}-end`} label="End date" value={value.rangeEnd} onChange={(v) => setRange(value.rangeStart, v)} messages={issuesFor(issues, "rangeEnd")} />
+          {endAdvice ? (
+            <div role="status" className="mt-1 rounded border border-amber-900 bg-amber-950/30 px-2 py-1.5 text-xs text-amber-100" data-testid="end-date-advice">
+              <p>
+                Catalog history ends before {value.rangeEnd} for{" "}
+                {endAdvice.affected.map((a, i) => (
+                  <span key={a.ticker}>
+                    {i > 0 ? ", " : ""}
+                    <span className="font-mono">{a.ticker}</span> ({a.catalog_end ?? "no end on record"})
+                  </span>
+                ))}
+                . Readiness will refuse those pairs.
+              </p>
+              {endAdvice.latestCommonEnd ? (
+                <button type="button" onClick={() => setRange(value.rangeStart, endAdvice.latestCommonEnd!)} className="mt-1 rounded border border-amber-700 px-2 py-0.5 text-amber-100 hover:bg-amber-900/40">
+                  Use latest common catalog end ({endAdvice.latestCommonEnd})
+                </button>
+              ) : (
+                <p className="mt-1 text-amber-200/80">No common catalog end is known for the selected assets.</p>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <span className="text-zinc-500">Shortcuts:</span>
@@ -178,7 +208,7 @@ export function ResearchPeriod({ value, onChange, issues, revisionNote }: Props)
             key={shortcut.label}
             type="button"
             onClick={() => {
-              const range = shortcut.compute(today);
+              const range = shortcut.compute(shortcutEnd);
               setRange(range.start, range.end);
             }}
             className="rounded border border-zinc-700 px-2 py-0.5 text-zinc-200 hover:bg-zinc-800"
@@ -186,6 +216,9 @@ export function ResearchPeriod({ value, onChange, issues, revisionNote }: Props)
             {shortcut.label}
           </button>
         ))}
+        <span className="text-zinc-600" data-testid="shortcut-end-note">
+          {lastCompletedSession ? `end on the last completed session (${lastCompletedSession})` : "end on today's date (calendar unavailable; the coverage check reports if that is too late)"}
+        </span>
       </div>
 
       <details className="text-xs text-zinc-500">

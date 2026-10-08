@@ -8,6 +8,7 @@ import { StudyAssistant } from "./StudyAssistant";
 import { EMPTY_WIZARD, StudyWizard, settingsToWizard, wizardBlockers, wizardToSettings, wizardWindows } from "./StudyWizard";
 import { planApplication } from "@/lib/research/proposal";
 import { DEFAULT_SPLIT, computeWindows, todayIso, validatePeriod, yearsBefore } from "@/lib/research/windows";
+import type { StudyPreflight } from "@/lib/research/types";
 import { mergeAssets } from "@/lib/research/assets";
 import type { AssetList, StudyProposal, StudySettings } from "@/lib/research/types";
 
@@ -58,6 +59,10 @@ function Picker({ initialManual = [] as string[], initialList = "", onChange }: 
       lists={[LIST]}
       listsFailure={null}
       maxAssets={25}
+      coverage={{}}
+      coverageLoading={false}
+      findings={null}
+      preflightFailure={null}
     />
   );
 }
@@ -132,7 +137,7 @@ describe("AssetPicker", () => {
     render(<Picker initialManual={["MSFT", "AAPL"]} initialList={LIST.list_id} onChange={(manual, list) => (latest = { manual, list })} />);
     const tags = within(screen.getByRole("list", { name: "Selected assets" })).getAllByRole("listitem");
     // Manual first (as typed order), then the list's extra tickers: exactly `mergeAssets`.
-    expect(tags.map((t) => t.textContent?.replace(/×|list/g, "").trim())).toEqual(mergeAssets(["MSFT", "AAPL"], LIST.tickers));
+    expect(tags.map((t) => t.textContent?.replace(/×|list|coverage unknown|checking…/g, "").trim())).toEqual(mergeAssets(["MSFT", "AAPL"], LIST.tickers));
     expect(tags[2].textContent).toContain("list");
     expect(screen.queryByRole("button", { name: "Remove NVDA" })).toBeNull();
     expect(screen.getByText(/stored exactly as shown/).textContent).toContain("3 asset(s) of up to 25");
@@ -162,6 +167,8 @@ describe("ResearchPeriod", () => {
         }}
         issues={issues}
         revisionNote={null}
+        lastCompletedSession={null}
+        endAdvice={null}
       />
     );
   }
@@ -593,6 +600,7 @@ describe("StudyWizard", () => {
         if (url.includes("/strategies/versions")) return jsonResponse(200, { as_of: "now", count: 0, versions: [] });
         if (url.includes("/job-types")) return jsonResponse(200, { as_of: "now", mutations_enabled: true, job_types: [] });
         if (url.endsWith("/api/v1/research/assistant")) return jsonResponse(200, { as_of: "now", assistant: ASSISTANT_OK });
+        if (url.endsWith("/api/v1/research/studies/preflight")) return jsonResponse(200, { as_of: "now", preflight: PREFLIGHT_EMPTY });
         return jsonResponse(404, { detail: { code: "not_found" } });
       }),
     );
@@ -608,5 +616,180 @@ describe("StudyWizard", () => {
     expect(create.disabled).toBe(true);
     expect(screen.getByRole("list", { name: "Before creating" }).textContent).toContain("Fix the research period.");
     await waitFor(() => expect(screen.getByRole("option", { name: "Mega caps (2)" })).toBeTruthy());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coverage preflight, end-date advice, missing inputs
+// ---------------------------------------------------------------------------
+
+const PREFLIGHT_EMPTY: StudyPreflight = {
+  calendar: { exchange: "XNYS", pinned_start: "2014-01-02", today: "2026-10-08", last_completed_session: "2026-10-07" },
+  assets: [],
+  versions: [],
+  required_start_by_version: {},
+  latest_common_catalog_end: null,
+  errors: [],
+  checked: { strategy_versions: 0, assets: 0, pairs: 0 },
+};
+
+function preflightFor(body: { strategy_version_ids: string[]; assets: string[]; range: { start: string; end: string } | null; development_start: string | null }): StudyPreflight {
+  // Deterministic stand-in for the backend: AAPL covers 2010..2026-10-07, ACQQ only from 2026-08-14, ZZZ unknown.
+  const catalog: Record<string, { start: string; end: string }> = { AAPL: { start: "2010-01-04", end: "2026-10-07" }, ACQQ: { start: "2026-08-14", end: "2026-10-07" }, NVDA: { start: "2010-01-04", end: "2026-10-06" } };
+  const versions = body.strategy_version_ids.map((id) => ({ version_id: id, name: id === "v-trend" ? "Trend following" : "Fast cross", version_no: 1, history_required: id === "v-trend" ? 200 : 10, approved: true }));
+  const errors: StudyPreflight["errors"] = [];
+  const required: Record<string, string | null> = {};
+  for (const ticker of body.assets) {
+    if (!catalog[ticker]) {
+      errors.push({ code: "asset_not_in_catalog", item: ticker });
+      continue;
+    }
+    for (const v of versions) {
+      // Session arithmetic is the backend's job; the stand-in just places required_start before development start.
+      const req = body.development_start ? (v.history_required === 200 ? "2020-12-22" : "2021-09-24") : null;
+      required[v.version_id] = req;
+      if (req && catalog[ticker].start > req) {
+        errors.push({ code: "coverage_start_too_late", item: `${v.version_id}:${ticker}`, required_start: req, catalog_start: catalog[ticker].start });
+      }
+      if (body.range && catalog[ticker].end < body.range.end) {
+        errors.push({ code: "coverage_end_too_early", item: `${v.version_id}:${ticker}`, requested_end: body.range.end, catalog_end: catalog[ticker].end });
+      }
+    }
+  }
+  const ends = body.assets.filter((t) => catalog[t]).map((t) => catalog[t].end).sort();
+  return {
+    ...PREFLIGHT_EMPTY,
+    assets: body.assets.map((t) => ({ ticker: t, in_catalog: Boolean(catalog[t]), name: catalog[t] ? `${t} Inc.` : null, catalog_start: catalog[t]?.start ?? null, catalog_end: catalog[t]?.end ?? null })),
+    versions,
+    required_start_by_version: required,
+    latest_common_catalog_end: ends[0] ?? null,
+    errors,
+    checked: { strategy_versions: versions.length, assets: body.assets.length, pairs: versions.length * body.assets.length },
+  };
+}
+
+function wizardFetch(options: { preflightStatus?: number; lists?: AssetList[] } = {}) {
+  const preflightCalls: unknown[] = [];
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/asset-lists")) return jsonResponse(200, { as_of: "now", count: 1, lists: options.lists ?? [LIST] });
+    if (url.endsWith("/research/catalog")) return jsonResponse(200, { as_of: "now", catalog: { rows_total: 1, rows_named: 1, name_search_note: "", coverage_note: "", last_synced_at: null, max_assets_per_study: 25 } });
+    if (url.includes("/strategies/versions")) {
+      return jsonResponse(200, {
+        as_of: "now",
+        count: 2,
+        versions: [
+          { version_id: "v-trend", strategy_id: "fam-t", version_no: 1, name: "Trend following", spec_sha256: "f".repeat(64), history_required: 200, history_minimum: 200, scale_class: "x", source: "manual", parent_version_id: null, behaviour_differs_from_original: null, approved_at: "2026-10-07T00:00:00Z" },
+          { version_id: "v-fast", strategy_id: "fam-f", version_no: 1, name: "Fast cross", spec_sha256: "e".repeat(64), history_required: 10, history_minimum: 10, scale_class: "x", source: "manual", parent_version_id: null, behaviour_differs_from_original: null, approved_at: "2026-10-07T00:00:00Z" },
+        ],
+      });
+    }
+    if (url.includes("/job-types")) return jsonResponse(200, { as_of: "now", mutations_enabled: true, job_types: [] });
+    if (url.endsWith("/api/v1/research/assistant")) return jsonResponse(200, { as_of: "now", assistant: ASSISTANT_OK });
+    if (url.endsWith("/api/v1/research/studies/preflight") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      preflightCalls.push(body);
+      if (options.preflightStatus && options.preflightStatus !== 200) {
+        return jsonResponse(options.preflightStatus, { detail: { code: "invalid_request", reason: "boom" } });
+      }
+      return jsonResponse(200, { as_of: "now", preflight: preflightFor(body) });
+    }
+    if (url.includes("/catalog/search")) return jsonResponse(200, { as_of: "now", query: "", count: 0, items: [], name_coverage: { rows_named: 1, rows_total: 1 }, name_search_note: "" });
+    return jsonResponse(404, { detail: { code: "not_found" } });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock, preflightCalls };
+}
+
+describe("coverage preflight in the wizard", () => {
+  it("shows per-asset coverage on tags (saved-list assets included), groups findings by asset and cause, and refreshes after date and strategy changes", async () => {
+    const { preflightCalls } = wizardFetch({ lists: [{ ...LIST, tickers: ["ACQQ"] }] });
+    render(<StudyWizard onNavigate={() => {}} />);
+    const input = await screen.findByRole("combobox", { name: /Add assets/ });
+    fireEvent.change(input, { target: { value: "aapl zzz" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // Saved list adds ACQQ as a list tag; it is preflighted like the manual ones.
+    const listSelect = await screen.findByRole("combobox", { name: /Saved list/ });
+    await waitFor(() => expect(screen.getByRole("option", { name: "Mega caps (1)" })).toBeTruthy());
+    fireEvent.change(listSelect, { target: { value: LIST.list_id } });
+    fireEvent.click(screen.getByLabelText(/Trend following v1/));
+    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2021-10-08" } });
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2026-10-08" } });
+    await waitFor(() => expect(screen.getByTestId("coverage-AAPL").textContent).toContain("ends 2026-10-07"), { timeout: 3000 });
+    expect(screen.getByTestId("coverage-ZZZ").textContent).toContain("not in catalog");
+    expect(screen.getByTestId("coverage-ACQQ").textContent).toContain("starts 2026-08-14");
+    const lastCall = preflightCalls.at(-1) as { assets: string[]; strategy_version_ids: string[]; development_start: string };
+    expect(lastCall.assets).toEqual(["AAPL", "ZZZ", "ACQQ"]);
+    expect(lastCall.strategy_version_ids).toEqual(["v-trend"]);
+    expect(lastCall.development_start).toBe("2021-10-08");
+    // Grouped: one entry per asset, one line per cause, versions expandable; not one line per pair.
+    const findings = within(screen.getByTestId("coverage-findings"));
+    expect(findings.getByText("Coverage findings: 3 asset(s) (3 strategy/asset pair checks)")).toBeTruthy();
+    expect(findings.getAllByText(/History ends 2026-10-07, before the requested end 2026-10-08/)).toHaveLength(2);
+    expect(findings.getByText(/History starts 2026-08-14, after the warm-up this version needs \(earliest required 2020-12-22\)/)).toBeTruthy();
+    expect(findings.getByText("Not in the catalog.")).toBeTruthy();
+    expect(findings.getAllByText("1 version(s)")).toHaveLength(3);
+    expect(findings.getByText(/Trend following v1 — requires history from 2020-12-22/)).toBeTruthy();
+    // End-date advice names the affected assets and offers the explicit alternative; nothing is changed silently.
+    const advice = within(screen.getByTestId("end-date-advice"));
+    expect(advice.getByText(/Catalog history ends before 2026-10-08 for/).textContent).toContain("AAPL (2026-10-07), ACQQ (2026-10-07)");
+    expect((screen.getByLabelText("End date") as HTMLInputElement).value).toBe("2026-10-08");
+    fireEvent.click(advice.getByRole("button", { name: "Use latest common catalog end (2026-10-07)" }));
+    expect((screen.getByLabelText("End date") as HTMLInputElement).value).toBe("2026-10-07");
+    await waitFor(() => expect(screen.queryByTestId("end-date-advice")).toBeNull(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByTestId("coverage-AAPL").textContent).toContain("covers period"), { timeout: 3000 });
+    // Changing the strategy re-runs the check: the fast version needs less warm-up, so ACQQ's start finding changes.
+    fireEvent.click(screen.getByLabelText(/Trend following v1/));
+    fireEvent.click(screen.getByLabelText(/Fast cross v1/));
+    await waitFor(() => expect((preflightCalls.at(-1) as { strategy_version_ids: string[] }).strategy_version_ids).toEqual(["v-fast"]), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText(/earliest required 2021-09-24/)).toBeTruthy(), { timeout: 3000 });
+    // Shortcuts end on the calendar's last completed session, not on today.
+    expect(screen.getByTestId("shortcut-end-note").textContent).toContain("2026-10-07");
+    fireEvent.click(screen.getByRole("button", { name: "Last 5 years" }));
+    expect((screen.getByLabelText("End date") as HTMLInputElement).value).toBe("2026-10-07");
+    expect((screen.getByLabelText("Start date") as HTMLInputElement).value).toBe("2021-10-07");
+  });
+
+  it("treats a failed preflight as unknown coverage and still allows creation", async () => {
+    wizardFetch({ preflightStatus: 500 });
+    render(<StudyWizard onNavigate={() => {}} />);
+    const input = await screen.findByRole("combobox", { name: /Add assets/ });
+    fireEvent.change(input, { target: { value: "aapl" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText(/Coverage check unavailable/).textContent).toContain("Every ticker is treated as unknown coverage"), { timeout: 3000 });
+    expect(screen.getByTestId("coverage-AAPL").textContent).toContain("coverage unknown");
+    expect(screen.getByTestId("shortcut-end-note").textContent).toContain("calendar unavailable");
+  });
+
+  it("warns beside empty costs and the objective's constraint and summarises near Create without blocking; zero counts as entered", async () => {
+    wizardFetch();
+    render(<StudyWizard onNavigate={() => {}} />);
+    await screen.findByRole("combobox", { name: /Add assets/ });
+    expect(screen.getByText(/the revision will report costs_missing until it is\./)).toBeTruthy();
+    expect(screen.getByText(/constraint_missing until the drawdown cap is set/)).toBeTruthy();
+    // Blockers first (name, versions, assets, period); the not-ready summary appears once creation is possible.
+    expect(screen.queryByTestId("not-ready-summary")).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Study name/), { target: { value: "s" } });
+    fireEvent.click(screen.getByLabelText(/Fast cross v1/));
+    const input = screen.getByRole("combobox", { name: /Add assets/ });
+    fireEvent.change(input, { target: { value: "aapl" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2018-01-01" } });
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2025-12-31" } });
+    const summary = screen.getByTestId("not-ready-summary");
+    expect(summary.textContent).toContain("This revision can be created, but will not be ready to run.");
+    expect(summary.textContent).toContain("Costs: slippage and commission not entered");
+    expect(summary.textContent).toContain("Max drawdown cap");
+    expect((screen.getByRole("button", { name: "Create study (revision 1)" }) as HTMLButtonElement).disabled).toBe(false);
+    // Zero costs are values; risk-first switches the constraint wording.
+    fireEvent.change(screen.getByLabelText(/Slippage, bps per side/), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText(/Commission per order/), { target: { value: "0" } });
+    expect(screen.queryByText(/report costs_missing/)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Objective/), { target: { value: "risk_first" } });
+    expect(screen.getByText(/constraint_missing until the CAGR floor is set/)).toBeTruthy();
+    expect(screen.getByTestId("not-ready-summary").textContent).toContain("CAGR floor");
+    fireEvent.change(screen.getByLabelText(/CAGR floor/), { target: { value: "0.05" } });
+    expect(screen.queryByTestId("not-ready-summary")).toBeNull();
+    expect((vi.mocked(fetch).mock.calls as unknown[][]).filter((c) => String(c[0]).endsWith("/api/v1/research/studies"))).toHaveLength(0);
   });
 });

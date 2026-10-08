@@ -90,6 +90,33 @@ async def create_study(request: Request, service: Service) -> JSONResponse:
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=created)
 
 
+@studies_router.post("/preflight")
+async def preflight_study(request: Request, service: Service) -> dict[str, Any]:
+    """Read-only coverage / warm-up check for the study wizard: the readiness logic on a
+    partly filled form. Nothing is written, so no ``require_mutations_enabled``."""
+
+    body = await _read_body(request, {"strategy_version_ids", "assets", "range", "development_start"})
+    version_ids = body.get("strategy_version_ids") or []
+    assets = body.get("assets") or []
+    window = body.get("range")
+    if not isinstance(version_ids, list) or not isinstance(assets, list):
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_request", reason="ids_or_assets_not_list")
+    if window is not None and (not isinstance(window, dict) or not set(window).issubset({"start", "end"})):
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_request", reason="range_malformed")
+    window = window or {}
+    try:
+        verdict = service.preflight(
+            strategy_version_ids=version_ids,
+            assets=assets,
+            range_start=window.get("start"),
+            range_end=window.get("end"),
+            development_start=body.get("development_start"),
+        )
+    except (StudyError, InputsChangedAfterFreezeError) as exc:
+        raise _translate(exc) from exc
+    return {"as_of": _as_of(), "preflight": verdict}
+
+
 @studies_router.get("/{study_id}")
 def get_study(study_id: str, service: Service) -> dict[str, Any]:
     try:

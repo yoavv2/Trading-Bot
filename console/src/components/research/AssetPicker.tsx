@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { fetchApi } from "@/lib/api";
 import type { AssetList, CatalogEntry, CatalogSearch } from "@/lib/research/types";
 import { assetTags, looksLikeMultiple, normalizeTicker, parseTickers } from "@/lib/research/assets";
+import { coverageBadge, type AssetCoverage, type Grouped } from "@/lib/research/preflight";
 
 const FIELD = "mt-1 block w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100";
 const SEARCH_LIMIT = 20;
@@ -23,7 +24,98 @@ type Props = {
   lists: AssetList[] | null;
   listsFailure: string | null;
   maxAssets: number | null;
+  /** Per-ticker coverage from the last preflight; a ticker missing here is unknown. */
+  coverage: Record<string, AssetCoverage>;
+  coverageLoading: boolean;
+  findings: Grouped | null;
+  preflightFailure: string | null;
 };
+
+const BADGE_TONE = { ok: "text-emerald-300", warn: "text-amber-300", unknown: "text-zinc-500" } as const;
+
+function CoverageBadge({ ticker, coverage, loading }: { ticker: string; coverage: AssetCoverage | undefined; loading: boolean }) {
+  if (!coverage || (loading && coverage.status.kind === "unknown")) {
+    return (
+      <span className="font-sans text-[10px] text-zinc-500" title="Coverage is being checked against the catalog">
+        {loading ? "checking…" : "coverage unknown"}
+      </span>
+    );
+  }
+  const badge = coverageBadge(coverage.status);
+  const status = coverage.status;
+  const title =
+    status.kind === "ok" || status.kind === "problem"
+      ? `${ticker}${coverage.name ? ` · ${coverage.name}` : ""}: catalog ${status.catalog_start ?? "—"} → ${status.catalog_end ?? "—"}`
+      : status.kind === "unknown"
+        ? `${ticker}: ${status.reason}`
+        : `${ticker}: not in the catalog; readiness will refuse it`;
+  return (
+    <span className={`font-sans text-[10px] ${BADGE_TONE[badge.tone]}`} title={title} data-testid={`coverage-${ticker}`}>
+      {badge.tone === "ok" ? "✓ " : badge.tone === "warn" ? "⚠ " : "? "}
+      {badge.text}
+    </span>
+  );
+}
+
+/** Findings grouped by asset and cause; the affected versions open on demand. */
+function CoverageFindings({ findings, failure }: { findings: Grouped | null; failure: string | null }) {
+  if (failure) {
+    return (
+      <p role="status" className="text-xs text-amber-200">
+        Coverage check unavailable: {failure}. Every ticker is treated as unknown coverage; readiness will check again after creation.
+      </p>
+    );
+  }
+  if (!findings || (findings.byAsset.length === 0 && findings.general.length === 0)) {
+    return null;
+  }
+  return (
+    <details className="rounded border border-amber-900 bg-amber-950/30 px-3 py-2 text-xs text-amber-100" data-testid="coverage-findings" open>
+      <summary className="cursor-pointer font-semibold">
+        Coverage findings: {findings.byAsset.length} asset(s){findings.pairErrors > 0 ? ` (${findings.pairErrors} strategy/asset pair checks)` : ""}
+        {findings.general.length > 0 ? `, ${findings.general.length} general` : ""}
+      </summary>
+      <ul className="mt-2 space-y-2">
+        {findings.byAsset.map((asset) => (
+          <li key={asset.ticker}>
+            <p>
+              <span className="font-mono text-amber-200">{asset.ticker}</span>
+              {asset.name ? <span className="text-amber-200/70"> {asset.name}</span> : null}
+              {asset.catalog_start || asset.catalog_end ? <span className="text-amber-200/70"> · catalog {asset.catalog_start ?? "—"} → {asset.catalog_end ?? "—"}</span> : null}
+            </p>
+            <ul className="ml-4 list-disc space-y-1">
+              {asset.causes.map((cause) => (
+                <li key={cause.code}>
+                  <span className="font-mono text-[10px] text-amber-300">{cause.code}</span> {cause.summary}
+                  {cause.versions.length > 0 ? (
+                    <details className="ml-2 inline">
+                      <summary className="inline cursor-pointer text-amber-300 underline">
+                        {cause.versions.length} version(s)
+                      </summary>
+                      <ul className="ml-4 list-square text-amber-100/90">
+                        {cause.versions.map((v) => (
+                          <li key={v.version_id}>
+                            {v.label}
+                            {v.detail ? ` — ${v.detail}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+        {findings.general.map((error, index) => (
+          <li key={`${error.code}-${index}`}>
+            <span className="font-mono text-[10px] text-amber-300">{error.code}</span> {error.item}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
 
 /**
  * Accessible multi-select combobox over the catalog (`/catalog/search`: ticker prefix or
@@ -34,7 +126,7 @@ type Props = {
  * as the backend builds it (manual first, then the list, de-duplicated), so they cannot be
  * removed one by one without detaching the list, which never edits the saved list itself.
  */
-export function AssetPicker({ manual, onManualChange, listId, onListChange, lists, listsFailure, maxAssets }: Props) {
+export function AssetPicker({ manual, onManualChange, listId, onListChange, lists, listsFailure, maxAssets, coverage, coverageLoading, findings, preflightFailure }: Props) {
   const id = useId();
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
@@ -204,6 +296,7 @@ export function AssetPicker({ manual, onManualChange, listId, onListChange, list
             className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-xs ${tag.source === "list" ? "border-violet-800 bg-violet-950/40 text-violet-100" : "border-cyan-800 bg-cyan-950/40 text-cyan-100"}`}
           >
             {tag.ticker}
+            <CoverageBadge ticker={tag.ticker} coverage={coverage[tag.ticker]} loading={coverageLoading} />
             {tag.source === "list" ? (
               <span className="font-sans text-[10px] uppercase text-violet-300" title={`From saved list ${selectedList?.name ?? ""}`}>
                 list
@@ -318,6 +411,7 @@ export function AssetPicker({ manual, onManualChange, listId, onListChange, list
           .
         </p>
       ) : null}
+      <CoverageFindings findings={findings} failure={preflightFailure} />
       <p className="text-xs text-zinc-500">
         {all.length} asset(s){maxAssets !== null ? ` of up to ${maxAssets}` : ""}, stored exactly as shown.
         {overLimit ? <span className="text-amber-200"> Over the per-study limit; readiness will refuse the run until trimmed.</span> : null}

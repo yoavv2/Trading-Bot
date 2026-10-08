@@ -47,8 +47,19 @@ research start command instead of rendering empty panels.
    not a methodology — a three-colour timeline of the computed windows, and
    **Customize periods** for the six window dates with the backend's ordering
    rules checked beside each control); capital, quantity policy, costs,
-   objective and constraint (required, never pre-filled). A new revision keeps
-   the stored dates to the day (custom periods preserved). An optional
+   objective and constraint (required, never pre-filled). While you fill it in,
+   a read-only preflight (`POST /api/v1/research/studies/preflight`, the same
+   coverage and warm-up logic as readiness, nothing created) marks every tag
+   with its catalog coverage (covers period / starts … / ends … / not in
+   catalog / unknown when the check failed), groups findings by asset and
+   cause with the affected versions on demand, and, when the end date is past
+   an asset's catalog end, names the assets and offers "Use latest common
+   catalog end" (never applied silently). Period shortcuts end on the
+   exchange calendar's last completed session. Empty costs and the
+   objective's constraint are flagged beside the inputs and summarised near
+   Create as "can be created, but will not be ready to run" (zero is a
+   value). A new revision keeps the stored dates to the day (custom periods
+   preserved). An optional
    **Describe your study** assistant proposes settings for review; **Apply to
    form** fills the wizard and creation stays the wizard's own button. The
    readiness panel lists every blocking item; **Run** submits the Job graph.
