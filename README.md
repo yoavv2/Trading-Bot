@@ -4,12 +4,18 @@ Strategy Research is a local, single-user application for writing daily,
 long-only trading strategies, testing them on historical U.S. stock and ETF
 data, and comparing the evidence per asset. It replaced the earlier
 automated-trading / operator-console direction of this repository on
-2026-10-06 (`.planning/research/strategy-research-pivot/`). The trading
+2026-10-06. The trading
 backend (paper execution, reconciliation, broker code, migrations 0022–0030)
 stays in the repository, frozen; it is not part of the product UI.
 
 This is a research tool. It does not place orders, does not contact a broker,
 and makes no claim that a strategy will perform in the future.
+
+> **No user interface at the moment.** The Next.js console was removed on
+> 2026-11-19 ahead of a new UI; the product is reachable through the API only.
+> Sections below that describe pages or screens describe the removed console.
+> The planning history (`.planning/`) was removed the same day; both remain in
+> git history.
 
 ## What the product does today
 
@@ -18,7 +24,7 @@ and makes no claim that a strategy will perform in the future.
   `highest`, `lowest`, `lag`, `change_pct`, comparison and crossing operators,
   `all_of` / `any_of` groups. Validation runs on every change with closed error
   codes; a deterministic plain-language explanation is rendered from the
-  specification itself. Contract: `.planning/research/strategy-research-pivot/02-STRATEGY-SPEC-V1.md`.
+  specification itself. Contract: `docs/STRATEGY-SPEC-V1.md`.
 - **Draft with an assistant** (optional): describe an idea or ask for a
   correction; the assistant returns a candidate specification, an
   `unsupported_requests` list and a note. The same validator and explanation
@@ -64,7 +70,6 @@ Scope and limitations are listed at the end of this file.
 ## Stack
 
 - Python 3.12+, FastAPI, SQLAlchemy, Alembic, PostgreSQL 16
-- Next.js console (`console/`, Node.js 22+)
 - Tiingo for daily bars (header authentication; personal-use license)
 - Anthropic Python SDK for the optional assistant
 
@@ -76,7 +81,7 @@ Scope and limitations are listed at the end of this file.
 ├── config/
 │   ├── app.yaml                # Base application/runtime config
 │   └── strategies/*.yaml       # The four original Python strategies (parity oracles)
-├── console/                    # Next.js console: Strategies, Assets, Studies, Jobs
+├── docs/STRATEGY-SPEC-V1.md    # Strategy specification contract
 ├── scripts/
 │   ├── bootstrap_research.py   # make research-bootstrap
 │   ├── create_research_db.py   # Create + migrate the research database (refuses the trading name)
@@ -91,14 +96,13 @@ Scope and limitations are listed at the end of this file.
 │   ├── strategies/declarative.py              # The one interpreter for approved versions
 │   └── services/, worker/, ...  # Trading backend (frozen)
 ├── tests/                      # tests/test_research_*.py cover the research product
-├── docker-compose.yml, Dockerfile, Makefile, pyproject.toml
-└── .planning/                  # Project state, roadmap, requirements, research documents
+└── docker-compose.yml, Dockerfile, Makefile, pyproject.toml
 ```
 
 ## Quick start
 
-There is one supported way to run the product locally: the research API, the
-Job worker and the console as host processes, started together by `make dev`,
+There is one supported way to run the product locally: the research API and
+the Job worker as host processes, started together by `make dev`,
 against the PostgreSQL database `trading_research` on `localhost:5432` (for
 example a native Homebrew PostgreSQL).
 
@@ -120,8 +124,6 @@ example a native Homebrew PostgreSQL).
    python3.12 -m venv .venv
    .venv/bin/pip install --upgrade pip
    .venv/bin/pip install -e '.[dev]'
-   make console-install
-   cp console/.env.example console/.env.local
    ```
 
 3. With PostgreSQL running on `localhost:5432`, prepare the research database
@@ -163,12 +165,9 @@ processes in one group (`Ctrl-C` stops all of them):
   registry contains exactly `catalog-sync`, `ingest-tiingo-bars`,
   `sync-market-sessions`, `research-freeze`, `research-backtest`,
   `research-evaluate`; no trading Job type can be submitted.
-- **Console** on `http://localhost:3000`. Legacy operator-console URLs
-  (`/`, `/strategy`, `/runs`, `/paper`, `/controls`) redirect permanently to
-  the research pages.
 
-Changes to `config/` or `.env` need a `make dev` restart. `make api`,
-`make worker` and `make console` run one piece in the foreground (API and
+Changes to `config/` or `.env` need a `make dev` restart. `make api`
+and `make worker` run one piece in the foreground (API and
 worker in research mode; `make api` reads `mutations_enabled` from `.env`
 like any deployment, so mutating routes return `403 mutations_disabled`
 unless enabled there).
@@ -247,19 +246,17 @@ TRADING_PLATFORM_RESEARCH__AI__MAX_OUTPUT_TOKENS=4096  # your choice; passed as 
 
 ```bash
 make research-bootstrap  # Prepare trading_research (migrate, examples, catalog, sessions); idempotent
-make dev                 # Research API + worker + console (the product)
+make dev                 # Research API + worker (the product backend)
 make api                 # Research API only, with --reload
 make worker              # Research Job worker only, restarted on code changes
-make console             # Console only
-make console-install     # npm install for the console
 make test                # A focused subset of the Python suite (six trading test files); see Testing
-make dev-trading         # Frozen trading stack (API + worker + console) against the .env database
+make dev-trading         # Frozen trading stack (API + worker) against the .env database
 make migrate / make seed # Trading-database tooling (frozen)
 make up / down / logs    # Alternative Compose stack (stack profile); never alongside make dev
 ```
 
 Long-running work (catalog sync, ingestion, freeze, backtests, evaluation)
-runs as Jobs submitted by the studies or from the console's `/jobs/new` page.
+runs as Jobs submitted by the studies or through the Jobs API.
 Authoring writes (drafts, versions, asset lists, study definitions, freezes)
 are synchronous HTTP writes on the research database.
 
@@ -299,8 +296,7 @@ comments.
 
 The research product is covered by `tests/test_research_*.py` (foundation,
 API isolation, strategies API, data pipeline, studies pipeline, engine
-metrics, budget, console contract, bootstrap, assistant, assistant converter)
-and by the console's vitest suite (`cd console && npm test`). Most Python
+metrics, budget, bootstrap, assistant, assistant converter). Most Python
 tests need a reachable PostgreSQL on the configured host/port and create
 throwaway migrated databases.
 
@@ -369,20 +365,17 @@ Remaining limitations of the implemented increment:
   portfolio mode UI, the visual rule builder, Python authoring, parameter
   search, walk-forward, cost sweeps, whole-market scanning. Order of the next
   agreed increments: Pine export and equivalence → visual builder → portfolio
-  mode (`.planning/ROADMAP.md`). None is authorized for implementation by this
+  mode. None is authorized for implementation by this
   document.
 
 ## Frozen trading backend
 
-`make dev-trading` starts the former operator stack (trading-mode API, worker
-and console) against the database named in `.env`. Its pages are no longer
-served by the console; only its API and the generic Jobs pages remain. Phase
+`make dev-trading` starts the former operator stack (trading-mode API and
+worker) against the database named in `.env`. Only its API remains. Phase
 20.1 (operator-state correctness) is incomplete with open verification
-findings, and Phase 21 was never started; see `.planning/ROADMAP.md`
-"Historical / frozen". The break-glass kill-switch trip
+findings, and Phase 21 was never started. The break-glass kill-switch trip
 (`python -m trading_platform.worker kill-switch-trip --reason ...`) still
-exists for that stack (decision D-15 in
-`.planning/phases/20-complete-operation-migration-safety-controls/20-CONTEXT.md`).
+exists for that stack.
 
 ### Alternative: Docker Compose stack (trading-era)
 
