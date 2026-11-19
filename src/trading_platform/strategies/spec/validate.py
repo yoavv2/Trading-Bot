@@ -32,12 +32,15 @@ from trading_platform.strategies.spec.schema import (
     PERIOD_TYPES,
     RECURSIVE_TYPES,
     SERIES_NAMES,
+    SUPPORTED_SPEC_VERSIONS,
     WINDOW_TYPES,
     Condition,
     ConditionGroup,
     IndicatorSpec,
     StrategySpec,
+    StrategySpecV2,
 )
+from trading_platform.strategies.trade_rules import RiskPlan
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
@@ -127,6 +130,11 @@ class CompiledSpec:
     spec_sha256: str
     pine_equivalent_available: bool = True
     leaves: tuple[Leaf, ...] = field(default_factory=tuple)
+    risk: RiskPlan | None = None  # None for a v1 document
+
+    @property
+    def spec_version(self) -> int:
+        return self.spec.spec_version
 
 
 # ---------------------------------------------------------------------------
@@ -134,17 +142,27 @@ class CompiledSpec:
 # ---------------------------------------------------------------------------
 
 
+def _is_v2(raw: Any) -> bool:
+    version = raw.get("spec_version") if isinstance(raw, dict) else None
+    return isinstance(version, int) and not isinstance(version, bool) and version == 2
+
+
 def _precheck(raw: Any) -> list[SpecError]:
     errors: list[SpecError] = []
     if not isinstance(raw, dict):
         return [SpecError(SpecErrorCode.INVALID_TYPE, "", "specification must be a mapping")]
+    v2 = _is_v2(raw)
     for key in raw:
+        if v2 and key == "risk":
+            continue  # the v2 risk block; its shape is checked by the schema
         if key in STOP_TARGET_KEYS:
             errors.append(
                 SpecError(
                     SpecErrorCode.STOP_OR_TARGET_PRICE_NOT_SUPPORTED,
                     key,
-                    "intrabar stop/target prices are not supported in v1; express exits on the close",
+                    "a stop and a target are declared in the v2 risk block (risk.stop, risk.target)"
+                    if v2
+                    else "intrabar stop/target prices are not supported in v1; express exits on the close",
                 )
             )
         elif key in SIZING_KEYS:
@@ -162,7 +180,7 @@ def _precheck(raw: Any) -> list[SpecError]:
     if direction is not None and direction != "long_only":
         errors.append(SpecError(SpecErrorCode.DIRECTION_NOT_SUPPORTED, "direction", f"{direction!r} is not supported"))
     version = raw.get("spec_version")
-    if version is not None and version != 1:
+    if version is not None and version not in SUPPORTED_SPEC_VERSIONS:
         errors.append(SpecError(SpecErrorCode.SPEC_VERSION_UNSUPPORTED, "spec_version", f"{version!r} is not supported"))
     indicators = raw.get("indicators")
     if isinstance(indicators, dict):
@@ -220,6 +238,24 @@ def _map_pydantic(exc: ValidationError) -> list[SpecError]:
         loc = ".".join(str(part) for part in item["loc"])
         etype = item["type"]
         last = str(item["loc"][-1]) if item["loc"] else ""
+        if etype == "literal_error" and loc == "risk.stop.type":
+            errors.append(
+                SpecError(
+                    SpecErrorCode.STOP_TYPE_NOT_SUPPORTED,
+                    loc,
+                    "the only supported stop is {type: percent}; ATR, indicator and trailing stops are not supported",
+                )
+            )
+            continue
+        if etype == "literal_error" and loc == "risk.target.type":
+            errors.append(
+                SpecError(
+                    SpecErrorCode.TARGET_TYPE_NOT_SUPPORTED,
+                    loc,
+                    "the only supported target is {type: risk_multiple}",
+                )
+            )
+            continue
         if etype == "extra_forbidden":
             code = SpecErrorCode.UNKNOWN_FIELD
         elif etype == "missing":
@@ -415,8 +451,9 @@ def validate_spec(raw: Any) -> CompiledSpec:
     errors = _precheck(raw)
     if errors and any(e.code == SpecErrorCode.INVALID_TYPE and e.path == "" for e in errors):
         raise SpecValidationError(errors)
+    model = StrategySpecV2 if _is_v2(raw) else StrategySpec
     try:
-        spec = StrategySpec.model_validate(raw)
+        spec = model.model_validate(raw)
     except ValidationError as exc:
         raise SpecValidationError(errors + _map_pydantic(exc)) from None
 
@@ -468,6 +505,15 @@ def validate_spec(raw: Any) -> CompiledSpec:
         canonical_json=canonical_text,
         spec_sha256=digest,
         leaves=tuple(leaves),
+        risk=(
+            RiskPlan(
+                stop_percent=spec.risk.stop.value,
+                target_risk_multiple=spec.risk.target.value,
+                min_reward_risk=spec.risk.min_reward_risk,
+            )
+            if isinstance(spec, StrategySpecV2)
+            else None
+        ),
     )
 
 

@@ -726,6 +726,7 @@ _WORKER_ROOT = _ROOT / "src/trading_platform/worker"
 _MAKEFILE = _ROOT / "Makefile"
 
 _SCRIPT_EXEMPTIONS: dict[str, str] = {
+    "run_signals_v2_study.py": "Step 1 research study runner, pending the Step 2 study Job",
     "migrate.py": "deployment tooling (schema migrations)",
     "seed_phase1.py": "deployment tooling (strategy catalog seed)",
     "create_research_db.py": (
@@ -773,6 +774,7 @@ _KEPT_MAKE_TARGETS = {
     "research-bootstrap",
 }
 _SCRIPT_TOP_LEVEL_DEFS: dict[str, set[str]] = {
+    "run_signals_v2_study.py": {"main"},
     "migrate.py": {"build_alembic_config", "build_parser", "main"},
     "create_research_db.py": {
         "build_parser",
@@ -789,6 +791,7 @@ _SCRIPT_TOP_LEVEL_DEFS: dict[str, set[str]] = {
     "report_strategy_analytics.py": {"build_parser", "main"},
 }
 _MUTATING_ENTRY_POINTS = {
+    "run_signal_study",
     "run_backtest",
     "run_risk_evaluation",
     "run_paper_session",
@@ -841,6 +844,7 @@ _MUTATING_ENTRY_POINTS = {
     "run_dry_bootstrap",
 }
 _ALLOWED_MUTATING_CALLS = {
+    ("scripts/run_signals_v2_study.py", "run_signal_study"),
     ("src/trading_platform/worker/commands/operator.py", "trip_kill_switch"),
 }
 

@@ -1,4 +1,4 @@
-"""Pydantic shape of the strategy specification v1 (contract §2–§4).
+"""Pydantic shape of the strategy specification (v1 contract §2–§4; v2 adds ``risk``).
 
 Shape only. Semantic validation (references, units, history minimums, bounds that
 depend on other fields, derived values) lives in ``validate.py``.
@@ -32,6 +32,9 @@ MAX_HISTORY = 1000
 MAX_SHIFT = 20
 MAX_NAME = 80
 MAX_DESCRIPTION = 2000
+MAX_STOP_PERCENT = 50
+MAX_TARGET_RISK_MULTIPLE = 20
+MAX_MIN_REWARD_RISK = 20
 
 
 class IndicatorSpec(BaseModel):
@@ -98,5 +101,62 @@ class StrategySpec(BaseModel):
     exit: ConditionNode
 
 
+def _normalized_number(value: object) -> object:
+    """Numbers and numeric strings become one canonical Decimal; anything else is left
+    for pydantic to reject (a bool is not a number here)."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return normalize_constant(Decimal(str(value)))
+    if isinstance(value, Decimal):
+        return normalize_constant(value)
+    if isinstance(value, str) and _NUMBER.match(value.strip()):
+        return normalize_constant(Decimal(value.strip()))
+    return value
+
+
+class StopSpec(BaseModel):
+    """Stop distance. v2 supports one type: a percent below the reference price."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["percent"]
+    value: Decimal = Field(gt=0, le=MAX_STOP_PERCENT)
+
+    _normalize = field_validator("value", mode="before")(_normalized_number)
+
+
+class TargetSpec(BaseModel):
+    """Target distance. v2 supports one type: a multiple of the planned risk."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["risk_multiple"]
+    value: Decimal = Field(gt=0, le=MAX_TARGET_RISK_MULTIPLE)
+
+    _normalize = field_validator("value", mode="before")(_normalized_number)
+
+
+class RiskSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stop: StopSpec
+    target: TargetSpec
+    min_reward_risk: Decimal = Field(ge=0, le=MAX_MIN_REWARD_RISK)
+
+    _normalize = field_validator("min_reward_risk", mode="before")(_normalized_number)
+
+
+class StrategySpecV2(StrategySpec):
+    """v1 plus a required ``risk`` block. Long only; one asset; daily bars."""
+
+    spec_version: Literal[2]  # type: ignore[assignment]
+    risk: RiskSpec
+
+
+SUPPORTED_SPEC_VERSIONS: frozenset[int] = frozenset({1, 2})
+
 ConditionGroup.model_rebuild()
 StrategySpec.model_rebuild()
+StrategySpecV2.model_rebuild()

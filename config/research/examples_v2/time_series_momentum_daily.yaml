@@ -1,0 +1,22 @@
+spec_version: 2
+name: Time-series momentum 252, stop 5% and target 2R (example)
+description: >-
+  Example translated from the original time_series_momentum_daily strategy. Long when the close
+  is above the close 252 sessions earlier; otherwise exit (the original emits EXIT whenever it is
+  not LONG).
+  The entry and exit rules are those of the v1 example, unchanged; this version adds the
+  base risk block used by the first signals study.
+timeframe: daily
+direction: long_only
+indicators:
+  lookback_close: {type: lag, source: close, periods: 252}
+entry:
+  all_of:
+    - {left: close, op: gt, right: lookback_close}
+exit:
+  any_of:
+    - {left: close, op: le, right: lookback_close}
+risk:
+  stop: {type: percent, value: 5}
+  target: {type: risk_multiple, value: 2}
+  min_reward_risk: 1.5
