@@ -55,6 +55,7 @@ RESEARCH_ROUTES = {
     ("POST", "/api/v1/research/strategies/versions/{version_id}/duplicate"),
     ("GET", "/api/v1/research/studies"),
     ("POST", "/api/v1/research/studies"),
+    ("POST", "/api/v1/research/studies/preflight"),
     ("GET", "/api/v1/research/studies/{study_id}"),
     ("POST", "/api/v1/research/studies/{study_id}/revisions"),
     ("GET", "/api/v1/research/revisions/{revision_id}"),
@@ -82,15 +83,17 @@ RESEARCH_ROUTES = {
     ("GET", "/api/v1/research/assistant/proposals/{ai_draft_id}"),
     ("POST", "/api/v1/research/assistant/proposals"),
     ("POST", "/api/v1/research/assistant/proposals/{ai_draft_id}/apply"),
+    ("POST", "/api/v1/research/assistant/study-proposals"),
+}
+
+#: The research POSTs that write nothing (editor validation, study-form preflight).
+RESEARCH_READ_ONLY_POSTS = {
+    ("POST", "/api/v1/research/strategies/validate"),
+    ("POST", "/api/v1/research/studies/preflight"),
 }
 
 #: The research writes; every one carries ``require_mutations_enabled``.
-RESEARCH_MUTATING_ROUTES = {(m, p) for m, p in RESEARCH_ROUTES if m != "GET"} - {
-    ("POST", "/api/v1/research/strategies/validate")
-}
-
-#: The one research POST that writes nothing (validates submitted text for the editor).
-RESEARCH_READ_ONLY_POSTS = {("POST", "/api/v1/research/strategies/validate")}
+RESEARCH_MUTATING_ROUTES = {(m, p) for m, p in RESEARCH_ROUTES if m != "GET"} - RESEARCH_READ_ONLY_POSTS
 
 TRADING_MUTATING_ROUTES = {
     ("POST", "/api/v1/jobs"),
