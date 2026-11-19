@@ -7,6 +7,8 @@ returns the proposal (valid, or invalid after the single automatic retry); termi
 failures (timeout, refusal, provider errors, exhausted allowance) answer with closed codes
 and the provenance row id. ``POST /assistant/proposals/{id}/apply`` is the explicit action
 that writes the proposal into a draft; approval stays ``POST .../drafts/{id}/approve``.
+``POST /assistant/study-proposals`` proposes Study settings (nothing is stored but the
+usage ledger); the console applies them to the study form.
 
 Error bodies are ``{"detail": {"code": ...}}`` objects, like every research route.
 """
@@ -30,6 +32,7 @@ from trading_platform.services.research.assistant import (
     CODE_INVALID_INPUT,
     CODE_NOT_APPLICABLE,
     CODE_NOT_CONFIGURED,
+    CODE_OUTPUT_INVALID,
     CODE_OUTPUT_TRUNCATED,
     CODE_PROVIDER_ERROR,
     CODE_PROVIDER_UNAVAILABLE,
@@ -42,6 +45,7 @@ from trading_platform.services.research.assistant import (
     ResearchAssistantService,
 )
 from trading_platform.services.research.strategies import DraftNotFoundError
+from trading_platform.services.research.study_assistant import StudyAssistantService
 
 router = APIRouter(prefix="/api/v1/research/assistant", tags=["research-assistant"])
 
@@ -53,7 +57,15 @@ def get_research_assistant_service(request: Request) -> ResearchAssistantService
     return ResearchAssistantService(get_settings(request))
 
 
+def get_study_assistant_service(request: Request) -> StudyAssistantService:
+    override = getattr(request.app.state, "study_assistant_service", None)
+    if override is not None:
+        return override
+    return StudyAssistantService(get_settings(request))
+
+
 Service = Annotated[ResearchAssistantService, Depends(get_research_assistant_service)]
+StudyService = Annotated[StudyAssistantService, Depends(get_study_assistant_service)]
 
 _HTTP_STATUS = {
     CODE_DISABLED: status.HTTP_409_CONFLICT,
@@ -65,6 +77,7 @@ _HTTP_STATUS = {
     CODE_BUSY: status.HTTP_409_CONFLICT,
     CODE_TIMEOUT: status.HTTP_504_GATEWAY_TIMEOUT,
     CODE_REFUSED: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    CODE_OUTPUT_INVALID: status.HTTP_422_UNPROCESSABLE_CONTENT,
     CODE_OUTPUT_TRUNCATED: status.HTTP_422_UNPROCESSABLE_CONTENT,
     CODE_PROVIDER_ERROR: status.HTTP_502_BAD_GATEWAY,
     CODE_PROVIDER_UNAVAILABLE: status.HTTP_502_BAD_GATEWAY,
@@ -129,6 +142,25 @@ async def create_proposal(request: Request, service: Service) -> JSONResponse:
             base_yaml_text=body.get("base_yaml_text"),
             parent_ai_draft_id=parent,
             request_token=body.get("request_token"),
+        )
+    except Exception as exc:
+        raise _translate(exc) from exc
+    return JSONResponse(
+        status_code=status.HTTP_200_OK, content={"as_of": _as_of(), "proposal": proposal}
+    )
+
+
+@router.post("/study-proposals", dependencies=[Depends(require_mutations_enabled)])
+async def create_study_proposal(request: Request, service: StudyService) -> JSONResponse:
+    """Propose Study settings from free text (or revise ``base_proposal``). Nothing is
+    created or persisted besides the usage-ledger rows; a human applies the proposal."""
+
+    body = await _read_body(request, {"user_text", "base_proposal"}, required={"user_text"})
+    try:
+        proposal = await run_in_threadpool(
+            service.propose_study,
+            user_text=body["user_text"],
+            base_proposal=body.get("base_proposal"),
         )
     except Exception as exc:
         raise _translate(exc) from exc

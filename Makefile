@@ -8,8 +8,8 @@ TO_DATE ?=
 SYMBOLS ?=
 
 # Canonical host development (`make dev`): the research product -- API + Job
-# worker in research mode against the research database, plus the console --
-# reloading on backend code changes. The frozen trading surface is reachable
+# worker in research mode against the research database, reloading on backend
+# code changes. The frozen trading surface is reachable
 # only through `make dev-trading` (same processes, trading mode, `.env` database).
 UVICORN ?= .venv/bin/uvicorn
 RESEARCH_DB ?= trading_research
@@ -20,19 +20,17 @@ RESEARCH_ENV ?= TRADING_PLATFORM_RESEARCH__MODE=true TRADING_PLATFORM_RESEARCH__
 WATCHFILES ?= .venv/bin/watchfiles
 API_HOST ?= 127.0.0.1
 API_PORT ?= 8000
-CONSOLE_PORT ?= 3000
-DEV_PORTS ?= $(API_PORT) $(CONSOLE_PORT)
+DEV_PORTS ?= $(API_PORT)
 API_CMD ?= $(PYTHONPATH_PREFIX) $(UVICORN) trading_platform.api.app:app --reload --reload-dir src --host $(API_HOST) --port $(API_PORT)
 # SIGINT lets the worker finish its in-flight Job; after 30s it is killed and
 # the lost-lease sweep reclaims the Job.
 WORKER_CMD ?= $(PYTHONPATH_PREFIX) $(WATCHFILES) --filter python --sigint-timeout 30 '$(PYTHON) -m trading_platform.worker run-jobs' src
-CONSOLE_CMD ?= cd console && npm run dev -- --port $(CONSOLE_PORT)
 
 # The full container stack (migrate/api/worker) sits behind the `stack`
 # profile; a bare `docker compose up` starts only the database.
 STACK_COMPOSE = $(COMPOSE) --profile stack
 
-.PHONY: up down logs migrate seed export-backtest-report generate-signals test console console-install api worker dev dev-trading research-bootstrap
+.PHONY: up down logs migrate seed export-backtest-report generate-signals test api worker dev dev-trading research-bootstrap
 
 up:
 	$(STACK_COMPOSE) up --build -d
@@ -56,9 +54,9 @@ research-bootstrap:
 	$(RESEARCH_ENV) $(PYTHONPATH_PREFIX) $(PYTHON) scripts/bootstrap_research.py
 
 # Fails fast when any dev port is taken (e.g. by the Compose stack), then runs
-# API, worker and console in one process group; Ctrl-C stops all of them.
+# API and worker in one process group; Ctrl-C stops all of them.
 # Mutations are enabled for this API process only; the app default stays off.
-# `dev` is the research product; `dev-trading` the frozen trading console.
+# `dev` is the research product; `dev-trading` the frozen trading API.
 define DEV_PORT_CHECK
 command -v lsof >/dev/null 2>&1 || { echo "make dev: lsof is required for the port check" >&2; exit 1; }; \
 	busy=0; \
@@ -80,7 +78,6 @@ dev:
 	@trap 'trap - INT TERM EXIT; kill 0 2>/dev/null' INT TERM EXIT; \
 	$(RESEARCH_ENV) TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED=true $(API_CMD) & \
 	$(RESEARCH_ENV) $(WORKER_CMD) & \
-	$(CONSOLE_CMD) & \
 	wait
 
 dev-trading:
@@ -88,7 +85,6 @@ dev-trading:
 	@trap 'trap - INT TERM EXIT; kill 0 2>/dev/null' INT TERM EXIT; \
 	TRADING_PLATFORM_ORCHESTRATION__MUTATIONS_ENABLED=true $(API_CMD) & \
 	$(WORKER_CMD) & \
-	$(CONSOLE_CMD) & \
 	wait
 
 migrate:
@@ -110,9 +106,3 @@ generate-signals:
 
 test:
 	$(PYTHONPATH_PREFIX) $(PYTEST) tests/test_app_boot.py tests/test_db_migrations.py tests/test_strategy_registry.py tests/test_market_data_ingestion.py tests/test_market_data_access.py tests/test_trend_following_strategy.py -q
-
-console-install:
-	cd console && npm install
-
-console:
-	$(CONSOLE_CMD)

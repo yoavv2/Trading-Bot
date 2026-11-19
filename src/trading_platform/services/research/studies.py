@@ -24,7 +24,8 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -53,8 +54,11 @@ from trading_platform.db.models.research import (
 )
 from trading_platform.db.session import session_scope
 from trading_platform.services.calendar import (
+    CalendarOutOfBoundsError,
+    exchange_today,
     get_calendar,
     pinned_calendar_start,
+    previous_session_date,
     sessions_in_range,
 )
 from trading_platform.services.read_recording import canonical_json, sha256_hex
@@ -349,6 +353,18 @@ class JobSubmitterNotConfiguredError(StudyError):
     status = 500
 
 
+@dataclass
+class CoverageResult:
+    """What the catalog / warm-up / coverage checks found; shared by ``readiness`` (which
+    adds the window, cost and market-session checks) and the wizard ``preflight`` read."""
+
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    required_starts: dict[str, str | None] = field(default_factory=dict)
+    pinned: date | None = None
+    versions: dict[uuid.UUID, StrategyVersion] = field(default_factory=dict)
+    catalog: dict[str, AssetCatalogEntry] = field(default_factory=dict)
+
+
 class StudyService:
     def __init__(self, settings: Settings, *, job_submitter: JobSubmitter | None = None) -> None:
         self._settings = settings
@@ -484,6 +500,246 @@ class StudyService:
             return None
         return required.date()
 
+    def _earliest_development_start(
+        self, catalog_start: date, history_required: list[int], pinned: date | None
+    ) -> date | None:
+        """The earliest development start whose warm-up is covered for every version in
+        ``history_required``, or ``None`` when the pinned calendar cannot place it.
+
+        Candidate: ``warmup_sessions_max`` sessions after the first session on/after the
+        catalog start (clamped to the pinned calendar's first session, since a catalog may
+        reach back further than the calendar does). It is then VERIFIED with the readiness
+        function ``_required_start`` for every version (calendar reach, pinned start,
+        catalog start) and walked forward session by session until it passes."""
+
+        calendar = get_calendar(self._settings.market_data.calendar.exchange)
+        warmup_max = max(history_required)
+        try:
+            floor = max(catalog_start, calendar.first_session.date())
+            first = calendar.date_to_session(floor, direction="next")
+            candidate = calendar.session_offset(first, warmup_max)
+            for _ in range(warmup_max + 6):
+                start = candidate.date()
+                if all(
+                    (required := self._required_start(start, h)) is not None
+                    and (pinned is None or required >= pinned)
+                    and required >= catalog_start
+                    for h in history_required
+                ):
+                    return start
+                candidate = calendar.session_offset(candidate, 1)
+        except Exception:  # noqa: BLE001 - the library raises its own error types for out-of-bounds sessions
+            return None
+        return None
+
+    def _coverage_checks(
+        self,
+        session: Session,
+        *,
+        version_ids: list[uuid.UUID],
+        assets: list[str],
+        development_start: date | None,
+        range_end: date | None,
+        provider: str,
+    ) -> CoverageResult:
+        """Pinned calendar, approved versions, catalog membership, warm-up and coverage.
+
+        The single implementation behind both ``readiness`` and ``preflight``. Without a
+        ``development_start`` the per-pair warm-up and coverage-start checks are skipped;
+        without a ``range_end`` the coverage-end check is skipped."""
+
+        result = CoverageResult()
+        errors = result.errors
+
+        def err(code: str, item: str, **detail: Any) -> None:
+            errors.append({"code": code, "item": item, **detail})
+
+        pinned = pinned_calendar_start()
+        result.pinned = pinned
+        if pinned is None:
+            err("calendar_start_not_pinned", "calendar")
+
+        versions = {
+            v.id: v for v in session.execute(select(StrategyVersion).where(StrategyVersion.id.in_(version_ids))).scalars()
+        }
+        result.versions = versions
+        for version_id in version_ids:
+            if version_id not in versions:
+                err("strategy_version_not_approved", str(version_id))
+        catalog = {
+            row.ticker: row
+            for row in session.execute(
+                select(AssetCatalogEntry).where(AssetCatalogEntry.provider == provider, AssetCatalogEntry.ticker.in_(assets))
+            ).scalars()
+        }
+        result.catalog = catalog
+        for asset in assets:
+            entry = catalog.get(asset)
+            if entry is None:
+                err("asset_not_in_catalog", asset)
+                continue
+            for version_id, version in versions.items():
+                pair = f"{version_id}:{asset}"
+                if development_start is not None:
+                    required = self._required_start(development_start, version.history_required)
+                    result.required_starts[pair] = required.isoformat() if required else None
+                    if required is None or (pinned is not None and required < pinned):
+                        err("warmup_not_satisfiable", pair, history_required=version.history_required)
+                        continue
+                    if entry.catalog_start is None or entry.catalog_start > required:
+                        err("coverage_start_too_late", pair, required_start=required.isoformat(), catalog_start=_iso(entry.catalog_start))
+                if range_end is not None and (entry.catalog_end is None or entry.catalog_end < range_end):
+                    err("coverage_end_too_early", pair, requested_end=range_end.isoformat(), catalog_end=_iso(entry.catalog_end))
+        return result
+
+    def preflight(
+        self,
+        *,
+        strategy_version_ids: list[str],
+        assets: list[str],
+        range_start: str | None,
+        range_end: str | None,
+        development_start: str | None,
+    ) -> dict[str, Any]:
+        """Read-only coverage / warm-up verdict for a partly filled study wizard. Reuses
+        ``_coverage_checks`` (the readiness logic) and writes nothing.
+
+        Per asset it also reports ``earliest_development_start``: the earliest development
+        start whose warm-up is covered for EVERY selected approved version (same exchange
+        calendar, pinned start and boundary rules as readiness; ``None`` when unknown), and
+        a ``feasibility`` label (``covers_selected_period`` / ``cannot_cover_selected_period``
+        / ``no_feasible_period`` / ``unknown``). The earliest start alone does NOT guarantee
+        that the validation and final-test windows fit, that the data passes the integrity
+        check, or that the study is ready: readiness remains the only full verdict."""
+
+        def parse_date(name: str, value: str | None) -> date | None:
+            if value is None:
+                return None
+            try:
+                if not isinstance(value, str):
+                    raise ValueError(name)
+                return date.fromisoformat(value)
+            except ValueError as exc:
+                raise InvalidStudySettingsError("preflight", field=name, reason="must be YYYY-MM-DD") from exc
+
+        parse_date("range_start", range_start)
+        end = parse_date("range_end", range_end)
+        dev_start = parse_date("development_start", development_start)
+
+        tickers: list[str] = []
+        for item in assets:
+            if not isinstance(item, str):
+                raise InvalidStudySettingsError("preflight", field="assets", reason="must be a list of strings")
+            if not item.strip():
+                continue
+            ticker = item.strip().upper().replace(".", "-")
+            if ticker not in tickers:
+                tickers.append(ticker)
+
+        # An unparseable id is reported as an unapproved version, not as a 422; parseable ids
+        # are keyed by their canonical text, which is also what the error ``item`` carries.
+        raw_ids: list[str] = []
+        parsed_ids: dict[str, uuid.UUID] = {}
+        unparseable: list[dict[str, Any]] = []
+        for raw in strategy_version_ids:
+            try:
+                parsed = uuid.UUID(str(raw))
+            except ValueError:
+                key = str(raw)
+                if key not in raw_ids:
+                    raw_ids.append(key)
+                    unparseable.append({"code": "strategy_version_not_approved", "item": key})
+                continue
+            key = str(parsed)
+            if key not in raw_ids:
+                raw_ids.append(key)
+                parsed_ids[key] = parsed
+
+        exchange = self._settings.market_data.calendar.exchange
+        today = exchange_today(exchange)
+        try:
+            last_completed: date | None = previous_session_date(today, exchange)
+        except CalendarOutOfBoundsError:
+            last_completed = None
+
+        with session_scope(self._settings) as session:
+            coverage = self._coverage_checks(
+                session,
+                version_ids=list(parsed_ids.values()),
+                assets=tickers,
+                development_start=dev_start,
+                range_end=end,
+                provider=TIINGO_PROVIDER,
+            )
+            versions_out: list[dict[str, Any]] = []
+            required_by_version: dict[str, str | None] = {}
+            for raw in raw_ids:
+                version = coverage.versions.get(parsed_ids[raw]) if raw in parsed_ids else None
+                if version is None:
+                    versions_out.append({"version_id": raw, "name": None, "version_no": None, "history_required": None, "approved": False})
+                    continue
+                versions_out.append(
+                    {
+                        "version_id": raw,
+                        "name": version.name,
+                        "version_no": version.version_no,
+                        "history_required": version.history_required,
+                        "approved": True,
+                    }
+                )
+                if dev_start is not None:
+                    required = self._required_start(dev_start, version.history_required)
+                    required_by_version[raw] = required.isoformat() if required else None
+            history_required = [v.history_required for v in coverage.versions.values()]
+            warmup_sessions_max = max(history_required) if history_required else None
+            shortfall_codes = {"coverage_start_too_late", "coverage_end_too_early", "warmup_not_satisfiable"}
+            short_assets = {
+                str(e["item"]).rpartition(":")[2] for e in coverage.errors if e["code"] in shortfall_codes
+            }
+            assets_out = []
+            for ticker in tickers:
+                entry = coverage.catalog.get(ticker)
+                earliest: date | None = None
+                if entry is not None and entry.catalog_start is not None and history_required:
+                    earliest = self._earliest_development_start(entry.catalog_start, history_required, coverage.pinned)
+                feasibility = "unknown"
+                if earliest is not None and entry is not None and entry.catalog_end is not None:
+                    if earliest + timedelta(days=2) > entry.catalog_end:
+                        feasibility = "no_feasible_period"
+                    elif dev_start is not None:
+                        feasibility = "cannot_cover_selected_period" if ticker in short_assets else "covers_selected_period"
+                assets_out.append(
+                    {
+                        "ticker": ticker,
+                        "in_catalog": entry is not None,
+                        "name": entry.name if entry is not None else None,
+                        "catalog_start": _iso(entry.catalog_start) if entry is not None else None,
+                        "catalog_end": _iso(entry.catalog_end) if entry is not None else None,
+                        "earliest_development_start": _iso(earliest),
+                        "feasibility": feasibility,
+                    }
+                )
+            ends = [e.catalog_end for e in coverage.catalog.values() if e.catalog_end is not None]
+            return {
+                "calendar": {
+                    "exchange": exchange,
+                    "pinned_start": _iso(coverage.pinned),
+                    "today": today.isoformat(),
+                    "last_completed_session": _iso(last_completed),
+                },
+                "assets": assets_out,
+                "versions": versions_out,
+                "required_start_by_version": required_by_version,
+                "warmup_sessions_max": warmup_sessions_max,
+                "latest_common_catalog_end": _iso(min(ends)) if ends else None,
+                "errors": [*unparseable, *coverage.errors],
+                "checked": {
+                    "strategy_versions": len(raw_ids),
+                    "assets": len(tickers),
+                    "pairs": len(raw_ids) * len(tickers),
+                },
+            }
+
     def readiness(self, revision_id: uuid.UUID) -> dict[str, Any]:
         with session_scope(self._settings) as session:
             revision = self._load_revision(session, revision_id)
@@ -516,40 +772,17 @@ class StudyService:
                 err("window_outside_range", role)
         if not (w.development.end < w.validation.start and w.validation.end < w.final_test.start):
             err("windows_overlap_or_unordered", "windows", reason="development < validation < final_test required")
-        pinned = pinned_calendar_start()
-        if pinned is None:
-            err("calendar_start_not_pinned", "calendar")
-
-        versions = {
-            v.id: v
-            for v in session.execute(select(StrategyVersion).where(StrategyVersion.id.in_(st.strategy_version_ids))).scalars()
-        }
-        for version_id in st.strategy_version_ids:
-            if version_id not in versions:
-                err("strategy_version_not_approved", str(version_id))
-        catalog = {
-            row.ticker: row
-            for row in session.execute(
-                select(AssetCatalogEntry).where(AssetCatalogEntry.provider == st.provider, AssetCatalogEntry.ticker.in_(st.assets))
-            ).scalars()
-        }
-        required_starts: dict[str, str | None] = {}
-        for asset in st.assets:
-            entry = catalog.get(asset)
-            if entry is None:
-                err("asset_not_in_catalog", asset)
-                continue
-            for version_id, version in versions.items():
-                pair = f"{version_id}:{asset}"
-                required = self._required_start(w.development.start, version.history_required)
-                required_starts[pair] = required.isoformat() if required else None
-                if required is None or (pinned is not None and required < pinned):
-                    err("warmup_not_satisfiable", pair, history_required=version.history_required)
-                    continue
-                if entry.catalog_start is None or entry.catalog_start > required:
-                    err("coverage_start_too_late", pair, required_start=required.isoformat(), catalog_start=_iso(entry.catalog_start))
-                if entry.catalog_end is None or entry.catalog_end < st.range.end:
-                    err("coverage_end_too_early", pair, requested_end=st.range.end.isoformat(), catalog_end=_iso(entry.catalog_end))
+        coverage = self._coverage_checks(
+            session,
+            version_ids=list(st.strategy_version_ids),
+            assets=list(st.assets),
+            development_start=w.development.start,
+            range_end=st.range.end,
+            provider=st.provider,
+        )
+        errors.extend(coverage.errors)
+        pinned = coverage.pinned
+        required_starts = coverage.required_starts
 
         # The integrity check compares downloaded bars with the exchange sessions stored in
         # ``market_sessions``; without them every bar is ``date_not_session`` and the freeze
