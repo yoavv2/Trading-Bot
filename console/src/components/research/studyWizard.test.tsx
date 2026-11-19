@@ -63,6 +63,8 @@ function Picker({ initialManual = [] as string[], initialList = "", onChange }: 
       coverageLoading={false}
       findings={null}
       preflightFailure={null}
+      removable={{ confirmed: [], unknown: [] }}
+      warmupSessionsMax={null}
     />
   );
 }
@@ -612,7 +614,7 @@ describe("StudyWizard", () => {
     // Standard view: two range dates only (no eight inputs).
     expect(screen.getAllByLabelText(/date$/i)).toHaveLength(2);
     expect(screen.queryByTestId("custom-periods")).toBeNull();
-    const create = screen.getByRole("button", { name: "Create study (revision 1)" }) as HTMLButtonElement;
+    const create = screen.getByRole("button", { name: /^Create study/ }) as HTMLButtonElement;
     expect(create.disabled).toBe(true);
     expect(screen.getByRole("list", { name: "Before creating" }).textContent).toContain("Fix the research period.");
     await waitFor(() => expect(screen.getByRole("option", { name: "Mega caps (2)" })).toBeTruthy());
@@ -629,6 +631,7 @@ const PREFLIGHT_EMPTY: StudyPreflight = {
   versions: [],
   required_start_by_version: {},
   latest_common_catalog_end: null,
+  warmup_sessions_max: null,
   errors: [],
   checked: { strategy_versions: 0, assets: 0, pairs: 0 },
 };
@@ -657,9 +660,19 @@ function preflightFor(body: { strategy_version_ids: string[]; assets: string[]; 
     }
   }
   const ends = body.assets.filter((t) => catalog[t]).map((t) => catalog[t].end).sort();
+  const warmupMax = versions.length ? Math.max(...versions.map((v) => v.history_required)) : null;
+  // Stand-in for the backend's earliest start: catalog start + warm-up sessions (as ~1.4 calendar days each).
+  const earliest = (t: string): string | null => (catalog[t] && warmupMax !== null ? new Date(Date.parse(`${catalog[t].start}T00:00:00Z`) + Math.round(warmupMax * 1.4) * 86_400_000).toISOString().slice(0, 10) : null);
+  const feasibility = (t: string): StudyPreflight["assets"][number]["feasibility"] => {
+    if (!catalog[t] || warmupMax === null || !body.development_start) return "unknown";
+    const e = earliest(t)!;
+    if (e > catalog[t].end) return "no_feasible_period";
+    return errors.some((x) => x.item.endsWith(`:${t}`)) ? "cannot_cover_selected_period" : "covers_selected_period";
+  };
   return {
     ...PREFLIGHT_EMPTY,
-    assets: body.assets.map((t) => ({ ticker: t, in_catalog: Boolean(catalog[t]), name: catalog[t] ? `${t} Inc.` : null, catalog_start: catalog[t]?.start ?? null, catalog_end: catalog[t]?.end ?? null })),
+    warmup_sessions_max: warmupMax,
+    assets: body.assets.filter((t) => t !== "GHOST").map((t) => ({ ticker: t, in_catalog: Boolean(catalog[t]), name: catalog[t] ? `${t} Inc.` : null, catalog_start: catalog[t]?.start ?? null, catalog_end: catalog[t]?.end ?? null, earliest_development_start: earliest(t), feasibility: feasibility(t) })),
     versions,
     required_start_by_version: required,
     latest_common_catalog_end: ends[0] ?? null,
@@ -780,7 +793,7 @@ describe("coverage preflight in the wizard", () => {
     expect(summary.textContent).toContain("This revision can be created, but will not be ready to run.");
     expect(summary.textContent).toContain("Costs: slippage and commission not entered");
     expect(summary.textContent).toContain("Max drawdown cap");
-    expect((screen.getByRole("button", { name: "Create study (revision 1)" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Create study with readiness warnings (revision 1)" }) as HTMLButtonElement).disabled).toBe(false);
     // Zero costs are values; risk-first switches the constraint wording.
     fireEvent.change(screen.getByLabelText(/Slippage, bps per side/), { target: { value: "0" } });
     fireEvent.change(screen.getByLabelText(/Commission per order/), { target: { value: "0" } });
@@ -791,5 +804,70 @@ describe("coverage preflight in the wizard", () => {
     fireEvent.change(screen.getByLabelText(/CAGR floor/), { target: { value: "0.05" } });
     expect(screen.queryByTestId("not-ready-summary")).toBeNull();
     expect((vi.mocked(fetch).mock.calls as unknown[][]).filter((c) => String(c[0]).endsWith("/api/v1/research/studies"))).toHaveLength(0);
+  });
+});
+
+describe("bulk removal, earliest start and create-button copy", () => {
+  async function fillPeriodAndVersion() {
+    fireEvent.click(screen.getByLabelText(/Trend following v1/));
+    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2021-10-08" } });
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2026-10-07" } });
+  }
+
+  it("removes only confirmed failures, detaches a saved list that contributed one without editing it, keeps unknowns, and re-runs preflight", async () => {
+    const { preflightCalls, fetchMock } = wizardFetch({ lists: [{ ...LIST, tickers: ["ACQQ", "NVDA"] }] });
+    render(<StudyWizard onNavigate={() => {}} />);
+    const input = await screen.findByRole("combobox", { name: /Add assets/ });
+    // GHOST is a ticker the backend never answers for (simulated missing metadata): unknown, never removed.
+    fireEvent.change(input, { target: { value: "aapl zzz ghost" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const listSelect = await screen.findByRole("combobox", { name: /Saved list/ });
+    await waitFor(() => expect(screen.getByRole("option", { name: "Mega caps (2)" })).toBeTruthy());
+    fireEvent.change(listSelect, { target: { value: LIST.list_id } });
+    await fillPeriodAndVersion();
+    await waitFor(() => expect(screen.getByTestId("remove-incompatible")).toBeTruthy(), { timeout: 3000 });
+    const button = screen.getByTestId("remove-incompatible");
+    // Exact tickers shown before the action: ZZZ (not in catalog) and ACQQ (starts too late); GHOST listed as unknown.
+    expect(button.textContent).toBe("Remove assets that cannot cover this period: ZZZ, ACQQ, NVDA");
+    expect(screen.getByText(/1 ticker\(s\) with unknown coverage stay: GHOST/)).toBeTruthy();
+    expect(screen.getByTestId("coverage-GHOST").textContent).toContain("coverage unknown");
+    // Earliest start with the longest warm-up (200 sessions in the stand-in), labelled, with the caveat.
+    expect(screen.getByTestId("earliest-ACQQ").textContent).toContain("Earliest development start with sufficient warm-up: 2027-05-21 (longest warm-up among the selected versions: 200 sessions). This date alone does not guarantee");
+    expect(screen.getByTestId("feasibility-ACQQ").textContent).toContain("No feasible period under the current rules");
+    expect(screen.getByTestId("feasibility-ZZZ").textContent).toContain("Feasibility unknown");
+    fireEvent.click(button);
+    // Draft form only: ACQQ and NVDA (its end is a day short) came from the list, so the list is detached; ZZZ gone; GHOST (unknown) kept.
+    const tags = within(screen.getByRole("list", { name: "Selected assets" })).getAllByRole("listitem");
+    expect(tags.map((t) => t.textContent?.split(/[✓⚠?]/)[0].replace(/×|list/g, "").trim())).toEqual(["AAPL", "GHOST"]);
+    expect((screen.getByRole("combobox", { name: /Saved list/ }) as HTMLSelectElement).value).toBe("");
+    expect(screen.getByText(/ACQQ, NVDA came from Mega caps, so the list was detached/)).toBeTruthy();
+    expect((fetchMock.mock.calls as unknown[][]).filter((c) => (c[1] as RequestInit | undefined)?.method === "PUT")).toHaveLength(0);
+    await waitFor(() => expect((preflightCalls.at(-1) as { assets: string[] }).assets).toEqual(["AAPL", "GHOST"]), { timeout: 3000 });
+    await waitFor(() => expect(screen.queryByTestId("remove-incompatible")).toBeNull(), { timeout: 3000 });
+  });
+
+  it("re-labels Create while confirmed readiness failures exist and restores it once they are resolved; strategy changes update the earliest start", async () => {
+    wizardFetch();
+    render(<StudyWizard onNavigate={() => {}} />);
+    const input = await screen.findByRole("combobox", { name: /Add assets/ });
+    fireEvent.change(screen.getByLabelText(/Study name/), { target: { value: "s" } });
+    fireEvent.change(input, { target: { value: "acqq" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await fillPeriodAndVersion();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create study with readiness warnings (revision 1)" })).toBeTruthy(), { timeout: 3000 });
+    expect(screen.getByText("Creating does not run anything; the readiness screen lists every problem first.")).toBeTruthy();
+    // A shorter warm-up moves the earliest start earlier (strategy change re-runs preflight).
+    fireEvent.click(screen.getByLabelText(/Trend following v1/));
+    fireEvent.click(screen.getByLabelText(/Fast cross v1/));
+    await waitFor(() => expect(screen.getByTestId("earliest-ACQQ").textContent).toContain("2026-08-28 (longest warm-up among the selected versions: 10 sessions)"), { timeout: 3000 });
+    // Resolve everything: drop the failing asset, add a covered one, enter costs and the cap.
+    fireEvent.click(screen.getByTestId("remove-incompatible"));
+    fireEvent.change(input, { target: { value: "aapl" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(screen.getByLabelText(/Slippage, bps per side/), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText(/Commission per order/), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText(/Max drawdown cap/), { target: { value: "0.2" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create study (revision 1)" })).toBeTruthy(), { timeout: 3000 });
+    expect(screen.queryByTestId("coverage-findings")).toBeNull();
   });
 });

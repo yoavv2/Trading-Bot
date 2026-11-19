@@ -16,7 +16,23 @@ export type CoverageStatus =
 export type AssetCoverage = { ticker: string; status: CoverageStatus; name: string | null };
 
 export type CauseGroup = { code: string; summary: string; versions: { version_id: string; label: string; detail: string }[] };
-export type AssetGroup = { ticker: string; name: string | null; catalog_start: string | null; catalog_end: string | null; causes: CauseGroup[] };
+export type Feasibility = StudyPreflight["assets"][number]["feasibility"];
+export type AssetGroup = {
+  ticker: string;
+  name: string | null;
+  catalog_start: string | null;
+  catalog_end: string | null;
+  earliest_development_start: string | null;
+  feasibility: Feasibility;
+  causes: CauseGroup[];
+};
+
+export const FEASIBILITY_COPY: Record<Feasibility, string> = {
+  covers_selected_period: "Covers the selected period",
+  cannot_cover_selected_period: "Cannot cover the selected period",
+  no_feasible_period: "No feasible period under the current rules",
+  unknown: "Feasibility unknown",
+};
 export type Grouped = { byAsset: AssetGroup[]; general: ReadinessError[]; pairErrors: number };
 
 const CAUSE_SUMMARY: Record<string, (first: ReadinessError, count: number) => string> = {
@@ -52,7 +68,15 @@ export function groupPreflight(preflight: StudyPreflight): Grouped {
     let group = byAsset.get(ticker);
     if (!group) {
       const asset = preflight.assets.find((a) => a.ticker === ticker);
-      group = { ticker, name: asset?.name ?? null, catalog_start: asset?.catalog_start ?? null, catalog_end: asset?.catalog_end ?? null, causes: [] };
+      group = {
+        ticker,
+        name: asset?.name ?? null,
+        catalog_start: asset?.catalog_start ?? null,
+        catalog_end: asset?.catalog_end ?? null,
+        earliest_development_start: asset?.earliest_development_start ?? null,
+        feasibility: asset?.feasibility ?? "unknown",
+        causes: [],
+      };
       byAsset.set(ticker, group);
     }
     return group;
@@ -143,6 +167,34 @@ export function coverageBadge(status: CoverageStatus): { text: string; tone: "ok
       return { text: parts.join(", ") || "coverage problem", tone: "warn" };
     }
   }
+}
+
+/** Confirmed coverage failures the backend reported (removable), kept apart from unknowns. */
+const CONFIRMED_CODES = new Set(["coverage_start_too_late", "coverage_end_too_early", "warmup_not_satisfiable", "asset_not_in_catalog"]);
+
+export type Removable = { confirmed: string[]; unknown: string[] };
+
+/**
+ * Tickers whose coverage failure the backend CONFIRMED in this response, in display order,
+ * and the shown tickers it did not answer for (unknown: never removed by the bulk action).
+ */
+export function removableAssets(shown: string[], preflight: StudyPreflight | null): Removable {
+  if (!preflight) {
+    return { confirmed: [], unknown: [...shown] };
+  }
+  const failing = new Set<string>();
+  for (const error of preflight.errors) {
+    if (!CONFIRMED_CODES.has(error.code)) {
+      continue;
+    }
+    const colon = error.item.indexOf(":");
+    failing.add(colon >= 0 ? error.item.slice(colon + 1) : error.item);
+  }
+  const answered = new Set(preflight.assets.map((a) => a.ticker));
+  return {
+    confirmed: shown.filter((ticker) => answered.has(ticker) && failing.has(ticker)),
+    unknown: shown.filter((ticker) => !answered.has(ticker)),
+  };
 }
 
 export type EndDateAdvice = { affected: { ticker: string; catalog_end: string | null }[]; latestCommonEnd: string | null } | null;

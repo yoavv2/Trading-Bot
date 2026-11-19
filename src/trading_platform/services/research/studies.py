@@ -25,7 +25,7 @@ import json
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -500,6 +500,38 @@ class StudyService:
             return None
         return required.date()
 
+    def _earliest_development_start(
+        self, catalog_start: date, history_required: list[int], pinned: date | None
+    ) -> date | None:
+        """The earliest development start whose warm-up is covered for every version in
+        ``history_required``, or ``None`` when the pinned calendar cannot place it.
+
+        Candidate: ``warmup_sessions_max`` sessions after the first session on/after the
+        catalog start (clamped to the pinned calendar's first session, since a catalog may
+        reach back further than the calendar does). It is then VERIFIED with the readiness
+        function ``_required_start`` for every version (calendar reach, pinned start,
+        catalog start) and walked forward session by session until it passes."""
+
+        calendar = get_calendar(self._settings.market_data.calendar.exchange)
+        warmup_max = max(history_required)
+        try:
+            floor = max(catalog_start, calendar.first_session.date())
+            first = calendar.date_to_session(floor, direction="next")
+            candidate = calendar.session_offset(first, warmup_max)
+            for _ in range(warmup_max + 6):
+                start = candidate.date()
+                if all(
+                    (required := self._required_start(start, h)) is not None
+                    and (pinned is None or required >= pinned)
+                    and required >= catalog_start
+                    for h in history_required
+                ):
+                    return start
+                candidate = calendar.session_offset(candidate, 1)
+        except Exception:  # noqa: BLE001 - the library raises its own error types for out-of-bounds sessions
+            return None
+        return None
+
     def _coverage_checks(
         self,
         session: Session,
@@ -570,7 +602,15 @@ class StudyService:
         development_start: str | None,
     ) -> dict[str, Any]:
         """Read-only coverage / warm-up verdict for a partly filled study wizard. Reuses
-        ``_coverage_checks`` (the readiness logic) and writes nothing."""
+        ``_coverage_checks`` (the readiness logic) and writes nothing.
+
+        Per asset it also reports ``earliest_development_start``: the earliest development
+        start whose warm-up is covered for EVERY selected approved version (same exchange
+        calendar, pinned start and boundary rules as readiness; ``None`` when unknown), and
+        a ``feasibility`` label (``covers_selected_period`` / ``cannot_cover_selected_period``
+        / ``no_feasible_period`` / ``unknown``). The earliest start alone does NOT guarantee
+        that the validation and final-test windows fit, that the data passes the integrity
+        check, or that the study is ready: readiness remains the only full verdict."""
 
         def parse_date(name: str, value: str | None) -> date | None:
             if value is None:
@@ -650,9 +690,24 @@ class StudyService:
                 if dev_start is not None:
                     required = self._required_start(dev_start, version.history_required)
                     required_by_version[raw] = required.isoformat() if required else None
+            history_required = [v.history_required for v in coverage.versions.values()]
+            warmup_sessions_max = max(history_required) if history_required else None
+            shortfall_codes = {"coverage_start_too_late", "coverage_end_too_early", "warmup_not_satisfiable"}
+            short_assets = {
+                str(e["item"]).rpartition(":")[2] for e in coverage.errors if e["code"] in shortfall_codes
+            }
             assets_out = []
             for ticker in tickers:
                 entry = coverage.catalog.get(ticker)
+                earliest: date | None = None
+                if entry is not None and entry.catalog_start is not None and history_required:
+                    earliest = self._earliest_development_start(entry.catalog_start, history_required, coverage.pinned)
+                feasibility = "unknown"
+                if earliest is not None and entry is not None and entry.catalog_end is not None:
+                    if earliest + timedelta(days=2) > entry.catalog_end:
+                        feasibility = "no_feasible_period"
+                    elif dev_start is not None:
+                        feasibility = "cannot_cover_selected_period" if ticker in short_assets else "covers_selected_period"
                 assets_out.append(
                     {
                         "ticker": ticker,
@@ -660,6 +715,8 @@ class StudyService:
                         "name": entry.name if entry is not None else None,
                         "catalog_start": _iso(entry.catalog_start) if entry is not None else None,
                         "catalog_end": _iso(entry.catalog_end) if entry is not None else None,
+                        "earliest_development_start": _iso(earliest),
+                        "feasibility": feasibility,
                     }
                 )
             ends = [e.catalog_end for e in coverage.catalog.values() if e.catalog_end is not None]
@@ -673,6 +730,7 @@ class StudyService:
                 "assets": assets_out,
                 "versions": versions_out,
                 "required_start_by_version": required_by_version,
+                "warmup_sessions_max": warmup_sessions_max,
                 "latest_common_catalog_end": _iso(min(ends)) if ends else None,
                 "errors": [*unparseable, *coverage.errors],
                 "checked": {

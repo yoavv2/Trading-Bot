@@ -9,8 +9,8 @@ import { JobsTable } from "@/components/jobs/JobsTable";
  */
 export default function JobsPage() {
   return (
-    <main className="flex-1 p-6">
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Jobs</h1>
+    <main className="page-content">
+      <div className="mb-6"><p className="eyebrow">Workspace tools</p><h1 className="page-heading mt-2">System activity</h1><p className="muted mt-2 text-sm">Track background tasks, investigate issues and manage maintenance. Study results are on your dashboard.</p></div>
       <JobsTable />
     </main>
   );

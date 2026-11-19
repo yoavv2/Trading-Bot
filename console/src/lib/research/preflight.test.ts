@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { coverageBadge, coverageByTicker, endDateAdvice, groupPreflight, missingInputs } from "./preflight";
+import { coverageBadge, coverageByTicker, endDateAdvice, groupPreflight, missingInputs, removableAssets } from "./preflight";
 import type { StudyPreflight } from "./types";
 
 const P: StudyPreflight = {
   calendar: { exchange: "XNYS", pinned_start: "2014-01-02", today: "2026-10-08", last_completed_session: "2026-10-07" },
   assets: [
-    { ticker: "ACQQ", in_catalog: true, name: "ACQQ Inc.", catalog_start: "2026-08-14", catalog_end: "2026-10-07" },
-    { ticker: "SNPE", in_catalog: true, name: null, catalog_start: "2010-01-04", catalog_end: "2026-10-07" },
-    { ticker: "ZZZ", in_catalog: false, name: null, catalog_start: null, catalog_end: null },
-    { ticker: "NOEND", in_catalog: true, name: null, catalog_start: "2010-01-04", catalog_end: null },
+    { ticker: "ACQQ", in_catalog: true, name: "ACQQ Inc.", catalog_start: "2026-08-14", catalog_end: "2026-10-07", earliest_development_start: null, feasibility: "no_feasible_period" },
+    { ticker: "SNPE", in_catalog: true, name: null, catalog_start: "2010-01-04", catalog_end: "2026-10-07", earliest_development_start: "2010-10-20", feasibility: "cannot_cover_selected_period" },
+    { ticker: "ZZZ", in_catalog: false, name: null, catalog_start: null, catalog_end: null, earliest_development_start: null, feasibility: "unknown" },
+    { ticker: "NOEND", in_catalog: true, name: null, catalog_start: "2010-01-04", catalog_end: null, earliest_development_start: "2010-10-20", feasibility: "unknown" },
   ],
+  warmup_sessions_max: 200,
   versions: [
     { version_id: "v1", name: "Trend", version_no: 1, history_required: 200, approved: true },
     { version_id: "v2", name: "Fast", version_no: 2, history_required: 10, approved: true },
@@ -44,6 +45,17 @@ describe("groupPreflight", () => {
     expect(g.byAsset[2].causes).toEqual([{ code: "asset_not_in_catalog", summary: "Not in the catalog.", versions: [] }]);
     expect(g.general).toEqual([{ code: "calendar_start_not_pinned", item: "calendar" }]);
     expect(g.pairErrors).toBe(6);
+  });
+});
+
+describe("removableAssets", () => {
+  it("lists only tickers with a confirmed failure, and keeps unanswered tickers apart as unknown", () => {
+    expect(removableAssets(["ACQQ", "SNPE", "ZZZ", "NOEND", "MISSING"], P)).toEqual({ confirmed: ["ACQQ", "SNPE", "ZZZ"], unknown: ["MISSING"] });
+    expect(removableAssets(["ACQQ"], null)).toEqual({ confirmed: [], unknown: ["ACQQ"] });
+    expect(removableAssets([], P)).toEqual({ confirmed: [], unknown: [] });
+    const g = groupPreflight(P);
+    expect(g.byAsset[0].feasibility).toBe("no_feasible_period");
+    expect(g.byAsset[1].earliest_development_start).toBe("2010-10-20");
   });
 });
 

@@ -5,21 +5,30 @@ editor with inline validation and the deterministic explanation, plus the
 optional assistant panel), approve immutable versions, search the asset
 catalog and keep saved lists, define studies, check readiness, run them, compare
 the evidence per asset, freeze a candidate and run the final test. The generic
-Jobs pages (`/jobs`, `/jobs/new`, `/jobs/<id>`) list and submit the research
-Jobs the studies run on.
+Jobs pages (`/jobs`, `/jobs/new`, `/jobs/<id>`) monitor the underlying tasks
+and submit available maintenance operations. Research evaluations are started from studies.
 
-Primary navigation (`src/lib/navigation.ts`): **Strategies · Assets · Studies
-· Jobs**. `/` lands on Studies.
+Primary navigation (`src/lib/navigation.ts`): **Dashboard · Strategies · Asset lists**.
+`/` lands on the research dashboard. **System activity** keeps the existing Jobs routes
+available as a secondary workspace tool. `/research` also redirects to the dashboard.
+
+The interface is English throughout, with a shared light/dark theme that remembers the
+user's choice. Strategy creation starts with the natural-language AI assistant; direct
+YAML editing, specification identifiers and provenance remain under Advanced disclosures.
+Study results lead with per-asset metrics, candidate selection and equity/drawdown charts
+against buy-and-hold. Readiness blockers remain visible, while full diagnostics, settings,
+job activity and report/export controls remain accessible. No capabilities or API mutation
+contracts were removed.
 
 ## What it serves
 
 | Route | Page |
 | --- | --- |
 | `/research/strategies` | Families, drafts, version history |
-| `/research/strategies/new`, `/research/strategies/drafts/[draftId]` | YAML editor, validation findings, explanation, assistant panel, Save / Approve / Duplicate / Delete |
+| `/research/strategies/new`, `/research/strategies/drafts/[draftId]` | Natural-language assistant, explanation, validation, advanced YAML editor, Save / Approve / Duplicate / Delete |
 | `/research/strategies/versions/[versionId]` | Immutable version: YAML as approved, explanation, lineage, assistant provenance chain |
 | `/research/assets` | Catalog search (named-versus-total count, coverage dates), saved lists |
-| `/research/studies`, `/research/studies/new`, `/research/studies/[id]` | Study list, wizard, study detail: revisions, readiness, progress, results, freeze, final test, exposures, export, report links |
+| `/research/studies`, `/research/studies/new`, `/research/studies/[id]` | Workspace overview, study setup, per-asset results dashboard: revisions, readiness, progress, results, freeze, final test, exposures, export, report links |
 | `/jobs`, `/jobs/new`, `/jobs/[jobId]` | Generic Job surface (research Job types only against a research-mode API) |
 
 The former operator console (system status, runs, paper trading, controls,
@@ -54,8 +63,18 @@ research start command instead of rendering empty panels.
    catalog / unknown when the check failed), groups findings by asset and
    cause with the affected versions on demand, and, when the end date is past
    an asset's catalog end, names the assets and offers "Use latest common
-   catalog end" (never applied silently). Period shortcuts end on the
-   exchange calendar's last completed session. Empty costs and the
+   catalog end" (never applied silently). Each finding states the asset's
+   feasibility ("Cannot cover the selected period" vs "No feasible period
+   under the current rules") and its "Earliest development start with
+   sufficient warm-up", computed server-side with the readiness calendar
+   rules for the longest warm-up among the selected versions (that date alone
+   guarantees neither the other windows nor data integrity). "Remove assets
+   that cannot cover this period" drops only the tickers with a confirmed
+   failure from the form (unknown coverage stays); a ticker that came from a
+   saved list detaches the list first, the list itself is never edited.
+   While confirmed readiness failures exist the button reads "Create study
+   with readiness warnings" (or "Create revision with readiness warnings").
+   Period shortcuts end on the exchange calendar's last completed session. Empty costs and the
    objective's constraint are flagged beside the inputs and summarised near
    Create as "can be created, but will not be ready to run" (zero is a
    value). A new revision keeps the stored dates to the day (custom periods

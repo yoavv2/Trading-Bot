@@ -41,11 +41,11 @@ export function JobResultSummaryPanel({
         {resultSummary === null ? (
           <p className="text-zinc-500">{emptyCopy(status, resourceCount)}</p>
         ) : (
-          <dl className="grid grid-cols-[minmax(0,auto)_1fr] gap-x-4 gap-y-1 text-xs">
+          <dl className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-4 gap-y-1 text-xs">
             {Object.entries(resultSummary).map(([key, value]) => (
               <div key={key} className="contents">
-                <dt className="font-mono text-zinc-500">{key}</dt>
-                <dd className="font-mono text-zinc-200">
+                <dt className="break-all font-mono text-zinc-500">{key}</dt>
+                <dd className="min-w-0 break-all font-mono text-zinc-200">
                   {typeof value === "object" && value !== null
                     ? JSON.stringify(value)
                     : String(value)}

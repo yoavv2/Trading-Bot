@@ -33,7 +33,7 @@ function NewJobRoute() {
 /** /jobs/new route shell (D-17/OPS-01). */
 export default function NewJobPage() {
   return (
-    <main className="flex-1 p-6">
+    <main className="page-content">
       <Suspense fallback={null}>
         <NewJobRoute />
       </Suspense>

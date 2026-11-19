@@ -43,20 +43,23 @@ describe("legacy console URLs redirect to research pages", () => {
 });
 
 describe("primary navigation is the research product", () => {
-  it("exposes Strategies, Assets, Studies and Jobs, in that order", () => {
+  it("exposes the three user destinations, with system activity separate", () => {
     expect(PRIMARY_NAVIGATION.map((item) => [item.label, item.href])).toEqual([
+      ["Dashboard", "/research/studies"],
       ["Strategies", "/research/strategies"],
-      ["Assets", "/research/assets"],
-      ["Studies", "/research/studies"],
-      ["Jobs", "/jobs"],
+      ["Asset lists", "/research/assets"],
     ]);
     expect(PRODUCT_NAME).toBe("Strategy Research");
   });
 
   it("the root layout renders that navigation and no trading chrome", () => {
     const layout = readFileSync(join(APP_ROOT, "layout.tsx"), "utf8");
-    expect(layout).toContain("PRIMARY_NAVIGATION.map(");
-    expect(layout).toContain("{PRODUCT_NAME}");
+    expect(layout).toContain("<AppShell>");
+    const shell = readFileSync(join(APP_ROOT, "..", "components", "AppShell.tsx"), "utf8");
+    expect(shell).toContain("PRIMARY_NAVIGATION.map(");
+    expect(shell).toContain("PRODUCT_NAME");
+    expect(shell).toContain('href="/jobs"');
+    expect(shell).toContain("System activity");
     for (const forbidden of ["KillSwitch", "Operator Console", "System Status", "Paper Trading", "Controls", '"/runs"', '"/strategy"', '"/paper"', '"/controls"']) {
       expect(layout, forbidden).not.toContain(forbidden);
     }

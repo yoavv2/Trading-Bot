@@ -34,22 +34,24 @@ export function StudyDetail({ studyId, initialRevisionId }: { studyId: string; i
   const current = chosen && revisions.some((r) => r.revision_id === chosen) ? chosen : revisions[revisions.length - 1]?.revision_id ?? null;
   return (
     <div className="space-y-4">
-      <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-zinc-200">
-            {study.result.data.study.name} <span className="text-xs text-zinc-500">{study.result.data.study.kind}</span>
-          </h2>
-          <FetchMeta asOf={study.result.asOf} loading={study.loading} onRefresh={study.refetch} />
+      <section className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div>
+            <p className="eyebrow">{study.result.data.study.kind} study</p>
+            <h1 className="mt-0.5 truncate text-xl font-semibold tracking-tight text-foreground">{study.result.data.study.name}</h1>
+          </div>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="eyebrow mr-1">Revision</span>
           {revisions.map((revision) => (
-            <button key={revision.revision_id} type="button" onClick={() => setChosen(revision.revision_id)} className={`rounded border px-2 py-0.5 ${revision.revision_id === current ? "border-cyan-700 text-cyan-200" : "border-zinc-700 text-zinc-400"}`}>
-              revision {revision.revision_no}
+            <button key={revision.revision_id} type="button" aria-pressed={revision.revision_id === current} onClick={() => setChosen(revision.revision_id)} className={`button-secondary min-h-8 px-2.5 py-1 text-xs ${revision.revision_id === current ? "border-accent text-accent" : ""}`}>
+              {revision.revision_no}
             </button>
           ))}
-          <Link href={`/research/studies/new?from=${studyId}`} className="rounded border border-zinc-700 px-2 py-0.5 text-zinc-300">
-            new revision (new settings)
+          <Link href={`/research/studies/new?from=${studyId}`} className="button-secondary min-h-8 px-2.5 py-1 text-xs">
+            New revision
           </Link>
+          <FetchMeta asOf={study.result.asOf} loading={study.loading} onRefresh={study.refetch} />
         </div>
       </section>
       {study.result.data.study.kind === "smoke" ? (
@@ -57,7 +59,7 @@ export function StudyDetail({ studyId, initialRevisionId }: { studyId: string; i
           Smoke run: this study is an integration test of the pipeline. Its assets, dates, costs, objective and constraint are test configuration, not user-approved investment objectives or product defaults; its verdict and final-test outcome are not research claims and name no winner.
         </p>
       ) : null}
-      {current ? <RevisionPanel revisionId={current} /> : <p className="text-sm text-zinc-500">No revisions.</p>}
+      {current ? <RevisionPanel key={current} revisionId={current} /> : <p className="text-sm text-zinc-500">No revisions.</p>}
     </div>
   );
 }
@@ -128,45 +130,16 @@ function RevisionPanel({ revisionId }: { revisionId: string }) {
 
   return (
     <div className="space-y-4">
-      <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-zinc-200">Revision settings</h3>
-          <FetchMeta asOf={revision.result?.asOf ?? null} loading={revision.loading} onRefresh={refreshAll} />
-        </div>
-        {revision.result?.ok ? <SettingsSummary revision={revision.result.data.revision} /> : revision.result ? <ErrorState failure={revision.result} /> : null}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button type="button" onClick={run} disabled={!canRun} className="rounded border border-cyan-700 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-950 disabled:opacity-50">
-            Run initial evaluation (development + validation)
-          </button>
-          {hasGraph ? <span className="text-xs text-zinc-500">already started for this revision</span> : null}
-          {evaluated ? (
-            <>
-              <button type="button" onClick={doExport} disabled={capability.state !== "enabled" || busy} className="rounded border border-zinc-600 px-3 py-1 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50">
-                Export (comparison.json, report, per-run files)
-              </button>
-              <a href={`/backend${base}/report`} target="_blank" rel="noreferrer" className="text-sm text-cyan-300 hover:underline">
-                Static report (HTML)
-              </a>
-              <a href={`/backend${base}/report?format=md`} target="_blank" rel="noreferrer" className="text-sm text-cyan-300 hover:underline">
-                Markdown
-              </a>
-            </>
-          ) : null}
-          {capability.state !== "enabled" ? <span className="text-xs text-zinc-500">{capability.reason ?? "Mutation availability unknown"}</span> : null}
-        </div>
-        {message ? <p role="alert" className="mt-2 text-sm text-zinc-200">{message}</p> : null}
-      </section>
-      {readiness.result?.ok ? <ReadinessPanel readiness={readiness.result.data.readiness} /> : readiness.result ? <ErrorState failure={readiness.result} /> : <p className="text-sm text-zinc-500">Loading readiness…</p>}
-      {progress.result?.ok ? <ProgressPanel progress={progress.result.data} /> : progress.result ? <ErrorState failure={progress.result} /> : null}
-      {results.result?.ok ? (
-        results.result.data.initial ? (
-          <ResultsView comparison={results.result.data.initial} />
-        ) : (
-          <p className="text-sm text-zinc-500">No evaluation yet for this revision.</p>
-        )
-      ) : results.result ? (
-        <ErrorState failure={results.result} />
+      {readiness.result?.ok ? <ReadinessPanel readiness={readiness.result.data.readiness} summaryOnly /> : readiness.result ? <ErrorState failure={readiness.result} title="Readiness could not be checked" /> : null}
+      {results.result?.ok && !evaluated ? (
+        <section className="surface-panel flex flex-wrap items-center justify-between gap-3 p-4">
+          <div><h2 className="text-sm font-semibold text-foreground">No evaluation yet</h2><p className="mt-1 text-xs text-muted-foreground">Initial evaluation uses the development and validation windows only.</p></div>
+          <button type="button" onClick={run} disabled={!canRun} className="button-primary px-3 py-2 text-sm disabled:opacity-50">Run initial evaluation</button>
+        </section>
       ) : null}
+      {results.result?.ok ? (
+        results.result.data.initial ? <ResultsView comparison={results.result.data.initial} /> : null
+      ) : results.result ? <ErrorState failure={results.result} /> : <p className="text-sm text-muted-foreground">Loading evaluation results…</p>}
       {results.result?.ok && revision.result?.ok ? (
         <FinalTestPanel
           revisionId={revisionId}
@@ -178,6 +151,46 @@ function RevisionPanel({ revisionId }: { revisionId: string }) {
           onChanged={refreshAll}
         />
       ) : null}
+      {evaluated ? <div className="flex flex-wrap items-center gap-3"><a href={`/backend${base}/report`} target="_blank" rel="noreferrer" className="button-secondary">View report</a><button type="button" onClick={doExport} disabled={capability.state !== "enabled" || busy} className="button-secondary">Export study</button></div> : null}
+      {message ? <p role="status" className="text-sm">{message}</p> : null}
+      <details className="surface-panel group rounded-lg">
+        <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-foreground">Study settings, reports and system activity</summary>
+        <div className="space-y-4 border-t border-border p-4">
+      <section className="surface-panel p-4 sm:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-foreground">Revision settings and actions</h2>
+          <FetchMeta asOf={revision.result?.asOf ?? null} loading={revision.loading} onRefresh={refreshAll} />
+        </div>
+        <details className="group mt-3">
+          <summary className="cursor-pointer text-sm text-muted-foreground">View dates, costs and execution settings</summary>
+          <div className="surface-muted mt-2 rounded-md p-3">{revision.result?.ok ? <SettingsSummary revision={revision.result.data.revision} /> : revision.result ? <ErrorState failure={revision.result} /> : null}</div>
+        </details>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button type="button" onClick={run} disabled={!canRun} className="button-primary px-3 py-2 text-sm disabled:opacity-50">
+            Run initial evaluation (development + validation)
+          </button>
+          {hasGraph ? <span className="text-xs text-zinc-500">already started for this revision</span> : null}
+          {evaluated ? (
+            <>
+              <button type="button" onClick={doExport} disabled={capability.state !== "enabled" || busy} className="button-secondary px-3 py-2 text-sm disabled:opacity-50">
+                Export (comparison.json, report, per-run files)
+              </button>
+              <a href={`/backend${base}/report`} target="_blank" rel="noreferrer" className="text-sm text-accent hover:underline">
+                Static report (HTML)
+              </a>
+              <a href={`/backend${base}/report?format=md`} target="_blank" rel="noreferrer" className="text-sm text-accent hover:underline">
+                Markdown
+              </a>
+            </>
+          ) : null}
+          {capability.state !== "enabled" ? <span className="text-xs text-zinc-500">{capability.reason ?? "Mutation availability unknown"}</span> : null}
+        </div>
+        {message ? <p role="alert" className="mt-2 text-sm text-zinc-200">{message}</p> : null}
+      </section>
+      {readiness.result?.ok ? <ReadinessPanel readiness={readiness.result.data.readiness} /> : readiness.result ? <ErrorState failure={readiness.result} /> : <p className="text-sm text-muted-foreground">Loading readiness…</p>}
+      {progress.result?.ok ? <ProgressPanel progress={progress.result.data} /> : progress.result ? <ErrorState failure={progress.result} /> : null}
+        </div>
+      </details>
     </div>
   );
 }

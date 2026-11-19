@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { fetchApi } from "@/lib/api";
 import type { AssetList, CatalogEntry, CatalogSearch } from "@/lib/research/types";
 import { assetTags, looksLikeMultiple, normalizeTicker, parseTickers } from "@/lib/research/assets";
-import { coverageBadge, type AssetCoverage, type Grouped } from "@/lib/research/preflight";
+import { FEASIBILITY_COPY, coverageBadge, type AssetCoverage, type Grouped, type Removable } from "@/lib/research/preflight";
 
 const FIELD = "mt-1 block w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100";
 const SEARCH_LIMIT = 20;
@@ -29,6 +29,8 @@ type Props = {
   coverageLoading: boolean;
   findings: Grouped | null;
   preflightFailure: string | null;
+  removable: Removable;
+  warmupSessionsMax: number | null;
 };
 
 const BADGE_TONE = { ok: "text-emerald-300", warn: "text-amber-300", unknown: "text-zinc-500" } as const;
@@ -57,8 +59,27 @@ function CoverageBadge({ ticker, coverage, loading }: { ticker: string; coverage
   );
 }
 
+const FEASIBILITY_TONE: Record<string, string> = {
+  covers_selected_period: "text-emerald-300",
+  cannot_cover_selected_period: "text-amber-300",
+  no_feasible_period: "text-red-300",
+  unknown: "text-zinc-400",
+};
+
 /** Findings grouped by asset and cause; the affected versions open on demand. */
-function CoverageFindings({ findings, failure }: { findings: Grouped | null; failure: string | null }) {
+function CoverageFindings({
+  findings,
+  failure,
+  removable,
+  warmupSessionsMax,
+  onRemove,
+}: {
+  findings: Grouped | null;
+  failure: string | null;
+  removable: Removable;
+  warmupSessionsMax: number | null;
+  onRemove: (tickers: string[]) => void;
+}) {
   if (failure) {
     return (
       <p role="status" className="text-xs text-amber-200">
@@ -83,6 +104,18 @@ function CoverageFindings({ findings, failure }: { findings: Grouped | null; fai
               {asset.name ? <span className="text-amber-200/70"> {asset.name}</span> : null}
               {asset.catalog_start || asset.catalog_end ? <span className="text-amber-200/70"> · catalog {asset.catalog_start ?? "—"} → {asset.catalog_end ?? "—"}</span> : null}
             </p>
+            <p className={`ml-4 ${FEASIBILITY_TONE[asset.feasibility]}`} data-testid={`feasibility-${asset.ticker}`}>
+              {FEASIBILITY_COPY[asset.feasibility]}
+              {asset.feasibility === "no_feasible_period" ? " (not enough history after the warm-up for three windows)" : ""}
+            </p>
+            {asset.earliest_development_start ? (
+              <p className="ml-4 text-amber-100/90" data-testid={`earliest-${asset.ticker}`}>
+                Earliest development start with sufficient warm-up: <span className="font-mono">{asset.earliest_development_start}</span>
+                {warmupSessionsMax !== null ? ` (longest warm-up among the selected versions: ${warmupSessionsMax} sessions)` : ""}. This date alone does not guarantee the remaining windows, data integrity or full readiness.
+              </p>
+            ) : asset.feasibility === "unknown" && asset.causes.every((c) => c.code !== "asset_not_in_catalog") ? (
+              <p className="ml-4 text-zinc-400">Earliest development start unknown (no versions selected or the calendar could not answer).</p>
+            ) : null}
             <ul className="ml-4 list-disc space-y-1">
               {asset.causes.map((cause) => (
                 <li key={cause.code}>
@@ -113,6 +146,17 @@ function CoverageFindings({ findings, failure }: { findings: Grouped | null; fai
           </li>
         ))}
       </ul>
+      {removable.confirmed.length > 0 ? (
+        <div className="mt-2 border-t border-amber-900/60 pt-2">
+          <button type="button" onClick={() => onRemove(removable.confirmed)} className="rounded border border-amber-700 px-2 py-0.5 text-amber-100 hover:bg-amber-900/40" data-testid="remove-incompatible">
+            Remove assets that cannot cover this period: {removable.confirmed.join(", ")}
+          </button>
+          <p className="mt-1 text-amber-200/80">
+            Removes only the {removable.confirmed.length} ticker(s) with a confirmed coverage failure from this form; the saved list itself is never changed.
+            {removable.unknown.length > 0 ? ` ${removable.unknown.length} ticker(s) with unknown coverage stay: ${removable.unknown.join(", ")}.` : ""}
+          </p>
+        </div>
+      ) : null}
     </details>
   );
 }
@@ -126,7 +170,7 @@ function CoverageFindings({ findings, failure }: { findings: Grouped | null; fai
  * as the backend builds it (manual first, then the list, de-duplicated), so they cannot be
  * removed one by one without detaching the list, which never edits the saved list itself.
  */
-export function AssetPicker({ manual, onManualChange, listId, onListChange, lists, listsFailure, maxAssets, coverage, coverageLoading, findings, preflightFailure }: Props) {
+export function AssetPicker({ manual, onManualChange, listId, onListChange, lists, listsFailure, maxAssets, coverage, coverageLoading, findings, preflightFailure, removable, warmupSessionsMax }: Props) {
   const id = useId();
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
@@ -219,6 +263,25 @@ export function AssetPicker({ manual, onManualChange, listId, onListChange, list
     onManualChange(manual.filter((t) => normalizeTicker(t) !== ticker));
     setHint(null);
     inputRef.current?.focus();
+  }
+
+  /**
+   * Bulk removal of confirmed failures. A ticker that comes from the saved list cannot be
+   * dropped while the list is referenced (the backend re-adds the list's tickers through
+   * asset_list_id), so the list is detached first: its remaining tickers become manual
+   * tags and the saved list is left untouched.
+   */
+  function removeMany(tickers: string[]) {
+    const drop = new Set(tickers.map(normalizeTicker));
+    const fromList = listTickers.map(normalizeTicker).filter((t) => drop.has(t));
+    const keep = all.filter((t) => !drop.has(t));
+    onManualChange(keep);
+    if (fromList.length > 0 && listId) {
+      onListChange("");
+      setHint(`Removed ${tickers.join(", ")}. ${fromList.join(", ")} came from ${selectedList?.name ?? "the saved list"}, so the list was detached (its remaining tickers stay as manual tags; the saved list itself is unchanged).`);
+    } else {
+      setHint(`Removed ${tickers.join(", ")}.`);
+    }
   }
 
   function detachList() {
@@ -411,7 +474,7 @@ export function AssetPicker({ manual, onManualChange, listId, onListChange, list
           .
         </p>
       ) : null}
-      <CoverageFindings findings={findings} failure={preflightFailure} />
+      <CoverageFindings findings={findings} failure={preflightFailure} removable={removable} warmupSessionsMax={warmupSessionsMax} onRemove={removeMany} />
       <p className="text-xs text-zinc-500">
         {all.length} asset(s){maxAssets !== null ? ` of up to ${maxAssets}` : ""}, stored exactly as shown.
         {overLimit ? <span className="text-amber-200"> Over the per-study limit; readiness will refuse the run until trimmed.</span> : null}

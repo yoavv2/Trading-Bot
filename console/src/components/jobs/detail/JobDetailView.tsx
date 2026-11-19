@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useApiQuery } from "@/lib/useApiQuery";
 import { isTerminalJobStatus } from "@/lib/jobStatus";
@@ -38,7 +39,8 @@ export function JobDetailView({ jobId }: JobDetailViewProps) {
   const job = result?.ok ? result.data : null;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
+      <Link href="/jobs" className="text-xs text-accent hover:underline">← System activity</Link>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <AutoRefreshIndicator
           polling={polling}
@@ -70,6 +72,8 @@ export function JobDetailView({ jobId }: JobDetailViewProps) {
             status={job.status}
             resourceCount={job.resources.length}
           />
+          <details className="surface-panel"><summary>Logs and event history</summary>
+          <div className="grid gap-5 xl:grid-cols-2">
           <JobLogsPanel
             jobId={jobId}
             jobIsTerminal={isTerminalJobStatus(job.status)}
@@ -78,6 +82,7 @@ export function JobDetailView({ jobId }: JobDetailViewProps) {
             jobId={jobId}
             jobIsTerminal={isTerminalJobStatus(job.status)}
           />
+          </div></details>
         </>
       ) : null}
     </div>

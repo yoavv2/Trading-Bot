@@ -9,7 +9,7 @@ import { planApplication } from "@/lib/research/proposal";
 import type { WizardState } from "./StudyWizard";
 import { WindowTimeline } from "./ResearchPeriod";
 
-const BOX = "rounded border border-zinc-800 bg-zinc-900/40 p-4";
+const BOX = "surface-panel";
 const FIELD = "mt-1 w-full rounded border border-zinc-700 bg-zinc-950 p-2 text-sm text-zinc-100";
 const EXAMPLE = "Compare the approved trend-following strategies on AAPL and MSFT from 2018 through 2025.";
 
@@ -93,7 +93,7 @@ export function StudyAssistant({ current, isRevision, capability, onApply }: Pro
   return (
     <section aria-label="Study assistant" className={`${BOX} space-y-3`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-zinc-200">Describe your study (optional)</h2>
+        <h2 className="text-sm font-semibold text-zinc-200">Plan with the AI assistant</h2>
         <div className="flex items-center gap-3">
           {assistant ? (
             <span className="text-xs text-zinc-500">
@@ -106,7 +106,7 @@ export function StudyAssistant({ current, isRevision, capability, onApply }: Pro
         </div>
       </div>
 
-      {!open ? <p className="text-xs text-zinc-500">Get proposed settings from a sentence; you review and apply them. The form works without it.</p> : null}
+      {!open ? <p className="text-xs text-zinc-500">Describe your research idea in plain English. The assistant proposes settings for you to review.</p> : null}
 
       {open ? (
         <>

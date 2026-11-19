@@ -5,19 +5,22 @@ write nothing, and keep working when mutations are disabled."""
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from tests.test_research_console_contract import console_db  # noqa: F401  (fixture)
-from tests.test_research_studies_pipeline import RANGE, WINDOWS, _settings_dict
+from tests.test_research_studies_pipeline import RANGE, SLOW_YAML, WINDOWS, _settings_dict
 
 import trading_platform.api.app as api_app
 from trading_platform.core.settings import clear_settings_cache, load_settings
 from trading_platform.db.models.research import AssetCatalogEntry
 from trading_platform.db.session import session_scope
+from trading_platform.services.calendar import get_calendar
 from trading_platform.services.research import studies as studies_module
+from trading_platform.services.research.strategies import ResearchStrategyService
+from trading_platform.services.research.studies import StudyService
 
 URL = "/api/v1/research/studies/preflight"
 COVERAGE_CODES = {
@@ -106,7 +109,10 @@ def test_unknown_ticker_and_unequal_coverage(console_db) -> None:  # noqa: F811
         unknown = _preflight(client, _body([version_id], ["aaa", "zzz", " bbb ", "AAA", "  "]))
         assert [a["ticker"] for a in unknown["assets"]] == ["AAA", "ZZZ", "BBB"]
         zzz = unknown["assets"][1]
-        assert zzz == {"ticker": "ZZZ", "in_catalog": False, "name": None, "catalog_start": None, "catalog_end": None}
+        assert zzz == {
+            "ticker": "ZZZ", "in_catalog": False, "name": None, "catalog_start": None, "catalog_end": None,
+            "earliest_development_start": None, "feasibility": "unknown",
+        }
         assert {"code": "asset_not_in_catalog", "item": "ZZZ"} in unknown["errors"]
         assert unknown["latest_common_catalog_end"] == "2026-10-06"  # ZZZ is ignored
 
@@ -181,3 +187,177 @@ def test_preflight_is_read_only_and_works_with_mutations_disabled(console_db, mo
         assert refused.status_code == 403 and refused.json()["detail"]["code"] == "mutations_disabled"
         assert _preflight(client, _body([version_id], ["AAA", "BBB"]))["errors"] == []
     assert counts() == before
+
+
+# -- earliest development start / feasibility ---------------------------------------------
+
+FEASIBILITY = {"covers_selected_period", "cannot_cover_selected_period", "no_feasible_period", "unknown"}
+
+
+def _approve_slow(settings) -> dict:
+    strategies = ResearchStrategyService(settings)
+    return strategies.approve_draft(uuid.UUID(strategies.create_draft(title="slow", yaml_text=SLOW_YAML)["draft_id"]))
+
+
+def _expected_candidate(settings, catalog_start: date, warmup: int) -> date:
+    """Independent of the production helper: first session on/after the catalog start (and
+    the pinned calendar), then ``warmup`` sessions forward."""
+
+    cal = get_calendar(settings.market_data.calendar.exchange)
+    first = cal.date_to_session(max(catalog_start, cal.first_session.date()), direction="next")
+    return cal.session_offset(first, warmup).date()
+
+
+def _asset(payload: dict, ticker: str) -> dict:
+    return next(a for a in payload["assets"] if a["ticker"] == ticker)
+
+
+def test_earliest_start_is_minimal_and_drives_feasibility(console_db) -> None:  # noqa: F811
+    settings = console_db["settings"]
+    fast, slow = console_db["fast"], _approve_slow(settings)
+    h_fast, h_slow = fast["history_required"], slow["history_required"]
+    assert h_fast != h_slow
+    h_max = max(h_fast, h_slow)
+    catalog_start = date(2016, 3, 2)
+    _add_catalog(settings, "NEWCO", catalog_start, date(2026, 10, 6))
+    service = StudyService(settings)
+    cal = get_calendar(settings.market_data.calendar.exchange)
+    expected = _expected_candidate(settings, catalog_start, h_max)
+    previous = cal.previous_session(expected).date()
+    ids = [fast["version_id"], slow["version_id"]]
+    with TestClient(api_app.create_app()) as client:
+        result = _preflight(client, _body(ids, ["NEWCO"], dev=expected.isoformat()))
+        assert result["warmup_sessions_max"] == h_max
+        asset = _asset(result, "NEWCO")
+        assert asset["earliest_development_start"] == expected.isoformat() and asset["feasibility"] == "covers_selected_period"
+        assert result["errors"] == []
+        # Readiness boundary rules: covered for both versions at the candidate...
+        for h in (h_fast, h_slow):
+            required = service._required_start(expected, h)
+            assert required is not None and required >= catalog_start
+        # ... and minimal: one session earlier the longest warm-up reaches before the catalog.
+        before = service._required_start(previous, h_max)
+        assert before is not None and before < catalog_start
+        # Brute force over every session: nothing earlier than the candidate is covered.
+        covered = [
+            d.date()
+            for d in cal.sessions_in_range(cal.first_session, expected)
+            if all((r := service._required_start(d.date(), h)) is not None and r >= catalog_start for h in (h_fast, h_slow))
+        ]
+        assert covered and covered[0] == expected
+
+        # A requested start one session too early is flagged, and agrees with the error list.
+        early = _preflight(client, _body(ids, ["NEWCO"], dev=previous.isoformat()))
+        assert _asset(early, "NEWCO")["earliest_development_start"] == expected.isoformat()
+        assert _asset(early, "NEWCO")["feasibility"] == "cannot_cover_selected_period"
+        assert {e["code"] for e in early["errors"]} == {"coverage_start_too_late"}
+        # The default wizard start (well after the candidate) is covered; a later one too.
+        assert _asset(_preflight(client, _body(ids, ["NEWCO"])), "NEWCO")["feasibility"] == "covers_selected_period"
+        # Range end beyond the catalog end: cannot cover although the start is fine.
+        assert _asset(_preflight(client, _body(ids, ["NEWCO"], end="2027-06-01", dev=expected.isoformat())), "NEWCO")["feasibility"] == "cannot_cover_selected_period"
+        # A single shorter version moves the candidate earlier.
+        fast_only = _preflight(client, _body([fast["version_id"]], ["NEWCO"]))
+        assert fast_only["warmup_sessions_max"] == h_fast
+        assert _asset(fast_only, "NEWCO")["earliest_development_start"] == _expected_candidate(settings, catalog_start, h_fast).isoformat()
+        # No development start given: the earliest start is still reported, feasibility unknown.
+        no_dev = _preflight(client, _body(ids, ["NEWCO"], dev=None))
+        assert _asset(no_dev, "NEWCO")["earliest_development_start"] == expected.isoformat()
+        assert _asset(no_dev, "NEWCO")["feasibility"] == "unknown"
+
+
+def test_catalog_reaching_before_the_pinned_calendar_is_clamped_to_it(console_db) -> None:  # noqa: F811
+    settings = console_db["settings"]
+    fast = console_db["fast"]
+    h = fast["history_required"]
+    service = StudyService(settings)
+    with TestClient(api_app.create_app()) as client:
+        asset = _asset(_preflight(client, _body([fast["version_id"]], ["AAA"])), "AAA")  # catalog_start 1990, pin 2014-01-02
+    cal = get_calendar(settings.market_data.calendar.exchange)
+    expected = cal.session_offset(cal.first_session, h).date()
+    assert asset["earliest_development_start"] == expected.isoformat() and asset["feasibility"] == "covers_selected_period"
+    required = service._required_start(expected, h)
+    assert required == date(2014, 1, 2)
+    previous = cal.previous_session(expected).date()
+    assert service._required_start(previous, h) is None or service._required_start(previous, h) < date(2014, 1, 2)
+
+
+def test_no_room_for_three_windows_is_no_feasible_period(console_db) -> None:  # noqa: F811
+    settings = console_db["settings"]
+    fast = console_db["fast"]
+    h = fast["history_required"]
+    catalog_start = date(2016, 3, 2)
+    candidate = _expected_candidate(settings, catalog_start, h)
+    _add_catalog(settings, "TINY", catalog_start, candidate + timedelta(days=1))  # candidate + 2 days > end
+    _add_catalog(settings, "EDGE", catalog_start, candidate + timedelta(days=2))  # exactly three calendar days
+    _add_catalog(settings, "NOEND", catalog_start, None)
+    ids = [fast["version_id"]]
+    with TestClient(api_app.create_app()) as client:
+        tiny = _asset(_preflight(client, _body(ids, ["TINY"], end=(candidate + timedelta(days=1)).isoformat(), dev=candidate.isoformat())), "TINY")
+        assert tiny["earliest_development_start"] == candidate.isoformat() and tiny["feasibility"] == "no_feasible_period"
+        edge = _asset(_preflight(client, _body(ids, ["EDGE"], end=(candidate + timedelta(days=2)).isoformat(), dev=candidate.isoformat())), "EDGE")
+        assert edge["feasibility"] == "covers_selected_period"
+        noend = _asset(_preflight(client, _body(ids, ["NOEND"], end=None, dev=candidate.isoformat())), "NOEND")
+        assert noend["earliest_development_start"] == candidate.isoformat() and noend["feasibility"] == "unknown"
+
+
+def test_unknown_inputs_have_no_earliest_start(console_db) -> None:  # noqa: F811
+    settings = console_db["settings"]
+    fast = console_db["fast"]
+    with session_scope(settings) as session:
+        session.add(
+            AssetCatalogEntry(
+                id=uuid.uuid4(), provider="tiingo", ticker="NOSTART", exchange="NYSE", asset_type="Stock", currency="USD",
+                catalog_start=None, catalog_end=date(2026, 10, 6), name="No Start", name_source="nasdaq_trader", synced_at=datetime.now(UTC),
+            )
+        )
+    with TestClient(api_app.create_app()) as client:
+        result = _preflight(client, _body([fast["version_id"]], ["ZZZ", "NOSTART", "AAA"]))
+        assert result["warmup_sessions_max"] == fast["history_required"]
+        for ticker in ("ZZZ", "NOSTART"):
+            asset = _asset(result, ticker)
+            assert asset["earliest_development_start"] is None and asset["feasibility"] == "unknown"
+        assert _asset(result, "AAA")["earliest_development_start"] is not None
+
+        no_versions = _preflight(client, _body([], ["AAA", "ZZZ"]))
+        assert no_versions["warmup_sessions_max"] is None
+        assert all(a["earliest_development_start"] is None and a["feasibility"] == "unknown" for a in no_versions["assets"])
+        only_unapproved = _preflight(client, _body([str(uuid.uuid4())], ["AAA"]))
+        assert only_unapproved["warmup_sessions_max"] is None and _asset(only_unapproved, "AAA")["earliest_development_start"] is None
+
+        empty = _preflight(client, {})
+        assert empty["warmup_sessions_max"] is None and empty["assets"] == []
+        assert all(a["feasibility"] in FEASIBILITY for a in result["assets"])
+
+
+def test_calendar_out_of_bounds_gives_no_candidate(console_db, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    settings = console_db["settings"]
+    fast = console_db["fast"]
+    _add_catalog(settings, "FUTURE", date(2300, 1, 3), date(2300, 12, 30))  # beyond the library window
+    _add_catalog(settings, "NORMAL", date(2016, 3, 2), date(2026, 10, 6))
+    ids = [fast["version_id"]]
+    with TestClient(api_app.create_app()) as client:
+        future = _asset(_preflight(client, _body(ids, ["FUTURE"])), "FUTURE")
+        assert future["earliest_development_start"] is None and future["feasibility"] == "unknown"
+
+        assert _asset(_preflight(client, _body(ids, ["NORMAL"])), "NORMAL")["earliest_development_start"] is not None
+        # The readiness function itself says the warm-up is not satisfiable: no candidate verifies.
+        monkeypatch.setattr(StudyService, "_required_start", lambda self, window_start, history_required: None)
+        blocked = _asset(_preflight(client, _body(ids, ["NORMAL"])), "NORMAL")
+        assert blocked["earliest_development_start"] is None and blocked["feasibility"] == "unknown"
+
+
+def test_catalog_start_on_weekend_or_holiday_maps_to_the_next_session(console_db) -> None:  # noqa: F811
+    settings = console_db["settings"]
+    fast = console_db["fast"]
+    h = fast["history_required"]
+    saturday, holiday_weekend = date(2016, 3, 5), date(2016, 1, 16)  # Saturday; Saturday before MLK Monday 2016-01-18
+    assert saturday.weekday() == 5 and holiday_weekend.weekday() == 5
+    _add_catalog(settings, "SAT", saturday, date(2026, 10, 6))
+    _add_catalog(settings, "MLK", holiday_weekend, date(2026, 10, 6))
+    cal = get_calendar(settings.market_data.calendar.exchange)
+    monday, tuesday = date(2016, 3, 7), date(2016, 1, 19)
+    assert cal.is_session(monday) and not cal.is_session(date(2016, 1, 18)) and cal.is_session(tuesday)
+    with TestClient(api_app.create_app()) as client:
+        result = _preflight(client, _body([fast["version_id"]], ["SAT", "MLK"]))
+    assert _asset(result, "SAT")["earliest_development_start"] == cal.session_offset(monday, h).date().isoformat()
+    assert _asset(result, "MLK")["earliest_development_start"] == cal.session_offset(tuesday, h).date().isoformat()

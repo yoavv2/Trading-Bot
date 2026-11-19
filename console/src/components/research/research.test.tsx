@@ -375,6 +375,8 @@ describe("DraftEditor", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<DraftEditor draftId={null} onNavigate={() => {}} />);
     const textarea = screen.getByLabelText("Specification (YAML)") as HTMLTextAreaElement;
+    expect(textarea.closest("details")?.open).toBe(false);
+    expect(screen.getByRole("button", { name: "Create draft" })).toBeTruthy();
     fireEvent.change(textarea, { target: { value: "spec_version: 1\nname: broken\n" } });
     const button = await screen.findByText("Create draft");
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
@@ -557,9 +559,9 @@ describe("AssistantPanel", () => {
   it("explains a disabled assistant with the exact settings to set and keeps the input disabled", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { as_of: "t", assistant: { ...ASSISTANT_OK, enabled: false, configured: false, missing: ["TRADING_PLATFORM_RESEARCH__AI__ENABLED=true", "ANTHROPIC_API_KEY (or TRADING_PLATFORM_RESEARCH__AI__API_KEY)"] } })));
     render(<AssistantPanel draftId={null} editorYaml="" editorIsStarter capability={CAPABILITY} onUseInEditor={() => {}} onApplied={() => {}} />);
-    await screen.findByText("The assistant is disabled.");
+    await screen.findByText("The assistant is currently disabled.");
     expect(screen.getByText("ANTHROPIC_API_KEY (or TRADING_PLATFORM_RESEARCH__AI__API_KEY)")).toBeTruthy();
-    expect((screen.getByLabelText("Describe the strategy") as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByLabelText("What should the strategy do?") as HTMLTextAreaElement).disabled).toBe(true);
     expect((screen.getByText("Draft with the assistant") as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -567,7 +569,7 @@ describe("AssistantPanel", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { as_of: "t", assistant: { ...ASSISTANT_OK, usage: { ...ASSISTANT_OK.usage, requests_today: 20, remaining_today: 0 } } })));
     render(<AssistantPanel draftId={null} editorYaml="" editorIsStarter capability={CAPABILITY} onUseInEditor={() => {}} onApplied={() => {}} />);
     await screen.findByText(/allowance is used up \(20\/20\)/);
-    fireEvent.change(screen.getByLabelText("Describe the strategy"), { target: { value: "trend" } });
+    fireEvent.change(screen.getByLabelText("What should the strategy do?"), { target: { value: "trend" } });
     expect((screen.getByText("Draft with the assistant") as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -583,8 +585,9 @@ describe("AssistantPanel", () => {
     vi.stubGlobal("fetch", fetchMock);
     const used: string[] = [];
     render(<AssistantPanel draftId={null} editorYaml="" editorIsStarter capability={CAPABILITY} onUseInEditor={(y) => used.push(y)} onApplied={() => {}} />);
-    await screen.findByText(/today 2\/20 requests/);
-    fireEvent.change(screen.getByLabelText("Describe the strategy"), { target: { value: "50/200 trend with a 5% stop" } });
+    expect(screen.getByRole("heading", { name: "Describe your strategy" })).toBeTruthy();
+    await screen.findByText(/2 of 20/);
+    fireEvent.change(screen.getByLabelText("What should the strategy do?"), { target: { value: "50/200 trend with a 5% stop" } });
     const button = screen.getByText("Draft with the assistant") as HTMLButtonElement;
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
@@ -599,11 +602,13 @@ describe("AssistantPanel", () => {
     expect(screen.getByText("a 5% stop was requested")).toBeTruthy();
     expect(screen.getByText("A moving-average trend filter.")).toBeTruthy();
     expect(screen.getByText("Enter long when 1. close is above sma_slow.")).toBeTruthy();
-    expect((screen.getByLabelText("Proposed specification (YAML, editable)") as HTMLTextAreaElement).value).toContain("Trend following 50/200");
+    const proposedYaml = screen.getByLabelText("Proposed specification (advanced YAML)") as HTMLTextAreaElement;
+    expect(proposedYaml.value).toContain("Trend following 50/200");
+    expect(proposedYaml.closest("details")?.open).toBe(false);
     fireEvent.click(screen.getByText("Use in editor"));
     expect(used).toEqual(["spec_version: 1\nname: Trend following 50/200\n"]);
     // editing the proposal blocks the verbatim apply until reset
-    fireEvent.change(screen.getByLabelText("Proposed specification (YAML, editable)"), { target: { value: "spec_version: 1\nname: edited\n" } });
+    fireEvent.change(screen.getByLabelText("Proposed specification (advanced YAML)"), { target: { value: "spec_version: 1\nname: edited\n" } });
     expect((screen.getByText("Apply as a new draft") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByText("reset to the proposal"));
     expect((screen.getByText("Apply as a new draft") as HTMLButtonElement).disabled).toBe(false);
@@ -623,20 +628,20 @@ describe("AssistantPanel", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<AssistantPanel draftId="d1" editorYaml="spec_version: 1\nname: seed\n" editorIsStarter={false} capability={CAPABILITY} onUseInEditor={() => {}} onApplied={() => {}} />);
-    await screen.findByText(/today 2\/20 requests/);
-    const input = screen.getByLabelText("Describe the correction");
+    await screen.findByText(/2 of 20/);
+    const input = screen.getByLabelText("What would you like to change?");
     fireEvent.change(input, { target: { value: "use 60 days" } });
     const button = screen.getByText("Request a revision") as HTMLButtonElement;
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
     await screen.findByTestId("assistant-proposal");
-    fireEvent.change(screen.getByLabelText("Describe the correction"), { target: { value: "and exit at 2% below" } });
+    fireEvent.change(screen.getByLabelText("What would you like to change?"), { target: { value: "and exit at 2% below" } });
     await waitFor(() => expect((screen.getByText("Request a revision") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByText("Request a revision"));
     await screen.findByRole("alert");
     expect(screen.getByRole("alert").textContent).toContain("did not answer within the deadline (60s)");
     expect(screen.getByRole("alert").textContent).toContain("Your text and the last proposal are kept");
-    expect((screen.getByLabelText("Describe the correction") as HTMLTextAreaElement).value).toBe("and exit at 2% below");
+    expect((screen.getByLabelText("What would you like to change?") as HTMLTextAreaElement).value).toBe("and exit at 2% below");
     expect(screen.getByTestId("assistant-proposal")).toBeTruthy();
   });
 
@@ -656,8 +661,8 @@ describe("AssistantPanel", () => {
     vi.stubGlobal("fetch", fetchMock);
     const applied: string[] = [];
     render(<AssistantPanel draftId="d1" editorYaml="spec_version: 1\nname: seed\n" editorIsStarter={false} capability={CAPABILITY} onUseInEditor={() => {}} onApplied={(d) => applied.push(d.draft_id)} />);
-    await screen.findByText(/this draft 1\/5 revisions/);
-    fireEvent.change(screen.getByLabelText("Describe the correction"), { target: { value: "x" } });
+    await screen.findByText(/1\/5 revisions on this draft/);
+    fireEvent.change(screen.getByLabelText("What would you like to change?"), { target: { value: "x" } });
     await waitFor(() => expect((screen.getByText("Request a revision") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByText("Request a revision"));
     await screen.findByTestId("assistant-proposal");

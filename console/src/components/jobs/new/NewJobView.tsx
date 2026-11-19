@@ -103,10 +103,10 @@ export function NewJobView({ jobType, initialParams, onNavigate }: NewJobViewPro
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">New Job</h1>
-      <ul className="space-y-3">
+      <h1 className="page-heading mb-4">New maintenance task</h1>
+      <ul className="grid gap-4 md:grid-cols-2">
         {result.data.items.map((item) => (
-          <li key={item.job_type}>
+          <li key={item.job_type} className="surface-panel">
             <Link
               href={`/jobs/new?type=${encodeURIComponent(item.job_type)}`}
               className="text-xs font-semibold text-sky-400 hover:underline"

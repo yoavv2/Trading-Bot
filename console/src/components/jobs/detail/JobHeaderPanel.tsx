@@ -198,7 +198,9 @@ export function JobHeaderPanel({ job, onChanged, onNavigate }: JobHeaderPanelPro
         <p className="mt-2 text-sm text-zinc-300">{outcomeLabel}</p>
       ) : null}
 
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+      {job.failure_reason || job.failure_message || job.outcome_uncertain ? <div role="alert" className="mt-4 rounded-lg border border-red-800 bg-red-950 p-3 text-sm text-red-100">Task issue: {job.failure_message ?? job.failure_reason ?? "Outcome uncertain"}{job.outcome_uncertain ? " · Outcome uncertain" : ""}</div> : null}
+      <details className="mt-3"><summary>Task details, dependencies and timestamps</summary>
+      <dl className="mt-3 grid grid-cols-[minmax(100px,1fr)_minmax(0,3fr)] gap-x-4 gap-y-2 text-xs">
         <dt className="text-zinc-500">Job ID</dt>
         <dd className="break-all font-mono text-zinc-300">{job.id}</dd>
 
@@ -309,7 +311,7 @@ export function JobHeaderPanel({ job, onChanged, onNavigate }: JobHeaderPanelPro
             </div>
           )}
         </dd>
-      </dl>
+      </dl></details>
 
       {cancellableStatus ? (
         <CancelJobDialog

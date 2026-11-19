@@ -7,7 +7,7 @@ import { useMutationCapability } from "@/lib/useMutationCapability";
 import { ErrorState } from "@/components/ErrorState";
 import type { AssetList, CatalogCoverage, Revision, StrategyVersion, Study, StudySettings } from "@/lib/research/types";
 import { dedupe, mergeAssets, normalizeTicker } from "@/lib/research/assets";
-import { coverageByTicker, endDateAdvice, groupPreflight, missingInputs } from "@/lib/research/preflight";
+import { coverageByTicker, endDateAdvice, groupPreflight, missingInputs, removableAssets } from "@/lib/research/preflight";
 import { useStudyPreflight } from "@/lib/useStudyPreflight";
 import { DEFAULT_SPLIT, computeWindows, splitFromWindows, validatePeriod, windowsEqual, type Split, type Windows } from "@/lib/research/windows";
 import { AssetPicker } from "./AssetPicker";
@@ -210,13 +210,13 @@ function VersionPicker({ selected, onToggle, versions }: { selected: string[]; o
   return (
     <>
       <p className="mt-1 text-xs text-zinc-500">
-        Every approved version is selectable, not only the latest; several versions of one family compare as separate candidates. Each is identified by name, version number, approval date and specification hash.
+        Choose one or more approved strategies to compare. Older versions remain available.
       </p>
-      <ul className="mt-2 space-y-3 text-sm">
+      <ul className="version-grid mt-4 space-y-3 text-sm">
         {families.map((family) => (
-          <li key={family.strategy_id}>
+          <li key={family.strategy_id} className="version-choice">
             <p className="text-xs font-semibold uppercase text-zinc-400">
-              {family.name} <span className="font-mono normal-case text-zinc-600">family {family.strategy_id.slice(0, 8)}</span> · {family.versions.length} version(s)
+              {family.name} <span className="sr-only">family {family.strategy_id.slice(0, 8)}</span> · {family.versions.length} version(s)
             </p>
             <ul className="mt-1 space-y-1">
               {family.versions.map((version, index) => (
@@ -227,11 +227,11 @@ function VersionPicker({ selected, onToggle, versions }: { selected: string[]; o
                       {version.name} v{version.version_no}
                     </span>
                     {index === 0 ? <span className="rounded border border-zinc-700 px-1 text-xs text-zinc-400">latest</span> : <span className="rounded border border-zinc-800 px-1 text-xs text-zinc-500">older</span>}
-                    <span className="text-xs text-zinc-500">
+                    </label>
+                    <details><summary>Version details</summary><span className="text-xs text-zinc-500">
                       approved {version.approved_at?.slice(0, 10) ?? "—"} · {version.source.replace(/_/g, " ")} · history {version.history_required} sessions · hash{" "}
                       <span className="font-mono">{version.spec_sha256.slice(0, 12)}</span>
-                    </span>
-                  </label>
+                    </span></details>
                 </li>
               ))}
             </ul>
@@ -331,6 +331,17 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
   const endAdvice = endDateAdvice(preflight.data, state.rangeEnd);
   const lastCompletedSession = (preflight.data ?? preflight.last)?.calendar.last_completed_session ?? null;
   const missing = missingInputs(state);
+  const removable = removableAssets(allAssets, preflight.data);
+  // Confirmed readiness failures: coverage findings the backend reported, or inputs the
+  // readiness check is certain to flag. Unknown coverage is not a confirmed failure.
+  const confirmedFailures = Boolean(findings && (findings.byAsset.length > 0 || findings.general.length > 0)) || missing.length > 0;
+  const createLabel = fromStudyId
+    ? confirmedFailures
+      ? "Create revision with readiness warnings"
+      : "Create new revision"
+    : confirmedFailures
+      ? "Create study with readiness warnings (revision 1)"
+      : "Create study (revision 1)";
   const periodIssues = validatePeriod(state.rangeStart, state.rangeEnd, wizardWindows(state));
   const blockers = wizardBlockers(state, Boolean(fromStudyId), listTickers);
   const disabled = busy || capability.state !== "enabled" || blockers.length > 0;
@@ -342,7 +353,18 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
     : null;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <div><h1 className="page-heading">{fromStudyId ? "Refine your study" : "Set up a study"}</h1><p className="muted mt-2">Choose what to test, set your assumptions and review data readiness before running.</p></div>
+      <div className="wizard-layout">
+      <nav aria-label="Study setup sections" className="wizard-nav">
+        {["Strategies", "Assets", "Research period", "Risk & costs"].map((label, index) => <a key={label} href={`#setup-${index + 1}`}><span>{index + 1}</span>{label}</a>)}
+      </nav>
+      <div className="space-y-5">
+      <section className="surface-panel"><h2 className="text-sm font-semibold">Give your study a name</h2>        <label className="mt-2 block text-xs text-zinc-400">
+          Study name {fromStudyId ? "(kept from the study)" : ""}
+          <input value={state.name} onChange={(event) => patch({ name: event.target.value })} className={FIELD} disabled={Boolean(fromStudyId)} />
+        </label>
+</section>
       {fromStudyId ? (
         <p className="rounded border border-cyan-900 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-100">
           New revision of study <span className="font-mono">{fromStudyId.slice(0, 8)}</span>
@@ -366,14 +388,14 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
         </p>
       ) : null}
 
-      <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
-        <h2 className="text-sm font-semibold text-zinc-200">1. Strategy versions (approved only)</h2>
+      <section id="setup-1" className="surface-panel scroll-mt-6">
+        <h2 className="text-sm font-semibold text-zinc-200">1. Choose strategies</h2>
         <VersionPicker selected={state.versionIds} onToggle={toggleVersion} versions={versions} />
         <p className="mt-2 text-xs text-zinc-500">Selected: {state.versionIds.length} version(s).</p>
       </section>
 
-      <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
-        <h2 className="text-sm font-semibold text-zinc-200">2. Assets</h2>
+      <section id="setup-2" className="surface-panel scroll-mt-6">
+        <h2 className="text-sm font-semibold text-zinc-200">2. Choose assets</h2>
         <AssetPicker
           manual={state.assets}
           onManualChange={(assets) => patch({ assets })}
@@ -386,10 +408,12 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           coverageLoading={preflight.loading}
           findings={findings}
           preflightFailure={preflight.failure}
+          removable={removable}
+          warmupSessionsMax={preflight.data?.warmup_sessions_max ?? null}
         />
       </section>
 
-      <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
+      <section id="setup-3" className="surface-panel scroll-mt-6">
         <h2 className="text-sm font-semibold text-zinc-200">3. Research period</h2>
         <ResearchPeriod
           value={{ rangeStart: state.rangeStart, rangeEnd: state.rangeEnd, split: state.split, mode: state.periodMode, windows: wizardWindows(state) }}
@@ -411,8 +435,8 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
         />
       </section>
 
-      <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
-        <h2 className="text-sm font-semibold text-zinc-200">4. Capital, quantities, costs, objective</h2>
+      <section id="setup-4" className="surface-panel scroll-mt-6">
+        <h2 className="text-sm font-semibold text-zinc-200">4. Set risk, capital and trading costs</h2>
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
           <label className="block text-xs text-zinc-400">
             Initial capital
@@ -421,15 +445,15 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           <label className="block text-xs text-zinc-400">
             Quantity policy
             <select value={state.quantityPolicy} onChange={(event) => patch({ quantityPolicy: event.target.value as WizardState["quantityPolicy"] })} className={FIELD}>
-              <option value="fractional">fractional (research default)</option>
-              <option value="whole_shares">whole shares</option>
+              <option value="fractional">Fractional shares</option>
+              <option value="whole_shares">Whole shares</option>
             </select>
           </label>
           <label className="block text-xs text-zinc-400">
-            Objective (default selection: return first)
+            Objective
             <select value={state.objective} onChange={(event) => patch({ objective: event.target.value as WizardState["objective"] })} className={FIELD}>
-              <option value="return_first">return first (constraint: max drawdown cap)</option>
-              <option value="risk_first">risk first (constraint: CAGR floor)</option>
+              <option value="return_first">Prioritize return · limit drawdown</option>
+              <option value="risk_first">Prioritize lower risk · require minimum growth</option>
             </select>
           </label>
           <label className="block text-xs text-zinc-400">
@@ -462,24 +486,20 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
         </div>
         <p className="mt-1 text-xs text-zinc-500">Costs and the constraint value are your inputs; a missing one makes the revision not ready (`costs_missing`, `constraint_missing`) instead of being filled in.</p>
         <label className="mt-2 block text-xs text-zinc-400">
-          Study name {fromStudyId ? "(kept from the study)" : ""}
-          <input value={state.name} onChange={(event) => patch({ name: event.target.value })} className={FIELD} disabled={Boolean(fromStudyId)} />
-        </label>
-        <label className="mt-2 block text-xs text-zinc-400">
           Note (optional)
           <input value={state.note} onChange={(event) => patch({ note: event.target.value })} className={FIELD} />
         </label>
         {!fromStudyId ? (
-          <label className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
+          <details className="mt-4"><summary>Advanced: pipeline test</summary><label className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
             <input type="checkbox" checked={state.kind === "smoke"} onChange={(event) => patch({ kind: event.target.checked ? "smoke" : "substantive" })} />
             Smoke run: an integration test of the pipeline, labelled as such everywhere; its settings are test configuration, not research objectives, and its outcome is not a research claim.
-          </label>
+          </label></details>
         ) : null}
       </section>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={submit} disabled={disabled} className="rounded border border-cyan-700 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-950 disabled:opacity-50">
-          {fromStudyId ? "Create new revision" : "Create study (revision 1)"}
+      <div className="wizard-actions flex flex-wrap items-center gap-3">
+        <button type="button" onClick={submit} disabled={disabled} className="button-primary">
+          {createLabel}
         </button>
         <span className="text-xs text-zinc-500">Creating does not run anything; the readiness screen lists every problem first.</span>
         {capability.state !== "enabled" ? <span className="text-xs text-zinc-500">{capability.reason ?? "Mutation availability unknown"}</span> : null}
@@ -508,6 +528,8 @@ export function StudyWizard({ onNavigate, fromStudyId = null }: { onNavigate: (h
           {message} Your entries are kept.
         </p>
       ) : null}
+      </div>
+      </div>
     </div>
   );
 }

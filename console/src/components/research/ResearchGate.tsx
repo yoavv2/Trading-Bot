@@ -18,10 +18,8 @@ const START_COMMAND = "make dev";
 export function ResearchGate({ title, children }: { title: string; children: ReactNode }) {
   const mode = useResearchMode();
   return (
-    <main className="flex-1 p-6">
-      <div className="mb-4 flex flex-wrap items-center gap-4">
-        <h1 className="text-xl font-semibold text-zinc-100">{title}</h1>
-      </div>
+    <main className="page-content">
+      <div className="page-route-title"><span className="eyebrow">{title.replace("Research · ", "")}</span></div>
       {mode.state === "trading" ? (
         <div role="alert" className="rounded border border-amber-800 bg-amber-950/40 px-4 py-3 text-sm text-amber-100">
           <p className="font-semibold">This API runs in trading mode.</p>

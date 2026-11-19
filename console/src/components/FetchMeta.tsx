@@ -11,7 +11,7 @@ type FetchMetaProps = {
  */
 export function FetchMeta({ asOf, loading, onRefresh }: FetchMetaProps) {
   const timestamp = asOf
-    ? `as of ${asOf.toLocaleTimeString(undefined, {
+    ? `as of ${asOf.toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
@@ -19,7 +19,7 @@ export function FetchMeta({ asOf, loading, onRefresh }: FetchMetaProps) {
     : "as of —";
 
   return (
-    <div className="flex items-center gap-2 text-xs text-zinc-400">
+    <div className="fetch-meta">
       <span>{timestamp}</span>
       <button
         type="button"

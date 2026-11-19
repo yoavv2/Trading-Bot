@@ -21,6 +21,11 @@ import { JobFilters, type JobFiltersValue } from "./JobFilters";
 import type { JobsResponse } from "./types";
 
 const POLL_INTERVAL_SECONDS = 5;
+function ActivityTime({ value }: { value: string | null }) {
+  if (!value) return <>—</>;
+  const date = new Date(value);
+  return <time dateTime={value} title={value}>{Number.isNaN(date.getTime()) ? value : date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time>;
+}
 
 function buildJobsEndpoint(status: string, jobType: string): string {
   const params = new URLSearchParams({ limit: "50" });
@@ -60,9 +65,9 @@ export function JobsTable() {
   const filtersActive = Boolean(filters.status) || Boolean(filters.jobType);
 
   return (
-    <section className="rounded border border-zinc-800 bg-zinc-900/40 p-4">
+    <section className="surface-panel">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-        <h2 className="text-sm font-semibold text-zinc-200">Jobs</h2>
+        <h2 className="text-sm font-semibold text-zinc-200">Background tasks</h2>
         <div className="flex flex-wrap items-center gap-3">
           <AutoRefreshIndicator
             polling={polling}
@@ -123,7 +128,7 @@ export function JobsTable() {
             </div>
           )
         ) : (
-          <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto"><table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-zinc-800 text-xs uppercase text-zinc-500">
                 <th className="py-2 pr-4">Job type</th>
@@ -154,9 +159,9 @@ export function JobsTable() {
                       {outcome ? outcome.label : job.status}
                     </span>
                   </td>
-                  <td className="py-2 pr-4">{job.queued_at ?? "—"}</td>
-                  <td className="py-2 pr-4">{job.started_at ?? "—"}</td>
-                  <td className="py-2 pr-4">{job.completed_at ?? "—"}</td>
+                  <td className="py-2 pr-4"><ActivityTime value={job.queued_at} /></td>
+                  <td className="py-2 pr-4"><ActivityTime value={job.started_at} /></td>
+                  <td className="py-2 pr-4"><ActivityTime value={job.completed_at} /></td>
                   <td className="py-2 pr-4">
                     {job.failure_reason
                       ? `${job.failure_reason}${
@@ -176,7 +181,7 @@ export function JobsTable() {
                 );
               })}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
     </section>

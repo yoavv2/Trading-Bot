@@ -33,11 +33,11 @@ export function JobResourcesPanel({ resources, status }: JobResourcesPanelProps)
               const href = resourceHref(resource.kind, resource.id);
               const text = `${resource.kind}: ${resource.id}`;
               return (
-                <li key={`${resource.kind}:${resource.id}`} className="flex items-center gap-2">
+                <li key={`${resource.kind}:${resource.id}`} className="flex flex-wrap items-center gap-2">
                   {href ? (
                     <Link
                       href={href}
-                      className="font-semibold text-sky-400 hover:underline"
+                      className="min-w-0 break-all font-semibold text-sky-400 hover:underline"
                     >
                       {text}
                     </Link>

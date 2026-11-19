@@ -18,7 +18,7 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
   const { jobId } = use(params);
 
   return (
-    <main className="flex-1 p-6">
+    <main className="page-content">
       <JobDetailView jobId={jobId} />
     </main>
   );

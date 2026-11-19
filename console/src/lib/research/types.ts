@@ -250,9 +250,19 @@ export type ReadinessError = { code: string; item: string; [key: string]: unknow
 // against the wizard's entries, without creating a study. Read-only.
 export type StudyPreflight = {
   calendar: { exchange: string; pinned_start: string | null; today: string; last_completed_session: string | null };
-  assets: { ticker: string; in_catalog: boolean; name: string | null; catalog_start: string | null; catalog_end: string | null }[];
+  assets: {
+    ticker: string;
+    in_catalog: boolean;
+    name: string | null;
+    catalog_start: string | null;
+    catalog_end: string | null;
+    /** Earliest development start whose warm-up (longest among the selected versions) the catalog covers; null when unknown. */
+    earliest_development_start: string | null;
+    feasibility: "unknown" | "no_feasible_period" | "cannot_cover_selected_period" | "covers_selected_period";
+  }[];
   versions: { version_id: string; name: string | null; version_no: number | null; history_required: number | null; approved: boolean }[];
   required_start_by_version: Record<string, string | null>;
+  warmup_sessions_max: number | null;
   latest_common_catalog_end: string | null;
   errors: ReadinessError[];
   checked: { strategy_versions: number; assets: number; pairs: number };

@@ -161,90 +161,11 @@ export function DraftEditor({ draftId, onNavigate }: { draftId: string | null; o
 
   return (
     <div className="space-y-4">
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <section className="space-y-3">
-        <label className="block text-sm">
-          <span className="text-zinc-400">Title</span>
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-100"
-            placeholder="Draft title"
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="text-zinc-400">Specification (YAML)</span>
-          <textarea
-            value={yaml}
-            onChange={(event) => setYaml(event.target.value)}
-            spellCheck={false}
-            rows={26}
-            className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 p-2 font-mono text-xs text-zinc-100"
-          />
-        </label>
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={save} disabled={disabled} className="rounded border border-zinc-600 px-3 py-1 text-sm text-zinc-100 hover:bg-zinc-800 disabled:opacity-50">
-            {draftId ? "Save draft" : "Create draft"}
-          </button>
-          {draftId ? (
-            <>
-              <button type="button" onClick={() => setConfirmApprove(true)} disabled={disabled || !canApprove} className="rounded border border-emerald-700 px-3 py-1 text-sm text-emerald-200 hover:bg-emerald-950 disabled:opacity-50">
-                Approve as immutable version…
-              </button>
-              <button type="button" onClick={duplicate} disabled={disabled} className="rounded border border-zinc-600 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50">
-                Duplicate
-              </button>
-              <button type="button" onClick={remove} disabled={disabled} className="rounded border border-red-800 px-3 py-1 text-sm text-red-200 hover:bg-red-950 disabled:opacity-50">
-                Delete draft
-              </button>
-            </>
-          ) : null}
-          {disabledReason ? <span className="text-xs text-zinc-500">{disabledReason}</span> : null}
-        </div>
-        {!canApprove && draftId ? (
-          <p className="text-xs text-zinc-500">Approval needs a valid specification whose validation matches the current text.</p>
-        ) : null}
-        {confirmApprove ? (
-          <div className="rounded border border-emerald-800 bg-emerald-950/30 p-3 text-sm">
-            <p className="text-emerald-100">
-              Approve this specification as an immutable version? The version can never be edited or deleted; editing later creates a new draft.
-            </p>
-            <div className="mt-2 flex gap-2">
-              <button type="button" onClick={approve} disabled={disabled} className="rounded border border-emerald-600 px-3 py-1 text-emerald-100 hover:bg-emerald-900 disabled:opacity-50">
-                Approve
-              </button>
-              <button type="button" onClick={() => setConfirmApprove(false)} className="rounded border border-zinc-600 px-3 py-1 text-zinc-300">
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : null}
-        {outcome.kind === "error" ? (
-          <p role="alert" className="rounded border border-red-800 bg-red-950/60 px-3 py-2 text-sm text-red-100">
-            {outcome.message} Your text is kept.
-          </p>
-        ) : null}
-        {outcome.kind === "info" ? <p className="text-sm text-emerald-300">{outcome.message}</p> : null}
-        {provenance ? (
-          <p className="text-xs text-zinc-500" data-testid="draft-provenance">
-            {provenance.summary.replace(", approved by user", "")} · {provenance.attempts[0]?.provider}/{provenance.attempts[0]?.model} · prompt {provenance.attempts[0]?.prompt_version}
-          </p>
-        ) : null}
-        {draftId && query.result?.ok && query.result.data.draft.parent_version_id ? (
-          <p className="text-xs text-zinc-500">
-            Derived from version{" "}
-            <Link href={`/research/strategies/versions/${query.result.data.draft.parent_version_id}`} className="text-cyan-300">
-              {query.result.data.draft.parent_version_id.slice(0, 8)}
-            </Link>{" "}
-            ({query.result.data.draft.source.replace(/_/g, " ")}).
-          </p>
-        ) : null}
-      </section>
-      <div className="space-y-4">
-        <ValidationPanel outcome={validation} pending={pending} />
-        <ExplanationPanel explanation={validation?.valid && !pending ? validation.explanation : null} />
-      </div>
-    </div>
+    <header>
+      <p className="eyebrow">Strategy research</p>
+      <h1 className="page-heading">{draftId ? "Refine your strategy" : "Build a strategy"}</h1>
+      <p className="muted mt-1 text-sm">Describe the idea in your own words. Review the rules and validation before saving a draft.</p>
+    </header>
     <AssistantPanel
       draftId={draftId}
       editorYaml={yaml}
@@ -265,6 +186,96 @@ export function DraftEditor({ draftId, onNavigate }: { draftId: string | null; o
         query.refetch();
       }}
     />
+
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(300px,.75fr)]">
+      <section className="surface-panel space-y-4">
+        <div>
+          <p className="eyebrow">Your working copy</p>
+          <h2 className="text-lg font-semibold">Draft details</h2>
+          <p className="muted mt-1 text-sm">Review the plain-language explanation and validation before saving or approving.</p>
+        </div>
+        <label className="block text-sm">
+          <span className="font-medium">Draft name</span>
+          <input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--foreground)]"
+            placeholder="Name this strategy"
+          />
+        </label>
+        <div className="surface-muted rounded-xl p-4">
+          <p className="eyebrow">What happens next</p>
+          <p className="mt-1 text-sm">A valid draft can be saved and reviewed. Approval creates a new immutable strategy version for studies.</p>
+        </div>
+        <details className="rounded-xl border border-[var(--border)] p-4">
+          <summary className="cursor-pointer font-medium">Advanced: example rules and YAML editor</summary>
+          <p className="muted mt-2 text-sm">Optional. The starter is an example to edit or replace; it is not saved until you choose Save draft. Most people can build and revise the strategy with the assistant above.</p>
+          <label className="mt-4 block text-sm">
+            <span className="font-medium">Specification (YAML)</span>
+            <textarea
+              value={yaml}
+              onChange={(event) => setYaml(event.target.value)}
+              spellCheck={false}
+              rows={24}
+              className="mt-2 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] p-3 font-mono text-xs leading-6 text-[var(--foreground)]"
+            />
+          </label>
+        </details>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={save} disabled={disabled} className="button-secondary disabled:opacity-50">{draftId ? "Save draft" : "Create draft"}</button>
+          {draftId ? (
+            <>
+              <button type="button" onClick={() => setConfirmApprove(true)} disabled={disabled || !canApprove} className="button-primary disabled:opacity-50">Approve immutable version…</button>
+              <button type="button" onClick={duplicate} disabled={disabled} className="button-secondary disabled:opacity-50">Duplicate draft</button>
+              <button type="button" onClick={remove} disabled={disabled} className="button-secondary border-[var(--negative)]/40 text-[var(--negative)] disabled:opacity-50">Delete draft</button>
+            </>
+          ) : null}
+          {disabledReason ? <span className="muted text-xs">{disabledReason}</span> : null}
+        </div>
+        {!canApprove && draftId ? <p className="muted text-xs">Approval needs a valid specification whose validation matches the current text.</p> : null}
+        {confirmApprove ? (
+          <div className="rounded-xl border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-4 text-sm">
+            <p>Approve this specification as an immutable version? It cannot be edited or deleted. Later changes create another draft.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={approve} disabled={disabled} className="button-primary disabled:opacity-50">Confirm approval</button>
+              <button type="button" onClick={() => setConfirmApprove(false)} className="button-secondary">Cancel</button>
+            </div>
+          </div>
+        ) : null}
+        {outcome.kind === "error" ? (
+          <p role="alert" className="rounded-lg border border-[var(--negative)]/30 bg-[var(--negative)]/5 px-3 py-2 text-sm text-[var(--negative)]">
+            {outcome.message} Your text is kept.
+          </p>
+        ) : null}
+        {outcome.kind === "info" ? <p className="text-sm text-[var(--positive)]">{outcome.message}</p> : null}
+        {draftId && query.result?.ok && query.result.data.draft.parent_version_id ? (
+          <details className="muted text-sm">
+            <summary className="cursor-pointer">Draft lineage</summary>
+            <p className="mt-2">Derived from <Link href={`/research/strategies/versions/${query.result.data.draft.parent_version_id}`} className="text-[var(--accent)] hover:underline">version {query.result.data.draft.parent_version_id.slice(0, 8)}</Link> ({query.result.data.draft.source.replace(/_/g, " ")}).</p>
+          </details>
+        ) : null}
+      </section>
+      <div className="space-y-4">
+        <ExplanationPanel explanation={validation?.valid && !pending ? validation.explanation : null} />
+        <ValidationPanel outcome={validation} pending={pending} example={!draftId && yaml === STARTER_YAML} />
+      </div>
+    </div>
+    {provenance ? (
+      <details className="surface-panel" data-testid="draft-provenance">
+        <summary className="cursor-pointer font-medium">Assistant history · {provenance.requests} request{provenance.requests === 1 ? "" : "s"}</summary>
+        <p className="muted mt-2 text-sm">{provenance.summary.replace(", approved by user", "")}</p>
+        <ol className="mt-3 space-y-2">
+          {provenance.attempts.map((attempt) => (
+            <li key={attempt.ai_draft_id} className="surface-muted rounded-lg p-3 text-xs">
+              <div className="font-medium">{attempt.kind} · attempt {attempt.attempt_no} · {attempt.status}</div>
+              <div className="muted mt-1">{attempt.provider}/{attempt.model} · prompt {attempt.prompt_version} · {attempt.completed_at ?? "In progress"}</div>
+              <p className="mt-2 whitespace-pre-wrap">{attempt.user_text}</p>
+              {attempt.note ? <p className="muted mt-1">Assistant note: {attempt.note}</p> : null}
+            </li>
+          ))}
+        </ol>
+      </details>
+    ) : null}
     </div>
   );
 }
