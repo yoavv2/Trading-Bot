@@ -53,7 +53,7 @@ def codes_of(raw: dict[str, Any]) -> list[SpecErrorCode]:
         (lambda s: s.update({"universe": ["AAPL"]}), SpecErrorCode.UNKNOWN_FIELD),
         (lambda s: s.pop("entry"), SpecErrorCode.MISSING_FIELD),
         (lambda s: s.update({"name": 12}), SpecErrorCode.INVALID_TYPE),
-        (lambda s: s.update({"spec_version": 2}), SpecErrorCode.SPEC_VERSION_UNSUPPORTED),
+        (lambda s: s.update({"spec_version": 3}), SpecErrorCode.SPEC_VERSION_UNSUPPORTED),
         (lambda s: s.update({"timeframe": "1h"}), SpecErrorCode.TIMEFRAME_NOT_SUPPORTED),
         (lambda s: s.update({"direction": "long_short"}), SpecErrorCode.DIRECTION_NOT_SUPPORTED),
         (lambda s: s["indicators"].update({"macd": {"type": "macd", "window": 12}}), SpecErrorCode.UNSUPPORTED_INDICATOR),

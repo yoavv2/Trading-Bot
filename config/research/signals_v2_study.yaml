@@ -1,0 +1,59 @@
+# Protocol of the first signals study (docs/SIGNALS-PLAN.md, Step 1).
+#
+# Written on 2026-11-19 before any v2 run. `scripts/run_signals_v2_study.py` reads this
+# file, records its SHA-256 with the results, and refuses to run a second time into the
+# same output directory. Changing anything here after a run is a new study.
+
+name: signals-v2-base-risk-2026-11-19
+
+# The four example rule sets, each with the same base risk block
+# (stop 5%, target 2R, minimum reward-to-risk 1.5): config/research/examples_v2/.
+versions:
+  - trend_following_daily
+  - rsi_mean_reversion_daily
+  - donchian_breakout_daily
+  - time_series_momentum_daily
+
+# The assets that have Tiingo bars in the research database today. They were picked by
+# the owner for earlier v1 studies, three of them (NVDA, PLTR, SMCI) after large rises,
+# so results on this list overstate what an asset list chosen in advance would give.
+assets: [NVDA, PLTR, QQQ, SMCI, URA]
+
+data:
+  provider: tiingo
+  adjusted: true
+  # Bars before `range.start` are read as indicator history only (253 sessions at most).
+  history_from: 2020-10-06
+
+range: {start: 2021-10-07, end: 2026-10-07}
+
+# Selection reads development and validation. The holdout is the last year; it is run
+# once, for one version, after the selection is fixed.
+windows:
+  development: {start: 2021-10-07, end: 2024-10-04}
+  validation: {start: 2024-10-07, end: 2025-10-06}
+  holdout: {start: 2025-10-07, end: 2026-10-07}
+
+# One asset per run, the whole capital in each trade. R does not depend on the size.
+initial_capital: 100000
+quantity_policy: fractional
+costs:
+  slippage_bps: 5 # against the trade, on every entry and every exit
+  commission_per_order: 1 # USD
+
+# A version is judged on the pool of its trades across the five assets, in net R, with
+# the stop assumed first on every bar that touched both levels.
+criteria:
+  min_closed_trades_development: 30
+  min_closed_trades_validation: 10
+  # also required, with no parameter:
+  #   mean net R > 0 in development and in validation;
+  #   development total net R > 0 and at least its largest R drawdown.
+  min_profitable_assets_development: 3 # assets with total net R > 0, out of 5
+  min_trades_per_month_development: 1
+  # Holdout, top-ranked qualifying version only: mean net R > 0 on at least this many
+  # closed trades confirms it. Fewer trades: insufficient evidence. Otherwise: failed.
+  # In both cases the choice stays open.
+  min_closed_trades_holdout: 8
+# Ranking of qualifying versions: the lower of the development and validation mean net R,
+# highest first; ties by development total net R.

@@ -1,0 +1,346 @@
+# Signals product: work plan
+
+Written 2026-11-19. This is the single entry point for continuing the work in a
+new session. It records what was decided, what the repository contains now, what
+is still open, and the order of the build.
+
+## 1. Start here (new session)
+
+1. Read this file, then `docs/STRATEGY-SPEC-V1.md` and
+   `docs/STRATEGY-SPEC-V2.md` (the contracts the validator and interpreter
+   implement).
+2. Check section 4 (blockers) and section 5 (open decisions) with the owner
+   before writing code that depends on them.
+3. **Step 1** (section 6) is built and its study has run. The study chose no
+   pilot candidate; read the Step 1 status before starting Step 2.
+
+Working rules the owner set:
+
+- No GSD workflow, no `.planning/` tree, no `CLAUDE.md` in this repository.
+- Do not rebuild the old console. The new UI is undecided.
+- Requirements are written as testable invariants: closed enums, typed errors,
+  database constraints. No "direction" wording.
+- Commits go on a branch; the owner merges through a GitHub pull request.
+
+## 2. What we are building and why
+
+A signals product in Hebrew for swing trading U.S. stocks and ETFs, with a
+community built through Shorts and Reels.
+
+The reference is SBX Capital (`app.sbxpremium.com`): 7–12 signals a month, each
+published in advance with entry, stop and target; push and WhatsApp updates at
+every stage; a public performance page listing every closed trade, losers
+included, measured in R; free tier with 1–2 signals a month and a paid tier at
+180 ₪ a month. The user places the trades at their own broker. SBX signals are
+chosen by analysts.
+
+Our difference: **every signal comes from an approved, rule-based strategy
+version, and the backtest evidence for that version is shown next to its live
+record.** SBX has no backtesting, walk-forward or out-of-sample evidence. That
+is also the content angle for the videos ("I tested this strategy over ten
+years, here is what came out"), and the research tool already produces the
+charts and numbers for it.
+
+We are not copying SBX's analyst desk, academy or events. Those are operations,
+not software.
+
+## 3. Repository state on 2026-11-19
+
+`main` is the only branch, in sync with `origin` (HEAD `5939187`).
+
+**Kept and working (the research backend):**
+
+- Strategy specification v1: `src/trading_platform/strategies/spec/`
+  (`schema.py`, `validate.py`, `evaluate.py`, `explain.py`, `errors.py`).
+  Daily bars, long-only, one asset per run, closed error codes.
+- The one interpreter: `src/trading_platform/strategies/declarative.py`
+  (`DeclarativeDailyStrategy.generate_signals(db_session, as_of)` already
+  returns a `SignalBatch` for a date; evaluation is stateless).
+- Research services: `src/trading_platform/services/research/` (catalog, Tiingo
+  ingestion, integrity, freeze, studies, backtest, metrics, evidence, ranking,
+  report, assistant).
+- Research API: `src/trading_platform/api/research/`, mounted only in research
+  mode.
+- Job framework: `src/trading_platform/jobs/`. The research registry holds six
+  Job types: `catalog-sync`, `ingest-tiingo-bars`, `sync-market-sessions`,
+  `research-freeze`, `research-backtest`, `research-evaluate`.
+- Research database `trading_research`, migrations through `0034`.
+- Four approved example versions (trend following 50/200, RSI mean reversion,
+  Donchian breakout, time-series momentum), and a v2 version of each with the
+  base risk block (`config/research/examples_v2/`), seeded by the study
+  script.
+
+**Removed on 2026-11-19 (recoverable from git history):**
+
+- `console/` (Next.js UI). The last state, including unfinished redesign work,
+  is commit `37e5e80`.
+- `.planning/` (GSD roadmap, phases, milestones). Only the specification
+  contract was kept, as `docs/STRATEGY-SPEC-V1.md`.
+- The Vercel project `trading-platform-console` and the local `.vercel/` link.
+
+**Frozen, not part of the product:** the trading backend (paper execution,
+reconciliation, broker code, migrations `0022`–`0030`). The signals product
+places no orders and contacts no broker, so none of it is needed.
+
+**Running it:** `make research-bootstrap` once, then `make dev` (research API
+on `127.0.0.1:8000` plus the Job worker). There is no UI.
+
+**Tests:** `PYTHONPATH=src .venv/bin/pytest -q`. Seven old failures remain on
+`main` and are unrelated to the signals work: the `universe_size` assertion in
+`tests/test_app_boot.py`, one test in `tests/test_api_reads.py`, three in
+`tests/test_dev_workflow.py` and two in
+`tests/test_orchestration_boundaries.py`. Most still expect the removed
+console (`npm run dev`, Makefile console targets).
+
+## 4. Blockers the owner must close
+
+Neither blocks building Steps 1–3. Both block showing signals or the
+performance record to anyone outside: until the legal check and the commercial
+data licence are both closed, the Step 3 screen and API stay internal.
+
+| Blocker | Why it matters | Blocks |
+|---|---|---|
+| Legal check with a lawyer | Publishing trade signals for payment in Israel may count as investment advice or marketing, which requires a licence from the Israel Securities Authority. SBX states it holds none. | Making the Step 3 record public; Step 4 onward |
+| Commercial market-data licence | The Tiingo key is a personal-use licence. It does not cover distributing signals derived from the data. | Making the Step 3 record public; Step 4 onward |
+
+## 5. Open decisions
+
+| Decision | Options discussed | Needed by |
+|---|---|---|
+| Distribution channel | WhatsApp channel, Telegram, own app with push | Step 4 |
+| New UI | Not designed. Public performance page first, or member app first | Step 3 or 5 |
+| Free versus paid split | SBX gives 1–2 free signals a month | Step 5 |
+| Which strategy version publishes first, and on which assets | Still open. The first v2 study (Step 1 status) chose no candidate: the top-ranked version failed the holdout. Next: a new study with a wider asset list fixed in advance, a longer history, unchanged base risk settings and a fresh holdout | Before any pilot |
+| Short signals, ATR and indicator stops | Deferred until a strategy under study needs them | After Step 3 |
+| Hosting | Local only today | Step 3 |
+
+## 6. Build order
+
+Each step lists what must be true when it is done. These are the acceptance
+conditions; write them as tests.
+
+### Step 1: one long strategy, from specification to an internal signal log
+
+Agreed 2026-11-19. This is a narrow slice through the specification, the
+backtest engine and the daily engine, for one long strategy. It comes before
+any UI or payment work. Steps 2 and 3 then widen it.
+
+The v1 contract rejects stop and target prices
+(`stop_or_target_price_not_supported`). A signal needs entry, stop and target.
+
+**Specification v2 (long only, minimal):**
+
+- `spec_version: 2` adds a required `risk` block with three fields:
+  `stop` (percent below the reference price), `target` (multiple of the
+  planned risk) and `min_reward_risk` (see entry rule 3).
+- `direction` stays `long`. Short, ATR stops and indicator stops are not in
+  this step; requesting them returns a closed error code.
+- A v1 document stays valid and evaluates exactly as before. The four example
+  versions keep passing the existing parity tests.
+- Every new rejection has a code in the closed error list. The plain-language
+  explanation renders the stop, target and minimum reward-to-risk.
+
+**Entry rules:**
+
+1. A signal is produced after the close of session D. Its reference price is
+   that close. Stop and target are computed from the reference price, stored
+   with the signal and never edited.
+2. The simulated entry is the open of session D+1.
+3. The signal expires without a trade if the D+1 open is at or beyond the stop,
+   at or beyond the target, or leaves a reward-to-risk ratio below
+   `min_reward_risk`. Example: reference 100, stop 95, target 110. An open at
+   111 expires. An open at 102 gives reward 8 against risk 7, a ratio of 1.14;
+   it opens only if `min_reward_risk` is 1.14 or lower.
+4. R for the performance record is measured against the actual initial risk
+   (entry minus stop), 7 per share in the example.
+
+**Exit rules for an open trade, in this order within a session:**
+
+1. If the session opens at or beyond the stop or the target, exit at the open.
+2. If the strategy's exit rule was true at the previous close, exit at the
+   open. A later touch of either level occurs after the position has closed.
+3. Otherwise check the session's low and high against the stop and target. If
+   only one is touched, exit at that level.
+4. If both are touched, record a stop exit and set the flag
+   `intrabar_order_unknown`. A daily bar cannot show which came first. The
+   flag lets us report how much of the result depends on this assumption.
+
+**One implementation for both engines:** the entry and exit rules above live
+in one shared function used by the backtest engine and the daily engine, so
+backtest evidence and the live record are comparable.
+
+**First tests to write, shared by both engines:**
+
+- the open is beyond the target before entry (signal expires, no trade);
+- a gap through the stop on an open trade (exit at the open);
+- one bar touches both levels (stop exit, flag set).
+
+**Evidence:** adding a stop and a target changes a strategy's results; a
+percent stop can cut a trend strategy's winners short. The v1 study results do
+not carry over. Run a new study on the v2 versions and choose the first
+publishing strategy from it.
+
+**Done when:** one approved v2 long version produces daily signals into an
+internal, append-only log, and each logged signal can be compared with the
+backtest of the same version under the same rules.
+
+**Status 2026-11-19: built; the study ran and chose no pilot candidate.**
+
+Built (contract in `docs/STRATEGY-SPEC-V2.md`):
+
+- Specification v2: `strategies/spec/schema.py`, `validate.py`, `explain.py`.
+  The four v1 digests are pinned in `tests/test_strategy_spec_v2.py`.
+- The shared rules: `strategies/trade_rules.py` (`plan_levels`,
+  `resolve_entry`, `resolve_exit`, `r_multiple`, `net_r_multiple`).
+- Backtest engine: `services/backtesting.py` calls the shared rules when the
+  strategy declares a risk block. A trade stores its levels, the rule entry
+  and exit prices (before costs), `exit_reason` and `intrabar_order_unknown`.
+- Daily engine: `services/signals/engine.py` (`run_signal_session`,
+  `run_signal_sessions`), writing `signal_log` and `signal_session_runs`.
+  Both tables refuse UPDATE and DELETE (migration `0034_signals_step1`).
+- Comparison: `services/signals/comparison.py`. For every signal it compares
+  the levels, the final state (`expired`, `open`, `closed_stop`,
+  `closed_target`, `closed_rule`), the entry and exit sessions and rule
+  prices, the exit reason, the flag and gross R. Net R comes from the
+  backtest's cost model and is reported separately (`net_r_from_backtest`).
+- Metrics in R: `services/research/risk_metrics.py`, stored in each v2 run's
+  `result_summary["research"]["risk_metrics"]`: signals and trades a month,
+  expiries by reason, mean and total gross and net R, the R drawdown, the
+  share of flagged trades and the result if the target had come first.
+- Selection rules: `services/research/signal_selection.py`, with closed
+  failure codes and verdicts.
+- Study runner: `services/research/signal_study.py` and
+  `scripts/run_signals_v2_study.py`, driven by the protocol
+  `config/research/signals_v2_study.yaml`.
+- Tests: `tests/test_trade_rules.py`, `tests/test_strategy_spec_v2.py`,
+  `tests/test_signals_step1_engines.py`, `tests/test_signal_study.py`.
+
+The study (`docs/studies/signals-v2-base-risk-2026-11-19/`: `REPORT.md` and
+`results.json` with every version id, run id, digest, window and the cost
+model):
+
+- Setup, fixed in the protocol before any run: the four example rule sets
+  with stop 5%, target 2R, minimum reward-to-risk 1.5; NVDA, PLTR, QQQ, SMCI
+  and URA on adjusted Tiingo bars; development 2021-10-07 to 2024-10-04,
+  validation 2024-10-07 to 2025-10-06, holdout 2025-10-07 to 2026-10-07;
+  5 bps slippage on each fill and 1 USD per order.
+- The daily engine and the backtest agreed on all 45 runs: 1,686 signals and
+  1,139 closed trades compared, 0 differences.
+- Three versions met every selection criterion on development and
+  validation. Donchian breakout ranked first (mean net R 0.40 and 0.50) and
+  was the only version run on the holdout. It failed there: 21 closed trades,
+  mean net R −0.05, total −1.13 R. **No pilot candidate is chosen.**
+- Trend following and time-series momentum also qualified. They were not run
+  on the holdout; trying them there now would turn the holdout into a
+  selection window. RSI mean reversion had too few trades (28 in three years).
+- About 30% of entry signals expired because the next open left a
+  reward-to-risk below 1.5. With these values that is any open more than 1%
+  above the reference close.
+- No trade had a bar that touched both levels, so the stop-first assumption
+  changed nothing in this study.
+- Limits: five assets and five years; three of the assets were picked after
+  large rises, so the development and validation figures overstate what an
+  asset list fixed in advance would give. Prices are adjusted prices.
+
+Still open in Step 1:
+
+- The historical run recorded a dirty Git revision. Its exact source snapshot
+  cannot be verified from that identifier.
+- The first pilot strategy. It needs a new protocol: a wider asset list fixed
+  in advance and a longer history (both need more Tiingo bars in the research
+  database). Keep the base risk settings fixed and reserve a fresh holdout for
+  that study.
+- The study HTML report (`services/research/report.py`) does not show the R
+  metrics; the study script writes its own Markdown report.
+- The AI assistant still writes v1 documents only. This can wait.
+
+Left to Step 2 on purpose: a Job type or command that runs the daily engine
+(today it is a function), the `skipped` result for a missing bar (today a
+typed refusal, `missing_bar`), the input data digest on each signal, and
+transition order enforced by the database.
+
+### Step 2: daily signal engine
+
+Hardens the daily run that Step 1 introduced. Move the Step 1 research study
+runner to a Job and retire its script and mutation-boundary exemption.
+
+- A Job type `signals-daily` runs after the U.S. close for a configured set of
+  (approved version, asset) pairs: ingest the latest bar, check integrity,
+  evaluate, write the results.
+- Signal lifecycle is a closed state machine:
+  `issued → open → closed_target | closed_stop | closed_rule`, and
+  `issued → expired` under entry rule 3 of Step 1. Illegal transitions are refused by
+  the database.
+- One signal per (version, asset, session date). A re-run of the same date
+  writes nothing new (unique constraint, tested by running the Job twice).
+- A session with missing or failed-integrity data produces a recorded
+  `skipped` result with a reason code. It never produces a signal and is never
+  silently ignored.
+- Exchange holidays and half days come from the existing sessions calendar; no
+  run happens on a non-session date.
+- Each signal stores the version id, the specification digest and the input
+  data digest it was computed from.
+
+### Step 3: append-only performance record
+
+Turns Step 1's internal log into the public record.
+
+- Signals and their events (`issued`, `expired`, `entry_filled`,
+  `rule_exit_signalled`, `closed_stop`, `closed_target`, `closed_rule`) are
+  append-only. A database trigger refuses UPDATE and DELETE, the same pattern
+  as approved strategy versions. There is no stop-moved event: in
+  specification v2 the stop is fixed when the signal is issued.
+- The record is published before the outcome is known: an `issued` event's
+  timestamp precedes the session it applies to, and a test asserts it.
+- A read-only API returns every closed signal, losers included, with entry,
+  exit, R result and running totals. Open signals are excluded from totals.
+- The same page shows, for each strategy version, its backtest evidence beside
+  its live record. This is the product's main claim.
+- This step needs a first screen, so the UI decision in section 5 comes due.
+- The screen and the API stay internal (no public URL, no access for anyone
+  outside) until both blockers in section 4 are closed: the legal check and
+  the commercial data licence.
+
+### Step 4: free distribution
+
+Requires both blockers in section 4 to be closed.
+
+- Each signal event is delivered once to the chosen channel. Delivery is
+  recorded per event; a retry does not send a duplicate.
+- A message carries: asset, direction, entry, stop, target, the reason in
+  plain language (from the specification's explanation), and a link to the
+  record.
+- A fixed risk disclaimer is attached to every message.
+
+### Step 5: accounts and payment
+
+- Sign-up, sign-in, free and paid tiers. The free tier's signal allowance is
+  enforced on the server.
+- Monthly subscription in shekels with cancellation effective at the end of
+  the paid period.
+- Tools around the signals, in this order if wanted: position-size calculator,
+  trade journal, price alerts.
+
+### In parallel, no code needed: content
+
+- Start the Shorts and Reels now. Source material: study results, equity and
+  drawdown charts, and the static `report.html` the research tool already
+  exports.
+- Format that fits what we have: one strategy, one asset, ten years, the
+  honest result including drawdowns.
+- Do not publish live signals or performance claims until the legal check is
+  done.
+
+## 7. Risks to keep in view
+
+- **Backtest and live must not drift.** One shared evaluation path for both;
+  otherwise the evidence shown beside a signal is not evidence for it.
+- **Few signals.** Four strategies on a short asset list may produce far fewer
+  than SBX's 7–12 a month. Measure the expected rate from backtests before
+  promising a cadence.
+- **Adjusted prices.** Research uses adjusted bars. Entry, stop and target
+  shown to users must be in prices they can actually trade; decide this in
+  Step 2.
+- **Marketing claims.** SBX's own pages contradict each other (90% hit rate on
+  the home page, 56% on the performance page). Our numbers come only from the
+  append-only record.

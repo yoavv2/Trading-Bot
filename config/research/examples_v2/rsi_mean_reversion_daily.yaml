@@ -1,0 +1,22 @@
+spec_version: 2
+name: RSI mean reversion 14, stop 5% and target 2R (example)
+description: >-
+  Example translated from the original rsi_mean_reversion_daily strategy. The original feeds a
+  100-bar window to Wilder's recursion, so history is 100 (mathematical minimum 15). Long when the
+  RSI is below 30; exit when it is above 70.
+  The entry and exit rules are those of the v1 example, unchanged; this version adds the
+  base risk block used by the first signals study.
+timeframe: daily
+direction: long_only
+indicators:
+  rsi14: {type: rsi, source: close, window: 14, history: 100}
+entry:
+  all_of:
+    - {left: rsi14, op: lt, right: 30}
+exit:
+  any_of:
+    - {left: rsi14, op: gt, right: 70}
+risk:
+  stop: {type: percent, value: 5}
+  target: {type: risk_multiple, value: 2}
+  min_reward_risk: 1.5

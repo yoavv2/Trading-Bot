@@ -1,0 +1,24 @@
+spec_version: 2
+name: Trend following 50/200, stop 5% and target 2R (example)
+description: >-
+  Example translated from the original trend_following_daily strategy. Long when the close is above
+  the 200-session average and the 50-session average is above it; exit when the close falls below
+  the 50-session average. Exit is checked before entry, as in the original.
+  The entry and exit rules are those of the v1 example, unchanged; this version adds the
+  base risk block used by the first signals study.
+timeframe: daily
+direction: long_only
+indicators:
+  sma_fast: {type: sma, source: close, window: 50}
+  sma_slow: {type: sma, source: close, window: 200}
+entry:
+  all_of:
+    - {left: close, op: gt, right: sma_slow}
+    - {left: sma_fast, op: gt, right: sma_slow}
+exit:
+  any_of:
+    - {left: close, op: lt, right: sma_fast}
+risk:
+  stop: {type: percent, value: 5}
+  target: {type: risk_multiple, value: 2}
+  min_reward_risk: 1.5

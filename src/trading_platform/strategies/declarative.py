@@ -19,6 +19,7 @@ from trading_platform.strategies.base import BaseStrategy, StrategyBootstrapResu
 from trading_platform.strategies.signals import IndicatorSnapshot, Signal, SignalBatch
 from trading_platform.strategies.spec.evaluate import Evaluation, evaluate
 from trading_platform.strategies.spec.validate import CompiledSpec
+from trading_platform.strategies.trade_rules import RiskPlan
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session as DbSession
@@ -49,6 +50,13 @@ class DeclarativeDailyStrategy(BaseStrategy):
     @property
     def compiled(self) -> CompiledSpec:
         return self._compiled
+
+    @property
+    def risk_plan(self) -> RiskPlan | None:
+        """The specification's stop/target plan; ``None`` for a v1 document. The engines
+        read this to decide whether the shared trade rules apply."""
+
+        return self._compiled.risk
 
     def bar_source(self) -> tuple[str, bool]:
         if self._explicit_bar_source is not None:
@@ -89,9 +97,20 @@ class DeclarativeDailyStrategy(BaseStrategy):
                 "history_minimum": self._compiled.history_minimum,
                 "spec_sha256": self._compiled.spec_sha256,
             },
-            risk={"declared_in_strategy": False},
+            risk=self._risk_metadata(),
             exits={"rule": "exit condition tree; checked before entry on every close"},
         )
+
+    def _risk_metadata(self) -> dict[str, object]:
+        risk = self._compiled.risk
+        if risk is None:
+            return {"declared_in_strategy": False}
+        return {
+            "declared_in_strategy": True,
+            "stop_percent": str(risk.stop_percent),
+            "target_risk_multiple": str(risk.target_risk_multiple),
+            "min_reward_risk": str(risk.min_reward_risk),
+        }
 
     def dry_run(self, services: object) -> StrategyBootstrapResult:
         return StrategyBootstrapResult(

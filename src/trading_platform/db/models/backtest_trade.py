@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, ForeignKey, Index, Integer, Numeric, String, Uuid
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from trading_platform.db.base import Base, TimestampedModel
@@ -73,6 +73,16 @@ class BacktestTrade(TimestampedModel, Base):
     rounding_slack: Mapped[Decimal | None] = mapped_column(
         Numeric(precision=20, scale=6), nullable=True
     )
+    # Signals Step 1 (0034): set only when the strategy declares a risk block (spec v2).
+    # The levels belong to the signal that opened the trade and never change.
+    reference_price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
+    target_price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
+    # The prices the shared trade rules gave, before slippage: the open, the stop or the target.
+    rule_entry_price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
+    rule_exit_price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)  # stop | target | rule
+    intrabar_order_unknown: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     strategy_run: Mapped["StrategyRun"] = relationship(back_populates="backtest_trades")
     symbol_ref: Mapped["Symbol"] = relationship()

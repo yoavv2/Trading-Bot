@@ -31,6 +31,16 @@ from trading_platform.services.market_data_access import (
 )
 from trading_platform.strategies.registry import StrategyRegistry, build_default_registry
 from trading_platform.strategies.signals import Signal, SignalDirection
+from trading_platform.strategies.trade_rules import (
+    EntryOutcome,
+    ExitDecision,
+    ExitReason,
+    RiskPlan,
+    SignalLevels,
+    plan_levels,
+    resolve_entry,
+    resolve_exit,
+)
 
 MONEY_SCALE = Decimal("0.000001")
 FRACTIONAL_QUANTITY_SCALE = Decimal("0.000001")
@@ -110,6 +120,8 @@ class PendingAction:
     action: Literal["entry", "exit"]
     signal: Signal
     fill_session: date
+    # Set for an entry when the strategy declares a risk block (specification v2).
+    levels: SignalLevels | None = None
 
 
 @dataclass
@@ -117,6 +129,7 @@ class OpenPosition:
     symbol_id: uuid.UUID
     ticker: str
     trade: BacktestTrade
+    levels: SignalLevels | None = None
 
 
 def resolve_backtest_window(
@@ -336,6 +349,12 @@ def _execute_backtest_run(
     slot_notional = initial_capital / Decimal(max_concurrent_positions)
     zero_quantity_fill_count = 0
     rounding_slack_total = Decimal("0")
+    # Specification v2: stop, target and entry expiry, decided by the shared trade rules
+    # (``strategies/trade_rules.py``). ``None`` keeps every step below exactly as it was.
+    risk_plan: RiskPlan | None = getattr(strategy, "risk_plan", None)
+    expired_by_reason: dict[str, int] = {outcome.value: 0 for outcome in EntryOutcome if outcome is not EntryOutcome.OPENED}
+    exits_by_reason: dict[str, int] = {reason.value: 0 for reason in ExitReason}
+    intrabar_order_unknown_count = 0
 
     with session_scope(settings) as session:
         strategy_run = session.get(StrategyRun, run_id)
@@ -371,6 +390,67 @@ def _execute_backtest_run(
         skipped_entry_fill_count = 0
         skipped_exit_fill_count = 0
         ending_equity = initial_capital
+        # Signal rows awaiting their entry outcome, keyed by (symbol, signal session).
+        entry_signal_rows: dict[tuple[str, date], BacktestSignal] = {}
+
+        def close_position(
+            position: OpenPosition,
+            *,
+            fill_session: date,
+            raw_price: Decimal,
+            exit_signal_session: date | None,
+            decision: ExitDecision | None = None,
+        ) -> None:
+            nonlocal cash, cumulative_realized_net, filled_exit_count, intrabar_order_unknown_count
+            fill_price = _apply_exit_fill_price(raw_price, slippage_bps)
+            exit_slippage = _slippage_cost(raw_price, fill_price, position.trade.quantity)
+            exit_commission = commission_per_order
+            realized_pnl = _money(
+                (fill_price - position.trade.entry_price) * position.trade.quantity
+            )
+            net_pnl = _money(
+                realized_pnl - position.trade.entry_commission - exit_commission
+            )
+            cash = _money(
+                cash + (position.trade.quantity * fill_price) - exit_commission
+            )
+            cumulative_realized_net = _money(cumulative_realized_net + net_pnl)
+
+            position.trade.status = "closed"
+            position.trade.exit_signal_session = exit_signal_session
+            position.trade.exit_fill_session = fill_session
+            position.trade.exit_price = fill_price
+            position.trade.exit_commission = exit_commission
+            position.trade.exit_slippage = exit_slippage
+            position.trade.realized_pnl = realized_pnl
+            position.trade.net_pnl = net_pnl
+            position.trade.holding_period_sessions = (
+                session_index[fill_session] - session_index[position.trade.entry_fill_session]
+            )
+            if decision is not None:
+                position.trade.rule_exit_price = decision.price
+                position.trade.exit_reason = decision.reason.value
+                position.trade.intrabar_order_unknown = decision.intrabar_order_unknown
+                exits_by_reason[decision.reason.value] += 1
+                if decision.intrabar_order_unknown:
+                    intrabar_order_unknown_count += 1
+            filled_exit_count += 1
+            del open_positions[position.ticker]
+
+        def record_entry_outcome(signal: Signal, outcome: EntryOutcome) -> None:
+            signal_row = entry_signal_rows.pop((signal.symbol, signal.session_date), None)
+            if signal_row is not None:
+                signal_row.signal_metadata = {**signal_row.signal_metadata, "entry_outcome": outcome.value}
+
+        def exit_decision_for(position: OpenPosition, bar, *, rule_exit_due: bool) -> ExitDecision | None:
+            assert position.levels is not None
+            return resolve_exit(
+                position.levels,
+                open_price=bar.open,
+                high=bar.high,
+                low=bar.low,
+                rule_exit_due=rule_exit_due,
+            )
 
         for session_date in session_dates:
             bars_today = bars_for_session_date(
@@ -382,40 +462,53 @@ def _execute_backtest_run(
             )
             fills_due = pending_actions.pop(session_date, [])
 
-            for action in [item for item in fills_due if item.action == "exit"]:
-                position = open_positions.get(action.signal.symbol)
-                bar = bars_today.get(action.signal.symbol)
-                if position is None or bar is None:
-                    skipped_exit_fill_count += 1
-                    continue
+            exit_actions = {
+                item.signal.symbol: item for item in fills_due if item.action == "exit"
+            }
+            # Range exits of positions that were open before today; applied after today's
+            # entries because they happen after the open.
+            intrabar_exits: list[tuple[OpenPosition, ExitDecision]] = []
+            opened_today: list[OpenPosition] = []
 
-                fill_price = _apply_exit_fill_price(bar.open, slippage_bps)
-                exit_slippage = _slippage_cost(bar.open, fill_price, position.trade.quantity)
-                exit_commission = commission_per_order
-                realized_pnl = _money(
-                    (fill_price - position.trade.entry_price) * position.trade.quantity
-                )
-                net_pnl = _money(
-                    realized_pnl - position.trade.entry_commission - exit_commission
-                )
-                cash = _money(
-                    cash + (position.trade.quantity * fill_price) - exit_commission
-                )
-                cumulative_realized_net = _money(cumulative_realized_net + net_pnl)
-
-                position.trade.status = "closed"
-                position.trade.exit_signal_session = action.signal.session_date
-                position.trade.exit_fill_session = session_date
-                position.trade.exit_price = fill_price
-                position.trade.exit_commission = exit_commission
-                position.trade.exit_slippage = exit_slippage
-                position.trade.realized_pnl = realized_pnl
-                position.trade.net_pnl = net_pnl
-                position.trade.holding_period_sessions = (
-                    session_index[session_date] - session_index[position.trade.entry_fill_session]
-                )
-                filled_exit_count += 1
-                del open_positions[action.signal.symbol]
+            if risk_plan is None:
+                for action in [item for item in fills_due if item.action == "exit"]:
+                    position = open_positions.get(action.signal.symbol)
+                    bar = bars_today.get(action.signal.symbol)
+                    if position is None or bar is None:
+                        skipped_exit_fill_count += 1
+                        continue
+                    close_position(
+                        position,
+                        fill_session=session_date,
+                        raw_price=bar.open,
+                        exit_signal_session=action.signal.session_date,
+                    )
+            else:
+                for symbol in exit_actions:
+                    if symbol not in open_positions or bars_today.get(symbol) is None:
+                        skipped_exit_fill_count += 1
+                for position in list(open_positions.values()):
+                    bar = bars_today.get(position.ticker)
+                    if bar is None:
+                        continue
+                    rule_exit = exit_actions.get(position.ticker)
+                    decision = exit_decision_for(position, bar, rule_exit_due=rule_exit is not None)
+                    if decision is None:
+                        continue
+                    if not decision.at_open:
+                        intrabar_exits.append((position, decision))
+                        continue
+                    close_position(
+                        position,
+                        fill_session=session_date,
+                        raw_price=decision.price,
+                        exit_signal_session=(
+                            rule_exit.signal.session_date
+                            if rule_exit is not None and decision.reason is ExitReason.RULE
+                            else None
+                        ),
+                        decision=decision,
+                    )
 
             for action in [item for item in fills_due if item.action == "entry"]:
                 if action.signal.symbol in open_positions:
@@ -429,6 +522,16 @@ def _execute_backtest_run(
                 if bar is None:
                     skipped_entry_fill_count += 1
                     continue
+
+                if risk_plan is not None:
+                    assert action.levels is not None
+                    entry_decision = resolve_entry(
+                        action.levels, open_price=bar.open, min_reward_risk=risk_plan.min_reward_risk
+                    )
+                    if not entry_decision.opened:
+                        expired_by_reason[entry_decision.outcome.value] += 1
+                        record_entry_outcome(action.signal, entry_decision.outcome)
+                        continue
 
                 fill_price = _apply_entry_fill_price(bar.open, slippage_bps)
                 quantity, rounding_slack = _entry_quantity(
@@ -461,6 +564,14 @@ def _execute_backtest_run(
                     # ``None`` on trading-path rows (unchanged); the actual residual on research rows.
                     rounding_slack=rounding_slack if opts.research else None,
                 )
+                if action.levels is not None:
+                    trade.reference_price = action.levels.reference
+                    trade.stop_price = action.levels.stop
+                    trade.target_price = action.levels.target
+                    trade.rule_entry_price = bar.open
+                    # Recorded only once the trade exists: a fill skipped for a zero
+                    # quantity leaves the signal without an entry outcome.
+                    record_entry_outcome(action.signal, EntryOutcome.OPENED)
                 rounding_slack_total += rounding_slack
                 session.add(trade)
                 session.flush()
@@ -470,9 +581,33 @@ def _execute_backtest_run(
                     symbol_id=symbol_map[action.signal.symbol].id,
                     ticker=action.signal.symbol,
                     trade=trade,
+                    levels=action.levels,
                 )
+                if risk_plan is not None:
+                    opened_today.append(open_positions[action.signal.symbol])
                 trade_count += 1
                 filled_entry_count += 1
+
+            for position, decision in intrabar_exits:
+                close_position(
+                    position,
+                    fill_session=session_date,
+                    raw_price=decision.price,
+                    exit_signal_session=None,
+                    decision=decision,
+                )
+            for position in opened_today:
+                # The entry session's own range counts: the stop or the target can be
+                # touched after the open that filled the entry.
+                decision = exit_decision_for(position, bars_today[position.ticker], rule_exit_due=False)
+                if decision is not None:
+                    close_position(
+                        position,
+                        fill_session=session_date,
+                        raw_price=decision.price,
+                        exit_signal_session=None,
+                        decision=decision,
+                    )
 
             batch = strategy.generate_signals(session, session_date)
             next_session = next_session_by_date.get(session_date)
@@ -519,7 +654,16 @@ def _execute_backtest_run(
                     continue
 
                 pending_actions[next_session].append(
-                    PendingAction(action="entry", signal=signal, fill_session=next_session)
+                    PendingAction(
+                        action="entry",
+                        signal=signal,
+                        fill_session=next_session,
+                        levels=(
+                            plan_levels(signal.indicators.close, risk_plan)
+                            if risk_plan is not None
+                            else None
+                        ),
+                    )
                 )
                 signal_actions[signal.symbol] = ("scheduled_entry", next_session)
                 scheduled_entry_count += 1
@@ -534,20 +678,28 @@ def _execute_backtest_run(
                         "indicators": signal.indicators.to_dict()["values"],
                     }
                 )
-                session.add(
-                    BacktestSignal(
-                        strategy_run_id=run_id,
-                        symbol_id=symbol_map[signal.symbol].id,
-                        session_date=signal.session_date,
-                        direction=signal.direction.value,
-                        reason=signal.reason.value,
-                        close=signal.indicators.close,
-                        sma_short=signal.indicators.sma_short,
-                        sma_long=signal.indicators.sma_long,
-                        bars_available=signal.indicators.bars_available,
-                        signal_metadata=signal_metadata,
-                    )
+                if risk_plan is not None and action_name == "scheduled_entry":
+                    levels = plan_levels(signal.indicators.close, risk_plan)
+                    signal_metadata["levels"] = {
+                        "reference": str(levels.reference),
+                        "stop": str(levels.stop),
+                        "target": str(levels.target),
+                    }
+                signal_row = BacktestSignal(
+                    strategy_run_id=run_id,
+                    symbol_id=symbol_map[signal.symbol].id,
+                    session_date=signal.session_date,
+                    direction=signal.direction.value,
+                    reason=signal.reason.value,
+                    close=signal.indicators.close,
+                    sma_short=signal.indicators.sma_short,
+                    sma_long=signal.indicators.sma_long,
+                    bars_available=signal.indicators.bars_available,
+                    signal_metadata=signal_metadata,
                 )
+                session.add(signal_row)
+                if risk_plan is not None and action_name == "scheduled_entry":
+                    entry_signal_rows[(signal.symbol, signal.session_date)] = signal_row
                 signal_count += 1
 
             gross_exposure = Decimal("0")
@@ -607,6 +759,17 @@ def _execute_backtest_run(
             summary["engine_options"] = opts.to_dict()
             summary["zero_quantity_fills"] = zero_quantity_fill_count
             summary["rounding_slack_total"] = str(_money(rounding_slack_total))
+        if risk_plan is not None:
+            # Additive, v2-only keys (a run without a risk block keeps its summary unchanged).
+            summary["risk"] = {
+                "stop_percent": str(risk_plan.stop_percent),
+                "target_risk_multiple": str(risk_plan.target_risk_multiple),
+                "min_reward_risk": str(risk_plan.min_reward_risk),
+                "expired_signals": sum(expired_by_reason.values()),
+                "expired_by_reason": dict(expired_by_reason),
+                "exits_by_reason": dict(exits_by_reason),
+                "intrabar_order_unknown_exits": intrabar_order_unknown_count,
+            }
         strategy_run.result_summary = summary
         return summary
 

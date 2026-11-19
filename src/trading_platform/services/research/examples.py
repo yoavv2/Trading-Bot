@@ -23,6 +23,10 @@ from trading_platform.strategies.spec.explain import explain
 from trading_platform.strategies.spec.validate import CompiledSpec, validate_spec
 
 EXAMPLES_DIR = PROJECT_ROOT / "config" / "research" / "examples"
+# The same four rule sets as specification v2: each adds the base ``risk`` block (stop 5%,
+# target 2R, minimum reward-to-risk 1.5). Seeded as the next version of the same family by
+# ``seed_example_versions(session, directory=EXAMPLES_V2_DIR)``; the bootstrap seeds v1 only.
+EXAMPLES_V2_DIR = PROJECT_ROOT / "config" / "research" / "examples_v2"
 EXAMPLE_NAMESPACE = uuid.UUID("5f0d1f1e-9a3c-4f2e-9d6d-2a7f3c8e4b10")
 EXAMPLE_KEYS: tuple[str, ...] = (
     "trend_following_daily",

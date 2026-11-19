@@ -82,6 +82,40 @@ def _lines(node: Node, indent: int, counter: list[int], out: list[str]) -> None:
         _lines(child, indent + 1, counter, out)
 
 
+_NOT_DONE_V2 = (
+    "short selling",
+    "intraday or weekly bars",
+    "ATR, indicator or trailing stops",
+    "position sizing",
+    "conditions on other assets",
+    "pyramiding",
+)
+
+
+def _number(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _risk_lines(compiled: CompiledSpec) -> list[str]:
+    risk = compiled.risk
+    assert risk is not None
+    return [
+        "Each signal carries a stop and a target, fixed when the signal is produced:",
+        "  Reference price: the close of the session that produced the signal.",
+        f"  Stop: {_number(risk.stop_percent)}% below the reference price.",
+        f"  Target: {_number(risk.target_risk_multiple)} times the planned risk "
+        "(reference price minus stop) above the reference price.",
+        "Entry: at the next session's open. The signal expires without a trade if that open is "
+        "at or below the stop, at or above the target, or leaves a reward-to-risk ratio below "
+        f"{_number(risk.min_reward_risk)}.",
+        "While the trade is open, in this order within a session: an open at or beyond the stop "
+        "or the target exits at the open; otherwise a rule exit from the previous close executes "
+        "at the open; otherwise the stop or the target exits at its level when the session's range "
+        "touches it. If one session touches both, the stop is assumed to have come first and the "
+        "trade is flagged.",
+    ]
+
+
 def explain(compiled: CompiledSpec) -> str:
     spec = compiled.spec
     out: list[str] = [f"Strategy: {spec.name}"]
@@ -91,15 +125,23 @@ def explain(compiled: CompiledSpec) -> str:
     _lines(compiled.entry, 1, [0], out)
     out.append("Exit when:")
     _lines(compiled.exit, 1, [0], out)
-    out.append(
-        "Evaluation: on each session close the exit rule is checked first; otherwise the entry "
-        "rule; otherwise no signal. Signals fill at the next session's open."
-    )
+    if compiled.risk is not None:
+        out.append(
+            "Evaluation: on each session close the exit rule is checked first; otherwise the entry "
+            "rule; otherwise no signal."
+        )
+        out.extend(_risk_lines(compiled))
+    else:
+        out.append(
+            "Evaluation: on each session close the exit rule is checked first; otherwise the entry "
+            "rule; otherwise no signal. Signals fill at the next session's open."
+        )
     out.append(
         f"History required: {compiled.history_required} session(s) "
         f"(mathematical minimum {compiled.history_minimum})."
     )
     scale = "free of absolute price levels" if compiled.scale_class == SCALE_FREE else "depends on absolute price levels"
     out.append(f"Price scale: {scale}.")
-    out.append("This strategy does not: " + ", ".join(_NOT_DONE) + ".")
+    not_done = _NOT_DONE_V2 if compiled.risk is not None else _NOT_DONE
+    out.append("This strategy does not: " + ", ".join(not_done) + ".")
     return "\n".join(out)

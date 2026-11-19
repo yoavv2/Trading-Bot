@@ -1,0 +1,23 @@
+spec_version: 2
+name: Donchian breakout 55/20, stop 5% and target 2R (example)
+description: >-
+  Example translated from the original donchian_breakout_daily strategy. Channels use the bars
+  strictly preceding the current one (shift 1). Long when the close breaks above the 55-session
+  high; exit when it breaks below the 20-session low.
+  The entry and exit rules are those of the v1 example, unchanged; this version adds the
+  base risk block used by the first signals study.
+timeframe: daily
+direction: long_only
+indicators:
+  channel_high: {type: highest, source: high, window: 55, shift: 1}
+  channel_low: {type: lowest, source: low, window: 20, shift: 1}
+entry:
+  all_of:
+    - {left: close, op: gt, right: channel_high}
+exit:
+  any_of:
+    - {left: close, op: lt, right: channel_low}
+risk:
+  stop: {type: percent, value: 5}
+  target: {type: risk_multiple, value: 2}
+  min_reward_risk: 1.5

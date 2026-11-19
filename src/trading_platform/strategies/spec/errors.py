@@ -30,6 +30,9 @@ class SpecErrorCode(StrEnum):
     MULTI_ASSET_CONDITION_NOT_SUPPORTED = "multi_asset_condition_not_supported"
     NAME_INVALID = "name_invalid"
     DESCRIPTION_TOO_LONG = "description_too_long"
+    # Specification v2 (the ``risk`` block).
+    STOP_TYPE_NOT_SUPPORTED = "stop_type_not_supported"
+    TARGET_TYPE_NOT_SUPPORTED = "target_type_not_supported"
     OTHER_UNSUPPORTED_REQUEST = "other_unsupported_request"
 
 

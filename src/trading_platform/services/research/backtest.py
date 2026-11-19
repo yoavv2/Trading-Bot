@@ -10,7 +10,7 @@ What every run records (proposal Parts F, H.2, J.2):
 * ``input_digest``: SHA-256 over every bar and session read the engine made (the
   read-recording seam of PROV-01), so a rerun on changed inputs is detectable;
 * ``results_digest``: SHA-256 over the persisted trades and equity curve, the
-  byte-identity a technical rerun must reproduce;
+  byte-identity a technical rerun must reproduce. Risk runs also cover per-signal expiry;
 * the pinned metrics and evidence descriptors in ``result_summary["research"]``.
 """
 
@@ -28,21 +28,24 @@ from sqlalchemy import select
 from trading_platform.core.settings import Settings
 from trading_platform.db.models import (
     BacktestEquitySnapshot,
+    BacktestSignal,
     BacktestTrade,
     StrategyRun,
     StrategyRunStatus,
     StrategyRunType,
 )
-from trading_platform.db.models.research import ResearchRunLink, StrategyVersion
+from trading_platform.db.models.research import ResearchRunLink, StrategyVersion, TestWindowExposure
 from trading_platform.db.session import session_scope
 from trading_platform.services.backtesting import EngineOptions, _execute_backtest_run
 from trading_platform.services.bootstrap import ensure_strategy_record
 from trading_platform.services.market_data_access import persisted_session_dates
-from trading_platform.services.read_recording import recording, sha256_hex
+from trading_platform.services.read_recording import canonical_json, recording, sha256_hex
 from trading_platform.services.research.benchmark import BuyAndHoldSingleAssetStrategy
-from trading_platform.services.research.code_identity import code_sha
+from trading_platform.services.research.code_identity import code_sha, study_code_identity
 from trading_platform.services.research.evidence import compute_evidence
 from trading_platform.services.research.metrics import EquityPoint, TradeRecord, compute_metrics
+from trading_platform.services.research.risk_metrics import RiskTrade, compute_risk_metrics
+from trading_platform.strategies.base import BaseStrategy
 from trading_platform.strategies.research_registry import strategy_from_version
 
 TRIGGER_SOURCE = "research_job"
@@ -106,6 +109,8 @@ class ResearchRunResult:
     input_digest: str
     spec_sha256: str | None
     code_sha: str
+    risk_metrics: dict[str, Any] | None = None  # runs of a specification with a risk block
+    results_digest_version: int = 1
 
 
 def _trade_record(trade: BacktestTrade) -> TradeRecord:
@@ -126,31 +131,103 @@ def _trade_record(trade: BacktestTrade) -> TradeRecord:
     )
 
 
+def risk_trades(asset: str, trades: list[BacktestTrade]) -> list[RiskTrade]:
+    """The trades of a risk-block run in the shape ``compute_risk_metrics`` reads. A trade
+    without levels (a v1 run, the benchmark) is left out."""
+
+    return [
+        RiskTrade(
+            asset=asset,
+            signal_session=t.entry_signal_session,
+            exit_session=t.exit_fill_session,
+            quantity=t.quantity,
+            rule_entry_price=t.rule_entry_price,
+            rule_exit_price=t.rule_exit_price,
+            stop_price=t.stop_price,
+            target_price=t.target_price,
+            net_pnl=t.net_pnl,
+            exit_reason=t.exit_reason,
+            intrabar_order_unknown=bool(t.intrabar_order_unknown),
+        )
+        for t in trades
+        if t.rule_entry_price is not None and t.stop_price is not None and t.target_price is not None
+    ]
+
+
 def _dec(value: Decimal | None) -> str | None:
     return None if value is None else format(value.normalize(), "f")
 
 
-def results_digest_for(trades: list[BacktestTrade], equity: list[BacktestEquitySnapshot]) -> str:
+def _trade_digest_row(trade: BacktestTrade) -> list[str | None]:
+    return [
+        trade.entry_fill_session.isoformat(),
+        trade.exit_fill_session.isoformat() if trade.exit_fill_session else None,
+        _dec(trade.quantity),
+        _dec(trade.entry_price),
+        _dec(trade.exit_price),
+        _dec(trade.net_pnl),
+        _dec(trade.rounding_slack),
+        trade.status,
+    ]
+
+
+def results_digest_for(
+    trades: list[BacktestTrade],
+    equity: list[BacktestEquitySnapshot],
+    *,
+    expired_by_reason: Mapping[str, int] | None = None,
+    expired_signals: tuple[BacktestSignal, ...] = (),
+) -> str:
     """Canonical digest of what a run produced (identity of a technical rerun)."""
 
-    trade_rows = sorted(
+    equity_rows = [
+        [e.session_date.isoformat(), _dec(e.total_equity), _dec(e.gross_exposure)] for e in equity
+    ]
+    if expired_by_reason is None:
+        trade_rows = sorted(
+            (_trade_digest_row(trade) for trade in trades), key=lambda row: (row[0] or "", row[1] or "")
+        )
+        return sha256_hex({"trades": trade_rows, "equity": equity_rows})
+
+    risk_trade_rows = sorted(
         (
             [
-                t.entry_fill_session.isoformat(),
-                t.exit_fill_session.isoformat() if t.exit_fill_session else None,
-                _dec(t.quantity),
-                _dec(t.entry_price),
-                _dec(t.exit_price),
-                _dec(t.net_pnl),
-                _dec(t.rounding_slack),
-                t.status,
+                *_trade_digest_row(t),
+                t.entry_signal_session.isoformat(),
+                t.exit_signal_session.isoformat() if t.exit_signal_session else None,
+                _dec(t.reference_price),
+                _dec(t.stop_price),
+                _dec(t.target_price),
+                _dec(t.rule_entry_price),
+                _dec(t.rule_exit_price),
+                t.exit_reason,
+                t.intrabar_order_unknown,
             ]
             for t in trades
         ),
-        key=lambda row: (row[0], row[1] or ""),
+        key=canonical_json,
     )
-    equity_rows = [[e.session_date.isoformat(), _dec(e.total_equity), _dec(e.gross_exposure)] for e in equity]
-    return sha256_hex({"trades": trade_rows, "equity": equity_rows})
+    expiry_rows = sorted(
+        (
+            [
+                signal.session_date.isoformat(),
+                signal.signal_metadata["fill_session"],
+                signal.signal_metadata["entry_outcome"],
+                signal.signal_metadata["levels"],
+            ]
+            for signal in expired_signals
+        ),
+        key=canonical_json,
+    )
+    return sha256_hex(
+        {
+            "version": 2,
+            "trades": risk_trade_rows,
+            "equity": sorted(equity_rows, key=canonical_json),
+            "expired_by_reason": dict(expired_by_reason),
+            "expired_signals": expiry_rows,
+        }
+    )
 
 
 def load_run_rows(session, run_id: uuid.UUID) -> tuple[list[BacktestTrade], list[BacktestEquitySnapshot]]:
@@ -168,16 +245,17 @@ def load_run_rows(session, run_id: uuid.UUID) -> tuple[list[BacktestTrade], list
 
 
 def run_research_backtest(
-    settings: Settings, request: ResearchRunRequest, *, job_id: uuid.UUID | None = None
+    settings: Settings, request: ResearchRunRequest, *, job_id: uuid.UUID | None = None,
+    exposure_id: uuid.UUID | None = None,
 ) -> ResearchRunResult:
     if request.window_role not in WINDOW_ROLES:
         raise ValueError(f"unknown window role {request.window_role!r}")
-    executed_code = code_sha()
     options = request.engine_options()
 
     with session_scope(settings) as session:
         spec_sha256: str | None = None
         bar_source = (request.bar_provider, request.bar_adjusted)
+        strategy: BaseStrategy
         if request.is_benchmark:
             strategy = BuyAndHoldSingleAssetStrategy(
                 settings, asset=request.asset, window_start=request.window_start, bar_source=bar_source
@@ -189,6 +267,9 @@ def run_research_backtest(
             strategy = strategy_from_version(settings, version, universe=(request.asset,), bar_source=bar_source)
             spec_sha256 = version.spec_sha256
         metadata = strategy.metadata
+        executed_code = (
+            study_code_identity() if getattr(strategy, "risk_plan", None) is not None else code_sha()
+        )
         strategy_record = ensure_strategy_record(session, metadata)
         run = StrategyRun(
             strategy_id=strategy_record.id,
@@ -215,6 +296,19 @@ def run_research_backtest(
         session.add(run)
         session.flush()
         run_id = run.id
+        if exposure_id is not None:
+            reservation = session.get(TestWindowExposure, exposure_id, with_for_update=True)
+            if (
+                reservation is None
+                or reservation.run_id is not None
+                or request.window_role != "final_test"
+                or reservation.study_revision_id != request.study_revision_id
+                or reservation.strategy_version_id != request.strategy_version_id
+                or reservation.asset != request.asset
+                or (reservation.range_start, reservation.range_end) != (request.window_start, request.window_end)
+            ):
+                raise ValueError("Holdout run does not match an unused reservation")
+            reservation.run_id = run_id
         session.add(
             ResearchRunLink(
                 run_id=run_id,
@@ -266,16 +360,44 @@ def run_research_backtest(
             zero_quantity_fills=int(summary.get("zero_quantity_fills", 0)),
         )
         evidence = compute_evidence(trades=[_trade_record(t) for t in trades], metrics=metrics, session_index=session_index)
-        digest = results_digest_for(trades, equity)
-        run = session.get(StrategyRun, run_id)
-        assert run is not None
-        run.status = StrategyRunStatus.SUCCEEDED
-        run.completed_at = datetime.now(UTC)
-        run.result_summary = {
+        risk_block: dict[str, Any] = {}
+        digest_version = 1
+        if "risk" in summary:
+            expired_by_reason = summary["risk"]["expired_by_reason"]
+            expired_signals = tuple(
+                session.scalars(
+                    select(BacktestSignal).where(
+                        BacktestSignal.strategy_run_id == run_id,
+                        BacktestSignal.signal_metadata["entry_outcome"]
+                        .as_string()
+                        .in_(tuple(expired_by_reason)),
+                    )
+                )
+            )
+            digest = results_digest_for(
+                trades, equity, expired_by_reason=expired_by_reason, expired_signals=expired_signals
+            )
+            digest_version = 2
+            risk_block["results_digest_version"] = digest_version
+            risk_block["risk_metrics"] = compute_risk_metrics(
+                trades=risk_trades(request.asset, trades),
+                expired_by_reason=expired_by_reason,
+                window_start=request.window_start,
+                window_end=request.window_end,
+                slippage_bps=request.slippage_bps,
+            )
+        else:
+            digest = results_digest_for(trades, equity)
+        completed_run = session.get(StrategyRun, run_id)
+        assert completed_run is not None
+        completed_run.status = StrategyRunStatus.SUCCEEDED
+        completed_run.completed_at = datetime.now(UTC)
+        completed_run.result_summary = {
             **summary,
             "research": {
                 "metrics": metrics,
                 "evidence": evidence,
+                **risk_block,
                 "results_digest": digest,
                 "input_digest": input_digest,
                 "input_reads": len(recorder.requests),
@@ -287,14 +409,21 @@ def run_research_backtest(
         link = session.get(ResearchRunLink, run_id)
         assert link is not None
         link.input_digest = input_digest
+        if exposure_id is not None:
+            exposure = session.get(TestWindowExposure, exposure_id, with_for_update=True)
+            if exposure is None or exposure.run_id != run_id:
+                raise ValueError("Holdout reservation no longer belongs to this run")
+            exposure.input_digest = input_digest
         session.flush()
 
     return ResearchRunResult(
         run_id=run_id,
         status=StrategyRunStatus.SUCCEEDED.value,
         metrics=metrics,
+        risk_metrics=risk_block.get("risk_metrics"),
         evidence=evidence,
         results_digest=digest,
+        results_digest_version=digest_version,
         input_digest=input_digest,
         spec_sha256=spec_sha256,
         code_sha=executed_code,
