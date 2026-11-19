@@ -67,6 +67,9 @@ def provider_failure_code(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+UPSERT_ROWS_PER_STATEMENT = 2000  # 15 columns each: 30,000 bind parameters
+
+
 def _rows_for_upsert(symbol_id: uuid.UUID, rows: list[TiingoDailyRow]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -113,23 +116,27 @@ def upsert_tiingo_bars(session: Session, symbol_id: uuid.UUID, rows: list[Tiingo
     if not rows:
         return 0
     values = _rows_for_upsert(symbol_id, rows)
-    insert_stmt = pg_insert(DailyBarModel).values(values)
-    stmt = insert_stmt.on_conflict_do_update(
-        constraint="uq_daily_bars_symbol_session_adjusted_provider",
-        set_={
-            "open": insert_stmt.excluded.open,
-            "high": insert_stmt.excluded.high,
-            "low": insert_stmt.excluded.low,
-            "close": insert_stmt.excluded.close,
-            "volume": insert_stmt.excluded.volume,
-            "split_factor": insert_stmt.excluded.split_factor,
-            "dividend_cash": insert_stmt.excluded.dividend_cash,
-            "updated_at": datetime.now(UTC),
-        },
-    ).returning(DailyBarModel.id)
-    returned = session.execute(stmt).fetchall()
+    written = 0
+    # PostgreSQL accepts at most 65,535 bind parameters in one statement, so a long
+    # history is written in several statements inside the caller's transaction.
+    for offset in range(0, len(values), UPSERT_ROWS_PER_STATEMENT):
+        insert_stmt = pg_insert(DailyBarModel).values(values[offset : offset + UPSERT_ROWS_PER_STATEMENT])
+        stmt = insert_stmt.on_conflict_do_update(
+            constraint="uq_daily_bars_symbol_session_adjusted_provider",
+            set_={
+                "open": insert_stmt.excluded.open,
+                "high": insert_stmt.excluded.high,
+                "low": insert_stmt.excluded.low,
+                "close": insert_stmt.excluded.close,
+                "volume": insert_stmt.excluded.volume,
+                "split_factor": insert_stmt.excluded.split_factor,
+                "dividend_cash": insert_stmt.excluded.dividend_cash,
+                "updated_at": datetime.now(UTC),
+            },
+        ).returning(DailyBarModel.id)
+        written += len(session.execute(stmt).fetchall())
     session.flush()
-    return len(returned)
+    return written
 
 
 def apply_metadata_to_symbol(

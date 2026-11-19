@@ -233,6 +233,21 @@ def test_tiingo_ingestion_writes_both_series_with_factors_and_metadata(research_
     assert count == 20 and again.run_status == "succeeded"
 
 
+def test_tiingo_ingestion_writes_a_history_longer_than_one_statement_can_carry(research_db: str) -> None:
+    """Twelve years of sessions, two rows each, exceed PostgreSQL's 65,535 bind parameters."""
+
+    settings = load_settings()
+    sessions = xnys_sessions(date(2014, 1, 2), 3_000)
+    client = StubTiingoClient({"AAPL": _tiingo_rows(sessions)})
+    result = ingest_tiingo_daily_bars(assets=["AAPL"], from_date=sessions[0], to_date=sessions[-1], settings=settings, client=client)
+    assert (result.run_status, result.bars_upserted, result.symbols_failed) == ("succeeded", 6_000, [])
+    with session_scope(settings) as session:
+        stored = session.execute(
+            select(sa.func.count(), sa.func.min(DailyBarModel.session_date), sa.func.max(DailyBarModel.session_date))
+        ).one()
+    assert tuple(stored) == (6_000, sessions[0], sessions[-1])
+
+
 def test_tiingo_ingestion_partial_and_all_failed(research_db: str) -> None:
     settings = load_settings()
     sessions = xnys_sessions(date(2024, 3, 4), 3)
