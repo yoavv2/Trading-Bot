@@ -419,7 +419,7 @@ def run_publication_study(
 
     rules: list[dict[str, Any]] = []
     for rule in protocol.rules:
-        by_window = {
+        by_window: dict[str, dict[str, Any]] = {
             role: measure(
                 apply_rule(signals[role], rule),
                 window_start=date.fromisoformat(windows[role]["start"]),

@@ -1,0 +1,1154 @@
+{
+  "code_sha": "b9c0320eed0a17f480fb1b1e4fb72732221736d3",
+  "completed_at": "2026-11-20T13:22:33.196894+00:00",
+  "protocol": {
+    "name": "signals-v2-publication-filters-2026-11-20",
+    "rules": [
+      {
+        "id": "all_signals",
+        "kind": "none"
+      },
+      {
+        "id": "min_initial_risk_2pct",
+        "kind": "min_initial_risk",
+        "min_risk_fraction": "0.02"
+      },
+      {
+        "id": "min_initial_risk_3pct",
+        "kind": "min_initial_risk",
+        "min_risk_fraction": "0.03"
+      },
+      {
+        "id": "min_initial_risk_4pct",
+        "kind": "min_initial_risk",
+        "min_risk_fraction": "0.04"
+      },
+      {
+        "id": "open_cap_5",
+        "kind": "open_cap",
+        "max_open": 5
+      },
+      {
+        "id": "open_cap_8",
+        "kind": "open_cap",
+        "max_open": 8
+      },
+      {
+        "id": "open_cap_10",
+        "kind": "open_cap",
+        "max_open": 10
+      },
+      {
+        "id": "open_cap_12",
+        "kind": "open_cap",
+        "max_open": 12
+      }
+    ],
+    "sha256": "7ea1e4521f03bcb0272ad21ca378a48ef4b64f383d81b0fa155f1246d6106ac8",
+    "source_results": "docs/studies/signals-v2-wide-2026-11-19/results.json",
+    "target_trades_per_month": {
+      "max": "12",
+      "min": "7"
+    },
+    "version": "time_series_momentum_daily",
+    "windows": [
+      "development",
+      "validation"
+    ]
+  },
+  "rules": [
+    {
+      "keeps_edge": true,
+      "meets_rate": false,
+      "ranking_value": 0.12373976441094013,
+      "rule": {
+        "id": "min_initial_risk_3pct",
+        "kind": "min_initial_risk",
+        "min_risk_fraction": "0.03"
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 42,
+          "net_r_median": -0.3079313721545229,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 449,
+            "published_trade": 2389,
+            "withdrawn_low_initial_risk": 124
+          },
+          "profitable_assets": 34,
+          "risk_metrics": {
+            "closed_trades": 2378,
+            "entry_signals": 2838,
+            "entry_signals_per_month": 30.469708994708995,
+            "exits_by_reason": {
+              "rule": 769,
+              "stop": 924,
+              "target": 685
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 51,
+              "expired_reward_risk_below_minimum": 398
+            },
+            "expired_signals": 449,
+            "gross_r": {
+              "mean": 0.1449119575501854,
+              "total": 344.6006350543409
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.12373976441094013,
+              "net_r_mean_target_first": 0.12373976441094013,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 294.25315976921564,
+              "net_r_total_target_first": 294.25315976921564,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 89.96961261272736,
+            "net_r": {
+              "best": 4.525153480916073,
+              "mean": 0.12373976441094013,
+              "total": 294.25315976921564,
+              "win_rate": 0.3780487804878049,
+              "worst": -3.132318672657485
+            },
+            "net_r_over_max_drawdown": 3.2705838251835457,
+            "open_at_end": 11,
+            "trades_opened": 2389,
+            "trades_per_month": 25.649096119929453,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 38,
+          "net_r_median": -0.1291255442899228,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 53,
+            "published_trade": 703,
+            "withdrawn_low_initial_risk": 18
+          },
+          "profitable_assets": 31,
+          "risk_metrics": {
+            "closed_trades": 667,
+            "entry_signals": 756,
+            "entry_signals_per_month": 31.564814814814813,
+            "exits_by_reason": {
+              "rule": 312,
+              "stop": 182,
+              "target": 173
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 2,
+              "expired_reward_risk_below_minimum": 51
+            },
+            "expired_signals": 53,
+            "gross_r": {
+              "mean": 0.19703136606597144,
+              "total": 131.41992116600295
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.17607555971767488,
+              "net_r_mean_target_first": 0.17607555971767488,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 117.44239833168915,
+              "net_r_total_target_first": 117.44239833168915,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 61.44545180954363,
+            "net_r": {
+              "best": 3.827519507871751,
+              "mean": 0.17607555971767488,
+              "total": 117.44239833168915,
+              "win_rate": 0.42128935532233885,
+              "worst": -2.447478052865025
+            },
+            "net_r_over_max_drawdown": 1.9113277691522832,
+            "open_at_end": 36,
+            "trades_opened": 703,
+            "trades_per_month": 29.351937585733882,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    },
+    {
+      "keeps_edge": true,
+      "meets_rate": false,
+      "ranking_value": 0.11806369266157864,
+      "rule": {
+        "id": "open_cap_5",
+        "kind": "open_cap",
+        "max_open": 5
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 5,
+          "net_r_median": -0.44621549315788617,
+          "outcomes": {
+            "held_back_open_cap": 2477,
+            "published_expired": 97,
+            "published_trade": 388,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 27,
+          "risk_metrics": {
+            "closed_trades": 383,
+            "entry_signals": 485,
+            "entry_signals_per_month": 5.207120811287478,
+            "exits_by_reason": {
+              "rule": 101,
+              "stop": 164,
+              "target": 118
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 14,
+              "expired_reward_risk_below_minimum": 83
+            },
+            "expired_signals": 97,
+            "gross_r": {
+              "mean": 0.14342142689299728,
+              "total": 54.93040650001795
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.11806369266157864,
+              "net_r_mean_target_first": 0.11806369266157864,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 45.21839428938462,
+              "net_r_total_target_first": 45.21839428938462,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 34.24140522737374,
+            "net_r": {
+              "best": 5.3995986831980725,
+              "mean": 0.11806369266157864,
+              "total": 45.21839428938462,
+              "win_rate": 0.370757180156658,
+              "worst": -4.1986420624474965
+            },
+            "net_r_over_max_drawdown": 1.3205764771953783,
+            "open_at_end": 5,
+            "trades_opened": 388,
+            "trades_per_month": 4.165696649029982,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 32,
+          "max_open_published": 5,
+          "net_r_median": -0.22946697105459316,
+          "outcomes": {
+            "held_back_open_cap": 654,
+            "published_expired": 10,
+            "published_trade": 110,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 17,
+          "risk_metrics": {
+            "closed_trades": 105,
+            "entry_signals": 120,
+            "entry_signals_per_month": 5.010288065843621,
+            "exits_by_reason": {
+              "rule": 34,
+              "stop": 41,
+              "target": 30
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 0,
+              "expired_reward_risk_below_minimum": 10
+            },
+            "expired_signals": 10,
+            "gross_r": {
+              "mean": 0.29160245164724385,
+              "total": 30.618257422960603
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.2697519104865891,
+              "net_r_mean_target_first": 0.2697519104865891,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 28.323950601091852,
+              "net_r_total_target_first": 28.323950601091852,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 15.117114305446577,
+            "net_r": {
+              "best": 10.451620088095966,
+              "mean": 0.2697519104865891,
+              "total": 28.323950601091852,
+              "win_rate": 0.4,
+              "worst": -1.6490126030898256
+            },
+            "net_r_over_max_drawdown": 1.873634744620999,
+            "open_at_end": 5,
+            "trades_opened": 110,
+            "trades_per_month": 4.592764060356653,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    },
+    {
+      "keeps_edge": true,
+      "meets_rate": false,
+      "ranking_value": 0.11617218659749091,
+      "rule": {
+        "id": "min_initial_risk_4pct",
+        "kind": "min_initial_risk",
+        "min_risk_fraction": "0.04"
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 42,
+          "net_r_median": -0.2836973236554025,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 449,
+            "published_trade": 2192,
+            "withdrawn_low_initial_risk": 321
+          },
+          "profitable_assets": 36,
+          "risk_metrics": {
+            "closed_trades": 2181,
+            "entry_signals": 2641,
+            "entry_signals_per_month": 28.35465167548501,
+            "exits_by_reason": {
+              "rule": 713,
+              "stop": 829,
+              "target": 639
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 51,
+              "expired_reward_risk_below_minimum": 398
+            },
+            "expired_signals": 449,
+            "gross_r": {
+              "mean": 0.13665606414023748,
+              "total": 298.046875889858
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.11617218659749091,
+              "net_r_mean_target_first": 0.11617218659749091,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 253.37153896912767,
+              "net_r_total_target_first": 253.37153896912767,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 80.9869935486225,
+            "net_r": {
+              "best": 4.1700702637786,
+              "mean": 0.11617218659749091,
+              "total": 253.37153896912767,
+              "win_rate": 0.38422741861531406,
+              "worst": -3.132318672657485
+            },
+            "net_r_over_max_drawdown": 3.1285460524844644,
+            "open_at_end": 11,
+            "trades_opened": 2192,
+            "trades_per_month": 23.534038800705467,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 38,
+          "net_r_median": -0.11123635432963863,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 53,
+            "published_trade": 674,
+            "withdrawn_low_initial_risk": 47
+          },
+          "profitable_assets": 32,
+          "risk_metrics": {
+            "closed_trades": 638,
+            "entry_signals": 727,
+            "entry_signals_per_month": 30.353995198902606,
+            "exits_by_reason": {
+              "rule": 300,
+              "stop": 169,
+              "target": 169
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 2,
+              "expired_reward_risk_below_minimum": 51
+            },
+            "expired_signals": 53,
+            "gross_r": {
+              "mean": 0.20493644680764975,
+              "total": 130.74945306328053
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.18429598632330413,
+              "net_r_mean_target_first": 0.18429598632330413,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 117.58083927426803,
+              "net_r_total_target_first": 117.58083927426803,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 52.32495948665452,
+            "net_r": {
+              "best": 3.469157798176241,
+              "mean": 0.18429598632330413,
+              "total": 117.58083927426803,
+              "win_rate": 0.42476489028213166,
+              "worst": -2.447478052865025
+            },
+            "net_r_over_max_drawdown": 2.2471271918377123,
+            "open_at_end": 36,
+            "trades_opened": 674,
+            "trades_per_month": 28.141117969821675,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    },
+    {
+      "keeps_edge": true,
+      "meets_rate": false,
+      "ranking_value": 0.11230617034987919,
+      "rule": {
+        "id": "min_initial_risk_2pct",
+        "kind": "min_initial_risk",
+        "min_risk_fraction": "0.02"
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 42,
+          "net_r_median": -0.3325826082264549,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 449,
+            "published_trade": 2466,
+            "withdrawn_low_initial_risk": 47
+          },
+          "profitable_assets": 31,
+          "risk_metrics": {
+            "closed_trades": 2455,
+            "entry_signals": 2915,
+            "entry_signals_per_month": 31.296406525573193,
+            "exits_by_reason": {
+              "rule": 779,
+              "stop": 981,
+              "target": 695
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 51,
+              "expired_reward_risk_below_minimum": 398
+            },
+            "expired_signals": 449,
+            "gross_r": {
+              "mean": 0.1341015804597277,
+              "total": 329.2193800286315
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.11230617034987919,
+              "net_r_mean_target_first": 0.11230617034987919,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 275.7116482089534,
+              "net_r_total_target_first": 275.7116482089534,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 125.21879432885972,
+            "net_r": {
+              "best": 5.74843498107279,
+              "mean": 0.11230617034987919,
+              "total": 275.7116482089534,
+              "win_rate": 0.3718940936863544,
+              "worst": -3.132318672657485
+            },
+            "net_r_over_max_drawdown": 2.2018391862555173,
+            "open_at_end": 11,
+            "trades_opened": 2466,
+            "trades_per_month": 26.47579365079365,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 39,
+          "net_r_median": -0.11599577049990271,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 53,
+            "published_trade": 714,
+            "withdrawn_low_initial_risk": 7
+          },
+          "profitable_assets": 34,
+          "risk_metrics": {
+            "closed_trades": 678,
+            "entry_signals": 767,
+            "entry_signals_per_month": 32.02409122085048,
+            "exits_by_reason": {
+              "rule": 316,
+              "stop": 184,
+              "target": 178
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 2,
+              "expired_reward_risk_below_minimum": 51
+            },
+            "expired_signals": 53,
+            "gross_r": {
+              "mean": 0.2326475618304292,
+              "total": 157.735046921031
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.211361637533224,
+              "net_r_mean_target_first": 0.211361637533224,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 143.30319024752586,
+              "net_r_total_target_first": 143.30319024752586,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 41.00401396142082,
+            "net_r": {
+              "best": 7.114284271679123,
+              "mean": 0.211361637533224,
+              "total": 143.30319024752586,
+              "win_rate": 0.42625368731563423,
+              "worst": -2.447478052865025
+            },
+            "net_r_over_max_drawdown": 3.4948576103391886,
+            "open_at_end": 36,
+            "trades_opened": 714,
+            "trades_per_month": 29.81121399176955,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    },
+    {
+      "keeps_edge": true,
+      "meets_rate": false,
+      "ranking_value": 0.10276820524609682,
+      "rule": {
+        "id": "all_signals",
+        "kind": "none"
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 42,
+          "net_r_median": -0.3546635380837909,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 449,
+            "published_trade": 2513,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 29,
+          "risk_metrics": {
+            "closed_trades": 2502,
+            "entry_signals": 2962,
+            "entry_signals_per_month": 31.80101410934744,
+            "exits_by_reason": {
+              "rule": 781,
+              "stop": 1022,
+              "target": 699
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 51,
+              "expired_reward_risk_below_minimum": 398
+            },
+            "expired_signals": 449,
+            "gross_r": {
+              "mean": 0.1271394064441779,
+              "total": 318.10279492333314
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.10276820524609682,
+              "net_r_mean_target_first": 0.10276820524609682,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 257.1260495257343,
+              "net_r_total_target_first": 257.1260495257343,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 147.34079100321344,
+            "net_r": {
+              "best": 10.014841463253855,
+              "mean": 0.10276820524609682,
+              "total": 257.1260495257343,
+              "win_rate": 0.3669064748201439,
+              "worst": -4.1986420624474965
+            },
+            "net_r_over_max_drawdown": 1.7451110977144575,
+            "open_at_end": 11,
+            "trades_opened": 2513,
+            "trades_per_month": 26.9804012345679,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 39,
+          "net_r_median": -0.1265081737845312,
+          "outcomes": {
+            "held_back_open_cap": 0,
+            "published_expired": 53,
+            "published_trade": 721,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 35,
+          "risk_metrics": {
+            "closed_trades": 685,
+            "entry_signals": 774,
+            "entry_signals_per_month": 32.31635802469136,
+            "exits_by_reason": {
+              "rule": 317,
+              "stop": 189,
+              "target": 179
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 2,
+              "expired_reward_risk_below_minimum": 51
+            },
+            "expired_signals": 53,
+            "gross_r": {
+              "mean": 0.24596699753673107,
+              "total": 168.48739331266077
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.22413641854679636,
+              "net_r_mean_target_first": 0.22413641854679636,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 153.5334467045555,
+              "net_r_total_target_first": 153.5334467045555,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 41.00401396142082,
+            "net_r": {
+              "best": 10.451620088095966,
+              "mean": 0.22413641854679636,
+              "total": 153.5334467045555,
+              "win_rate": 0.4248175182481752,
+              "worst": -2.447478052865025
+            },
+            "net_r_over_max_drawdown": 3.7443516346719017,
+            "open_at_end": 36,
+            "trades_opened": 721,
+            "trades_per_month": 30.103480795610427,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    },
+    {
+      "keeps_edge": true,
+      "meets_rate": false,
+      "ranking_value": 0.09489193712633313,
+      "rule": {
+        "id": "open_cap_12",
+        "kind": "open_cap",
+        "max_open": 12
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 12,
+          "net_r_median": -0.588917476906626,
+          "outcomes": {
+            "held_back_open_cap": 1697,
+            "published_expired": 250,
+            "published_trade": 1015,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 24,
+          "risk_metrics": {
+            "closed_trades": 1006,
+            "entry_signals": 1265,
+            "entry_signals_per_month": 13.581459435626103,
+            "exits_by_reason": {
+              "rule": 236,
+              "stop": 467,
+              "target": 303
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 35,
+              "expired_reward_risk_below_minimum": 215
+            },
+            "expired_signals": 250,
+            "gross_r": {
+              "mean": 0.1218435543906814,
+              "total": 122.57461571702548
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.09489193712633313,
+              "net_r_mean_target_first": 0.09489193712633313,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 95.46128874909112,
+              "net_r_total_target_first": 95.46128874909112,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 72.31068555286178,
+            "net_r": {
+              "best": 10.014841463253855,
+              "mean": 0.09489193712633313,
+              "total": 95.46128874909112,
+              "win_rate": 0.36083499005964215,
+              "worst": -4.1986420624474965
+            },
+            "net_r_over_max_drawdown": 1.3201546634391317,
+            "open_at_end": 9,
+            "trades_opened": 1015,
+            "trades_per_month": 10.897376543209877,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 41,
+          "max_open_published": 12,
+          "net_r_median": -0.16124129292513695,
+          "outcomes": {
+            "held_back_open_cap": 464,
+            "published_expired": 20,
+            "published_trade": 290,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 30,
+          "risk_metrics": {
+            "closed_trades": 278,
+            "entry_signals": 310,
+            "entry_signals_per_month": 12.943244170096023,
+            "exits_by_reason": {
+              "rule": 114,
+              "stop": 89,
+              "target": 75
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 0,
+              "expired_reward_risk_below_minimum": 20
+            },
+            "expired_signals": 20,
+            "gross_r": {
+              "mean": 0.23855267847414768,
+              "total": 66.31764461581305
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.21692925191416232,
+              "net_r_mean_target_first": 0.21692925191416232,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 60.30633203213713,
+              "net_r_total_target_first": 60.30633203213713,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 28.513062763666607,
+            "net_r": {
+              "best": 10.451620088095966,
+              "mean": 0.21692925191416232,
+              "total": 60.30633203213713,
+              "win_rate": 0.4136690647482014,
+              "worst": -2.447478052865025
+            },
+            "net_r_over_max_drawdown": 2.1150422363248818,
+            "open_at_end": 12,
+            "trades_opened": 290,
+            "trades_per_month": 12.108196159122086,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    },
+    {
+      "keeps_edge": true,
+      "meets_rate": true,
+      "ranking_value": 0.08953478621751582,
+      "rule": {
+        "id": "open_cap_10",
+        "kind": "open_cap",
+        "max_open": 10
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 10,
+          "net_r_median": -0.5826174578218777,
+          "outcomes": {
+            "held_back_open_cap": 1903,
+            "published_expired": 219,
+            "published_trade": 840,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 24,
+          "risk_metrics": {
+            "closed_trades": 832,
+            "entry_signals": 1059,
+            "entry_signals_per_month": 11.369775132275132,
+            "exits_by_reason": {
+              "rule": 196,
+              "stop": 385,
+              "target": 251
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 32,
+              "expired_reward_risk_below_minimum": 187
+            },
+            "expired_signals": 219,
+            "gross_r": {
+              "mean": 0.11726441854065776,
+              "total": 97.56399622582727
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.08953478621751582,
+              "net_r_mean_target_first": 0.08953478621751582,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 74.49294213297316,
+              "net_r_total_target_first": 74.49294213297316,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 70.31886972550814,
+            "net_r": {
+              "best": 9.302311476782634,
+              "mean": 0.08953478621751582,
+              "total": 74.49294213297316,
+              "win_rate": 0.3605769230769231,
+              "worst": -4.1986420624474965
+            },
+            "net_r_over_max_drawdown": 1.059359207901928,
+            "open_at_end": 8,
+            "trades_opened": 840,
+            "trades_per_month": 9.018518518518519,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 41,
+          "max_open_published": 10,
+          "net_r_median": -0.16383096746065243,
+          "outcomes": {
+            "held_back_open_cap": 507,
+            "published_expired": 18,
+            "published_trade": 249,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 27,
+          "risk_metrics": {
+            "closed_trades": 239,
+            "entry_signals": 267,
+            "entry_signals_per_month": 11.147890946502057,
+            "exits_by_reason": {
+              "rule": 98,
+              "stop": 76,
+              "target": 65
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 0,
+              "expired_reward_risk_below_minimum": 18
+            },
+            "expired_signals": 18,
+            "gross_r": {
+              "mean": 0.2588692889786529,
+              "total": 61.86976006589805
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.23712455187038262,
+              "net_r_mean_target_first": 0.23712455187038262,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 56.672767897021444,
+              "net_r_total_target_first": 56.672767897021444,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 27.378856050265437,
+            "net_r": {
+              "best": 10.451620088095966,
+              "mean": 0.23712455187038262,
+              "total": 56.672767897021444,
+              "win_rate": 0.4225941422594142,
+              "worst": -2.447478052865025
+            },
+            "net_r_over_max_drawdown": 2.069946523440376,
+            "open_at_end": 10,
+            "trades_opened": 249,
+            "trades_per_month": 10.396347736625515,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    },
+    {
+      "keeps_edge": false,
+      "meets_rate": true,
+      "ranking_value": 0.07203110341689951,
+      "rule": {
+        "id": "open_cap_8",
+        "kind": "open_cap",
+        "max_open": 8
+      },
+      "windows": {
+        "development": {
+          "assets_with_closed_trades": 42,
+          "max_open_published": 8,
+          "net_r_median": -0.5689177482147206,
+          "outcomes": {
+            "held_back_open_cap": 2118,
+            "published_expired": 178,
+            "published_trade": 666,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 27,
+          "risk_metrics": {
+            "closed_trades": 659,
+            "entry_signals": 844,
+            "entry_signals_per_month": 9.061463844797178,
+            "exits_by_reason": {
+              "rule": 162,
+              "stop": 301,
+              "target": 196
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 25,
+              "expired_reward_risk_below_minimum": 153
+            },
+            "expired_signals": 178,
+            "gross_r": {
+              "mean": 0.09813811696310812,
+              "total": 64.67301907868826
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.07203110341689951,
+              "net_r_mean_target_first": 0.07203110341689951,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 47.46849715173678,
+              "net_r_total_target_first": 47.46849715173678,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 56.4414221067128,
+            "net_r": {
+              "best": 5.3995986831980725,
+              "mean": 0.07203110341689951,
+              "total": 47.46849715173678,
+              "win_rate": 0.3566009104704097,
+              "worst": -4.1986420624474965
+            },
+            "net_r_over_max_drawdown": 0.8410223445821214,
+            "open_at_end": 7,
+            "trades_opened": 666,
+            "trades_per_month": 7.150396825396825,
+            "window": {
+              "end": "2022-10-06",
+              "months": 93.14168377823408,
+              "start": "2015-01-02"
+            }
+          }
+        },
+        "validation": {
+          "assets_with_closed_trades": 39,
+          "max_open_published": 8,
+          "net_r_median": -0.16496342314853724,
+          "outcomes": {
+            "held_back_open_cap": 555,
+            "published_expired": 13,
+            "published_trade": 206,
+            "withdrawn_low_initial_risk": 0
+          },
+          "profitable_assets": 25,
+          "risk_metrics": {
+            "closed_trades": 198,
+            "entry_signals": 219,
+            "entry_signals_per_month": 9.143775720164609,
+            "exits_by_reason": {
+              "rule": 84,
+              "stop": 65,
+              "target": 49
+            },
+            "expired_by_reason": {
+              "expired_open_at_or_above_target": 0,
+              "expired_open_at_or_below_stop": 0,
+              "expired_reward_risk_below_minimum": 13
+            },
+            "expired_signals": 13,
+            "gross_r": {
+              "mean": 0.22688489282887767,
+              "total": 44.923208780117776
+            },
+            "intrabar_order_unknown": {
+              "net_r_mean_stop_first": 0.20514862544715656,
+              "net_r_mean_target_first": 0.20514862544715656,
+              "net_r_total_range": 0.0,
+              "net_r_total_stop_first": 40.619427838537,
+              "net_r_total_target_first": 40.619427838537,
+              "share_of_closed_trades": 0.0,
+              "trades": 0
+            },
+            "max_r_drawdown": 23.74441757049638,
+            "net_r": {
+              "best": 10.451620088095966,
+              "mean": 0.20514862544715656,
+              "total": 40.619427838537,
+              "win_rate": 0.4090909090909091,
+              "worst": -2.447478052865025
+            },
+            "net_r_over_max_drawdown": 1.710693796465602,
+            "open_at_end": 8,
+            "trades_opened": 206,
+            "trades_per_month": 8.60099451303155,
+            "window": {
+              "end": "2024-10-04",
+              "months": 23.95071868583162,
+              "start": "2022-10-07"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "source": {
+    "assets": [
+      "MMM",
+      "AXP",
+      "T",
+      "BA",
+      "CAT",
+      "CVX",
+      "CSCO",
+      "KO",
+      "DD",
+      "XOM",
+      "GE",
+      "GS",
+      "HD",
+      "INTC",
+      "IBM",
+      "JNJ",
+      "JPM",
+      "MCD",
+      "MRK",
+      "MSFT",
+      "NKE",
+      "PFE",
+      "PG",
+      "TRV",
+      "UNH",
+      "RTX",
+      "V",
+      "VZ",
+      "WMT",
+      "DIS",
+      "SPY",
+      "IWM",
+      "DIA",
+      "XLB",
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLK",
+      "XLP",
+      "XLU",
+      "XLV",
+      "XLY"
+    ],
+    "path": "docs/studies/signals-v2-wide-2026-11-19/results.json",
+    "protocol_name": "signals-v2-wide-2026-11-19",
+    "sha256": "818755ad3d9612276c3518bf0ac124a8fabca1e16955483e2821f440975c408c",
+    "slippage_bps": "5",
+    "spec_sha256": "dea864251cc077719c7f81f40f727a6f8e590f06664b089b102bcc74e87c9365",
+    "strategy_version_id": "a4bbd0b8-b5ea-45b3-b59e-abafd810cb0f",
+    "study_id": "59489ef0-fec9-4c26-b9aa-59f99168e53c"
+  },
+  "status": "completed",
+  "windows": {
+    "development": {
+      "end": "2022-10-06",
+      "entry_signals": 2962,
+      "runs": 42,
+      "signals_without_outcome": 0,
+      "start": "2015-01-02"
+    },
+    "validation": {
+      "end": "2024-10-04",
+      "entry_signals": 774,
+      "runs": 42,
+      "signals_without_outcome": 0,
+      "start": "2022-10-07"
+    }
+  }
+}

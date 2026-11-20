@@ -111,7 +111,7 @@ data licence are both closed, the Step 3 screen and API stay internal.
 | Distribution channel | WhatsApp channel, Telegram, own app with push | Step 4 |
 | New UI | Not designed. Public performance page first, or member app first | Step 3 or 5 |
 | Free versus paid split | SBX gives 1–2 free signals a month | Step 5 |
-| Which strategy version publishes first, and on which assets | The second study (Step 1 status) confirmed time-series momentum v2 as the pilot candidate on 42 assets. Still open: the owner's approval of it, and how to cut about 37 trades a month across 42 assets down to a publishable number by a rule fixed in advance | Before any pilot |
+| Which strategy version publishes first, and on which assets | The second study (Step 1 status) confirmed time-series momentum v2 as the pilot candidate on 42 assets. Still open: the owner's approval of it, and the publication rule (the filter study in the Step 1 status measured two kinds; a cap of 10 open signals is the only one that kept the edge and met the rate) | Before any pilot |
 | Short signals, ATR and indicator stops | Deferred until a strategy under study needs them | After Step 3 |
 | Hosting | Local only today | Step 3 |
 
@@ -279,13 +279,41 @@ The second study, run 2026-11-20
   (`6c38f2c8-31e6-4963-92eb-91282ac779aa`) with 330 selection runs and no
   holdout exposure.
 
+The publication-filter study, run 2026-11-20
+(`docs/studies/signals-v2-publication-filters-2026-11-20/`, protocol
+`config/research/signals_v2_publication_filters.yaml`, code
+`services/research/publication_filters.py`, clean revision `b9c0320`):
+
+- What it measures: the candidate's stored signals and trades from the wide
+  study's development and validation windows, with one rule deciding which
+  are published. Each rule is applied on its own. No backtest is run and the
+  holdout is not read. A signal a rule holds back still runs internally and
+  is never published later.
+- Minimum initial risk (a signal is withdrawn at the open when
+  (open − stop) / open is below 2%, 3% or 4%): keeps the edge at all three
+  values and removes the very large multiples (best trade in development
+  10.0 R unfiltered, 4.5 R at 3%). It withdraws 2% to 13% of the trades, so
+  the rate stays at 23 to 30 trades a month. It does not solve the rate.
+- Cap on open published signals (5, 8, 10 or 12 across all assets, same-day
+  signals taken in a fixed hash order): the rate follows the cap, about one
+  trade a month for each place. Cap 10 is the only rule that keeps the edge
+  and meets the 7 to 12 a month target in both windows (9.0 and 10.4 trades a
+  month, mean net R 0.09 and 0.24). Cap 8 meets the rate and fails the edge
+  reading: its development total (47.5 R) is below its R drawdown (56.4 R).
+  Cap 12 keeps the edge and is just above the rate in validation (12.1).
+  Cap 5 keeps the edge at 4 to 5 trades a month.
+- Limits: the cap results rest on one fixed order of same-day signals;
+  another order publishes other trades, and the differences between caps 8,
+  10 and 12 are within what that could move. The two rules were not combined.
+  No rule has been tested on data that no study has read.
+
 Still open in Step 1:
 
+- The publication rule. The owner chooses it from the study above; the chosen
+  rule then needs one test on data no study has read (a new asset list with
+  its own holdout, or the internal daily log going forward).
 - The first study's run recorded a dirty Git revision. Its exact source
   snapshot cannot be verified from that identifier.
-- A rule, fixed in advance, that limits how many of the candidate's signals
-  are published, and evidence for the candidate under that rule. Choosing a
-  subset of assets from the holdout results would reuse the holdout.
 - The study HTML report (`services/research/report.py`) does not show the R
   metrics; the study script writes its own Markdown report.
 - The AI assistant still writes v1 documents only. This can wait.
