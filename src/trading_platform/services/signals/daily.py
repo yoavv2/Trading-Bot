@@ -234,6 +234,8 @@ def run_daily_book(
                     start=pending[0],
                     end=target,
                     bar_source=book.bar_source,
+                    now=clock(),
+                    keep_inputs=True,
                 )
                 for outcome in outcomes:
                     if outcome.skipped is not None:

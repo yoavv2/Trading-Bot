@@ -83,6 +83,7 @@ from trading_platform.db.models.signal_log import (
     SessionSkipReason,
     SignalEventType,
     SignalLogEvent,
+    SignalSessionInput,
     SignalSessionRun,
     SignalSessionSkip,
 )
@@ -116,6 +117,7 @@ __all__ = [
     "SignalSessionRun",
     "SessionSkipReason",
     "SignalSessionSkip",
+    "SignalSessionInput",
     "PublicationDecision",
     "SignalBook",
     "SignalPublication",

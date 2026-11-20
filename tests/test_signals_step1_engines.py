@@ -559,6 +559,9 @@ def test_the_database_refuses_a_second_event_of_the_same_type_and_unknown_vocabu
             "expiry_reason": None,
             "intrabar_order_unknown": None,
             "input_data_digest": "0" * 64,
+            "adjustment_factor": D(1),
+            "effective_stop_price": D(95),
+            "effective_target_price": D(110),
             "recorded_at": sa.func.now(),
         } | overrides
         with session_scope(settings) as session:

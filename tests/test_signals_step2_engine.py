@@ -250,6 +250,9 @@ def _insert(settings: Settings, version_id: uuid.UUID, event_type: str, signal: 
         "expiry_reason": "expired_open_at_or_below_stop" if event_type == "expired" else None,
         "intrabar_order_unknown": False if event_type.startswith("closed_") else None,
         "input_data_digest": "b" * 64,
+        "adjustment_factor": D(1),
+        "effective_stop_price": D(95),
+        "effective_target_price": D(110),
         "recorded_at": sa.func.now(),
     } | overrides
     with session_scope(settings) as session:
