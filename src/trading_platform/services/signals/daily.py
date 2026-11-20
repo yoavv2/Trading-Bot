@@ -252,7 +252,8 @@ def run_daily_book(
         book_row = session.get(SignalBook, book.id)
         assert book_row is not None
         # The clock is read again: the download may have taken long enough to pass an open.
-        decisions = decide_publications(session, book_row, now=clock())
+        decided_at = clock()
+        decisions = decide_publications(session, book_row, now=decided_at)
         open_published = open_published_count(session, book_row)
 
     return {
@@ -260,6 +261,10 @@ def run_daily_book(
         "book_id": str(book.id),
         "strategy_version_id": str(book.version_id),
         "session_date": target.isoformat(),
+        # When the run actually happened: a run that starts late (a sleeping machine, late
+        # data) shows here, and its signals are held back as late by the publication rule.
+        "started_at": started.isoformat(),
+        "decided_at": decided_at.isoformat(),
         "history_from": range_start.isoformat(),
         "ingestion": ingestion,
         "integrity_errors": integrity_errors,

@@ -451,16 +451,40 @@ Built on branch `feat/signals-step2-daily-engine`:
 - The daily Job adds a third publication outcome to the two of the frozen
   rules: `held_back_late`.
 
+- The forward log's book: `config/signals/forward-log-2026-11.yaml`, 42
+  assets, cap 10, first session Monday 2026-11-23 (owner's decision,
+  2026-11-21). If the merge, the migration or the first run is late, the
+  first session moves to the next future session, in a new file under a new
+  name, so the first record is a decision made in real time.
+- Daily start: `launchd` on the owner's Mac (`deploy/launchd/`). The agent
+  runs `run-signals-daily.sh` at 02:00 local time, Tuesday to Saturday: it
+  starts the research API, submits `signals-daily` for the book, runs the
+  worker once and logs the Job's result with UTC times. A machine asleep at
+  02:00 runs it on waking. The Job result carries `started_at` and
+  `decided_at`; a signal decided after the next open is `held_back_late`.
+  The agent is installed after the merge and the local migration, not before.
+- Trial on real Tiingo data, 2026-11-21, in a separate database
+  (`trading_research_trial`, a copy of the research database migrated to
+  `0037`), with a trial book identical to the forward log's except for its
+  name and a first session of 2026-11-18. One run up to the closed session of
+  2026-11-20: 42 requests, 25,284 bars written, no integrity error, no asset
+  skipped, 126 sessions processed, 108 events, 54 publication decisions (10
+  published, 1 held back by the cap, 43 late because the run caught up two
+  sessions after their next open). Replay: 126 sessions, 108 events and 54
+  decisions recomputed, 0 differences. A second run wrote nothing. The
+  launchd script submitted and ran the forward log's Job against the trial
+  database; it was refused with `before_first_session`, as it must be before
+  2026-11-23. Not exercised by the trial: a dividend or split on an active
+  signal in real data (every factor was 1), and a day-after-day sequence of
+  real runs.
+- Observation from the trial: a book starts with no open signals, so its
+  first sessions issue signals for most assets at once (54 in three sessions)
+  and the cap fills on the first day in the fixed hash order.
+
 Not built yet:
 
-1. The forward log's book file (`config/signals/<name>.yaml`) with its first
-   session, and who starts the Job each day (there is no scheduler; hosting
-   is local). The owner sets the first session.
-2. The study runner as a Job, retiring `scripts/run_signals_v2_study.py` and
+1. The study runner as a Job, retiring `scripts/run_signals_v2_study.py` and
    its mutation-boundary exemption.
-3. The first real download. The daily path has run only against stubbed
-   Tiingo data; the factor on an ex-date depends on that day's download
-   having rewritten the adjusted history before the session is processed.
 
 ### Step 3: append-only performance record
 

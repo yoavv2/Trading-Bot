@@ -1,0 +1,28 @@
+# The forward log (docs/SIGNALS-PLAN.md, Step 1 status, "Forward log").
+#
+# Approved by the owner on 2026-11-21, before the first session. The daily Job records
+# this file's SHA-256 with the book on its first run and refuses to run the book if the
+# file changes afterwards: a changed book is a new test. If the first session passes
+# before the Job can run, the first session is moved to the next future session (in a
+# new file, under a new name) so that the first record is a decision made in real time.
+
+name: forward-log-2026-11
+
+# time_series_momentum_daily v2 ("Time-series momentum 252, stop 5% and target 2R"),
+# the pilot candidate of docs/studies/signals-v2-wide-2026-11-19.
+strategy_spec_sha256: dea864251cc077719c7f81f40f727a6f8e590f06664b089b102bcc74e87c9365
+
+# The 42 assets of the wide study: the 30 Dow members of 2015-01-02 and 12 funds.
+assets:
+  [MMM, AXP, T, BA, CAT, CVX, CSCO, KO, DD, XOM, GE, GS, HD, INTC, IBM, JNJ, JPM, MCD,
+   MRK, MSFT, NKE, PFE, PG, TRV, UNH, RTX, V, VZ, WMT, DIS,
+   SPY, IWM, DIA, XLB, XLE, XLF, XLI, XLK, XLP, XLU, XLV, XLY]
+
+# At most 10 published signals open at once, across all assets.
+max_open: 10
+
+# Monday 2026-11-23: the first session whose close produces signals of this book.
+first_session: 2026-11-23
+
+exchange: XNYS
+bar_source: {provider: tiingo, adjusted: true}

@@ -298,3 +298,23 @@ def test_book_configuration_errors_have_closed_codes(settings: Settings, tmp_pat
         ensure_book(session, config, digest)
     assert info.value.code is SignalBookErrorCode.VERSION_NOT_FOUND
     assert PublicationDecision.HELD_BACK_LATE.value == "held_back_late"
+
+
+def test_the_committed_forward_log_book_is_the_one_the_owner_approved() -> None:
+    import json
+
+    import yaml
+
+    from trading_platform.core.settings import PROJECT_ROOT
+
+    config, digest = load_book_config("forward-log-2026-11")
+    wide = yaml.safe_load((PROJECT_ROOT / "config" / "research" / "signals_v2_wide_study.yaml").read_text())
+    results = json.loads(
+        (PROJECT_ROOT / "docs" / "studies" / "signals-v2-wide-2026-11-19" / "results.json").read_text()
+    )
+    assert len(digest) == 64
+    assert config.assets == sorted(wide["assets"]) and len(config.assets) == 42
+    assert config.max_open == 10 and config.first_session == date(2026, 11, 23)
+    assert (config.exchange, config.bar_source.provider, config.bar_source.adjusted) == ("XNYS", "tiingo", True)
+    assert results["pilot_candidate"] is not None
+    assert config.strategy_spec_sha256 in json.dumps(results["versions"])
