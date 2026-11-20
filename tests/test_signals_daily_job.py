@@ -28,7 +28,12 @@ from trading_platform.jobs.handlers.signals_daily import SignalsDailyJobHandler
 from trading_platform.jobs.handlers.signals_daily_submission import SignalsDailySubmissionSpec
 from trading_platform.jobs.registry import InvalidJobPayloadError, build_research_registry
 from trading_platform.services.calendar import upsert_market_sessions
-from trading_platform.services.signals.daily import DailyRunError, DailyRunErrorCode, run_daily_book
+from trading_platform.services.signals.daily import (
+    DailyRunError,
+    DailyRunErrorCode,
+    history_start,
+    run_daily_book,
+)
 from trading_platform.services.signals.publication import SignalBookError, SignalBookErrorCode
 from trading_platform.services.tiingo import TiingoAssetMetadata, TiingoDailyRow
 
@@ -47,10 +52,13 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
 class World:
     """Seeded bars for three assets, an approved version and a book configuration file."""
 
-    def __init__(self, settings: Settings, directory: Path, *, seeded: int = SESSIONS, max_open: int = 2) -> None:
+    def __init__(
+        self, settings: Settings, directory: Path, *, seeded: int | None = None, max_open: int = 2, sessions: int = SESSIONS
+    ) -> None:
         self.settings = settings
         self.directory = directory
-        self.days = xnys_sessions(START, SESSIONS)
+        self.days = xnys_sessions(START, sessions)
+        seeded = sessions if seeded is None else seeded
         self.bars: dict[str, list[Bar]] = {
             asset: make_bars(asset, self.days, seed=index + 1, volatility=0.03) for index, asset in enumerate(ASSETS)
         }
@@ -277,6 +285,46 @@ def test_the_run_downloads_the_history_range_with_one_request_an_asset(settings:
     assert (stub.requests_made, stub.metadata_requests) == (3, 0)
     assert {(start, end) for _, start, end in stub.ranges} == {(date.fromisoformat(report["history_from"]), d[FIRST + 1])}
     assert date.fromisoformat(report["history_from"]) < d[FIRST + 1] - timedelta(days=30)
+
+
+def test_a_run_after_a_long_interruption_downloads_from_the_first_pending_session_and_catches_up(
+    settings: Settings, tmp_path: Path
+) -> None:
+    # The book ran its first session, then nothing ran for 59 sessions (about 85 calendar
+    # days). That is longer than the history range of one target session (31 days for this
+    # one-bar strategy), so the bars of the first missed sessions lie before that range.
+    world = World(settings, tmp_path, seeded=FIRST + 1, sessions=80)
+    d = world.days
+    world.run(d[FIRST])
+    stub = StubTiingo(world.bars)
+    assert history_start(d[-1], 1) > d[FIRST + 1]  # the gap the old range left
+
+    report = world.run(d[-1], ingest=True, client=stub)
+    assert report["complete"] is True and report["assets_skipped"] == {} and report["integrity_errors"] == {}
+    assert report["sessions_processed"] == 3 * (80 - FIRST - 1)
+    # The range starts from the history of the first pending session, not of the target.
+    assert report["first_pending_session"] == d[FIRST + 1].isoformat()
+    assert date.fromisoformat(report["history_from"]) == history_start(d[FIRST + 1], 1)
+    assert {(start, end) for _, start, end in stub.ranges} == {(history_start(d[FIRST + 1], 1), d[-1])}
+    with session_scope(settings) as session:
+        last = dict(
+            session.execute(
+                sa.select(SignalSessionRun.asset, sa.func.max(SignalSessionRun.session_date)).group_by(
+                    SignalSessionRun.asset
+                )
+            ).all()
+        )
+    assert last == {asset: d[-1] for asset in ASSETS}
+
+    # A repeated run, with or without the download, writes nothing.
+    before = world.counts()
+    for ingest in (True, False):
+        again = world.run(d[-1], ingest=ingest, client=stub if ingest else None)
+        assert again["sessions_processed"] == 0 and again["events"] == {} and again["publications"] == {}
+        assert again["complete"] is True
+    assert world.counts() == before
+    # With nothing pending the range is the target's own history again.
+    assert date.fromisoformat(again["history_from"]) == history_start(d[-1], 1)
 
 
 # ---------------------------------------------------------------------------

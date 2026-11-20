@@ -6,8 +6,10 @@
 2. resolve the target session: the requested date, or the latest session that has
    closed. A date that is not a session, has not closed yet or is before the book's first
    session is refused with a closed code and nothing is written;
-3. download the bars of the book's assets for the history the strategy reads, ending at
-   the target session (skipped when ``ingest`` is false);
+3. download the bars of the book's assets, from the history the strategy reads at the
+   first session still to be processed up to the target session (skipped when ``ingest``
+   is false). After an interruption of any length the range therefore covers every
+   missed session and its history;
 4. check the integrity of that range. An asset with an integrity error is not run: its
    next unprocessed session gets a recorded skip (``integrity_failed`` with the code);
 5. for every other asset, process each unprocessed session up to the target, in order.
@@ -120,6 +122,35 @@ def _resolve_target(settings: Settings, book: _Book, requested: date | None, now
     return target
 
 
+def _first_pending_session(settings: Settings, book: _Book, target: date) -> date | None:
+    """The earliest session, over the book's assets, not yet processed and not after the
+    target. ``None`` when every asset is processed up to the target."""
+
+    with session_scope(settings) as session:
+        last_by_asset = dict(
+            session.execute(
+                select(SignalSessionRun.asset, func.max(SignalSessionRun.session_date))
+                .where(
+                    SignalSessionRun.strategy_version_id == book.version_id,
+                    SignalSessionRun.asset.in_(list(book.assets)),
+                )
+                .group_by(SignalSessionRun.asset)
+            ).all()
+        )
+        if len(last_by_asset) < len(book.assets):
+            after = None  # an asset that never ran starts at the book's first session
+        else:
+            after = min(last_by_asset.values())
+        query = select(func.min(MarketSession.session_date)).where(
+            MarketSession.exchange == book.exchange,
+            MarketSession.session_date >= book.first_session,
+            MarketSession.session_date <= target,
+        )
+        if after is not None:
+            query = query.where(MarketSession.session_date > after)
+        return session.execute(query).scalar_one()
+
+
 def run_daily_book(
     settings: Settings,
     *,
@@ -151,7 +182,12 @@ def run_daily_book(
             history_required=version.history_required,
         )
     target = _resolve_target(settings, book, session_date, started)
-    range_start = history_start(target, book.history_required)
+    # The range downloaded and checked starts from the history of the first session that
+    # is still to be processed, not of the target: after an interruption the engine
+    # resumes at the first missed session, and that session's bar and history must be in
+    # the range, however long the interruption was.
+    first_pending = _first_pending_session(settings, book, target)
+    range_start = history_start(first_pending or target, book.history_required)
 
     ingestion: dict[str, Any] | None = None
     if ingest:
@@ -265,6 +301,7 @@ def run_daily_book(
         # data) shows here, and its signals are held back as late by the publication rule.
         "started_at": started.isoformat(),
         "decided_at": decided_at.isoformat(),
+        "first_pending_session": None if first_pending is None else first_pending.isoformat(),
         "history_from": range_start.isoformat(),
         "ingestion": ingestion,
         "integrity_errors": integrity_errors,

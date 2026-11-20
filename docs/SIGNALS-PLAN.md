@@ -412,7 +412,9 @@ Built on branch `feat/signals-step2-daily-engine`:
 - Job type `signals-daily` (`services/signals/daily.py`, payload `book`,
   `session_date`, `ingest`): download the history range with one Tiingo
   request an asset, check integrity, process every unprocessed session of
-  each asset in its own transaction, decide publications. A date that is not
+  each asset in its own transaction, decide publications. The range that is
+  downloaded and checked starts from the history of the first session still
+  to be processed, so a book resumes after an interruption of any length. A date that is not
   a session, has not closed or is before the book's first session is refused
   with a closed code. A re-run writes nothing new.
 - Tests: `tests/test_signals_step2_engine.py`,
