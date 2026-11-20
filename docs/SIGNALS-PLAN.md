@@ -67,7 +67,9 @@ not software.
 - Job framework: `src/trading_platform/jobs/`. The research registry holds six
   Job types: `catalog-sync`, `ingest-tiingo-bars`, `sync-market-sessions`,
   `research-freeze`, `research-backtest`, `research-evaluate`.
-- Research database `trading_research`, migrations through `0034`.
+- Research database `trading_research`, migrations through `0034`. The Step 2
+  branch adds `0035` and `0036`; the local database is migrated when that
+  branch is merged.
 - Four approved example versions (trend following 50/200, RSI mean reversion,
   Donchian breakout, time-series momentum), and a v2 version of each with the
   base risk block (`config/research/examples_v2/`), seeded by the study
@@ -382,6 +384,61 @@ runner to a Job and retire its script and mutation-boundary exemption.
   daily run and its decision is recorded for every signal with a closed
   outcome (`published`, `held_back_open_cap`). The decision is written once
   and a re-run or a replay over the same data reproduces it.
+
+**Status 2026-11-20: the daily run is built; the forward log has not started.**
+
+Built on branch `feat/signals-step2-daily-engine`:
+
+- Migration `0035_signals_step2`. `signal_log` and `signal_session_runs`
+  carry `input_data_digest`, the SHA-256 of the market-data reads of the
+  session. A transition guard refuses events out of order, an event whose
+  levels differ from the issued signal, and a new signal while another of the
+  same (version, asset) is active. A session is recorded only after every
+  session already recorded.
+- Skips. A session whose bar is missing or whose data failed the integrity
+  check is not processed. `signal_session_skips` records it once per reason
+  (`missing_bar`, `integrity_failed` with the integrity code). The session
+  stays the next one to process and blocks the sessions after it, so no stop
+  check is lost; it is processed late when its data arrives.
+- Migration `0036_signal_books`. A book is a fixed (version, assets, cap,
+  first session), read from `config/signals/<name>.yaml` and recorded once
+  with the file's SHA-256; a changed file is refused (`book_changed`).
+  `signal_publications` holds one decision for each issued signal. The
+  database computes the outcome and refuses any other: `held_back_late` when
+  the decision is recorded at or after the next session's open, otherwise
+  `held_back_open_cap` when `max_open` published signals are still open,
+  otherwise `published`. `tests/test_signal_publication.py` shows the daily
+  decisions equal the cap rule of the filter study on the same log.
+- Job type `signals-daily` (`services/signals/daily.py`, payload `book`,
+  `session_date`, `ingest`): download the history range with one Tiingo
+  request an asset, check integrity, process every unprocessed session of
+  each asset in its own transaction, decide publications. A date that is not
+  a session, has not closed or is before the book's first session is refused
+  with a closed code. A re-run writes nothing new.
+- Tests: `tests/test_signals_step2_engine.py`,
+  `tests/test_signal_publication.py`, `tests/test_signals_daily_job.py`.
+
+Not built yet. The forward log must not start before the first two:
+
+1. **Levels of an active signal across a dividend or a split.** The engine
+   reads adjusted bars. Each daily download rewrites the adjusted history, so
+   after an ex-dividend date or a split the stored levels of an open signal
+   are in the old price scale. Needed: the engine derives the levels in
+   today's scale from the adjusted close of the signal session (stored
+   reference against the same bar read today) and records the factor on each
+   event. Without it a split closes a trade at a false stop. This also
+   settles the "adjusted prices" risk in section 7, and it changes what a user
+   would see as the stop after a dividend, so the owner confirms it.
+2. **Replay over the same input data** (success condition 3 of the forward
+   log). Adjusted history changes after every dividend, so the inputs of a
+   past session cannot be read back from `daily_bars` later. Needed: the bars
+   each session read are kept (a daily freeze or a per-session snapshot), and
+   a replay command recomputes the events and publication decisions from them
+   and reports every difference.
+3. The study runner as a Job, retiring `scripts/run_signals_v2_study.py` and
+   its mutation-boundary exemption.
+4. The forward log's book file (`config/signals/`) with its first session,
+   and who starts the Job each day (there is no scheduler; hosting is local).
 
 ### Step 3: append-only performance record
 
