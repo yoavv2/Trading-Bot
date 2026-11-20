@@ -11,8 +11,9 @@ is still open, and the order of the build.
    implement).
 2. Check section 4 (blockers) and section 5 (open decisions) with the owner
    before writing code that depends on them.
-3. **Step 1** (section 6) is built and its study has run. The study chose no
-   pilot candidate; read the Step 1 status before starting Step 2.
+3. **Step 1** (section 6) is built. The first study chose no pilot candidate;
+   the second, wider study confirmed time-series momentum on its holdout. Read
+   the Step 1 status before starting Step 2.
 
 Working rules the owner set:
 
@@ -110,7 +111,7 @@ data licence are both closed, the Step 3 screen and API stay internal.
 | Distribution channel | WhatsApp channel, Telegram, own app with push | Step 4 |
 | New UI | Not designed. Public performance page first, or member app first | Step 3 or 5 |
 | Free versus paid split | SBX gives 1–2 free signals a month | Step 5 |
-| Which strategy version publishes first, and on which assets | Still open. The first v2 study (Step 1 status) chose no candidate: the top-ranked version failed the holdout. Next: a new study with a wider asset list fixed in advance, a longer history, unchanged base risk settings and a fresh holdout | Before any pilot |
+| Which strategy version publishes first, and on which assets | The second study (Step 1 status) confirmed time-series momentum v2 as the pilot candidate on 42 assets. Still open: the owner's approval of it, and how to cut about 37 trades a month across 42 assets down to a publishable number by a rule fixed in advance | Before any pilot |
 | Short signals, ATR and indicator stops | Deferred until a strategy under study needs them | After Step 3 |
 | Hosting | Local only today | Step 3 |
 
@@ -242,14 +243,49 @@ model):
   large rises, so the development and validation figures overstate what an
   asset list fixed in advance would give. Prices are adjusted prices.
 
+The second study, run 2026-11-20
+(`docs/studies/signals-v2-wide-2026-11-19/`, protocol
+`config/research/signals_v2_wide_study.yaml`, clean revision `e4c1b3c`):
+
+- Setup, fixed in the protocol before any run on these assets: the same four
+  rule sets and base risk block; 42 assets (the 30 Dow members of 2015-01-02
+  and SPY, IWM, DIA and nine sector funds); development 2015-01-02 to
+  2022-10-06, validation 2022-10-07 to 2024-10-04, holdout 2024-10-07 to
+  2026-10-07; the same costs. The profitable-asset criterion kept its ratio
+  (26 of 42).
+- The daily engine and the backtest agreed on all 378 runs: 11,117 signals
+  and 9,543 closed trades compared, 0 differences.
+- Time-series momentum and trend following qualified. Time-series momentum
+  ranked first (mean net R 0.10 in development, 0.22 in validation) and was
+  the only version run on the holdout. It was confirmed there: 858 closed
+  trades, mean net R 0.22, total 192.3 R, 31 of 42 assets positive.
+  **Pilot candidate: `time_series_momentum_daily` v2.**
+- RSI mean reversion and Donchian breakout failed two development criteria
+  each: total net R below the largest R drawdown, and too few profitable
+  assets.
+- Limits: the holdout's calendar period was seen in the first study on five
+  other assets, so it is new for these assets and not for the market. The
+  edge is thin in development (0.10 R a trade). The pooled R drawdown on the
+  holdout is 47.5 R and the worst single-asset equity drawdown is 57%. The
+  study does not compare against holding the assets, and both later windows
+  were rising markets. R is measured against the actual initial risk, so an
+  entry that opens close to the stop gives very large multiples (best trade
+  22.5 R, worst −11.4 R on the holdout). 27 holdout trades with an initial
+  risk under 2% of the entry carry 41.7 of the 224.2 gross R; with every
+  trade limited to between −1.5 R and 2.5 R the gross total is 134.2 R, still
+  positive. The median trade loses 0.56 R. The rate is about 37 trades a month across the 42
+  assets, several times what the product would publish. Prices are adjusted
+  prices. One interrupted earlier attempt left an unused study row
+  (`6c38f2c8-31e6-4963-92eb-91282ac779aa`) with 330 selection runs and no
+  holdout exposure.
+
 Still open in Step 1:
 
-- The historical run recorded a dirty Git revision. Its exact source snapshot
-  cannot be verified from that identifier.
-- The first pilot strategy. It needs a new protocol: a wider asset list fixed
-  in advance and a longer history (both need more Tiingo bars in the research
-  database). Keep the base risk settings fixed and reserve a fresh holdout for
-  that study.
+- The first study's run recorded a dirty Git revision. Its exact source
+  snapshot cannot be verified from that identifier.
+- A rule, fixed in advance, that limits how many of the candidate's signals
+  are published, and evidence for the candidate under that rule. Choosing a
+  subset of assets from the holdout results would reuse the holdout.
 - The study HTML report (`services/research/report.py`) does not show the R
   metrics; the study script writes its own Markdown report.
 - The AI assistant still writes v1 documents only. This can wait.
