@@ -12,8 +12,10 @@ is still open, and the order of the build.
 2. Check section 4 (blockers) and section 5 (open decisions) with the owner
    before writing code that depends on them.
 3. **Step 1** (section 6) is built. The first study chose no pilot candidate;
-   the second, wider study confirmed time-series momentum on its holdout. Read
-   the Step 1 status before starting Step 2.
+   the second, wider study confirmed time-series momentum on its holdout. The
+   owner approved the publication rule and the forward log's rules on
+   2026-11-20 ("Forward log" in the Step 1 status). Read the Step 1 status
+   before starting Step 2.
 
 Working rules the owner set:
 
@@ -111,7 +113,7 @@ data licence are both closed, the Step 3 screen and API stay internal.
 | Distribution channel | WhatsApp channel, Telegram, own app with push | Step 4 |
 | New UI | Not designed. Public performance page first, or member app first | Step 3 or 5 |
 | Free versus paid split | SBX gives 1–2 free signals a month | Step 5 |
-| Which strategy version publishes first, and on which assets | The second study (Step 1 status) confirmed time-series momentum v2 as the pilot candidate on 42 assets. Still open: the owner's approval of it, and the publication rule (the filter study in the Step 1 status measured two kinds; a cap of 10 open signals is the only one that kept the edge and met the rate) | Before any pilot |
+| Which strategy version publishes first, and on which assets | Decided 2026-11-20: time-series momentum v2 on the 42 assets of the wide study, published under a cap of 10 open signals, first in the internal forward log (Step 1 status, "Forward log") | Closed |
 | Short signals, ATR and indicator stops | Deferred until a strategy under study needs them | After Step 3 |
 | Hosting | Local only today | Step 3 |
 
@@ -309,14 +311,46 @@ The publication-filter study, run 2026-11-20
 
 Still open in Step 1:
 
-- The publication rule. The owner chooses it from the study above; the chosen
-  rule then needs one test on data no study has read (a new asset list with
-  its own holdout, or the internal daily log going forward).
+- The forward log below has to run; it starts once Step 2 can run it.
 - The first study's run recorded a dirty Git revision. Its exact source
   snapshot cannot be verified from that identifier.
 - The study HTML report (`services/research/report.py`) does not show the R
   metrics; the study script writes its own Markdown report.
 - The AI assistant still writes v1 documents only. This can wait.
+
+**Forward log: rules approved by the owner on 2026-11-20, before it starts.**
+
+The owner chose the cap of 10 open signals on its own (no minimum initial
+risk) and the internal daily log going forward as the test on unseen data.
+Changing anything below after the log has started is a new test.
+
+- Purpose: to check that the daily engine works in real time and that the
+  rate meets the target. Profitability is reported as an observation. The log
+  is not asked to decide whether the edge is real: at about 10 trades a month
+  it cannot do that within a year.
+- What runs: `time_series_momentum_daily` v2 on the 42 assets of the wide
+  study.
+- Publication: at most 10 published signals open at once across all assets,
+  counted as the filter study counts them
+  (`services/research/publication_filters.py`). When one session has more
+  signals than free places, they are taken in ascending order of
+  `sha256("<session date>:<asset>")`. A signal held back is never published
+  later.
+- Summary date: the first date on which at least six months have passed since
+  the first session of the log and at least 60 published trades have closed.
+- Operational success, all three:
+  1. the mean over the whole period is 7 to 12 published trades a month,
+     counted as in the studies (single months may fall outside);
+  2. the cap held on every session;
+  3. a replay over the same input data gives the same publication, entry and
+     exit decisions as the daily engine recorded.
+- Early stop: the log stops if the fall of the total net R of published
+  trades from its previous peak exceeds 70 R. The largest such fall in the
+  development window under this cap was 70.32 R; 70 is that figure rounded,
+  chosen in advance.
+- Profitability: mean net R, total net R and the largest R drawdown are
+  reported. Apart from the early stop, the financial result changes neither
+  the summary date nor the operational verdict.
 
 Left to Step 2 on purpose: a Job type or command that runs the daily engine
 (today it is a function), the `skipped` result for a missing bar (today a
@@ -344,6 +378,10 @@ runner to a Job and retire its script and mutation-boundary exemption.
   run happens on a non-session date.
 - Each signal stores the version id, the specification digest and the input
   data digest it was computed from.
+- The publication rule of the forward log (Step 1 status) is applied by the
+  daily run and its decision is recorded for every signal with a closed
+  outcome (`published`, `held_back_open_cap`). The decision is written once
+  and a re-run or a replay over the same data reproduces it.
 
 ### Step 3: append-only performance record
 
