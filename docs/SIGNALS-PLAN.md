@@ -68,7 +68,7 @@ not software.
   Job types: `catalog-sync`, `ingest-tiingo-bars`, `sync-market-sessions`,
   `research-freeze`, `research-backtest`, `research-evaluate`.
 - Research database `trading_research`, migrations through `0034`. The Step 2
-  branch adds `0035` and `0036`; the local database is migrated when that
+  branch adds `0035` to `0037`; the local database is migrated when that
   branch is merged.
 - Four approved example versions (trend following 50/200, RSI mean reversion,
   Donchian breakout, time-series momentum), and a v2 version of each with the
@@ -418,27 +418,49 @@ Built on branch `feat/signals-step2-daily-engine`:
 - Tests: `tests/test_signals_step2_engine.py`,
   `tests/test_signal_publication.py`, `tests/test_signals_daily_job.py`.
 
-Not built yet. The forward log must not start before the first two:
+- Adjusted levels (owner's decision, 2026-11-21). The engine reads adjusted
+  bars, and a dividend or a split after the signal session rescales the whole
+  adjusted history. The levels a signal was issued with are never changed. On
+  every later session the engine derives the stop and the target in that
+  session's price scale from the issued levels and the factor `adjusted close
+  of the signal session as read today / issued reference price`. Example:
+  reference 100 read today as 99 gives factor 0.99, stop 95 becomes 94.05 and
+  target 110 becomes 108.90. Deriving from the issued levels every time means
+  an adjustment is never applied twice. Each event records
+  `adjustment_factor`, `effective_stop_price` and `effective_target_price`
+  (migration `0037_signal_inputs`); a user is shown the derived levels, and
+  the issued ones stay in the history. R is measured in one price scale
+  (`services/signals/comparison.py`).
+- One decision function. `services/signals/session_rules.py` holds
+  `decide_session`, a pure function of the session's inputs and the active
+  signal. The daily engine and the replay both call it.
+- Kept inputs. The daily Job stores the bars every processed session read in
+  `signal_session_inputs` (append-only, with their SHA-256). A later download
+  rewrites adjusted history, so this is the only place a past session's
+  inputs can be read back.
+- Replay (`services/signals/replay.py`, Job type `signals-replay`, read-only).
+  It recomputes every event from the kept inputs and every publication
+  decision from the recorded order and times, compares both with the record
+  and lists each difference with a closed kind (`event_differs`,
+  `publication_differs`, `inputs_digest_mismatch`, `cap_exceeded` and others).
+- Tests of the owner's two conditions for starting the forward log
+  (`tests/test_signals_adjustment_and_replay.py`): two dividends in a row and
+  a 2-for-1 split on an open trade; a book run day by day with a dividend on
+  an active signal replays with no difference, also after the adjusted
+  history is rewritten again; a changed record is reported.
+- The daily Job adds a third publication outcome to the two of the frozen
+  rules: `held_back_late`.
 
-1. **Levels of an active signal across a dividend or a split.** The engine
-   reads adjusted bars. Each daily download rewrites the adjusted history, so
-   after an ex-dividend date or a split the stored levels of an open signal
-   are in the old price scale. Needed: the engine derives the levels in
-   today's scale from the adjusted close of the signal session (stored
-   reference against the same bar read today) and records the factor on each
-   event. Without it a split closes a trade at a false stop. This also
-   settles the "adjusted prices" risk in section 7, and it changes what a user
-   would see as the stop after a dividend, so the owner confirms it.
-2. **Replay over the same input data** (success condition 3 of the forward
-   log). Adjusted history changes after every dividend, so the inputs of a
-   past session cannot be read back from `daily_bars` later. Needed: the bars
-   each session read are kept (a daily freeze or a per-session snapshot), and
-   a replay command recomputes the events and publication decisions from them
-   and reports every difference.
-3. The study runner as a Job, retiring `scripts/run_signals_v2_study.py` and
+Not built yet:
+
+1. The forward log's book file (`config/signals/<name>.yaml`) with its first
+   session, and who starts the Job each day (there is no scheduler; hosting
+   is local). The owner sets the first session.
+2. The study runner as a Job, retiring `scripts/run_signals_v2_study.py` and
    its mutation-boundary exemption.
-4. The forward log's book file (`config/signals/`) with its first session,
-   and who starts the Job each day (there is no scheduler; hosting is local).
+3. The first real download. The daily path has run only against stubbed
+   Tiingo data; the factor on an ex-date depends on that day's download
+   having rewritten the adjusted history before the session is processed.
 
 ### Step 3: append-only performance record
 
@@ -497,9 +519,10 @@ Requires both blockers in section 4 to be closed.
 - **Few signals.** Four strategies on a short asset list may produce far fewer
   than SBX's 7–12 a month. Measure the expected rate from backtests before
   promising a cadence.
-- **Adjusted prices.** Research uses adjusted bars. Entry, stop and target
-  shown to users must be in prices they can actually trade; decide this in
-  Step 2.
+- **Adjusted prices.** Research uses adjusted bars. Decided in Step 2: the
+  levels are issued in the prices of the signal session (on that day the
+  adjusted close equals the traded close) and are rescaled after a dividend or
+  a split; users see the rescaled stop and target.
 - **Marketing claims.** SBX's own pages contradict each other (90% hit rate on
   the home page, 56% on the performance page). Our numbers come only from the
   append-only record.
