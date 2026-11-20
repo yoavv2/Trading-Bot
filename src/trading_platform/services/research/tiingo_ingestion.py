@@ -160,6 +160,16 @@ def apply_metadata_to_symbol(
     symbol.active = True
 
 
+def _has_tiingo_metadata(settings: Settings, ticker: str) -> bool:
+    with session_scope(settings) as session:
+        return (
+            session.execute(
+                select(Symbol.id).where(Symbol.ticker == ticker, Symbol.metadata_provider == PROVIDER)
+            ).first()
+            is not None
+        )
+
+
 def _derive_status(succeeded: int, failed: int) -> IngestionRunStatus:
     if succeeded == 0:
         return "failed"
@@ -227,8 +237,13 @@ def ingest_tiingo_daily_bars(
     trigger_source: str = "job",
     job_id: uuid.UUID | None = None,
     client: TiingoClient | None = None,
+    refresh_metadata: bool = True,
 ) -> IngestionResult:
     """Download only the requested assets for the requested range (plus nothing else).
+
+    With ``refresh_metadata=False`` an asset whose symbol row already carries Tiingo
+    metadata costs one request (prices) instead of two: the daily signal run downloads
+    the same assets every day and the hourly budget is 50 requests.
 
     Per-asset failures (a bad payload, a DB error for one symbol) mark that asset failed
     and the run continues, as the Polygon path does. Provider-level failures (an invalid
@@ -263,11 +278,16 @@ def ingest_tiingo_daily_bars(
     try:
         for ticker in assets:
             try:
-                metadata = resolved_client.fetch_metadata(ticker)
+                metadata = (
+                    None
+                    if not refresh_metadata and _has_tiingo_metadata(settings, ticker)
+                    else resolved_client.fetch_metadata(ticker)
+                )
                 rows = resolved_client.fetch_daily_prices(ticker, from_date, to_date)
                 with session_scope(settings) as symbol_session:
                     symbol = upsert_symbol(symbol_session, ticker)
-                    apply_metadata_to_symbol(symbol_session, symbol, metadata)
+                    if metadata is not None:
+                        apply_metadata_to_symbol(symbol_session, symbol, metadata)
                     count = upsert_tiingo_bars(symbol_session, symbol.id, rows)
                 total += count
                 succeeded += 1

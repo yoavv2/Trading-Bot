@@ -374,6 +374,7 @@ RESEARCH_JOB_TYPES: tuple[str, ...] = (
     "research-freeze",
     "research-backtest",
     "research-evaluate",
+    "signals-daily",
 )
 """The closed set a research-mode process registers (plan S0 + S3). No trading Job type
 (paper session, broker sync, reconciliation, risk evaluation, external activity,
@@ -406,6 +407,8 @@ def build_research_registry(settings: Settings | None = None) -> JobRegistry:
         ResearchEvaluateSubmissionSpec,
         ResearchFreezeSubmissionSpec,
     )
+    from trading_platform.jobs.handlers.signals_daily import SignalsDailyJobHandler
+    from trading_platform.jobs.handlers.signals_daily_submission import SignalsDailySubmissionSpec
     from trading_platform.jobs.handlers.sync_market_sessions import (
         SyncMarketSessionsJobHandler,
     )
@@ -416,6 +419,7 @@ def build_research_registry(settings: Settings | None = None) -> JobRegistry:
     registry.register(
         CatalogSyncJobHandler(settings=resolved), submission_spec=CatalogSyncSubmissionSpec(resolved)
     )
+    registry.register(SignalsDailyJobHandler(settings=resolved), submission_spec=SignalsDailySubmissionSpec(resolved))
     registry.register(
         IngestTiingoBarsJobHandler(settings=resolved),
         submission_spec=IngestTiingoBarsSubmissionSpec(resolved),
