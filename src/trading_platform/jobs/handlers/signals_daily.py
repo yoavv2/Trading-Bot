@@ -18,6 +18,7 @@ from trading_platform.jobs.contracts import JobContext
 from trading_platform.services.config.validation import ExecutionMode
 from trading_platform.services.signals.daily import run_daily_book
 from trading_platform.services.signals.publication import BOOKS_DIRECTORY
+from trading_platform.services.signals.replay import replay_book_by_name
 from trading_platform.services.tiingo import TiingoClient
 
 
@@ -71,5 +72,29 @@ class SignalsDailyJobHandler:
                     "open_published",
                 )
             },
+        )
+        return {**report, "produced_run_ids": []}
+
+
+class SignalsReplayJobHandler:
+    """``signals-replay``: read-only. The Job succeeds whether or not differences are
+    found; the result says ``identical`` and lists every difference."""
+
+    job_type = "signals-replay"
+    required_execution_mode = ExecutionMode.BACKTEST
+
+    def __init__(self, settings: Settings | None = None, *, books_directory: Path = BOOKS_DIRECTORY) -> None:
+        self._settings = settings
+        self._books_directory = books_directory
+
+    def run(self, context: JobContext) -> dict[str, Any]:
+        settings = self._settings or load_settings()
+        context.report_progress(step="replaying kept inputs")
+        report = replay_book_by_name(settings, context.payload["book"], books_directory=self._books_directory)
+        context.log(
+            level="info" if report["identical"] else "error",
+            event_code="signals_replay_completed",
+            message="Replay finished.",
+            context={key: report[key] for key in ("book", "sessions_replayed", "publications_checked", "differences")},
         )
         return {**report, "produced_run_ids": []}

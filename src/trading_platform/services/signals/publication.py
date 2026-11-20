@@ -57,6 +57,7 @@ class SignalBookErrorCode(StrEnum):
     BOOK_CONFIG_NOT_FOUND = "book_config_not_found"
     BOOK_CONFIG_INVALID = "book_config_invalid"
     BOOK_CHANGED = "book_changed"
+    BOOK_NOT_RECORDED = "book_not_recorded"
     VERSION_NOT_FOUND = "version_not_found"
     VERSION_AMBIGUOUS = "version_ambiguous"
 
@@ -161,6 +162,19 @@ def ensure_book(session: Session, config: BookConfig, config_sha256: str, *, now
     )
     session.add(book)
     session.flush()
+    return book
+
+
+def recorded_book(session: Session, config: BookConfig, config_sha256: str) -> SignalBook:
+    """The recorded book of this configuration. Never records one."""
+
+    book = session.execute(select(SignalBook).where(SignalBook.name == config.name)).scalar_one_or_none()
+    if book is None:
+        raise SignalBookError(SignalBookErrorCode.BOOK_NOT_RECORDED, f"book {config.name} has never run")
+    if book.config_sha256 != config_sha256:
+        raise SignalBookError(
+            SignalBookErrorCode.BOOK_CHANGED, f"book {config.name} was recorded from a different configuration file"
+        )
     return book
 
 

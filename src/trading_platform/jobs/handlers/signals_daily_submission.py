@@ -1,4 +1,5 @@
-"""Public input contract of the ``signals-daily`` Job type (research mode only).
+"""Public input contracts of the ``signals-daily`` and ``signals-replay`` Job types
+(research mode only).
 
 ``book`` names a configuration file in ``config/signals/``; ``session_date`` is the
 session to run up to (``null``: the latest closed session); ``ingest`` says whether the
@@ -59,6 +60,40 @@ class SignalsDailySubmissionSpec:
     def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         try:
             parsed = _Payload.model_validate(dict(payload))
+        except ValidationError as exc:
+            reason = SignalsDailyPayloadRejection(map_validation_error(exc).value)
+            raise InvalidJobPayloadError(job_type=self.job_type, reason=reason.value) from exc
+        if not BOOK_NAME_PATTERN.fullmatch(parsed.book):
+            raise InvalidJobPayloadError(
+                job_type=self.job_type, reason=SignalsDailyPayloadRejection.INVALID_BOOK_NAME.value
+            )
+        return parsed.model_dump(mode="json")
+
+    def submission_defaults(self) -> dict[str, Any] | None:
+        return None
+
+
+SIGNALS_REPLAY_JOB_TYPE = "signals-replay"
+
+
+class _ReplayPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    book: StrictStr
+
+
+class SignalsReplaySubmissionSpec:
+    job_type = SIGNALS_REPLAY_JOB_TYPE
+    description = "Replay a signal book from its kept inputs and report every difference from the record."
+    cancellation_mode = JobCancellationMode.QUEUED_ONLY
+    console_submission = ConsoleSubmission.API_ONLY
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def validate_payload(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        try:
+            parsed = _ReplayPayload.model_validate(dict(payload))
         except ValidationError as exc:
             reason = SignalsDailyPayloadRejection(map_validation_error(exc).value)
             raise InvalidJobPayloadError(job_type=self.job_type, reason=reason.value) from exc

@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 
 from sqlalchemy import select
@@ -28,7 +28,12 @@ from trading_platform.db.models.signal_log import (
     SignalEventType,
     SignalLogEvent,
 )
-from trading_platform.strategies.trade_rules import EntryOutcome, net_r_multiple, r_multiple
+from trading_platform.strategies.trade_rules import (
+    PRICE_SCALE,
+    EntryOutcome,
+    net_r_multiple,
+    r_multiple,
+)
 
 OUTCOME_OPENED = EntryOutcome.OPENED.value
 
@@ -104,6 +109,18 @@ def _outcome(
     )
 
 
+def _issue_scale(event: SignalLogEvent | None) -> Decimal | None:
+    """The event's price in the price scale of the signal session. After a dividend or a
+    split the engine works in the scale of the event session and records the factor; the
+    outcome, and its R, are measured in one scale."""
+
+    if event is None or event.price is None:
+        return None
+    if event.adjustment_factor is None or event.adjustment_factor == 1:
+        return event.price
+    return (event.price / event.adjustment_factor).quantize(PRICE_SCALE, rounding=ROUND_HALF_EVEN)
+
+
 def outcomes_from_log(
     session: Session, *, strategy_version_id: uuid.UUID, asset: str, through: date
 ) -> list[SignalOutcome]:
@@ -138,9 +155,9 @@ def outcomes_from_log(
                 # ``expiry_reason`` is NOT NULL on an ``expired`` row (CHECK constraint, 0034).
                 entry_outcome=(expired.expiry_reason or "") if expired is not None else OUTCOME_OPENED,
                 entry_session=filled.event_session if filled is not None else None,
-                entry_price=filled.price if filled is not None else None,
+                entry_price=_issue_scale(filled),
                 exit_session=closed.event_session if closed is not None else None,
-                exit_price=closed.price if closed is not None else None,
+                exit_price=_issue_scale(closed),
                 exit_reason=closed.event_type.removeprefix("closed_") if closed is not None else None,
                 intrabar_order_unknown=closed.intrabar_order_unknown if closed is not None else None,
             )
