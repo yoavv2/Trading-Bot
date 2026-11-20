@@ -19,14 +19,25 @@ Sessions are processed in calendar order with none skipped: a stop can only be c
 on a session the engine actually processed. ``signal_session_runs`` records each
 processed session, so a re-run writes nothing and a gap is refused with a typed error.
 Nothing is ever updated or deleted (migration 0034 installs the triggers).
+
+A session whose bar is missing, or whose data failed the integrity check, is not
+processed: ``signal_session_skips`` records it with a closed reason and the session
+stays the next one to process. The sessions after it wait until its data arrives, so no
+stop check is ever lost; the skip is recorded once per reason, never silently ignored.
+
+Every row written for a session carries ``input_data_digest``: the SHA-256 of the
+market-data reads the session made (its own bar and the history the strategy
+evaluated), in order. A replay over the same data produces the same digest.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -35,14 +46,17 @@ from trading_platform.core.settings import Settings
 from trading_platform.db.models.research import StrategyVersion
 from trading_platform.db.models.signal_log import (
     TERMINAL_EVENT_TYPES,
+    SessionSkipReason,
     SignalEventType,
     SignalLogEvent,
     SignalSessionRun,
+    SignalSessionSkip,
 )
 from trading_platform.services.market_data_access import (
     bars_for_session_date,
     persisted_session_dates,
 )
+from trading_platform.services.read_recording import recording, sha256_hex
 from trading_platform.strategies.research_registry import strategy_from_version
 from trading_platform.strategies.signals import SignalDirection
 from trading_platform.strategies.trade_rules import (
@@ -65,7 +79,6 @@ class SignalEngineErrorCode(StrEnum):
     NOT_A_SESSION = "not_a_session"
     SESSION_OUT_OF_ORDER = "session_out_of_order"
     SESSION_SKIPPED = "session_skipped"
-    MISSING_BAR = "missing_bar"
 
 
 class SignalEngineError(Exception):
@@ -78,9 +91,62 @@ class SignalEngineError(Exception):
 
 @dataclass(frozen=True)
 class SessionOutcome:
+    """``skipped`` is set when the session was not processed; it has no events then."""
+
     session_date: date
     already_processed: bool
     events: tuple[SignalLogEvent, ...]
+    skipped: SessionSkipReason | None = None
+
+
+class _InputReads:
+    """Collects the recorded market-data reads of one session."""
+
+    def __init__(self) -> None:
+        self._reads: list[list[Any]] = []
+
+    def record(self, kind: str, params: Mapping[str, Any], digest: str, count: int) -> None:
+        self._reads.append([kind, dict(params), digest, count])
+
+    def digest(self) -> str:
+        return sha256_hex(self._reads)
+
+
+def record_session_skip(
+    session: Session,
+    *,
+    version: StrategyVersion,
+    asset: str,
+    session_date: date,
+    reason: SessionSkipReason,
+    detail: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Record that a session could not be processed. Returns False when the same skip
+    (version, asset, session, reason) is already recorded, and writes nothing then."""
+
+    known = session.execute(
+        select(SignalSessionSkip.id).where(
+            SignalSessionSkip.strategy_version_id == version.id,
+            SignalSessionSkip.asset == asset,
+            SignalSessionSkip.session_date == session_date,
+            SignalSessionSkip.reason == reason.value,
+        )
+    ).first()
+    if known is not None:
+        return False
+    session.add(
+        SignalSessionSkip(
+            strategy_version_id=version.id,
+            asset=asset,
+            session_date=session_date,
+            reason=reason.value,
+            detail=detail,
+            recorded_at=now or datetime.now(UTC),
+        )
+    )
+    session.flush()
+    return True
 
 
 @dataclass(frozen=True)
@@ -162,7 +228,10 @@ def run_signal_session(
     bar_source: tuple[str, bool],
     now: datetime | None = None,
 ) -> SessionOutcome:
-    """Process one session. Raises ``SignalEngineError`` and writes nothing when refused."""
+    """Process one session. Raises ``SignalEngineError`` and writes nothing when refused.
+
+    A session without a bar is not processed: the skip is recorded and returned in
+    ``SessionOutcome.skipped``."""
 
     strategy = strategy_from_version(settings, version, universe=(asset,), bar_source=bar_source)
     risk = strategy.risk_plan
@@ -184,11 +253,25 @@ def run_signal_session(
 
     _check_order(session, settings, version.id, asset, session_date)
     provider, adjusted = bar_source
-    bar = bars_for_session_date(session, session_date, symbols=[asset], adjusted=adjusted, provider=provider).get(asset)
-    if bar is None:
-        raise SignalEngineError(SignalEngineErrorCode.MISSING_BAR, f"no {provider} bar for {asset} on {session_date}")
-
     recorded_at = now or datetime.now(UTC)
+    reads = _InputReads()
+    with recording(reads):
+        bar = bars_for_session_date(
+            session, session_date, symbols=[asset], adjusted=adjusted, provider=provider
+        ).get(asset)
+    if bar is None:
+        record_session_skip(
+            session,
+            version=version,
+            asset=asset,
+            session_date=session_date,
+            reason=SessionSkipReason.MISSING_BAR,
+            now=recorded_at,
+        )
+        return SessionOutcome(
+            session_date=session_date, already_processed=False, events=(), skipped=SessionSkipReason.MISSING_BAR
+        )
+
     events: list[SignalLogEvent] = []
 
     def record(
@@ -252,7 +335,8 @@ def run_signal_session(
             in_trade = False
 
     # The close: evaluate the strategy on bars up to and including today.
-    signal = strategy.generate_signals(session, session_date).signals[0]
+    with recording(reads):
+        signal = strategy.generate_signals(session, session_date).signals[0]
     if in_trade and signal.direction is SignalDirection.EXIT:
         assert active is not None
         if not active.rule_exit_due:
@@ -261,13 +345,20 @@ def run_signal_session(
         levels = plan_levels(signal.indicators.close, risk)
         record(session_date, levels, SignalEventType.ISSUED)
 
-    session.add_all(events)
+    input_data_digest = reads.digest()
+    for event in events:
+        # One statement per event, in order: the database checks each transition against
+        # the events already written.
+        event.input_data_digest = input_data_digest
+        session.add(event)
+        session.flush()
     session.add(
         SignalSessionRun(
             strategy_version_id=version.id,
             asset=asset,
             session_date=session_date,
             spec_sha256=version.spec_sha256,
+            input_data_digest=input_data_digest,
             recorded_at=recorded_at,
         )
     )
@@ -285,12 +376,16 @@ def run_signal_sessions(
     end: date,
     bar_source: tuple[str, bool],
 ) -> list[SessionOutcome]:
-    """Process every market session in ``[start, end]`` in order."""
+    """Process every market session in ``[start, end]`` in order, stopping at the first
+    session that had to be skipped (the last outcome then has ``skipped`` set)."""
 
     exchange = settings.market_data.calendar.exchange
-    return [
-        run_signal_session(
+    outcomes: list[SessionOutcome] = []
+    for session_date in persisted_session_dates(session, start=start, end=end, exchange=exchange):
+        outcome = run_signal_session(
             session, settings, version=version, asset=asset, session_date=session_date, bar_source=bar_source
         )
-        for session_date in persisted_session_dates(session, start=start, end=end, exchange=exchange)
-    ]
+        outcomes.append(outcome)
+        if outcome.skipped is not None:
+            break
+    return outcomes
