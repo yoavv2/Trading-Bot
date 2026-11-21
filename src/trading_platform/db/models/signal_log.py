@@ -1,7 +1,9 @@
-"""ORM models for the internal signal log (migration ``0034_signals_step1``).
+"""ORM models for the internal signal log (migrations ``0034_signals_step1``,
+``0035_signals_step2`` and ``0037_signal_inputs``).
 
-Both tables are append-only: a trigger refuses every UPDATE and DELETE. The closed
-vocabularies below are enforced by CHECK constraints in the migration.
+Every table is append-only: a trigger refuses every UPDATE and DELETE. The closed
+vocabularies below are enforced by CHECK constraints in the migrations, and the order of
+a signal's events by the transition guard of 0035.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from trading_platform.db.base import Base
@@ -41,6 +44,13 @@ CLOSING_EVENT_TYPES: frozenset[SignalEventType] = frozenset(
     {SignalEventType.CLOSED_STOP, SignalEventType.CLOSED_TARGET, SignalEventType.CLOSED_RULE}
 )
 TERMINAL_EVENT_TYPES: frozenset[SignalEventType] = CLOSING_EVENT_TYPES | {SignalEventType.EXPIRED}
+
+
+class SessionSkipReason(StrEnum):
+    """Why the daily engine could not process a session (it stays unprocessed)."""
+
+    MISSING_BAR = "missing_bar"
+    INTEGRITY_FAILED = "integrity_failed"
 
 
 class SignalLogEvent(Base):
@@ -70,6 +80,13 @@ class SignalLogEvent(Base):
     price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
     expiry_reason: Mapped[str | None] = mapped_column(String(48), nullable=True)
     intrabar_order_unknown: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # The levels in the price scale of the event session: the issued levels times
+    # ``adjustment_factor`` (1 unless a dividend or a split followed the signal session).
+    adjustment_factor: Mapped[Decimal | None] = mapped_column(Numeric(precision=24, scale=12), nullable=True)
+    effective_stop_price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
+    effective_target_price: Mapped[Decimal | None] = mapped_column(Numeric(precision=20, scale=6), nullable=True)
+    # SHA-256 of the market-data reads of the session that wrote the event.
+    input_data_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -90,4 +107,52 @@ class SignalSessionRun(Base):
     asset: Mapped[str] = mapped_column(String(32), nullable=False)
     session_date: Mapped[date] = mapped_column(Date, nullable=False)
     spec_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_data_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SignalSessionSkip(Base):
+    """A session the daily engine could not process, with the reason. The session stays
+    unprocessed; one row per (strategy version, asset, session, reason)."""
+
+    __tablename__ = "signal_session_skips"
+    __table_args__ = (
+        UniqueConstraint(
+            "strategy_version_id",
+            "asset",
+            "session_date",
+            "reason",
+            name="uq_signal_session_skips_version_asset_session_reason",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset: Mapped[str] = mapped_column(String(32), nullable=False)
+    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SignalSessionInput(Base):
+    """The bars one processed session was computed from (kept by the daily Job)."""
+
+    __tablename__ = "signal_session_inputs"
+    __table_args__ = (
+        UniqueConstraint(
+            "strategy_version_id", "asset", "session_date", name="uq_signal_session_inputs_version_asset_session"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset: Mapped[str] = mapped_column(String(32), nullable=False)
+    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    inputs: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    inputs_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

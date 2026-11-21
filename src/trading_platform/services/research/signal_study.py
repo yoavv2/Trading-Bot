@@ -250,7 +250,7 @@ def _conformance(settings: Settings, *, version_id: uuid.UUID, asset: str, run_i
             return {"checked": False, "reason": "signal_log_not_empty_for_version_and_asset"}
         version = session.get(StrategyVersion, version_id)
         assert version is not None
-        run_signal_sessions(
+        outcomes = run_signal_sessions(
             session,
             settings,
             version=version,
@@ -259,6 +259,8 @@ def _conformance(settings: Settings, *, version_id: uuid.UUID, asset: str, run_i
             end=window.end,
             bar_source=bar_source,
         )
+        if any(outcome.skipped is not None for outcome in outcomes):
+            return {"checked": False, "reason": "daily_engine_skipped_a_session"}
         log = outcomes_from_log(session, strategy_version_id=version_id, asset=asset, through=window.end)
         backtest = outcomes_from_backtest(session, run_id=run_id, asset=asset)
         found = differences(log, backtest)

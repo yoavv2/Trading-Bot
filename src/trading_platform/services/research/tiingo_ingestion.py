@@ -67,6 +67,9 @@ def provider_failure_code(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+UPSERT_ROWS_PER_STATEMENT = 2000  # 15 columns each: 30,000 bind parameters
+
+
 def _rows_for_upsert(symbol_id: uuid.UUID, rows: list[TiingoDailyRow]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -113,23 +116,27 @@ def upsert_tiingo_bars(session: Session, symbol_id: uuid.UUID, rows: list[Tiingo
     if not rows:
         return 0
     values = _rows_for_upsert(symbol_id, rows)
-    insert_stmt = pg_insert(DailyBarModel).values(values)
-    stmt = insert_stmt.on_conflict_do_update(
-        constraint="uq_daily_bars_symbol_session_adjusted_provider",
-        set_={
-            "open": insert_stmt.excluded.open,
-            "high": insert_stmt.excluded.high,
-            "low": insert_stmt.excluded.low,
-            "close": insert_stmt.excluded.close,
-            "volume": insert_stmt.excluded.volume,
-            "split_factor": insert_stmt.excluded.split_factor,
-            "dividend_cash": insert_stmt.excluded.dividend_cash,
-            "updated_at": datetime.now(UTC),
-        },
-    ).returning(DailyBarModel.id)
-    returned = session.execute(stmt).fetchall()
+    written = 0
+    # PostgreSQL accepts at most 65,535 bind parameters in one statement, so a long
+    # history is written in several statements inside the caller's transaction.
+    for offset in range(0, len(values), UPSERT_ROWS_PER_STATEMENT):
+        insert_stmt = pg_insert(DailyBarModel).values(values[offset : offset + UPSERT_ROWS_PER_STATEMENT])
+        stmt = insert_stmt.on_conflict_do_update(
+            constraint="uq_daily_bars_symbol_session_adjusted_provider",
+            set_={
+                "open": insert_stmt.excluded.open,
+                "high": insert_stmt.excluded.high,
+                "low": insert_stmt.excluded.low,
+                "close": insert_stmt.excluded.close,
+                "volume": insert_stmt.excluded.volume,
+                "split_factor": insert_stmt.excluded.split_factor,
+                "dividend_cash": insert_stmt.excluded.dividend_cash,
+                "updated_at": datetime.now(UTC),
+            },
+        ).returning(DailyBarModel.id)
+        written += len(session.execute(stmt).fetchall())
     session.flush()
-    return len(returned)
+    return written
 
 
 def apply_metadata_to_symbol(
@@ -151,6 +158,16 @@ def apply_metadata_to_symbol(
     symbol.currency_name = (catalog.currency.lower() if catalog and catalog.currency else symbol.currency_name)
     symbol.metadata_provider = PROVIDER
     symbol.active = True
+
+
+def _has_tiingo_metadata(settings: Settings, ticker: str) -> bool:
+    with session_scope(settings) as session:
+        return (
+            session.execute(
+                select(Symbol.id).where(Symbol.ticker == ticker, Symbol.metadata_provider == PROVIDER)
+            ).first()
+            is not None
+        )
 
 
 def _derive_status(succeeded: int, failed: int) -> IngestionRunStatus:
@@ -220,8 +237,13 @@ def ingest_tiingo_daily_bars(
     trigger_source: str = "job",
     job_id: uuid.UUID | None = None,
     client: TiingoClient | None = None,
+    refresh_metadata: bool = True,
 ) -> IngestionResult:
     """Download only the requested assets for the requested range (plus nothing else).
+
+    With ``refresh_metadata=False`` an asset whose symbol row already carries Tiingo
+    metadata costs one request (prices) instead of two: the daily signal run downloads
+    the same assets every day and the hourly budget is 50 requests.
 
     Per-asset failures (a bad payload, a DB error for one symbol) mark that asset failed
     and the run continues, as the Polygon path does. Provider-level failures (an invalid
@@ -256,11 +278,16 @@ def ingest_tiingo_daily_bars(
     try:
         for ticker in assets:
             try:
-                metadata = resolved_client.fetch_metadata(ticker)
+                metadata = (
+                    None
+                    if not refresh_metadata and _has_tiingo_metadata(settings, ticker)
+                    else resolved_client.fetch_metadata(ticker)
+                )
                 rows = resolved_client.fetch_daily_prices(ticker, from_date, to_date)
                 with session_scope(settings) as symbol_session:
                     symbol = upsert_symbol(symbol_session, ticker)
-                    apply_metadata_to_symbol(symbol_session, symbol, metadata)
+                    if metadata is not None:
+                        apply_metadata_to_symbol(symbol_session, symbol, metadata)
                     count = upsert_tiingo_bars(symbol_session, symbol.id, rows)
                 total += count
                 succeeded += 1

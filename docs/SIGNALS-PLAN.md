@@ -11,8 +11,11 @@ is still open, and the order of the build.
    implement).
 2. Check section 4 (blockers) and section 5 (open decisions) with the owner
    before writing code that depends on them.
-3. **Step 1** (section 6) is built and its study has run. The study chose no
-   pilot candidate; read the Step 1 status before starting Step 2.
+3. **Step 1** (section 6) is built. The first study chose no pilot candidate;
+   the second, wider study confirmed time-series momentum on its holdout. The
+   owner approved the publication rule and the forward log's rules on
+   2026-11-20 ("Forward log" in the Step 1 status). Read the Step 1 status
+   before starting Step 2.
 
 Working rules the owner set:
 
@@ -64,7 +67,9 @@ not software.
 - Job framework: `src/trading_platform/jobs/`. The research registry holds six
   Job types: `catalog-sync`, `ingest-tiingo-bars`, `sync-market-sessions`,
   `research-freeze`, `research-backtest`, `research-evaluate`.
-- Research database `trading_research`, migrations through `0034`.
+- Research database `trading_research`, migrations through `0034`. The Step 2
+  branch adds `0035` to `0037`; the local database is migrated when that
+  branch is merged.
 - Four approved example versions (trend following 50/200, RSI mean reversion,
   Donchian breakout, time-series momentum), and a v2 version of each with the
   base risk block (`config/research/examples_v2/`), seeded by the study
@@ -110,7 +115,7 @@ data licence are both closed, the Step 3 screen and API stay internal.
 | Distribution channel | WhatsApp channel, Telegram, own app with push | Step 4 |
 | New UI | Not designed. Public performance page first, or member app first | Step 3 or 5 |
 | Free versus paid split | SBX gives 1–2 free signals a month | Step 5 |
-| Which strategy version publishes first, and on which assets | Still open. The first v2 study (Step 1 status) chose no candidate: the top-ranked version failed the holdout. Next: a new study with a wider asset list fixed in advance, a longer history, unchanged base risk settings and a fresh holdout | Before any pilot |
+| Which strategy version publishes first, and on which assets | Decided 2026-11-20: time-series momentum v2 on the 42 assets of the wide study, published under a cap of 10 open signals, first in the internal forward log (Step 1 status, "Forward log") | Closed |
 | Short signals, ATR and indicator stops | Deferred until a strategy under study needs them | After Step 3 |
 | Hosting | Local only today | Step 3 |
 
@@ -242,17 +247,112 @@ model):
   large rises, so the development and validation figures overstate what an
   asset list fixed in advance would give. Prices are adjusted prices.
 
+The second study, run 2026-11-20
+(`docs/studies/signals-v2-wide-2026-11-19/`, protocol
+`config/research/signals_v2_wide_study.yaml`, clean revision `e4c1b3c`):
+
+- Setup, fixed in the protocol before any run on these assets: the same four
+  rule sets and base risk block; 42 assets (the 30 Dow members of 2015-01-02
+  and SPY, IWM, DIA and nine sector funds); development 2015-01-02 to
+  2022-10-06, validation 2022-10-07 to 2024-10-04, holdout 2024-10-07 to
+  2026-10-07; the same costs. The profitable-asset criterion kept its ratio
+  (26 of 42).
+- The daily engine and the backtest agreed on all 378 runs: 11,117 signals
+  and 9,543 closed trades compared, 0 differences.
+- Time-series momentum and trend following qualified. Time-series momentum
+  ranked first (mean net R 0.10 in development, 0.22 in validation) and was
+  the only version run on the holdout. It was confirmed there: 858 closed
+  trades, mean net R 0.22, total 192.3 R, 31 of 42 assets positive.
+  **Pilot candidate: `time_series_momentum_daily` v2.**
+- RSI mean reversion and Donchian breakout failed two development criteria
+  each: total net R below the largest R drawdown, and too few profitable
+  assets.
+- Limits: the holdout's calendar period was seen in the first study on five
+  other assets, so it is new for these assets and not for the market. The
+  edge is thin in development (0.10 R a trade). The pooled R drawdown on the
+  holdout is 47.5 R and the worst single-asset equity drawdown is 57%. The
+  study does not compare against holding the assets, and both later windows
+  were rising markets. R is measured against the actual initial risk, so an
+  entry that opens close to the stop gives very large multiples (best trade
+  22.5 R, worst −11.4 R on the holdout). 27 holdout trades with an initial
+  risk under 2% of the entry carry 41.7 of the 224.2 gross R; with every
+  trade limited to between −1.5 R and 2.5 R the gross total is 134.2 R, still
+  positive. The median trade loses 0.56 R. The rate is about 37 trades a month across the 42
+  assets, several times what the product would publish. Prices are adjusted
+  prices. One interrupted earlier attempt left an unused study row
+  (`6c38f2c8-31e6-4963-92eb-91282ac779aa`) with 330 selection runs and no
+  holdout exposure.
+
+The publication-filter study, run 2026-11-20
+(`docs/studies/signals-v2-publication-filters-2026-11-20/`, protocol
+`config/research/signals_v2_publication_filters.yaml`, code
+`services/research/publication_filters.py`, clean revision `b9c0320`):
+
+- What it measures: the candidate's stored signals and trades from the wide
+  study's development and validation windows, with one rule deciding which
+  are published. Each rule is applied on its own. No backtest is run and the
+  holdout is not read. A signal a rule holds back still runs internally and
+  is never published later.
+- Minimum initial risk (a signal is withdrawn at the open when
+  (open − stop) / open is below 2%, 3% or 4%): keeps the edge at all three
+  values and removes the very large multiples (best trade in development
+  10.0 R unfiltered, 4.5 R at 3%). It withdraws 2% to 13% of the trades, so
+  the rate stays at 23 to 30 trades a month. It does not solve the rate.
+- Cap on open published signals (5, 8, 10 or 12 across all assets, same-day
+  signals taken in a fixed hash order): the rate follows the cap, about one
+  trade a month for each place. Cap 10 is the only rule that keeps the edge
+  and meets the 7 to 12 a month target in both windows (9.0 and 10.4 trades a
+  month, mean net R 0.09 and 0.24). Cap 8 meets the rate and fails the edge
+  reading: its development total (47.5 R) is below its R drawdown (56.4 R).
+  Cap 12 keeps the edge and is just above the rate in validation (12.1).
+  Cap 5 keeps the edge at 4 to 5 trades a month.
+- Limits: the cap results rest on one fixed order of same-day signals;
+  another order publishes other trades, and the differences between caps 8,
+  10 and 12 are within what that could move. The two rules were not combined.
+  No rule has been tested on data that no study has read.
+
 Still open in Step 1:
 
-- The historical run recorded a dirty Git revision. Its exact source snapshot
-  cannot be verified from that identifier.
-- The first pilot strategy. It needs a new protocol: a wider asset list fixed
-  in advance and a longer history (both need more Tiingo bars in the research
-  database). Keep the base risk settings fixed and reserve a fresh holdout for
-  that study.
+- The forward log below has to run; it starts once Step 2 can run it.
+- The first study's run recorded a dirty Git revision. Its exact source
+  snapshot cannot be verified from that identifier.
 - The study HTML report (`services/research/report.py`) does not show the R
   metrics; the study script writes its own Markdown report.
 - The AI assistant still writes v1 documents only. This can wait.
+
+**Forward log: rules approved by the owner on 2026-11-20, before it starts.**
+
+The owner chose the cap of 10 open signals on its own (no minimum initial
+risk) and the internal daily log going forward as the test on unseen data.
+Changing anything below after the log has started is a new test.
+
+- Purpose: to check that the daily engine works in real time and that the
+  rate meets the target. Profitability is reported as an observation. The log
+  is not asked to decide whether the edge is real: at about 10 trades a month
+  it cannot do that within a year.
+- What runs: `time_series_momentum_daily` v2 on the 42 assets of the wide
+  study.
+- Publication: at most 10 published signals open at once across all assets,
+  counted as the filter study counts them
+  (`services/research/publication_filters.py`). When one session has more
+  signals than free places, they are taken in ascending order of
+  `sha256("<session date>:<asset>")`. A signal held back is never published
+  later.
+- Summary date: the first date on which at least six months have passed since
+  the first session of the log and at least 60 published trades have closed.
+- Operational success, all three:
+  1. the mean over the whole period is 7 to 12 published trades a month,
+     counted as in the studies (single months may fall outside);
+  2. the cap held on every session;
+  3. a replay over the same input data gives the same publication, entry and
+     exit decisions as the daily engine recorded.
+- Early stop: the log stops if the fall of the total net R of published
+  trades from its previous peak exceeds 70 R. The largest such fall in the
+  development window under this cap was 70.32 R; 70 is that figure rounded,
+  chosen in advance.
+- Profitability: mean net R, total net R and the largest R drawdown are
+  reported. Apart from the early stop, the financial result changes neither
+  the summary date nor the operational verdict.
 
 Left to Step 2 on purpose: a Job type or command that runs the daily engine
 (today it is a function), the `skipped` result for a missing bar (today a
@@ -280,6 +380,113 @@ runner to a Job and retire its script and mutation-boundary exemption.
   run happens on a non-session date.
 - Each signal stores the version id, the specification digest and the input
   data digest it was computed from.
+- The publication rule of the forward log (Step 1 status) is applied by the
+  daily run and its decision is recorded for every signal with a closed
+  outcome (`published`, `held_back_open_cap`). The decision is written once
+  and a re-run or a replay over the same data reproduces it.
+
+**Status 2026-11-20: the daily run is built; the forward log has not started.**
+
+Built on branch `feat/signals-step2-daily-engine`:
+
+- Migration `0035_signals_step2`. `signal_log` and `signal_session_runs`
+  carry `input_data_digest`, the SHA-256 of the market-data reads of the
+  session. A transition guard refuses events out of order, an event whose
+  levels differ from the issued signal, and a new signal while another of the
+  same (version, asset) is active. A session is recorded only after every
+  session already recorded.
+- Skips. A session whose bar is missing or whose data failed the integrity
+  check is not processed. `signal_session_skips` records it once per reason
+  (`missing_bar`, `integrity_failed` with the integrity code). The session
+  stays the next one to process and blocks the sessions after it, so no stop
+  check is lost; it is processed late when its data arrives.
+- Migration `0036_signal_books`. A book is a fixed (version, assets, cap,
+  first session), read from `config/signals/<name>.yaml` and recorded once
+  with the file's SHA-256; a changed file is refused (`book_changed`).
+  `signal_publications` holds one decision for each issued signal. The
+  database computes the outcome and refuses any other: `held_back_late` when
+  the decision is recorded at or after the next session's open, otherwise
+  `held_back_open_cap` when `max_open` published signals are still open,
+  otherwise `published`. `tests/test_signal_publication.py` shows the daily
+  decisions equal the cap rule of the filter study on the same log.
+- Job type `signals-daily` (`services/signals/daily.py`, payload `book`,
+  `session_date`, `ingest`): download the history range with one Tiingo
+  request an asset, check integrity, process every unprocessed session of
+  each asset in its own transaction, decide publications. The range that is
+  downloaded and checked starts from the history of the first session still
+  to be processed, so a book resumes after an interruption of any length. A date that is not
+  a session, has not closed or is before the book's first session is refused
+  with a closed code. A re-run writes nothing new.
+- Tests: `tests/test_signals_step2_engine.py`,
+  `tests/test_signal_publication.py`, `tests/test_signals_daily_job.py`.
+
+- Adjusted levels (owner's decision, 2026-11-21). The engine reads adjusted
+  bars, and a dividend or a split after the signal session rescales the whole
+  adjusted history. The levels a signal was issued with are never changed. On
+  every later session the engine derives the stop and the target in that
+  session's price scale from the issued levels and the factor `adjusted close
+  of the signal session as read today / issued reference price`. Example:
+  reference 100 read today as 99 gives factor 0.99, stop 95 becomes 94.05 and
+  target 110 becomes 108.90. Deriving from the issued levels every time means
+  an adjustment is never applied twice. Each event records
+  `adjustment_factor`, `effective_stop_price` and `effective_target_price`
+  (migration `0037_signal_inputs`); a user is shown the derived levels, and
+  the issued ones stay in the history. R is measured in one price scale
+  (`services/signals/comparison.py`).
+- One decision function. `services/signals/session_rules.py` holds
+  `decide_session`, a pure function of the session's inputs and the active
+  signal. The daily engine and the replay both call it.
+- Kept inputs. The daily Job stores the bars every processed session read in
+  `signal_session_inputs` (append-only, with their SHA-256). A later download
+  rewrites adjusted history, so this is the only place a past session's
+  inputs can be read back.
+- Replay (`services/signals/replay.py`, Job type `signals-replay`, read-only).
+  It recomputes every event from the kept inputs and every publication
+  decision from the recorded order and times, compares both with the record
+  and lists each difference with a closed kind (`event_differs`,
+  `publication_differs`, `inputs_digest_mismatch`, `cap_exceeded` and others).
+- Tests of the owner's two conditions for starting the forward log
+  (`tests/test_signals_adjustment_and_replay.py`): two dividends in a row and
+  a 2-for-1 split on an open trade; a book run day by day with a dividend on
+  an active signal replays with no difference, also after the adjusted
+  history is rewritten again; a changed record is reported.
+- The daily Job adds a third publication outcome to the two of the frozen
+  rules: `held_back_late`.
+
+- The forward log's book: `config/signals/forward-log-2026-11.yaml`, 42
+  assets, cap 10, first session Monday 2026-11-23 (owner's decision,
+  2026-11-21). If the merge, the migration or the first run is late, the
+  first session moves to the next future session, in a new file under a new
+  name, so the first record is a decision made in real time.
+- Daily start: `launchd` on the owner's Mac (`deploy/launchd/`). The agent
+  runs `run-signals-daily.sh` at 02:00 local time, Tuesday to Saturday: it
+  starts the research API, submits `signals-daily` for the book, runs the
+  worker once and logs the Job's result with UTC times. A machine asleep at
+  02:00 runs it on waking. The Job result carries `started_at` and
+  `decided_at`; a signal decided after the next open is `held_back_late`.
+  The agent is installed after the merge and the local migration, not before.
+- Trial on real Tiingo data, 2026-11-21, in a separate database
+  (`trading_research_trial`, a copy of the research database migrated to
+  `0037`), with a trial book identical to the forward log's except for its
+  name and a first session of 2026-11-18. One run up to the closed session of
+  2026-11-20: 42 requests, 25,284 bars written, no integrity error, no asset
+  skipped, 126 sessions processed, 108 events, 54 publication decisions (10
+  published, 1 held back by the cap, 43 late because the run caught up two
+  sessions after their next open). Replay: 126 sessions, 108 events and 54
+  decisions recomputed, 0 differences. A second run wrote nothing. The
+  launchd script submitted and ran the forward log's Job against the trial
+  database; it was refused with `before_first_session`, as it must be before
+  2026-11-23. Not exercised by the trial: a dividend or split on an active
+  signal in real data (every factor was 1), and a day-after-day sequence of
+  real runs.
+- Observation from the trial: a book starts with no open signals, so its
+  first sessions issue signals for most assets at once (54 in three sessions)
+  and the cap fills on the first day in the fixed hash order.
+
+Not built yet:
+
+1. The study runner as a Job, retiring `scripts/run_signals_v2_study.py` and
+   its mutation-boundary exemption.
 
 ### Step 3: append-only performance record
 
@@ -338,9 +545,10 @@ Requires both blockers in section 4 to be closed.
 - **Few signals.** Four strategies on a short asset list may produce far fewer
   than SBX's 7–12 a month. Measure the expected rate from backtests before
   promising a cadence.
-- **Adjusted prices.** Research uses adjusted bars. Entry, stop and target
-  shown to users must be in prices they can actually trade; decide this in
-  Step 2.
+- **Adjusted prices.** Research uses adjusted bars. Decided in Step 2: the
+  levels are issued in the prices of the signal session (on that day the
+  adjusted close equals the traded close) and are rescaled after a dividend or
+  a split; users see the rescaled stop and target.
 - **Marketing claims.** SBX's own pages contradict each other (90% hit rate on
   the home page, 56% on the performance page). Our numbers come only from the
   append-only record.

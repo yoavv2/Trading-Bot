@@ -121,6 +121,8 @@ def test_registries_are_closed_sets_and_selected_by_mode(monkeypatch: pytest.Mon
         "research-backtest",
         "research-evaluate",
         "research-freeze",
+        "signals-daily",
+        "signals-replay",
         "sync-market-sessions",
     ]
     default_types = build_default_registry(settings).list_job_types()

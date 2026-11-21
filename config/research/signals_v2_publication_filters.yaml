@@ -1,0 +1,56 @@
+# Protocol of the publication-filter study (docs/SIGNALS-PLAN.md, Step 1 status).
+#
+# Written on 2026-11-20 before any filtered result was computed. The owner asked for each
+# rule to be measured on its own. `python -m trading_platform.services.research.publication_filters`
+# reads this file, records its SHA-256 with the results, and refuses to write into an
+# output directory that already holds a result. Changing anything here is a new study.
+#
+# What is measured: the pilot candidate's signals and trades, exactly as the wide study
+# recorded them, with one rule deciding which of them would have been published. No
+# backtest is run again. The engine's own record is unchanged: a signal that a rule holds
+# back still runs its course internally and is never published later.
+
+name: signals-v2-publication-filters-2026-11-20
+
+# The study whose stored runs are read, and the version measured.
+source_results: docs/studies/signals-v2-wide-2026-11-19/results.json
+version: time_series_momentum_daily
+
+# Selection windows only. The holdout of the source study (2024-10-07 to 2026-10-07) is
+# not read: its unfiltered result is known, so reading it here would use it a second time.
+windows: [development, validation]
+
+# The owner's publishing rate (docs/SIGNALS-PLAN.md, section 2): 7 to 12 signals a month.
+target_trades_per_month: {min: 7, max: 12}
+
+rules:
+  # Baseline: every signal is published.
+  - {id: all_signals, kind: none}
+
+  # Minimum initial risk. A published signal is withdrawn at the open of its fill session
+  # when (open - stop) / open is below the value: the open has fallen so close to the stop
+  # that a small move decides the trade and the R multiple becomes very large either way.
+  # At the reference price this ratio is 0.05 (the 5% stop).
+  - {id: min_initial_risk_2pct, kind: min_initial_risk, min_risk_fraction: 0.02}
+  - {id: min_initial_risk_3pct, kind: min_initial_risk, min_risk_fraction: 0.03}
+  - {id: min_initial_risk_4pct, kind: min_initial_risk, min_risk_fraction: 0.04}
+
+  # Cap on open published signals, across all assets. After the close of session D a new
+  # signal is published only while (published trades still open after D) + (signals
+  # already published for D) is below the cap. A published signal that expires at the next
+  # open used its place for that day only. Signals of the same session are taken in the
+  # order of sha256("<session date>:<asset>"), lowest first: an order fixed in advance
+  # that favours no asset and uses nothing about the outcome.
+  - {id: open_cap_5, kind: open_cap, max_open: 5}
+  - {id: open_cap_8, kind: open_cap, max_open: 8}
+  - {id: open_cap_10, kind: open_cap, max_open: 10}
+  - {id: open_cap_12, kind: open_cap, max_open: 12}
+
+# Reading the result, fixed in advance. For each rule and window the report gives the
+# published trades a month and the net R record of the published trades. A rule
+#   keeps the edge  when mean net R > 0 in both windows and the development total net R
+#                   is at least the development R drawdown (the wide study's criteria);
+#   meets the rate  when published trades a month lie inside the target in both windows.
+# Rules are listed by the lower of their two windows' mean net R, highest first. The
+# report names no winner: the owner chooses, and the chosen rule still needs a test on
+# data no study has read.

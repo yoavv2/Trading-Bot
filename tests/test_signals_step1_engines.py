@@ -558,6 +558,10 @@ def test_the_database_refuses_a_second_event_of_the_same_type_and_unknown_vocabu
             "price": None,
             "expiry_reason": None,
             "intrabar_order_unknown": None,
+            "input_data_digest": "0" * 64,
+            "adjustment_factor": D(1),
+            "effective_stop_price": D(95),
+            "effective_target_price": D(110),
             "recorded_at": sa.func.now(),
         } | overrides
         with session_scope(settings) as session:
@@ -609,7 +613,7 @@ def test_sessions_cannot_be_skipped_or_run_out_of_order_and_refusals_write_nothi
         session.execute(
             sa.text("DELETE FROM daily_bars WHERE session_date = :day"), {"day": bars[2].session_date}
         )
-    assert refused(bars[2].session_date) is SignalEngineErrorCode.MISSING_BAR
+    # A missing bar is no longer a refusal: Step 2 records a skip (test_signals_step2_engine.py).
 
 
 def test_a_v1_version_is_refused_by_the_daily_engine(settings: Settings) -> None:

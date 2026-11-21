@@ -74,7 +74,19 @@ from trading_platform.db.models.research import (
     TestWindowExposure,
 )
 from trading_platform.db.models.risk_event import RiskEvent
-from trading_platform.db.models.signal_log import SignalEventType, SignalLogEvent, SignalSessionRun
+from trading_platform.db.models.signal_book import (
+    PublicationDecision,
+    SignalBook,
+    SignalPublication,
+)
+from trading_platform.db.models.signal_log import (
+    SessionSkipReason,
+    SignalEventType,
+    SignalLogEvent,
+    SignalSessionInput,
+    SignalSessionRun,
+    SignalSessionSkip,
+)
 from trading_platform.db.models.strategy import Strategy, StrategyStatus
 from trading_platform.db.models.strategy_run import StrategyRun, StrategyRunStatus, StrategyRunType
 from trading_platform.db.models.symbol import Symbol
@@ -103,6 +115,12 @@ __all__ = [
     "SignalEventType",
     "SignalLogEvent",
     "SignalSessionRun",
+    "SessionSkipReason",
+    "SignalSessionSkip",
+    "SignalSessionInput",
+    "PublicationDecision",
+    "SignalBook",
+    "SignalPublication",
     "AbsenceEvidenceItem",
     "AccountReconciliationRun",
     "AccountReconciliationScope",

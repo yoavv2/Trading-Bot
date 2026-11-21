@@ -91,7 +91,7 @@ def test_migration_head_tables_columns_and_append_only_trigger(research_db: str)
     engine = sa.create_engine(settings.database.url)
     inspector = inspect(engine)
     with engine.connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0034_signals_step1"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0037_signal_inputs"
     tables = set(inspector.get_table_names())
     assert {
         "ai_drafts", "strategy_versions", "strategy_drafts", "asset_catalog", "asset_lists",
@@ -231,6 +231,21 @@ def test_tiingo_ingestion_writes_both_series_with_factors_and_metadata(research_
     with session_scope(settings) as session:
         count = session.execute(select(sa.func.count()).select_from(DailyBarModel)).scalar_one()
     assert count == 20 and again.run_status == "succeeded"
+
+
+def test_tiingo_ingestion_writes_a_history_longer_than_one_statement_can_carry(research_db: str) -> None:
+    """Twelve years of sessions, two rows each, exceed PostgreSQL's 65,535 bind parameters."""
+
+    settings = load_settings()
+    sessions = xnys_sessions(date(2014, 1, 2), 3_000)
+    client = StubTiingoClient({"AAPL": _tiingo_rows(sessions)})
+    result = ingest_tiingo_daily_bars(assets=["AAPL"], from_date=sessions[0], to_date=sessions[-1], settings=settings, client=client)
+    assert (result.run_status, result.bars_upserted, result.symbols_failed) == ("succeeded", 6_000, [])
+    with session_scope(settings) as session:
+        stored = session.execute(
+            select(sa.func.count(), sa.func.min(DailyBarModel.session_date), sa.func.max(DailyBarModel.session_date))
+        ).one()
+    assert tuple(stored) == (6_000, sessions[0], sessions[-1])
 
 
 def test_tiingo_ingestion_partial_and_all_failed(research_db: str) -> None:
@@ -440,7 +455,7 @@ def test_create_research_db_script_creates_migrates_refuses_trading_name(researc
         assert create_research_db.main(["--database", name]) == 0
         params = _admin_params()
         with psycopg.connect(host=params["host"], port=params["port"], user=params["user"], password=params["password"], dbname=name) as connection:
-            assert connection.execute("select version_num from alembic_version").fetchone()[0] == "0034_signals_step1"
+            assert connection.execute("select version_num from alembic_version").fetchone()[0] == "0037_signal_inputs"
         assert create_research_db.main(["--database", name]) == 0  # idempotent
     finally:
         os.environ["TRADING_PLATFORM_DATABASE__NAME"] = research_db
